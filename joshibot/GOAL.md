@@ -41,3 +41,8 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   domain, tape must stay clean; 65 findings elsewhere are tracked debt surfaced by `--full`.
   Two real narrowing holes closed in the money path while gating (executor reconciliation,
   domain no-quote guard); both now fail closed instead of relying on a reader's inference.
+- 2026-08-13 — stale-doc sweep: README no longer claims full-balance-only exits and now states
+  the cost-basis contract (never inferred from a quote; unknown basis ⇒ rug-only); Scout's
+  "cannot sell" corrected to "cannot sell directly" (it can write a rule that causes a later
+  sale); `lots.py` grace comment no longer describes the deleted fabrication. `policy_to_mapping`
+  float exception documented with the condition under which it must be split.

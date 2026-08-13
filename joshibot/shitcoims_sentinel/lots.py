@@ -22,8 +22,12 @@ DEFAULT_NEW_BAG_STOP_LOSS_PCT = Decimal("-35")
 DEFAULT_NEW_BAG_TAKE_PROFIT_PCT = Decimal("80")
 DEFAULT_NEW_BAG_TRAILING_STOP_PCT = Decimal("20")
 DEFAULT_NEW_BAG_PROTECT_DELAY_SECONDS = 600
-# After auto-protect we invent cost basis from the current quote. SL
-# against that number must not go live on the next poll.
+# Grace before an auto-protect stop goes live. The original reason was that basis was
+# invented from the current quote, so a stop against that number had to be held off; that
+# fabrication is gone and basis is now reconstructed from observed on-chain buys. The grace
+# is kept for a different and still-valid reason: basis reconstruction is an RPC round trip
+# that can fail transiently, and a stop must not fire on the first poll after a bag appears
+# while its basis is still unresolved.
 DEFAULT_NEW_BAG_SL_GRACE_SECONDS = 600
 ORIGIN_OPERATOR = "operator"
 ORIGIN_DEFAULT = "default"

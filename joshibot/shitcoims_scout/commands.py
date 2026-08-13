@@ -7,8 +7,8 @@ from .local_api import Query
 
 HELP = """🔭 shitcoims Scout
 
-/desk — bags and YAML policy buttons (cannot sell). Delete rule removes YAML only.
-/candidates — intelligence candidates (cannot sell)
+/desk — bags and YAML policy buttons (cannot sell directly). Delete rule removes YAML only.
+/candidates — intelligence candidates (advisory only)
 /now — urgent intelligence and feed health
 /x — latest X/Twitter observations
 /xkol — latest X KOL posts
@@ -31,7 +31,11 @@ HELP = """🔭 shitcoims Scout
 /why <signal-id> — evidence for a signal
 /digest — latest intelligence digest
 
-Scout can write local exit rules. Delete rule removes a YAML rule. Scout cannot sell, arm, panic, or sign."""
+Scout can write local exit rules. Delete rule removes a YAML rule.
+Scout cannot sell DIRECTLY: it cannot arm, panic or sign, and there is
+no sell endpoint. It CAN write a policy that causes the sentinel to sell
+on a later cycle — setting a stop above the current PnL is a sale you
+asked for."""
 
 DENIED = {
     "buy",

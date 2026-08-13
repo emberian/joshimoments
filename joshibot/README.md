@@ -96,8 +96,18 @@ positions:
 Alternatively use `buy_price_sol` for SOL per whole token; set exactly one of `cost_basis_sol` and
 `buy_price_sol`. Restart the service after config changes.
 
-Every price decision uses a Jupiter quote for the wallet's complete current token balance. It is an
-executable exit valuation, not a ticker price.
+**Cost basis is never inferred from a quote.** An earlier build stamped it from the current Jupiter
+exit quote, so PnL began at 0% regardless of what had been paid and every stop fired that far below
+the coin's already-fallen price — measured over one live window, quote-stamped bases returned −29.1%
+mean across 16 round trips while operator-typed bases returned +18.1% across 3. Basis is now
+reconstructed from the wallet's own observed on-chain buys, and when it cannot be established the
+position is left **rug-only**: with no basis there is no PnL, so no stop, take-profit, trail or
+dispose rule can fire at any price. An unknown basis is reported as unknown, never guessed.
+
+Price decisions use a Jupiter quote for the wallet's current token balance — an executable exit
+valuation, not a ticker price. Note that exits are **no longer full-balance-only**: scale-out rungs
+sell a fraction of a lot, and the simulation check binds the expected remainder rather than
+requiring the whole position to disappear.
 
 To make disposal a one-shot local override without editing YAML:
 

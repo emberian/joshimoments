@@ -84,7 +84,7 @@ def render_desk(snapshot: dict[str, Any], policies: list[dict[str, Any]]) -> str
     wallet = snapshot.get("wallet") if isinstance(snapshot.get("wallet"), dict) else {}
     rows = bags_from_snapshot(snapshot, policies)
     lines = [
-        "🎛 Desk — YAML rules only. Cannot sell. Cannot arm.",
+        "🎛 Desk — YAML rules only. Cannot sell directly, cannot arm; a rule can still cause a later sale.",
         f"Mode: {system.get('mode', '?')} / {system.get('protection_state', '?')}",
         f"SOL: {wallet.get('sol', '?')} · book {wallet.get('portfolio_exit_sol', '?')}",
         "",
@@ -107,7 +107,7 @@ def render_bag(bag: BagView) -> str:
         f"🎛 {bag.name}",
         f"{bag.mint}",
         f"Quoted exit: {bag.exit_sol or '?'} SOL",
-        "Writes config.yaml only. Cannot sell. Cannot arm.",
+        "Writes config.yaml only. Cannot sell directly or arm; a rule you set can cause a later sale.",
     ]
     if bag.kind == "protected":
         lines.insert(3, _rule_line(bag, compact=False))

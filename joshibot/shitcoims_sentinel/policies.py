@@ -55,6 +55,24 @@ def _blocked(mapping: dict[str, Any]) -> None:
 
 
 def policy_to_mapping(policy: PositionPolicy) -> dict[str, Any]:
+    """Render a policy for BOTH `config.yaml` persistence and the dashboard API.
+
+    The `float()` calls break the otherwise end-to-end `Decimal` discipline, and that is a
+    deliberate, bounded exception rather than an oversight. Two things keep it safe, and both
+    must hold if anyone changes this:
+
+    - These are SOL-denominated quantities and percentages, not raw base units. A SOL amount
+      at 9 decimals below ~10^6 SOL sits well inside float64's ~15-17 significant digits. The
+      exactness cliff that matters in this project is at 2**53 raw token units, which is
+      reachable by a 1e9-supply 6-decimal memecoin — see `shitcoims_tape.schema`, where raw
+      amounts therefore cross the wire as strings. Nothing raw passes through here.
+    - This mapping is shared: `persist_positions` writes it to YAML and `server.list_policies`
+      serves it to the browser, which types these fields as `number`. Switching to strings for
+      precision would silently change the API contract.
+
+    So: if a raw base-unit field is ever added to a policy, it must NOT be rendered with
+    `float()` here — split the persistence and API mappings first.
+    """
     payload: dict[str, Any] = {
         "mint": policy.mint,
         "name": policy.name,
