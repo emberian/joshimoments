@@ -67,3 +67,13 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = ["solders.*", "yaml.*", "uvicorn.*"]
 ignore_missing_imports = true
+
+# The tape recorder REUSES the intelligence package's audited Borsh decoder and its Helius
+# credential handling rather than forking either -- a second copy of the code that must never
+# leak an API key is exactly the mirror this project keeps paying for. mypy therefore follows
+# those imports, and without this the gate on shitcoims_tape would fail on pre-existing debt in
+# a module nobody in this lane owns. `silent` keeps the types flowing while leaving that debt
+# where it already is: tracked by `scripts/check.sh --full`, not blocking.
+[[tool.mypy.overrides]]
+module = ["shitcoims_intelligence.*"]
+follow_imports = "silent"

@@ -3,6 +3,12 @@
 This package holds interfaces #1 (tape event schema), #7 (entity resolution output) and
 #8 (propensity log) of the Phase 0 manifest in SWARM.md. It contains data contracts only —
 no network, no keys, no execution. Nothing here may import from ``shitcoims_sentinel``.
+
+The recorder that *produces* a tape lives in sibling modules and is imported explicitly, so
+that this namespace stays free of transports and credentials: ``shitcoims_tape.writer``
+(append-only segments), ``.watch`` (the censoring state machine), ``.recorder`` (chain
+transactions to tape events), ``.sources`` (Helius transports), ``.backfill`` (MELT and
+RED-PUMP), ``.health`` (the coverage and censoring audit), ``.cli`` (the process).
 """
 
 from __future__ import annotations
