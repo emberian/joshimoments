@@ -10,14 +10,12 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
 
 ## Next 3 moves
 
-1. Wave 2 in flight: signal #1 (SVN co-trading clusters) and signal #2 (funding-tree entity
-   resolution). #2 is a prerequisite for #1, #4, #5, #6 — nothing splits train/test correctly
-   until wallets collapse to entities.
-2. Drive the recorder against live mints so the signal lanes have real multi-wallet data; the
-   existing store has only 2 wallets, which is why spike #3 came back UNRESOLVABLE.
-3. Phase 2: replay + search harness (exact AMM fills via the kernel, MAP-Elites over DSL terms,
-   OPE over propensity-logged trades, purged walk-forward, honest trials accounting from the
-   grammar cardinality).
+1. Mint-indexed panel collection, hard-capped at 100k credits (1% of plan). Every signal lane
+   converged on this as the single unblocker; the existing store is a 2-address watchlist.
+2. Phase 2 replay harness: deterministic tape replay with exact AMM fills through the Lean
+   kernel, so a strategy is evaluated against the artifact the theorems are about.
+3. Phase 2 search: MAP-Elites over DSL terms with OPE on propensity-logged trades, purged
+   walk-forward, and trials accounting taken from the grammar cardinality rather than guessed.
 
 ## Done log
 
