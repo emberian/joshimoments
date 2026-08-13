@@ -6,9 +6,20 @@ Jupiter exit quote. PnL therefore started at 0% by construction, and every stop 
 far below wherever the coin had already fallen. Split by basis source over the same window:
 operator-typed +18.1% mean over 3 round trips, quote-stamped -29.1% over 16.
 
-The fix in Python was to delete the offending assignment at four call sites. The fix here is
-stronger: `BasisSource` has no constructor that accepts a quote, so the bug is not a mistake
-you must remember not to make — it is a term that does not typecheck.
+The fix in Python was to delete the offending assignment at four call sites. What this file
+adds is weaker than it originally claimed, and an adversarial audit was right to say so.
+
+`BasisSource` has no `fromQuote` constructor, so a basis must NAME its provenance. But the
+source is a label with no relationship to `lamportsPaid`, and nothing stops a caller stamping
+the current exit quote and labelling it `operator`:
+
+    { lamportsPaid := r.sellOut bag, tokensAcquired := bag, source := .operator, .. }
+
+That compiles, and it reproduces the -7.47 SOL failure exactly — PnL starts at 0 bps and the
+stop never fires. What the type buys is a REQUIRED, AUDITABLE declaration of where a number
+came from, not an impossibility. The guarantee has to come from the construction site: the
+sentinel's only path to `observedFill` is the chain reconstructor, and `observedFill` carries a
+signature and slot precisely so a mislabel can be checked against chain after the fact.
 
 The second property this file buys is fail-closed PnL. A position whose basis could not be
 established has `none`, not a guess, and every threshold rule is a function of PnL. So an
@@ -92,8 +103,12 @@ theorem no_basis_never_stops (p : Position) (h : p.basis = none)
     p.stopFires exitLamports thresholdBps = false := by
   simp [stopFires, pnlBps, h]
 
-/-- A quote-derived basis is not merely discouraged, it is unconstructible: every basis in
-existence carries a source that is either an observed fill or an operator assertion. -/
+/-- Every basis names a provenance: an observed fill, or an operator assertion.
+
+Constructor exhaustiveness over a two-constructor inductive, and nothing more — it depends on
+no axioms and it holds of a MISLABELLED basis too. It says the declaration is present, never
+that it is true. The earlier docstring claimed unconstructibility of a quote-derived basis;
+that was false, and the module header now records the counterexample. -/
 theorem basis_source_is_observed_or_operator (b : CostBasis) :
     (∃ sig slot, b.source = BasisSource.observedFill sig slot) ∨
       b.source = BasisSource.operator := by

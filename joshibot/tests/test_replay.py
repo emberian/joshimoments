@@ -108,27 +108,39 @@ def test_slots_are_replayed_in_ascending_order_even_if_the_tape_is_reversed() ->
     assert order == [10, 20, 30]
 
 
-def test_a_sell_is_priced_by_the_kernel_not_by_the_engine() -> None:
-    """The fill must equal the artifact the Lean theorems are about, to the lamport."""
+def test_a_sell_actually_happens_and_is_priced_by_the_kernel() -> None:
+    """A REAL sell, with the ledger asserted numerically.
+
+    The previous version of this test contained no sell at all: its policy returned None
+    while holdings were zero, and its only numeric assertion called the kernel directly
+    without touching the ledger. An adversarial audit showed four mutations surviving it —
+    including `proceeds = 0` and `proceeds = 2 * sell_out(...)`, a literal money printer.
+    """
     mint, pool, wallet = _addr(), _addr(), _addr()
-    events = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000)])
+    events = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000), (20, 1_000_000, 500_000)])
 
     def policy(snap: Snapshot) -> Order | None:
-        if snap.holdings.get(mint, 0) == 0:
-            return None
-        return Order(mint=mint, side=Side.SELL, amount_raw=250_000)
+        if snap.slot == 10:
+            return Order(mint=mint, side=Side.BUY, amount_raw=10_000)
+        held = snap.holdings.get(mint, 0)
+        return Order(mint=mint, side=Side.SELL, amount_raw=held) if held else None
 
-    ledger = replay(events, policy, starting_lamports=0)
-    assert ledger.fills == []  # nothing held, so nothing sold
+    ledger = replay(events, policy, starting_lamports=10**9)
+    buys = [f for f in ledger.fills if f.side is Side.BUY]
+    sells = [f for f in ledger.fills if f.side is Side.SELL]
+    assert len(buys) == 1 and len(sells) == 1
 
-    def buyer(snap: Snapshot) -> Order | None:
-        return Order(mint=mint, side=Side.BUY, amount_raw=250_000)
-
-    bought = replay(events, buyer, starting_lamports=10**9)
-    assert len(bought.fills) == 1
-    expected_reserves = KernelReserves(token_raw=1_000_000, sol_lamports=500_000)
-    # Selling that same size out of the same pool must agree with the kernel exactly.
-    assert sell_out(expected_reserves, 250_000) == 100_000
+    # Slot 20 carries a fresh reserve reading, and RECORDED GROUND TRUTH WINS over our own
+    # simulated impact — so the sell prices against the tape, not against the curve our buy
+    # moved. That is the honest semantic and the reason a participation cap is needed: the
+    # tape comes from a world in which we did not trade, so beyond a small size the replay
+    # cannot be faithful no matter how carefully the fill is computed.
+    observed = KernelReserves(token_raw=1_000_000, sol_lamports=500_000)
+    assert sells[0].lamports == sell_out(observed, 10_000)
+    assert ledger.lamports_received == sells[0].lamports
+    assert ledger.lamports_spent == buys[0].lamports
+    # A round trip against an unchanged pool must LOSE. Anything else is a printer.
+    assert ledger.realised_lamports < 0
 
 
 def test_a_round_trip_never_returns_more_than_it_cost() -> None:
@@ -154,7 +166,7 @@ def test_a_round_trip_never_returns_more_than_it_cost() -> None:
                 return Order(mint=mint, side=Side.BUY, amount_raw=_size)
             return None
 
-        bought = replay(events, policy, starting_lamports=10**18)
+        bought = replay(events, policy, starting_lamports=10**18, max_participation_bps=10_000)
         assert len(bought.fills) == 1
         cost = bought.fills[0].lamports
         proceeds = sell_out(KernelReserves(token_raw=tokens, sol_lamports=lamports), size)
@@ -194,7 +206,7 @@ def test_a_buy_beyond_available_lamports_is_refused() -> None:
     def policy(snap: Snapshot) -> Order:
         return Order(mint=mint, side=Side.BUY, amount_raw=900_000)
 
-    ledger = replay(events, policy, starting_lamports=1)
+    ledger = replay(events, policy, starting_lamports=1, max_participation_bps=10_000)
     assert ledger.fills == []
     assert ledger.rejected_orders == 1
 
@@ -284,3 +296,87 @@ def test_buying_the_whole_reserve_is_impossible_rather_than_expensive() -> None:
 
     with pytest.raises(ReplayError):
         _buy_cost(KernelReserves(token_raw=1_000, sol_lamports=1_000), 1_000)
+
+
+def test_the_replay_is_not_a_money_printer() -> None:
+    """The regression for the worst defect an adversarial audit found in this harness.
+
+    With reserves written only by tape events and no participation cap, a policy could buy
+    90% of a pool every slot and sell back 90x the entire pool — realising 989 SOL from a
+    pool holding 1,000 lamports, reported as `realised_lamports`, the one number this module
+    claims is trustworthy.
+
+    Two things stop it now, and this pins both: own fills move the simulated curve, and
+    orders beyond the faithful range are refused rather than priced.
+    """
+    mint, pool, wallet = _addr(), _addr(), _addr()
+    events = _tape(mint, pool, wallet, [(s, 1_000_000, 1_000) for s in range(10, 110)])
+    events += _tape(mint, pool, wallet, [(200, 1_000_000, 10**12)])
+
+    def hog(snap: Snapshot) -> Order | None:
+        if snap.slot < 200:
+            return Order(mint=mint, side=Side.BUY, amount_raw=900_000)
+        held = snap.holdings.get(mint, 0)
+        return Order(mint=mint, side=Side.SELL, amount_raw=held) if held else None
+
+    ledger = replay(events, hog, starting_lamports=10**18)
+    assert ledger.fills == []
+    assert ledger.rejected_for_participation > 0
+    assert ledger.realised_lamports == 0
+
+
+def test_an_own_fill_moves_the_pool_it_fills_against() -> None:
+    """Reserves must be debited by our own trade, not only by tape events."""
+    mint, pool, wallet = _addr(), _addr(), _addr()
+    events = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000)])
+    seen: list[tuple[int, int]] = []
+
+    def policy(snap: Snapshot) -> Order | None:
+        state = snap.pools.get(mint)
+        if state is not None:
+            seen.append((state.reserves.token_raw, state.reserves.sol_lamports))
+        return Order(mint=mint, side=Side.BUY, amount_raw=10_000) if snap.slot == 10 else None
+
+    replay(events, policy, starting_lamports=10**12)
+    # Only one slot, so we observe the pre-fill state; assert the post-fill state directly.
+    assert seen == [(1_000_000, 500_000)]
+
+    two_slots = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000)])
+    # A second decision point with NO new reserve event: the policy must see our own impact.
+    two_slots += [
+        TapeEvent(
+            kind=EventKind.TRADE,
+            observed_at="2026-08-13T00:00:00Z",
+            provenance=_prov(),
+            chain=_chain(20),
+            body=Trade(
+                mint=mint, wallet=wallet, side=Side.BUY,
+                sol_delta_lamports=-1, token_delta_raw=1, pool=pool,
+            ),
+        )
+    ]
+    later: list[tuple[int, int]] = []
+
+    def watcher(snap: Snapshot) -> Order | None:
+        state = snap.pools.get(mint)
+        if state is not None:
+            later.append((state.reserves.token_raw, state.reserves.sol_lamports))
+        return Order(mint=mint, side=Side.BUY, amount_raw=10_000) if snap.slot == 10 else None
+
+    replay(two_slots, watcher, starting_lamports=10**12)
+    assert later[0] == (1_000_000, 500_000)
+    assert later[1][0] == 990_000, "our purchase did not remove tokens from the pool"
+    assert later[1][1] > 500_000, "our purchase did not add lamports to the pool"
+
+
+def test_an_oversized_buy_rejects_rather_than_aborting_the_whole_replay() -> None:
+    """One unfillable order must not destroy a run that may have taken hours."""
+    mint, pool, wallet = _addr(), _addr(), _addr()
+    events = _tape(mint, pool, wallet, [(10, 1_000, 500_000)])
+
+    def policy(snap: Snapshot) -> Order:
+        return Order(mint=mint, side=Side.BUY, amount_raw=5_000)
+
+    ledger = replay(events, policy, starting_lamports=10**18, max_participation_bps=10_000)
+    assert ledger.fills == []
+    assert ledger.rejected_orders == 1

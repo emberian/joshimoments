@@ -103,7 +103,11 @@ def walk_forward(
     out: list[Fold] = []
 
     for fold in range(1, folds):
-        test_positions = order[fold * block : (fold + 1) * block] if fold < folds - 1 else order[fold * block :]
+        test_positions = (
+            order[fold * block : (fold + 1) * block]
+            if fold < folds - 1
+            else order[fold * block :]
+        )
         if not test_positions:
             continue
         train_positions = order[: fold * block]

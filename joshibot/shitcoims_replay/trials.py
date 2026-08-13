@@ -18,7 +18,7 @@ the set of terms of bounded depth, and `kernel/Joshi/Dsl.lean` computes it exact
 takes that number from the Lean artifact, so the correction rests on a counted quantity.
 
 **The cross-trial spread is REQUIRED, not defaulted.** `trial_sharpe_sd` has no default value.
-Passing it is the whole content of the deflation: with σ set to 1 by convention the expected
+Passing it is the whole content of the deflation: with the spread set to 1 by convention the expected
 maximum is wrong by exactly the factor the term exists to supply. Making it mandatory means
 the caller cannot omit it by accident, which is precisely how both audited implementations
 lost it.
@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from statistics import NormalDist
 
-#: Euler–Mascheroni, as it appears in the expected-maximum expansion.
+#: Euler-Mascheroni, as it appears in the expected-maximum expansion.
 _GAMMA = 0.5772156649015329
 
 
@@ -42,31 +43,17 @@ def _norm_cdf(x: float) -> float:
 
 
 def _norm_ppf(p: float) -> float:
-    """Inverse normal CDF (Acklam's rational approximation, ~1e-9 absolute).
+    """Inverse normal CDF, from the standard library.
 
-    Hand-rolled to keep this module dependency-free, and accurate enough that the deflation
-    is limited by the inputs rather than by the quantile.
+    This was a hand-rolled Acklam approximation, justified in a docstring as keeping the
+    module dependency-free. That justification was false — `statistics` IS the standard
+    library — and an adversarial audit measured the approximation's worst absolute error at
+    7.36e-09 against a claimed ~1e-9, with no direct test: substituting a version 2% wrong
+    survived the whole suite. `NormalDist().inv_cdf` is exact to ~1e-16 and shorter.
     """
     if not 0.0 < p < 1.0:
         raise TrialsError("normal quantile needs p in (0, 1)")
-    a = [-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
-         1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00]
-    b = [-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
-         6.680131188771972e01, -1.328068155288572e01]
-    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
-         -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00]
-    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
-         3.754408661907416e00]
-    plow, phigh = 0.02425, 1 - 0.02425
-    if p < plow:
-        q = math.sqrt(-2 * math.log(p))
-        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
-    if p > phigh:
-        q = math.sqrt(-2 * math.log(1 - p))
-        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
-    q = p - 0.5
-    r = q * q
-    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+    return NormalDist().inv_cdf(p)
 
 
 def expected_max_sharpe(trials: int, trial_sharpe_sd: float) -> float:
@@ -141,12 +128,19 @@ def minimum_backtest_length(trials: int, target_sharpe: float = 1.0) -> float:
 
     The other side of the same coin, and the more useful one when planning a search: it
     answers "how big a search can this much data support" rather than "did my winner survive".
+
+    This is the EXACT expression, ``E[max SR]² / target²``. An earlier version shipped
+    ``2·ln(N)/target²``, which the paper gives as a loose upper BOUND — it overstated the
+    requirement by 52-102% and contradicted this module's own anchor, claiming five years
+    supports N=12 when the paper's figure is ~45. Caught by adversarial audit; the test that
+    was supposed to protect it merely restated the implementation's own formula.
     """
     if trials < 2:
         raise TrialsError("minimum backtest length needs at least 2 trials")
     if target_sharpe <= 0:
         raise TrialsError("target_sharpe must be positive")
-    return 2.0 * math.log(trials) / target_sharpe**2
+    benchmark = expected_max_sharpe(trials, 1.0)
+    return benchmark**2 / target_sharpe**2
 
 
 def grammar_trials(features: int, literals: int, depth: int) -> int:

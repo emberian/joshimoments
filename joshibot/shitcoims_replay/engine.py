@@ -8,8 +8,32 @@ done to the book, and that guess is where fidelity dies. Against an AMM the answ
 arithmetic: given the reserves recorded on the tape, the payout for a size is computable to
 the lamport. This replay therefore does not *estimate* a fill — it computes one, through
 ``shitcoims_kernel``, which is held to exact agreement with the Lean artifact that the fill
-theorems are about. A memecoin backtest can be higher-fidelity than any equities backtest, and
-this is the reason.
+theorems are about.
+
+**And a fill moves the pool it fills against.** This was missing in the first version and an
+adversarial audit reduced the harness to a money printer with it: because reserves were only
+ever written by tape events, a policy could buy 900,000 tokens out of a 1,000,000-token pool
+a hundred times over and sell 90x the entire pool back, realising 989 SOL from a pool holding
+1,000 lamports. Own fills now debit the simulated reserves until the next observed reserve
+reading replaces them with ground truth. A backtest that lets a policy trade without impact is
+not high-fidelity, it is unbounded.
+
+**And there is a hard participation cap, because beyond it a replay CANNOT be faithful.**
+Own-fill impact alone does not save the harness: the next recorded reserve reading overwrites
+it, and that reading comes from a world in which we did not trade. So a policy sized to move
+the pool is being replayed against a counterfactual that no longer describes it. The audit's
+money printer survived impact modelling for exactly this reason — it bought 90% of the pool
+each slot and the tape kept resetting the curve underneath it.
+
+The only honest response is to refuse the regime rather than to simulate it badly. Orders above
+``max_participation_bps`` of the observed token reserve are rejected and counted. The default
+is 200bps, matching PROGRAM.md's entry rule, and it is the *same* constraint a live desk faces
+— so the cap is not a simulator artefact, it is the tradeable envelope.
+
+Two residual limitations, stated rather than hidden: there is still no fee (pump.fun takes
+100bps on the sell side, Raydium 25bps), so round trips remain optimistic; and the policy is
+consulted after a slot's events are folded in, so it decides on a bar and fills at that bar's
+close, with no latency model behind it.
 
 **Lookahead is structurally impossible, not merely avoided.** A policy is never handed the
 tape. It is handed a :class:`Snapshot` holding the prefix of events at or before the current
@@ -109,6 +133,9 @@ class Ledger:
     lamports_spent: int = 0
     lamports_received: int = 0
     rejected_orders: int = 0
+    #: Orders refused because they would have moved the pool beyond the faithful range. A
+    #: non-zero count means the policy WANTED a size this tape cannot honestly price.
+    rejected_for_participation: int = 0
 
     @property
     def realised_lamports(self) -> int:
@@ -142,6 +169,7 @@ def replay(
     policy: Policy,
     *,
     starting_lamports: int = 0,
+    max_participation_bps: int = 200,
 ) -> Ledger:
     """Run ``policy`` over ``events`` in chain order, filling from recorded reserves.
 
@@ -183,6 +211,11 @@ def replay(
             continue
 
         state = pools.get(order.mint)
+        if state is not None and max_participation_bps < 10_000:
+            cap = state.reserves.token_raw * max_participation_bps // 10_000
+            if order.amount_raw > cap:
+                ledger.rejected_for_participation += 1
+                continue
         if state is None:
             # No observed reserves means no computable fill. Refusing is the only honest
             # option: a modelled price here would be exactly the fabrication this engine
@@ -199,17 +232,41 @@ def replay(
             holdings[order.mint] = held - order.amount_raw
             lamports += proceeds
             ledger.lamports_received += proceeds
+            # The sale moves the curve: tokens in, lamports out.
+            pools[order.mint] = PoolState(
+                mint=order.mint,
+                reserves=KernelReserves(
+                    token_raw=state.reserves.token_raw + order.amount_raw,
+                    sol_lamports=state.reserves.sol_lamports - proceeds,
+                ),
+                slot=state.slot,
+            )
             ledger.fills.append(
                 Fill(slot, order.mint, Side.SELL, order.amount_raw, proceeds)
             )
         else:
-            cost = _buy_cost(state.reserves, order.amount_raw)
+            try:
+                cost = _buy_cost(state.reserves, order.amount_raw)
+            except ReplayError:
+                # An order larger than the pool is unfillable, not fatal. Aborting the whole
+                # replay on one bad order would destroy a run over a single thin pool.
+                ledger.rejected_orders += 1
+                continue
             if cost > lamports:
                 ledger.rejected_orders += 1
                 continue
             holdings[order.mint] = holdings.get(order.mint, 0) + order.amount_raw
             lamports -= cost
             ledger.lamports_spent += cost
+            # The purchase moves the curve the other way: tokens out, lamports in.
+            pools[order.mint] = PoolState(
+                mint=order.mint,
+                reserves=KernelReserves(
+                    token_raw=state.reserves.token_raw - order.amount_raw,
+                    sol_lamports=state.reserves.sol_lamports + cost,
+                ),
+                slot=state.slot,
+            )
             ledger.fills.append(Fill(slot, order.mint, Side.BUY, order.amount_raw, cost))
 
     return ledger

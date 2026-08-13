@@ -89,13 +89,22 @@ def test_fat_tails_reduce_the_deflated_probability() -> None:
     assert fat.probability < normal.probability
 
 
-def test_minimum_backtest_length_matches_the_published_scale() -> None:
-    """After ~7 independent configurations an in-sample Sharpe of 1 means an OOS Sharpe of 0."""
-    assert minimum_backtest_length(7, 1.0) == pytest.approx(2.0 * math.log(7))
-    assert 3.5 < minimum_backtest_length(7, 1.0) < 4.5
-    # Five years supports roughly 45 configurations at a target Sharpe of 1.
-    assert 4.5 < minimum_backtest_length(45, 1.0) < 8.0
-    # A larger search demands more data, monotonically.
+def test_minimum_backtest_length_matches_the_paper_not_its_loose_bound() -> None:
+    """Pinned against the PUBLISHED anchors, never against the implementation's own formula.
+
+    The previous test asserted `== 2*ln(7)`, which is the code restating itself and cannot
+    detect a wrong formula — and the formula WAS wrong, shipping the paper's upper bound as
+    the answer and overstating the data requirement by 52-102%.
+    """
+    # Bailey et al.: ~7 configurations exhaust an in-sample Sharpe of 1 in under two years...
+    assert minimum_backtest_length(7, 1.0) == pytest.approx(1.923, abs=0.02)
+    # ...and five years of data supports roughly 45 of them.
+    assert minimum_backtest_length(45, 1.0) == pytest.approx(4.998, abs=0.02)
+    assert minimum_backtest_length(100, 1.0) == pytest.approx(6.404, abs=0.02)
+    # The discarded upper bound would have said 3.89 / 7.61 / 9.21 respectively.
+    assert minimum_backtest_length(7, 1.0) < 2.0 * math.log(7)
+    # Doubling the target Sharpe quarters the data requirement.
+    assert minimum_backtest_length(45, 2.0) == pytest.approx(minimum_backtest_length(45, 1.0) / 4)
     lengths = [minimum_backtest_length(n) for n in (10, 100, 1_000)]
     assert lengths == sorted(lengths)
 
@@ -129,3 +138,25 @@ def test_impossible_inputs_are_refused_rather_than_returned() -> None:
         )
     with pytest.raises(TrialsError):
         minimum_backtest_length(1)
+
+
+def test_a_live_oracle_answering_err_is_a_failure_not_a_skip() -> None:
+    """The defect the audit demonstrated: a working binary with one broken dispatch.
+
+    `OracleUnavailable` is legitimately skippable — the binary may not be built. `err` from a
+    LIVE binary is not: it means a query that should be answered was rejected, which is
+    exactly the drift these tests exist to catch. Conflating the two reports a broken
+    dispatch as green-with-a-skip.
+    """
+    from shitcoims_kernel import OracleRejected, OracleUnavailable
+
+    assert not issubclass(OracleRejected, OracleUnavailable)
+    assert not issubclass(OracleUnavailable, OracleRejected)
+
+    try:
+        from shitcoims_kernel import LeanOracle
+
+        with LeanOracle() as oracle, pytest.raises(OracleRejected):
+            oracle._ask("predcount 8 4")  # wrong arity: a live binary answers `err`
+    except OracleUnavailable as exc:
+        pytest.skip(f"lean oracle unavailable: {exc}")

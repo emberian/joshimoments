@@ -170,3 +170,38 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   cannot extrapolate and silently trying is how it lies. 10 tests, 4/4 mutations killed — and
   the tests caught a real bug in my own DR formula (the direct term must be the target-weighted
   expectation over ALL actions, not the model's value for the logged one).
+
+## Adversarial audit round 1 (2026-08-13) — what it found
+
+Three auditors, one per surface, briefed to REFUTE. All three found real defects; the harness
+audit found **25 of 60 mutations surviving**. Fixed so far:
+
+- **Lean F1 (CRITICAL)** — "lookahead is a term that cannot be constructed" was FALSE. A
+  strategy can close over a `History`; the counterexample compiles, and my own no-lookahead
+  theorem is satisfied *by* the leaky strategy (it is congruence, not causality). Fixed for the
+  DSL path by removing the caller-supplied feature function; general `Strategy` claim corrected
+  and the theorem renamed `decision_depends_only_on_the_view`.
+- **Lean F2 (CRITICAL)** — "a quote-derived basis is unconstructible" was FALSE; the source is
+  a label with no tie to `lamportsPaid`. Claim corrected to what the type actually buys.
+- **Lean F3/F4** — the envelope's pool size is proposer-supplied, and the "join with Fill.lean"
+  uses nothing from Fill.lean. Both now stated as open gaps in the code.
+- **Harness C-1 (CRITICAL)** — the replay was a **money printer**: own fills never debited the
+  pool, so a policy extracted 90× the entire reserve, 989 SOL from a 1,000-lamport pool. Fixed
+  with own-fill impact *and* a participation cap, because tape ground truth overwrites our
+  impact — beyond a small size a replay simply cannot be faithful.
+- **Harness C-2** — the "priced by the kernel" test contained NO SELL. Rewritten with a real
+  sell and numeric ledger assertions.
+- **Harness C-6** — `minimum_backtest_length` shipped the paper's loose *upper bound* as the
+  answer (52–102% too high) and its test restated the implementation's own formula. Now the
+  exact expression, pinned to published anchors.
+- **Harness C-18** — hand-rolled `_norm_ppf` justified as "dependency-free" when `statistics`
+  is stdlib; 7× worse than claimed and untested. Replaced with `NormalDist().inv_cdf`.
+- **Kernel F7** — an oracle `err` from a LIVE binary became a `pytest.skip`. `OracleRejected`
+  is now a distinct exception that must never be skipped.
+
+**Still open, recorded not fixed:** Lean F5 (N is verified arithmetic, not a cardinality
+theorem; the type is infinite), F6 (no fee in the fill model; `afterSell` dead), F8/F9/F10;
+harness C-3 (three split tests run on fixtures where every fold's train set is EMPTY), C-4
+(the DR test's model is constant — the one shape that cannot catch its bug), C-5, C-7..C-20;
+tape audit's 20 findings including the tri-state destroyed on the READ path, cross-source
+dedupe not working, and signal #1's "null deletes 100%" not being what the code measures.

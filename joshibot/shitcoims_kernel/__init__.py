@@ -24,6 +24,7 @@ the Lean side is right by construction and the Python side is a bug.
 from __future__ import annotations
 
 from shitcoims_kernel.fill import Reserves, accepts, sell_out
-from shitcoims_kernel.oracle import LeanOracle, OracleUnavailable
+from shitcoims_kernel.oracle import LeanOracle, OracleRejected, OracleUnavailable
 
-__all__ = ["LeanOracle", "OracleUnavailable", "Reserves", "accepts", "sell_out"]
+__all__ = ["LeanOracle", "OracleRejected",
+    "OracleUnavailable", "Reserves", "accepts", "sell_out"]

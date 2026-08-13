@@ -17,7 +17,18 @@ _BINARY = Path(__file__).resolve().parent.parent / "kernel" / ".lake" / "build" 
 
 
 class OracleUnavailable(RuntimeError):
-    """The Lean oracle binary is not built. Run `lake build joshi-oracle` in kernel/."""
+    """The Lean oracle binary is not built or has died. Tests may legitimately SKIP on this."""
+
+
+class OracleRejected(RuntimeError):
+    """A live oracle answered `err`. This is a REAL failure and must never be skipped.
+
+    Kept distinct from `OracleUnavailable` because conflating them reproduces the exact defect
+    the trials test was written to prevent: a caller that skips on "oracle unavailable" would
+    also skip when a working binary rejects a query it should have answered, reporting a
+    broken dispatch as green. Demonstrated by adversarial audit against a binary whose
+    `predcount` arity had drifted.
+    """
 
 
 class LeanOracle:
@@ -45,8 +56,10 @@ class LeanOracle:
         proc.stdin.write(query + "\n")
         proc.stdin.flush()
         reply = proc.stdout.readline().strip()
-        if reply == "" or reply == "err":
-            raise OracleUnavailable(f"oracle rejected or died on: {query!r}")
+        if reply == "":
+            raise OracleUnavailable(f"oracle produced no reply to: {query!r}")
+        if reply == "err":
+            raise OracleRejected(f"oracle rejected a query it should answer: {query!r}")
         return reply
 
     def sell_out(self, token_raw: int, sol_lamports: int, amount: int) -> int:

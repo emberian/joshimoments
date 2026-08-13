@@ -8,9 +8,27 @@ evaluation protocol. A GNN benchmark moved 39.5 F1 points between transductive a
 evaluation. One published "purged" cross-validation had a purge parameter that was a literal
 no-op. In every case the code ran, produced a number, and the number was wrong.
 
-The defence here is that a strategy is not given a history. It is given a `View t`, which
-carries a proof that it contains nothing after `t`. Reading the future is therefore not a
-mistake to be caught in review; it is a term that cannot be constructed.
+The defence here is that a strategy is handed a `View t`, which carries a proof that it holds
+nothing after `t`.
+
+**What that does and does not buy — corrected after an adversarial audit found the original
+claim false.** This file previously asserted that lookahead was "a term that cannot be
+constructed". It is not. Lean function types do not restrict capture, so a strategy can close
+over a whole `History` and read any slot it likes:
+
+    def leaky (h : History) : Strategy Bool :=
+      { decide := fun t _ => h.events.any (fun o => decide (t < o.slot)) }
+
+That compiles, and it satisfies `decision_depends_only_on_the_view` below — because a strategy
+which ignores its argument trivially gives equal outputs on equal arguments. The theorem is
+CONGRUENCE, not causality, and it is honestly named as such now.
+
+The real guarantee lives one level up, in `Dsl.lean`: a strategy expressed as a first-order
+`Pred` term, evaluated through the kernel's own `featuresOf`, has no channel through which to
+reference a history at all. `Dsl.toStrategy_reads_only_the_visible_prefix` is the causal
+statement, and it holds because the closure channel has been removed rather than because a
+type forbade it. Arbitrary `Strategy` values remain unconstrained, and any harness that accepts
+one is trusting its author.
 -/
 
 namespace Joshi
@@ -58,17 +76,19 @@ theorem View.ext {t : Nat} {v w : View t} (h : v.events = w.events) : v = w := b
 
 /-- A strategy: for every slot, a decision from the causally-restricted view.
 
-The type is the specification. There is no `History` argument anywhere in it. -/
+The absence of a `History` parameter is suggestive, NOT binding — a closure can capture one.
+See the module docstring; the enforceable version is a `Pred` term in `Dsl.lean`. -/
 structure Strategy (Action : Type) where
   decide : (t : Nat) → View t → Action
 
-/-- **No-lookahead, as a theorem.**
+/-- Two histories agreeing up to `t` yield the same decision at `t` — for a strategy that
+actually reads only its argument.
 
-Two histories that agree up to `t` — however wildly they differ afterwards — produce the
-same decision at `t`. This is the property that backtest protocols try to enforce socially
-with purging and embargoes, and that a leaked feature silently violates. Here it is a
-consequence of the strategy's type, so it holds for every strategy anyone can write. -/
-theorem decision_ignores_the_future {Action : Type} (s : Strategy Action)
+Named honestly: this is congruence through `View.at`, and its whole content is that
+`View.at h t` factors through `h.visible t`. It does NOT establish that a given strategy is
+causal, because a strategy that ignores its argument satisfies it vacuously. Use it to
+transport causality once you have it; do not mistake it for a proof that you do. -/
+theorem decision_depends_only_on_the_view {Action : Type} (s : Strategy Action)
     (h₁ h₂ : History) (t : Nat) (agree : h₁.visible t = h₂.visible t) :
     s.decide t (View.at h₁ t) = s.decide t (View.at h₂ t) := by
   have : View.at h₁ t = View.at h₂ t := View.ext agree

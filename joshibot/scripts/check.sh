@@ -79,8 +79,8 @@ import Joshi
 #print axioms Joshi.Reserves.sellOut_le_reserve
 #print axioms Joshi.Reserves.sellOut_mono
 #print axioms Joshi.Position.no_basis_never_stops
-#print axioms Joshi.decision_ignores_the_future
-#print axioms Joshi.toStrategy_ignores_the_future
+#print axioms Joshi.decision_depends_only_on_the_view
+#print axioms Joshi.toStrategy_reads_only_the_visible_prefix
 #print axioms Joshi.exposure_bounded
 #print axioms Joshi.exposure_monotone
 #print axioms Joshi.admitted_spend_within_pool

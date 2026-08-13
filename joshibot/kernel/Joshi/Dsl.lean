@@ -3,9 +3,12 @@ Interface #4 of the Phase 0 manifest: the strategy term algebra.
 
 Two things this buys, and the second is the one that is hard to get any other way.
 
-First, composition with the causal index: a term is evaluated against a `View t`, so every
-strategy expressible in this DSL inherits the no-lookahead theorem from `History.lean`. You
-cannot write a leaky strategy in it.
+First, composition with the causal index: a `Pred` term is first-order and is evaluated
+through the kernel's own `featuresOf`, so there is no parameter through which a history could
+enter. A leaky strategy is genuinely inexpressible ON THIS PATH. (An adversarial audit found
+the earlier version false: `toStrategy` took a caller-supplied feature function, and that
+closure could capture a tape. The channel is now closed; arbitrary `Strategy` values remain
+unconstrained, as `History.lean` says.)
 
 Second, and more unusual: **the trial count is computable.** Honest multiple-testing
 correction needs N, the number of configurations actually searched, and in practice nobody
@@ -15,9 +18,23 @@ audited implementation of it in this project's own reference material was simply
 the stakes: after only ~7 independent configurations the expected best in-sample Sharpe of 1
 corresponds to an out-of-sample Sharpe of zero, and five years of data supports about 45.
 
-When the search space is a grammar, N is not estimated. It is the cardinality of the set of
-terms of bounded depth, and `exprCount` / `predCount` below compute it exactly. A search that
-enumerates this grammar can report its own N, so the correction stops being a hopeful guess.
+When the search space is a grammar, N can be COUNTED rather than guessed, and `exprCount` /
+`predCount` below do that counting.
+
+Two honest limits on that, both found by adversarial audit and neither yet closed:
+
+1. These recurrences are **verified by exhaustive enumeration** for small parameters (see the
+   audit's `count.py`: every case matches, no double counting, `add`/`sub` symmetric, the
+   at-most-depth reading consistent with `Expr.depth`/`Pred.depth`). They are NOT proved equal
+   to the cardinality of the Lean type, and cannot be as written: `Expr.lit : Nat → Expr n`
+   makes even the depth-0 subtype infinite, and `lits` has no referent in `Expr` at all. They
+   describe an intended grammar with a bounded literal set. Treat the number as arithmetic
+   that has been checked, not as a theorem about this type.
+2. Syntactic count ≠ independent configurations. Measured at `n=2, lits=2, d=1`: 1568 terms
+   but at most 86 distinct behaviours on a 6×6 feature grid — an 18× inflation from `neg neg`,
+   `le a a`, commuted `add`. The direction is CONSERVATIVE for the deflated Sharpe (which
+   increases in `trials`), so it cannot manufacture a false discovery — but Bailey et al.'s
+   ~7/~45 figures are about *independent* configurations, and this is not that number.
 -/
 
 import Joshi.History
@@ -103,22 +120,36 @@ theorem exprCount_pos (n lits d : Nat) (h : 0 < lits + n) : 0 < exprCount n lits
   | zero => simpa [exprCount] using h
   | succ d ih => simp only [exprCount]; omega
 
-/-- Every DSL term is a causal strategy.
+/-- The kernel's own feature extractor. Four features, read from the view and nothing else.
 
-`features` may read only the view, so the composed strategy satisfies
-`decision_ignores_the_future` by construction. This is the join between #3 and #4: the
-grammar cannot express a leak because the only data it can reach is causally restricted. -/
-def Pred.toStrategy {n : Nat} (p : Pred n)
-    (features : (t : Nat) → View t → Fin n → Nat) : Strategy Bool :=
-  { decide := fun t v => p.eval (features t v) }
+This is the fix for a hole an adversarial audit found: `toStrategy` used to accept a
+caller-supplied `features : (t : Nat) → View t → Fin n → Nat`, and that function could close
+over an entire `History` and read the future — so the "grammar cannot express a leak" claim
+was false through the feature channel rather than the term channel.
 
-/-- The no-lookahead guarantee transported to every term of the grammar. -/
-theorem toStrategy_ignores_the_future {n : Nat} (p : Pred n)
-    (features : (t : Nat) → View t → Fin n → Nat)
+Defining the extractor HERE removes the channel. A `Pred` is first-order, `featuresOf` is a
+closed definition over `v.events`, and there is nowhere left for a tape to enter. -/
+def featuresOf {t : Nat} (v : View t) : Fin 4 → Nat
+  | ⟨0, _⟩ => v.events.length
+  | ⟨1, _⟩ => v.events.foldl (fun acc o => max acc o.value) 0
+  | ⟨2, _⟩ => v.events.foldl (fun acc o => acc + o.value) 0
+  | _      => (v.events.reverse.head?).elim 0 (fun o => o.value)
+
+/-- Every DSL term is a causal strategy — now genuinely, because the closure channel is gone. -/
+def Pred.toStrategy (p : Pred 4) : Strategy Bool :=
+  { decide := fun _t v => p.eval (featuresOf v) }
+
+/-- **A DSL strategy reads only the visible prefix.**
+
+Unlike the general congruence lemma this one has content, because `Pred.toStrategy` admits no
+parameter through which a history could be smuggled in: `p` is a first-order term and
+`featuresOf` is a closed definition over the view's events. Two histories agreeing up to `t`
+therefore produce the same decision for a reason stronger than "the strategy ignored its
+argument". -/
+theorem toStrategy_reads_only_the_visible_prefix (p : Pred 4)
     (h₁ h₂ : History) (t : Nat) (agree : h₁.visible t = h₂.visible t) :
-    (p.toStrategy features).decide t (View.at h₁ t)
-      = (p.toStrategy features).decide t (View.at h₂ t) :=
-  decision_ignores_the_future (p.toStrategy features) h₁ h₂ t agree
+    p.toStrategy.decide t (View.at h₁ t) = p.toStrategy.decide t (View.at h₂ t) :=
+  decision_depends_only_on_the_view p.toStrategy h₁ h₂ t agree
 
 /-- A worked trial count, so the number is concrete rather than rhetorical.
 

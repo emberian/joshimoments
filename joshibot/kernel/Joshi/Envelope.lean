@@ -33,7 +33,13 @@ structure Limits where
   /-- Realised loss the desk may absorb before it stops trading for the day. -/
   dailyLossBudget : Nat
 
-/-- A proposed action, carrying the pool state it would execute against. -/
+/-- A proposed action.
+
+⚠ `poolSolLamports` is SUPPLIED BY THE PROPOSER, and the gate's liquidity clause reads it. A
+learner that self-reports a 10,000 SOL pool it is really about to move 1 SOL of passes the
+fraction cap trivially — demonstrated by adversarial audit. Nothing in this file binds it to a
+`Reserves`. Until a caller checks it against observed reserves BEFORE calling `admits`, the
+impact cap is advisory and only the trade-size, exposure and loss clauses are adversarial. -/
 structure Action where
   spendLamports : Nat
   poolSolLamports : Nat
@@ -131,12 +137,13 @@ theorem exposure_monotone (l : Limits) :
 
 /-- An admitted action never spends more than the pool's whole SOL side.
 
-The join with `Fill.lean`. Because AMM impact is a deterministic function of reserves, a
-fraction cap enforced at admission time is a real bound on execution cost rather than a hope
-about liquidity — which is the best an equities venue can offer. Concretely: with the cap set
-at or below 1, cross-multiplication and cancellation of the (positive) denominator give a
-spend bounded by the pool itself, which is what stops a single admitted fill from crossing
-the whole curve.
+Pure arithmetic over `Limits` and `Action`: with the cap at or below 1, cross-multiplication
+and cancellation of the positive denominator bound the spend by the reported pool.
+
+⚠ This was previously described as "the join with `Fill.lean`". It is not — it mentions no
+`Reserves`, no `sellOut`, no `accepts`, and the `import Joshi.Fill` above is unused by it.
+There is currently NO theorem connecting the envelope to the fill semantics, and the bound is
+against the proposer-reported pool size (see `Action`). Both gaps are real and open.
 
 Every hypothesis is load-bearing here: drop `h` and there is no fraction bound to cancel,
 drop `hfrac` and the cap could exceed the pool. -/
