@@ -40,6 +40,27 @@ def append(path: Path, record: dict) -> None:
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
+def _close_record(close, run_id: str, reason: str) -> dict:
+    """The ONE shape a close record takes, whatever ended the position.
+
+    Every field every consumer needs, always present. See the drain-path comment: a
+    record missing `spend_lamports` reads as a real observation and poisons every ratio
+    computed over the file.
+    """
+    return {
+        "run_id": run_id,
+        "decision_id": close.decision_id,
+        "mint": close.mint,
+        "spend_lamports": close.spend_lamports,
+        "proceeds_lamports": close.proceeds_lamports,
+        "priority_fees_lamports": close.priority_fees_lamports,
+        "pnl_lamports": close.pnl_lamports,
+        "entry_t": close.entry_t,
+        "exit_t": close.exit_t,
+        "exit_reason": reason,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=10.0)
@@ -48,6 +69,9 @@ def main() -> None:
     args = ap.parse_args()
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # Every record carries a run_id. Without one, records from different runs (different
+    # seeds, thresholds, code) pool silently in one file and are averaged together.
+    run_id = f"{int(time.time())}-s{args.seed}"
     decisions_path = STATE_DIR / "decisions.jsonl"
     closes_path = STATE_DIR / "closes.jsonl"
     heartbeat_path = STATE_DIR / "heartbeat.jsonl"
@@ -87,6 +111,7 @@ def main() -> None:
             counters["decisions"] += 1
             record = decision.propensity_record_json()
             record.update(
+                run_id=run_id,
                 verdict_pass=decision.verdict_pass,
                 explored=decision.explored,
                 thresholds=decision.thresholds.to_json(),
@@ -127,26 +152,14 @@ def main() -> None:
             counters["closes"] += 1
             if close.exit_reason == "feed_lost":
                 counters["feed_lost"] += 1
-            append(
-                closes_path,
-                {
-                    "decision_id": close.decision_id,
-                    "mint": close.mint,
-                    "spend_lamports": close.spend_lamports,
-                    "proceeds_lamports": close.proceeds_lamports,
-                    "priority_fees_lamports": close.priority_fees_lamports,
-                    "pnl_lamports": close.pnl_lamports,
-                    "entry_t": close.entry_t,
-                    "exit_t": close.exit_t,
-                    "exit_reason": close.exit_reason,
-                },
-            )
+            append(closes_path, _close_record(close, run_id, close.exit_reason))
 
         if now - last_heartbeat >= 60.0:
             last_heartbeat = now
             append(
                 heartbeat_path,
                 {
+                    "run_id": run_id,
                     "t": utc_iso(now),
                     "open_positions": len(book.heap),
                     "exposure_lamports": book.heap.exposure_lamports(),
@@ -158,12 +171,16 @@ def main() -> None:
         time.sleep(max(0.0, args.poll_seconds - (time.time() - now)))
 
     # Drain: close whatever is still open at the horizon, pessimistically.
+    #
+    # This writes the FULL record. An earlier version emitted only decision_id/mint/pnl,
+    # which silently broke every downstream ratio: the report divided ten positions' PnL by
+    # one position's spend and printed -151%. A partial row is worse than no row, because it
+    # looks like data. Any close record must carry the same fields whatever ended it.
     for pos in list(positions.values()):
         snap = poll_mint(pos.mint)
         close = marker.close(pos.decision_id, snap.curve if snap else None, reason="drain")
         if close is not None:
-            append(closes_path, {"decision_id": close.decision_id, "mint": close.mint,
-                                 "pnl_lamports": close.pnl_lamports, "exit_reason": "drain"})
+            append(closes_path, _close_record(close, run_id, "drain"))
     print(json.dumps(counters, indent=1))
 
 
