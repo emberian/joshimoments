@@ -98,3 +98,9 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   the resolver. Pair precision 1.000 at every hub threshold — the knobs buy recall, never
   errors. Contract updated in response: `Trade` now carries `signers` (custody evidence) and
   `fee_payer` (explicitly NOT custody), which was its #1 next experiment.
+- 2026-08-13 — Recorder now extracts custody: `signers` (the account keys that actually signed
+  — requires the private key, so the strongest linkage) and `fee_payer`, kept in separate
+  fields on every recorded trade. Malformed input yields EMPTY custody, never a guess, since a
+  wrong signer set would be treated as strong evidence. Falsified both directions (all-keys-are
+  -signers; guessing from the fee payer). This closes signal #2's #1 next experiment and
+  unlocks its held-out custody precision check.

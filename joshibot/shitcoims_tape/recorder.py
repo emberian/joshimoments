@@ -145,6 +145,56 @@ class AttributedLog:
 
 
 @dataclass(frozen=True, slots=True)
+class Custody:
+    """Who signed a transaction, and who merely paid for it.
+
+    Kept as one object so the two can never be threaded independently and swapped. Signing
+    requires the private key and is the strongest entity-resolution evidence available;
+    paying a fee requires nothing at all, and merging on it fuses unrelated actors — in the
+    live store a single sponsor touched both watched wallets.
+    """
+
+    signers: tuple[str, ...] = ()
+    fee_payer: str | None = None
+
+
+#: The empty custody. A module-level singleton so it can be an argument default: a frozen
+#: value is safe to share, and "we recorded no custody evidence" must be one identity rather
+#: than a fresh object per call site.
+NO_CUSTODY: Final[Custody] = Custody()
+
+
+def extract_custody(transaction: Mapping[str, Any]) -> Custody:
+    """Pull the signer set and fee payer out of a jsonParsed transaction.
+
+    In jsonParsed form each account key carries its own ``signer`` flag, and the fee payer is
+    by protocol the first account. Anything malformed yields an EMPTY custody rather than a
+    guess: a wrong signer set is worse than none, because it would be treated as strong
+    evidence of shared key custody.
+    """
+    inner = transaction.get("transaction")
+    message = inner.get("message") if isinstance(inner, Mapping) else None
+    keys = message.get("accountKeys") if isinstance(message, Mapping) else None
+    if not isinstance(keys, Sequence) or isinstance(keys, str | bytes) or not keys:
+        return NO_CUSTODY
+    signers: list[str] = []
+    fee_payer: str | None = None
+    for index, key in enumerate(keys):
+        if isinstance(key, Mapping):
+            pubkey = key.get("pubkey")
+            is_signer = bool(key.get("signer"))
+        else:
+            pubkey, is_signer = key, index == 0
+        if not isinstance(pubkey, str):
+            continue
+        if index == 0:
+            fee_payer = pubkey
+        if is_signer:
+            signers.append(pubkey)
+    return Custody(signers=tuple(signers), fee_payer=fee_payer)
+
+
+@dataclass(frozen=True, slots=True)
 class AttributedLogs:
     entries: tuple[AttributedLog, ...]
     truncated: bool
@@ -392,10 +442,17 @@ class TapeRecorder:
         provenance = Provenance(
             source=self._source, fetched_at=moment.isoformat(), cursor=cursor
         )
+        custody = extract_custody(transaction)
         written = 0
         for entry, decoded in pending.events:
             written += self._emit_for(
-                entry, decoded, pending, chain=chain, moment=moment, provenance=provenance
+                entry,
+                decoded,
+                pending,
+                chain=chain,
+                moment=moment,
+                provenance=provenance,
+                custody=custody,
             )
         return written
 
@@ -495,6 +552,7 @@ class TapeRecorder:
         chain: Chainstamp,
         moment: datetime,
         provenance: Provenance,
+        custody: Custody = NO_CUSTODY,
     ) -> int:
         name = decoded.event_name
         try:
@@ -502,7 +560,12 @@ class TapeRecorder:
                 return self._on_create(decoded, pending, chain=chain, moment=moment, provenance=provenance)
             if name == "TradeEvent":
                 return self._on_curve_trade(
-                    entry, decoded, chain=chain, moment=moment, provenance=provenance
+                    entry,
+                    decoded,
+                    chain=chain,
+                    moment=moment,
+                    provenance=provenance,
+                    custody=custody,
                 )
             if name in {"CompleteEvent", "CompletePumpAmmMigrationEvent"}:
                 return self._on_graduation(decoded, moment=moment, chain=chain)
@@ -510,7 +573,12 @@ class TapeRecorder:
                 return self._on_create_pool(decoded, chain=chain, moment=moment, provenance=provenance)
             if name in {"BuyEvent", "SellEvent"}:
                 return self._on_amm_trade(
-                    entry, decoded, chain=chain, moment=moment, provenance=provenance
+                    entry,
+                    decoded,
+                    chain=chain,
+                    moment=moment,
+                    provenance=provenance,
+                    custody=custody,
                 )
             if name == "WithdrawEvent":
                 return self._on_withdraw(decoded, moment=moment, chain=chain)
@@ -602,6 +670,7 @@ class TapeRecorder:
         chain: Chainstamp,
         moment: datetime,
         provenance: Provenance,
+        custody: Custody = NO_CUSTODY,
     ) -> int:
         fields = decoded.fields
         if _pubkey(fields, "quote_mint") != WRAPPED_SOL_MINT:
@@ -623,6 +692,8 @@ class TapeRecorder:
             + _u64(fields, "creator_fee")
             + _u64(fields, "buyback_fee"),
             routed_via_frontend=_routed_via_frontend(entry),
+            signers=custody.signers,
+            fee_payer=custody.fee_payer,
         )
         written = self._write(
             EventKind.TRADE, trade, moment=moment, provenance=provenance, chain=chain
@@ -664,6 +735,7 @@ class TapeRecorder:
         chain: Chainstamp,
         moment: datetime,
         provenance: Provenance,
+        custody: Custody = NO_CUSTODY,
     ) -> int:
         fields = decoded.fields
         pool = _pubkey(fields, "pool")
@@ -696,6 +768,7 @@ class TapeRecorder:
         chain: Chainstamp,
         moment: datetime,
         provenance: Provenance,
+        custody: Custody = NO_CUSTODY,
     ) -> int:
         fields = decoded.fields
         pool = _pubkey(fields, "pool")
@@ -728,6 +801,8 @@ class TapeRecorder:
             + _u64(fields, "coin_creator_fee")
             + _u64(fields, "buyback_fee"),
             routed_via_frontend=_routed_via_frontend(entry),
+            signers=custody.signers,
+            fee_payer=custody.fee_payer,
         )
         written = self._write(
             EventKind.TRADE, trade, moment=moment, provenance=provenance, chain=chain

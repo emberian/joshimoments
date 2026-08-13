@@ -693,3 +693,61 @@ def test_a_transaction_without_a_block_time_is_kept_and_counted_not_dropped() ->
     assert event.chain is not None
     assert event.chain.block_time is None  # never guessed from the observer clock
     assert event.chain.slot == 1000
+
+
+def test_a_recorded_trade_carries_the_signer_set_and_fee_payer() -> None:
+    """Entity resolution needs custody evidence, and it has to come off the tape.
+
+    Without this the strongest linkage available (a shared signer set, which requires the
+    private key) is simply absent, and the resolver is left with fee sponsorship — which
+    merges unrelated actors.
+    """
+    from shitcoims_tape.recorder import extract_custody
+
+    signer, cosigner, other = "S" * 32, "C" * 32, "O" * 32
+    custody = extract_custody(
+        {
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        {"pubkey": signer, "signer": True},
+                        {"pubkey": cosigner, "signer": True},
+                        {"pubkey": other, "signer": False},
+                    ]
+                }
+            }
+        }
+    )
+    assert custody.signers == (signer, cosigner)
+    assert custody.fee_payer == signer
+    assert other not in custody.signers
+
+
+def test_custody_extraction_returns_empty_rather_than_guessing() -> None:
+    """A wrong signer set is worse than none: it would be treated as strong evidence."""
+    from shitcoims_tape.recorder import Custody, extract_custody
+
+    assert extract_custody({}) == Custody()
+    assert extract_custody({"transaction": {"message": {"accountKeys": []}}}) == Custody()
+    assert extract_custody({"transaction": {"message": {}}}) == Custody()
+
+
+def test_a_sponsor_who_did_not_sign_is_not_in_the_signer_set() -> None:
+    """The exact merge that would fuse our own sentinel with a third-party KOL."""
+    from shitcoims_tape.recorder import extract_custody
+
+    sponsor, actor = "P" * 32, "A" * 32
+    custody = extract_custody(
+        {
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        {"pubkey": sponsor, "signer": True},
+                        {"pubkey": actor, "signer": False},
+                    ]
+                }
+            }
+        }
+    )
+    assert custody.fee_payer == sponsor
+    assert actor not in custody.signers
