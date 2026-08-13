@@ -21,7 +21,7 @@ bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; fail=1; }
 
 step "ruff"
 if uv run ruff check sentinel.py intel.py scout.py shitcoims_sentinel shitcoims_intelligence \
-    shitcoims_scout shitcoims_tape studies tests >/tmp/joshi-ruff.log 2>&1; then
+    shitcoims_scout shitcoims_tape studies scripts tests >/tmp/joshi-ruff.log 2>&1; then
   ok "lint clean"
 else
   tail -20 /tmp/joshi-ruff.log; bad "ruff"
