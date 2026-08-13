@@ -444,6 +444,14 @@ async def test_stream_is_confirmed_full_versioned_deduped_and_marks_disconnect(
     async def no_sleep(_seconds: float) -> None:
         return None
 
+    async def _fake_block_time(slot: int) -> int:
+        return 1_786_000_000 + slot
+
+    # A transactionNotification carries a slot but NO blockTime, so the stream now resolves
+    # slot -> block time and DEFECTS a row it cannot stamp. This test injects a resolver for
+    # two reasons: without one the assertion below would be asserting the very bug that was
+    # fixed (a clockless row emitted as a real transaction), and — worse — the stream would
+    # attempt a live POST to mainnet.helius-rpc.com from the test suite.
     stream = HeliusTransactionStream(
         api_key_file=secret_file(tmp_path),
         websocket_url_template=WS_TEMPLATE,
@@ -451,6 +459,7 @@ async def test_stream_is_confirmed_full_versioned_deduped_and_marks_disconnect(
         keepalive_seconds=30,
         reconnect_seconds=0,
         sleeper=no_sleep,
+        block_time_resolver=_fake_block_time,
     )
     events = stream.events(watchlist)
     observed = [await anext(events) for _ in range(5)]
