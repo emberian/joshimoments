@@ -182,12 +182,57 @@ architecture**:
   is perfectly circular (labels from DFS cycles, features from centrality on the same graph).
 
 Per-token estimation is hopeless at 10²–10³ events, and the fix is structural: **pool the shape
-globally, estimate one or two scalars locally.** The deployed template is SEISMIC (KDD'15) — global
-kernel fitted once across thousands of cascades, per-unit scalar infectiousness via a growing-window
-estimator, ~15% error on final size after 10 minutes, on cascades with *median 110 events*.
-Hierarchical beats both extremes quantitatively: pooled branching 0.899 (biased up, mega-units
-dominate), unpooled 0.717 ± 0.139 (prior-dominated), **partial 0.742 ± 0.026 — same answer, 5×
-sharper**.
+globally, estimate one or two scalars locally.** Hierarchical beats both extremes quantitatively:
+pooled branching 0.899 (biased up, mega-units dominate), unpooled 0.717 ± 0.139 (prior-dominated),
+**partial 0.742 ± 0.026 — same answer, 5× sharper**.
+
+**SEISMIC was the cited template for that, and reading it retracts the citation.** The first draft
+described it as "global kernel fitted once across thousands of cascades … ~15% error on final size
+after 10 minutes, on cascades with median 110 events." Verified against arXiv:1506.02594, three of
+those four clauses are wrong and the transfer has a blocking finding:
+
+- **"Thousands of cascades" is fabricated** — the word "thousand" appears nowhere in the paper. The
+  kernel is fitted from **15 hand-picked tweets**, chosen precisely because their authors had enormous
+  follower counts so that reshares are first-generation and the raw reaction time is directly
+  observable. That is not a pooling estimator; it is *deconvolution avoidance*. The transferable idea
+  is much sharper than "pool": **find a sub-population where the primitive is directly observable and
+  measure it there.**
+- **"15% at 10 minutes" splices two halves of one sentence.** 15% is the **1-hour** figure; at 10
+  minutes it is **25%**. It is *median* APE (95th percentile at 10 min is 71%), measured against
+  `R₁₄days` rather than true final size, from a model with ~10 fitted calibration constants tuned to
+  minimise that very metric.
+- **"Median 110 events" is right but backwards as evidence.** It is the training-set median after
+  filtering 3.2B tweets to 166,076 with **≥50 retweets**, and predictions only begin *once a cascade
+  reaches 50 events*. So the task is a 2× extrapolation from a hard floor — evidence that SEISMIC
+  needs 50 events before it will speak, not that it works at our scale.
+- **Blocking: it requires per-node out-degree `nᵢ` in every equation** — intensity, both accumulators,
+  the infectiousness estimator, the prediction formula, and the criticality threshold `p* = 1/n*`.
+  `nᵢ` is the *denominator* of `p̂ₜ`. Without it `p̂ₜ` is undefined, not degraded. A wallet buying a
+  fresh mint has no follower count, and the only available substitute — constant `nᵢ` — collapses the
+  model into the RPM family, which the paper measures as **worse than linear regression** in exactly
+  the early window we care about.
+- **Its kernel carries no shape in our window.** `φ(s)` is *flat* below 5 minutes by construction, so
+  the globally-pooled object degenerates to a constant precisely where we operate. Worse, from the
+  paper's own fitted parameters (`θ = 0.242`, `c = 6.27e-4`, `s₀ = 300s`; normalisation checks to
+  0.965): **81% of reaction mass arrives after 5 minutes, the median reaction time is ~36 minutes, and
+  the mean is infinite** (θ < 1, so the tail integral diverges). Against Marino's 4.4-minute median
+  time-to-graduation that is the wrong timescale by roughly 8×.
+- **It also cannot anchor the hierarchical argument above** — it has no prior over `pₜ`, no shrinkage,
+  no random-coefficients structure. It is a *fully-pooled-shape model with an unregularised per-unit
+  MLE*: the baseline partial pooling would improve on, not an instance of it.
+- **No saturation term at all.** The underlying branching process has no exhaustion mechanism — fine
+  when a 110-event cascade runs against hundreds of millions of users, first-order wrong for a token
+  whose buyer population is small, finite, and observable in the pool. For us, exhaustion *is* the
+  dominant dynamic and the thing that decides when to exit.
+
+**What does transfer, and is what we should have cited:** (i) the **ranking** result — 78 of the top
+100 cascades recovered within 10 minutes on a 500-wide shortlist — because top-k selection over a live
+universe is our actual problem, and rank is far more robust to a miscalibrated scalar than a point
+estimate is; (ii) the **O(Rₜ), 0.02s-per-unit** online cost, 180× faster than its nearest rival, which
+is what makes any of this family viable in a live loop. (iii) And the honest floor it establishes:
+plain log-linear regression, `log R∞ = αₜ + log Rₜ` — literally "scale the current count by a
+time-dependent constant" — **beats both competing point-process models early**. That is one line of
+code and it is the first thing any cascade model of ours must beat.
 
 The name for why 3-token pooling produced incoherent signs: **Pesaran & Smith 1995** — pooling
 dynamic panels with heterogeneous slopes is inconsistent and misleading. (Their own prescription is the
