@@ -316,7 +316,11 @@ Barras/Scaillet/Wermers JF 2010 (FDR framework) + Andrikogiannopoulou & Papakons
 the AMS* 61(5) (trials accounting as a theorem) · Bouchaud/Bonart/Donier/Gould, *Trades, Quotes and
 Prices* ch. 10–13 (the one book).
 
-Local corpus: `scratchpad/lit/`, `lit-gnn/`, `lit-smart/`, `lit-cross/` — PDFs with extracted text.
+Local corpus: **`~/paperbin/`** — 93 papers, PDF plus extracted `.txt`, flat
+`descriptive-slug[-arxivid].pdf` naming (e.g. `marino-lillo-pumpfun-token-success-prediction-2602.14860`,
+`melt-memecoin-behavioral-trace-dataset-2602.13480`, `tumminello-statistically-validated-investor-clusters`).
+Grep the `.txt` companions to search the corpus without opening a PDF. Two papers are image-only scans
+with no text layer (`lo-mackinlay-nonsynchronous-trading`, `lo-mackinlay-contrarian-profits`).
 
 ---
 
