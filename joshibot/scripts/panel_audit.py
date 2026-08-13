@@ -53,6 +53,7 @@ from shitcoims_intelligence.pump_layouts import (
 from shitcoims_tape.panel import feasible_universe, read_frame
 from shitcoims_tape.recorder import (
     CREDITS_PER_TRANSACTION_PAGE,
+    SOL_QUOTE_MINTS,
     CreditBudget,
     attribute_program_data,
 )
@@ -69,6 +70,18 @@ _BY_DISCRIMINATOR = {
 }
 
 
+def _is_trade_on(decoded: Any, mint: str, pool_to_mint: dict[str, str]) -> bool:
+    """Is this decoded trade event a fill on ``mint``, in a unit the recorder records?"""
+
+    fields = decoded.fields
+    if decoded.event_name == "TradeEvent":
+        return fields.get("mint") == mint and fields.get("quote_mint") in SOL_QUOTE_MINTS
+    pool = fields.get("pool")
+    # A PumpSwap event names only its pool. The tape's own pool -> mint map is the honest
+    # resolver here: an unknown pool means the audit cannot say, not that the tape is wrong.
+    return isinstance(pool, str) and pool_to_mint.get(pool) == mint
+
+
 def _layout_name(payload: str) -> str:
     """Which event a quarantined payload CLAIMS to be, from its 8-byte discriminator."""
 
@@ -83,6 +96,7 @@ def scan_tape(root: Path) -> dict[str, Any]:
     """One pass: trade signatures per mint, last reserve per pool, wallet activity."""
 
     per_mint: dict[str, set[str]] = {}
+    pool_to_mint: dict[str, str] = {}
     window: dict[str, tuple[int, int]] = {}
     last_reserve: dict[str, tuple[int, dict[str, int]]] = {}
     activity: dict[str, set[str]] = {}
@@ -103,6 +117,9 @@ def scan_tape(root: Path) -> dict[str, Any]:
                     trades += 1
                     mint = event.body.mint  # type: ignore[union-attr]
                     per_mint.setdefault(mint, set()).add(event.chain.signature)
+                    pool = event.body.pool  # type: ignore[union-attr]
+                    if isinstance(pool, str):
+                        pool_to_mint[pool] = mint
                     activity.setdefault(event.body.wallet, set()).add(mint)  # type: ignore[union-attr]
                     block = event.chain.block_time
                     if block is not None:
@@ -130,6 +147,7 @@ def scan_tape(root: Path) -> dict[str, Any]:
         "window": window,
         "last_reserve": last_reserve,
         "activity": activity,
+        "pool_to_mint": pool_to_mint,
     }
 
 
@@ -218,6 +236,7 @@ async def replicate(
     # a drifted bookkeeping event costs nothing.
     decoded_events: dict[str, int] = {}
     drifted_events: dict[str, int] = {}
+    off_mint = 0
     async with httpx.AsyncClient(timeout=60) as http:
         client = HeliusHistoryClient(
             api_key_file=key, http_url_template=HTTP_TEMPLATE, http=http
@@ -254,10 +273,20 @@ async def replicate(
                         decoded_events[decoded.event_name] = (
                             decoded_events.get(decoded.event_name, 0) + 1
                         )
-                        if decoded.event_name in TRADE_EVENTS:
-                            signature = (item.get("transaction") or {}).get("signatures")
-                            if signature:
-                                signatures.add(str(signature[0]))
+                        if decoded.event_name not in TRADE_EVENTS:
+                            continue
+                        # The event has to be a trade ON THIS MINT and in a unit the recorder
+                        # accepts. A transaction that touches mint M routinely carries trades
+                        # on OTHER mints -- a router leg, a bundle -- and counting those as
+                        # M's would report the recorder as missing trades it correctly filed
+                        # elsewhere. Ditto a USDC-quoted pool, which the recorder refuses on
+                        # purpose.
+                        if not _is_trade_on(decoded, mint, scanned["pool_to_mint"]):
+                            off_mint += 1
+                            continue
+                        signature = (item.get("transaction") or {}).get("signatures")
+                        if signature:
+                            signatures.add(str(signature[0]))
                 if stop or cursor is None or not page:
                     complete = True
                     break
@@ -276,6 +305,7 @@ async def replicate(
     drifted_trades = sum(v for k, v in drifted_events.items() if k in TRADE_EVENTS)
     decoded_trades = sum(v for k, v in decoded_events.items() if k in TRADE_EVENTS)
     return {
+        "trade_events_on_another_mint_or_quote": off_mint,
         "decoded_events": dict(sorted(decoded_events.items())),
         "drifted_events": dict(sorted(drifted_events.items())),
         "trade_events_lost_to_layout_drift": (
@@ -331,6 +361,7 @@ async def main() -> int:
     # it costs 3% more calls instead of the 170% a page size of 37 would.
     parser.add_argument("--page-size", type=int, default=97)
     parser.add_argument("--reconcile", type=int, default=60)
+    parser.add_argument("--run-report", type=Path, action="append", default=[])
     parser.add_argument("--max-credits", type=int, default=6000)
     parser.add_argument("--total-cap", type=int, default=100_000)
     parser.add_argument("--seed", type=int, default=20260813)
@@ -339,7 +370,13 @@ async def main() -> int:
 
     root = args.tape_dir if args.tape_dir is not None else default_tape_root()
     scanned = scan_tape(root)
-    frame = [row for path in args.frame for row in read_frame(path)]
+    seen: set[str] = set()
+    frame = [
+        row
+        for path in args.frame
+        for row in read_frame(path)
+        if row.mint not in seen and not seen.add(row.mint)  # type: ignore[func-returns-value]
+    ]
     collected = sorted(scanned["per_mint"])
     rng = random.Random(args.seed)
 
@@ -347,7 +384,25 @@ async def main() -> int:
     allowance = min(args.max_credits, args.total_cap - int(ledger["spent"]))
     budget = CreditBudget(limit=max(allowance, 0))
 
-    sample = rng.sample(collected, min(args.replicate, len(collected)))
+    # Frame mints ONLY. An incidentally-observed mint's recorded window is not a window: it
+    # is the gap between two arbitrary sightings, and one such mint in the first run showed 3
+    # trades spanning 16.6 HOURS and swallowed the entire replication budget paging a history
+    # nobody had asked for.
+    frame_mints = {row.mint for row in frame}
+    # Only mints the collector claims to have read COMPLETELY. A page-cap truncation stopped
+    # mid-history by design, so "the replication found trades the tape lacks" would be the
+    # truncation being rediscovered, not a paging hole -- and it would drown the signal the
+    # check exists for. Coverage is only checkable where coverage is claimed.
+    complete_stops = {"exhausted", "window"}
+    completed = set()
+    for report_path in args.run_report or []:
+        for outcome in json.loads(Path(report_path).read_text())["outcomes"]:
+            history = outcome.get("history")
+            if history and history["stopped_by"] in complete_stops:
+                completed.add(outcome["mint"])
+    eligible = frame_mints & completed if completed else frame_mints
+    replicable = [mint for mint in collected if mint in eligible]
+    sample = rng.sample(replicable, min(args.replicate, len(replicable)))
     replication = await replicate(
         scanned, sample, key=args.helius_key, budget=budget, page_size=args.page_size
     )
