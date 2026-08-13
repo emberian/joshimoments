@@ -464,6 +464,59 @@ net of costs skill is undetectable; pre-expense there is real dispersion in both
 §3 rule 9 counts trials over the DSL grammar, §4 #6 corrects FDR over entities. If a wallet screen feeds
 strategy selection, the trial counts *multiply* and neither correction covers the product.
 
+### 4.3 What a wallet's alpha is measured against
+
+§4.2 surfaced the hole: both fund papers measure alpha against a factor benchmark, π₀ describes a
+*residual*, and we had never said what a wallet's return is a residual **of**. Raw PnL adjusts for
+nothing — under it, everyone long a token that went up scores as skilled. There is no CAPM for
+memecoins and there will not be one, so this is a design choice. The honest move is to choose a
+benchmark for its *properties* and state them.
+
+**Required properties**, each one earned from a failure we actually hit:
+
+1. Computable from the tape **at decision time** (no lookahead — §3, and the kernel's `View t`).
+2. A no-skill wallet scores **zero in expectation**, exactly, not asymptotically.
+3. Not corrupted by **cross-wallet dependence** — the blocker that killed the sign-randomization null.
+4. Not corrupted by **discreteness** at tens of trades — the blocker that broke Storey's π̂₀.
+5. **Survivorship-free**: dead tokens must enter with their real paths.
+6. **Decomposable**, because timing skill and selection skill are different signals wanting different
+   detectors, and conflating them is likely why one "skill screen" kept failing.
+
+**The primary benchmark: a within-token timing permutation.** For a wallet's round trip on mint `m`
+with entry `t_in`, exit `t_out`, duration `D = t_out − t_in`, hold `D` fixed and randomise *when*:
+draw `t'` uniformly over placements where `[t', t'+D]` lies wholly inside the mint's `WatchWindow`, and
+recompute the SOL return along the same recorded reserve path. The p-value is the fraction of
+counterfactual placements beating the observed one.
+
+Why this specific construction, property by property: token selection **cancels identically** because
+every counterfactual is on the same price path (1, 6). It is an **exact conditional permutation test** —
+no asymptotics, no π₀, no uniformity assumption, so discreteness is a non-issue (4). Crucially it
+**dissolves the dependence blocker** (3): two wallets in the same token are no longer compared to each
+other but each to counterfactual versions of *itself* on a fixed path, so the correlation that made
+independent sign-flips invalid simply does not enter. Dead tokens contribute their real, bad paths (5).
+
+**And note what it replaces.** The old design preserved *timing* and randomised *direction*. On
+pump.fun you can only be long — there is no short — so the direction was never a real degree of
+freedom, and randomising it tested a choice the trader never made. Timing is the live decision.
+Inverting the permutation is not a patch; it is the difference between testing a decision and testing
+an artifact.
+
+**The secondary benchmark: selection, against matched controls.** Timing permutation is *blind* to
+selection by construction — a wallet that only ever buys eventual winners but times them averagely
+scores zero. That component needs the control-mint machinery now specified in SWARM.md Track B: for an
+entry on `m` at curve position `v` and time `t`, compare `m`'s forward return to controls matched on
+launch bucket, vSol band, and hour-of-day. It is second because it *requires collection we do not yet
+have*, whereas timing permutation runs on the tape as specified.
+
+Together they are exactly §5's attribution decomposition — *entry selection, exit timing, induced
+reaction* — which means the envelope's attribution monitor and the wallet-alpha definition are the same
+object viewed from two directions, and should be built once.
+
+**Open, and genuinely a judgment call:** the interaction term. Selection and timing are not additive in
+log-return once fees and price impact enter, and we should decide whether to attribute the cross term,
+split it, or report it separately, *before* any number is produced — not after we see which convention
+flatters the desk.
+
 ---
 
 ## 5. The envelope
