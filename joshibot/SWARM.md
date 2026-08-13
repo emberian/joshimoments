@@ -223,6 +223,32 @@ lanes — harvest and commit the done ones, don't discard the run.
 
 ---
 
+## Audit cadence — and the failure of nerve it corrects
+
+The gate in the previous section is a BUILD check. It proves the tree compiles, the tests pass
+and no theorem rests on `sorry`. It does not prove the tests assert anything or that the
+theorems say what their docstrings claim, and those are different questions.
+
+Running the build gate and calling it verification is the exact substitution this project keeps
+finding in other people's work: a purge parameter that was a no-op, a zero-control that a
+detect-nothing estimator passes perfectly, an AUC of 1.0 from features computed off the labels.
+Each of those had a green pipeline.
+
+So the adversarial audit is not optional and it is not the same step. It runs on a SCHEDULE,
+not on a feeling that the work looks finished:
+
+- after every swarm wave, before the next one is launched;
+- whenever a component's claims get stronger (a new theorem, a new guarantee in a docstring);
+- and periodically on components that have NOT changed, because their dependencies have.
+
+The auditor is told to REFUTE, is forbidden from trusting summaries or mutation matrices, and
+must produce per-item conclusions with runnable reproductions. "It all looks good" is the
+weakest result it can return and is only acceptable after demonstrated effort.
+
+Note for whoever runs this next: the first three waves of this project shipped with the build
+gate run every time and the adversarial audit run ZERO times, because the build gate kept
+coming back green and green feels like enough. It is not. Schedule the audit.
+
 ## Swarm-safety mechanics (paid for in real debugging)
 
 - Commit **named files** while lanes are live; never `git add -A` (half-written siblings).
