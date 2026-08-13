@@ -924,7 +924,11 @@ class SlotBlockTimeCache:
         *,
         fetch: BlockTimeFetcher,
         max_entries: int = DEFAULT_BLOCK_TIME_CACHE_SIZE,
-        max_attempts: int = 3,
+        # Four attempts spend ~1.75 s of backoff before defecting.  The slot being
+        # resolved was just delivered over the provider's own socket, but the RPC
+        # POST can land on a different node in the fleet, so the retry window has
+        # to cover a node that is a few slots behind the one that pushed it.
+        max_attempts: int = 4,
         backoff_seconds: float = 0.25,
         max_backoff_seconds: float = 2.0,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,

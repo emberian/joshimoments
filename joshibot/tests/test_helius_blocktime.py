@@ -289,7 +289,7 @@ async def test_unresolvable_slot_defects_and_emits_no_row(tmp_path: Path) -> Non
     assert defect.transaction is None
     assert defect.reason == f"block_time_unresolved:{SIGNATURE_A}"
     assert defect.last_observed_slot == 42
-    assert rpc.slots == [42, 42, 42]  # Bounded retries, then give up.
+    assert rpc.slots == [42, 42, 42, 42]  # Bounded retries, then give up.
     # The refusal is recorded evidence, not a silent hole.
     observation = stream_event_observation(defect)
     assert observation.kind == "stream_defect"
