@@ -140,3 +140,14 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   MANDATORY, which is how it stops getting lost. 10 tests, 4 mutations (dropped variance term,
   the invented `sr/ln(trials)`, ignored non-normality, a guessed N) all killed. Falsification
   also caught one of my own tests turning a real failure into a skip via `except Exception`.
+- 2026-08-13 — Panel collection (interim, 33.3k/100k credits): stratum B complete — 250 mints,
+  221,184 trades, 443,039 tape events, 0 malformed, 0 duplicate ids, 0 displaced. **Signal #1
+  is FEASIBLE**: 2,230 wallets at an activity floor of 5 against a Bonferroni cap of 3,880; at
+  floor 2 it is infeasible by three orders of magnitude, exactly as PROGRAM.md §4.1 predicted.
+  Two real recorder defects found against live chain and fixed: (1) pump.fun spells native SOL
+  as the ALL-ZERO pubkey on the bonding curve, so the recorder dropped *every* curve trade
+  (735 → 1,123 on the same 5 mints, verified against a checked-in mainnet fixture reconciling
+  to 0.13%); (2) `HeliusHistorySource` never paged and paid for failed transactions — filtering
+  to succeeded is ~2.5× more usable data per credit. Plus a latent bug caught in review:
+  terminal watch closes weren't keyed by mint, so a neighbour's graduation inside a bundled
+  transaction could swallow an `OBSERVER_LOST` record and bias the censoring rate DOWNWARD.
