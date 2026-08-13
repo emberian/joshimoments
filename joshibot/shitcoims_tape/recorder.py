@@ -164,6 +164,43 @@ class Custody:
 NO_CUSTODY: Final[Custody] = Custody()
 
 
+def resolve_pool_facts(
+    transaction: Mapping[str, Any], pool: str
+) -> tuple[str, str] | None:
+    """Learn a pool's (base, quote) mints from the transaction's own token balances.
+
+    Without this the recorder can only attribute trades on pools whose ``CreatePoolEvent`` it
+    personally witnessed — so a recorder started today records NOTHING for any already-migrated
+    token, permanently, because that event happened weeks ago and never comes again. Found by
+    replaying real transactions: 27 of 27 decoded AMM trades were dropped as unattributed.
+
+    The pool holds a token account per side, and jsonParsed balances name the owner and mint of
+    each, so the pair is recoverable with no extra RPC. Fails closed: anything other than
+    exactly two distinct mints, one of them wrapped SOL, returns ``None`` rather than a guess —
+    attributing a trade to the wrong mint is worse than not recording it.
+    """
+    meta = transaction.get("meta")
+    if not isinstance(meta, Mapping):
+        return None
+    mints: set[str] = set()
+    for key in ("preTokenBalances", "postTokenBalances"):
+        balances = meta.get(key)
+        if not isinstance(balances, Sequence) or isinstance(balances, str | bytes):
+            continue
+        for balance in balances:
+            if not isinstance(balance, Mapping):
+                continue
+            if balance.get("owner") != pool:
+                continue
+            mint = balance.get("mint")
+            if isinstance(mint, str):
+                mints.add(mint)
+    if len(mints) != 2 or WRAPPED_SOL_MINT not in mints:
+        return None
+    base = next(mint for mint in mints if mint != WRAPPED_SOL_MINT)
+    return base, WRAPPED_SOL_MINT
+
+
 def extract_custody(transaction: Mapping[str, Any]) -> Custody:
     """Pull the signer set and fee payer out of a jsonParsed transaction.
 
@@ -282,6 +319,7 @@ class RecorderCounters:
     deaths: int = 0
     non_sol_quote_skipped: int = 0
     unattributed_pool_skipped: int = 0
+    pools_resolved_from_balances: int = 0
     rejected_by_schema: int = 0
 
     def to_json(self) -> dict[str, int]:
@@ -304,6 +342,7 @@ class RecorderCounters:
             "deaths": self.deaths,
             "non_sol_quote_skipped": self.non_sol_quote_skipped,
             "unattributed_pool_skipped": self.unattributed_pool_skipped,
+            "pools_resolved_from_balances": self.pools_resolved_from_balances,
             "rejected_by_schema": self.rejected_by_schema,
         }
 
@@ -443,6 +482,7 @@ class TapeRecorder:
             source=self._source, fetched_at=moment.isoformat(), cursor=cursor
         )
         custody = extract_custody(transaction)
+        self._learn_pools_from(transaction, pending)
         written = 0
         for entry, decoded in pending.events:
             written += self._emit_for(
@@ -887,6 +927,26 @@ class TapeRecorder:
             return 1
         self._counters.tape_events_deduped += 1
         return 0
+
+    def _learn_pools_from(self, transaction: Mapping[str, Any], pending: _Pending) -> None:
+        """Seed pool facts for any pool this transaction trades on but we have not seen created.
+
+        A witnessed ``CreatePoolEvent`` still wins: it is the authoritative statement of the
+        pair, and this only fills gaps for pools that predate the recorder.
+        """
+        for _entry, decoded in pending.events:
+            if decoded.event_name not in {"BuyEvent", "SellEvent"}:
+                continue
+            fields = decoded.fields
+            pool = fields.get("pool")
+            if not isinstance(pool, str) or pool in self._pool_facts:
+                continue
+            resolved = resolve_pool_facts(transaction, pool)
+            if resolved is None:
+                continue
+            base, quote = resolved
+            self._pool_facts[pool] = PoolFacts(base_mint=base, quote_mint=quote)
+            self._counters.pools_resolved_from_balances += 1
 
     @staticmethod
     def _chainstamp(transaction: Mapping[str, Any]) -> Chainstamp | None:

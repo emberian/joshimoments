@@ -112,3 +112,11 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   the threshold, not the ordering. 16/16 mutations killed. Promoted two rules to PROGRAM.md §3
   (both-controls-always; two-nulls-at-matched-density), the first now independently discovered
   by two lanes.
+- 2026-08-13 — **First real-data validation of the recorder**, and it found a permanent blind
+  spot: pool facts came only from a witnessed `CreatePoolEvent`, so a recorder started today
+  records NOTHING for any already-migrated token, forever. Replaying 29 real transactions
+  produced 0 events (27 decoded AMM trades, all dropped as unattributed). Fixed by resolving
+  (base, quote) from the transaction's own token balances — no extra RPC — and the same sample
+  now yields 54 events. Fails closed on anything ambiguous; a witnessed creation still wins.
+  Falsification caught a second gap: nothing had pinned that precedence, so a pool-shaped
+  transaction could silently re-point an existing pool at a different mint.

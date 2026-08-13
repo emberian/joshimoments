@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from solders.keypair import Keypair
@@ -751,3 +752,83 @@ def test_a_sponsor_who_did_not_sign_is_not_in_the_signer_set() -> None:
     )
     assert custody.fee_payer == sponsor
     assert actor not in custody.signers
+
+
+def test_a_pool_is_resolved_from_balances_when_its_creation_was_never_witnessed() -> None:
+    """A recorder started today has never seen an already-migrated pool being created.
+
+    Found by replaying REAL transactions: every one of 27 decoded AMM trades was dropped as
+    unattributed, because pool facts only ever came from a `CreatePoolEvent` that had happened
+    weeks earlier and would never come again. The pool holds a token account per side and
+    jsonParsed balances name owner and mint, so the pair is recoverable with no extra RPC.
+    """
+    from shitcoims_tape.recorder import resolve_pool_facts
+
+    pool, base = "P" * 32, "B" * 32
+    wsol = "So11111111111111111111111111111111111111112"
+    tx = {
+        "meta": {
+            "postTokenBalances": [
+                {"owner": pool, "mint": base},
+                {"owner": pool, "mint": wsol},
+                {"owner": "O" * 32, "mint": "Z" * 32},
+            ]
+        }
+    }
+    assert resolve_pool_facts(tx, pool) == (base, wsol)
+
+
+def test_pool_resolution_fails_closed_on_anything_ambiguous() -> None:
+    """Attributing a trade to the wrong mint is worse than not recording it."""
+    from shitcoims_tape.recorder import resolve_pool_facts
+
+    pool, base, other = "P" * 32, "B" * 32, "C" * 32
+    wsol = "So11111111111111111111111111111111111111112"
+
+    # three mints on one owner: which is the base?
+    three = {"meta": {"postTokenBalances": [
+        {"owner": pool, "mint": base},
+        {"owner": pool, "mint": other},
+        {"owner": pool, "mint": wsol},
+    ]}}
+    assert resolve_pool_facts(three, pool) is None
+
+    # a pair with no SOL side is not a pool we can price
+    no_sol = {"meta": {"postTokenBalances": [
+        {"owner": pool, "mint": base},
+        {"owner": pool, "mint": other},
+    ]}}
+    assert resolve_pool_facts(no_sol, pool) is None
+
+    # nothing owned by this pool at all
+    assert resolve_pool_facts({"meta": {"postTokenBalances": []}}, pool) is None
+    assert resolve_pool_facts({}, pool) is None
+
+
+def test_a_witnessed_pool_creation_is_not_overwritten_by_balance_inference() -> None:
+    """The authoritative statement of a pair must win over an inference from balances.
+
+    Balance inference exists only to fill gaps for pools that predate the recorder. If it can
+    overwrite a witnessed `CreatePoolEvent`, then a single transaction whose balances happen
+    to look pool-shaped can silently re-point an existing pool at a different mint — and every
+    trade recorded afterwards is attributed to the wrong token.
+    """
+    from shitcoims_tape.recorder import PoolFacts, _Pending
+
+    _sink, recorder = build()
+    pool, truth, impostor = "P" * 32, "T" * 32, "I" * 32
+    wsol = "So11111111111111111111111111111111111111112"
+    recorder._pool_facts[pool] = PoolFacts(base_mint=truth, quote_mint=wsol)
+
+    decoded = SimpleNamespace(event_name="BuyEvent", fields={"pool": pool})
+    pending = _Pending()
+    pending.events.append((None, decoded))
+    recorder._learn_pools_from(
+        {"meta": {"postTokenBalances": [
+            {"owner": pool, "mint": impostor},
+            {"owner": pool, "mint": wsol},
+        ]}},
+        pending,
+    )
+    assert recorder._pool_facts[pool].base_mint == truth
+    assert recorder._counters.pools_resolved_from_balances == 0
