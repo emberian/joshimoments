@@ -225,7 +225,11 @@ def evaluate_position(
             state,
         )
 
-    if quote is None:
+    # `unit_price` is derived from `quote` above and `unit_price_sol` raises rather than
+    # returning None, so the second clause is unreachable today. It is stated anyway: it makes
+    # the correlation checkable instead of carried in a reader's head, and if the quote ever
+    # gains a None-returning path this fails closed to HOLD rather than dividing by None.
+    if quote is None or unit_price is None:
         return Decision(DecisionKind.HOLD, "no executable quote", pnl, unit_price, state)
 
     if pnl is not None and pnl <= policy.stop_loss_pct:

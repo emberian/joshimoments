@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import struct
 from dataclasses import dataclass
+from typing import Any
 
 from solders.keypair import Keypair
 from solders.message import MessageV0, to_bytes_versioned
@@ -68,7 +69,7 @@ async def _resolve_keys(message: MessageV0, rpc: SolanaRpc) -> list[Pubkey]:
     return [*message.account_keys, *writable, *readonly]
 
 
-def _instruction_keys(instruction, keys: list[Pubkey]) -> list[Pubkey]:
+def _instruction_keys(instruction: Any, keys: list[Pubkey]) -> list[Pubkey]:
     try:
         return [keys[index] for index in instruction.accounts]
     except IndexError as exc:
@@ -186,7 +187,7 @@ def _simulated_token_amount(account: object) -> int:
         raise TransactionRejected("simulated token account data was not base64") from exc
     if len(raw) < 72:
         raise TransactionRejected("simulated token account data was too short")
-    return struct.unpack_from("<Q", raw, 64)[0]
+    return int(struct.unpack_from("<Q", raw, 64)[0])
 
 
 def validate_simulated_exit(

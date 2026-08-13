@@ -16,6 +16,7 @@ dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
+  "mypy>=1.11,<2",
 ]
 
 [tool.pytest.ini_options]
@@ -30,3 +31,38 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "SIM", "RUF"]
+
+# Typing is currently DOCUMENTATION, not a checked invariant: the tree is annotated
+# throughout and every domain type is a frozen slotted dataclass, but nothing verified it.
+# The gate starts where the money is and tightens outward -- a repo-wide --strict flip would
+# produce hundreds of findings nobody reads, which is how type checking gets switched off.
+[tool.mypy]
+python_version = "3.11"
+# The GATED set: these must stay clean, and CI fails if they do not. Everything else is
+# tracked debt, surfaced by `scripts/check.sh --full` but not blocking, so the gate is a
+# line that holds rather than a wall of findings nobody reads.
+files = [
+  "shitcoims_sentinel/executor.py",
+  "shitcoims_sentinel/transaction.py",
+  "shitcoims_sentinel/domain.py",
+  "shitcoims_tape",
+]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+
+# The execution path and the tape contract are held to the full standard. These are the two
+# places where a wrong type is money or a corrupt study rather than an inconvenience.
+[[tool.mypy.overrides]]
+module = ["shitcoims_sentinel.executor", "shitcoims_sentinel.transaction", "shitcoims_tape.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# solders ships no stubs.
+[[tool.mypy.overrides]]
+module = ["solders.*", "yaml.*", "uvicorn.*"]
+ignore_missing_imports = true

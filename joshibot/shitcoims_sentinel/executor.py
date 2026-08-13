@@ -558,12 +558,14 @@ class SellExecutor:
                     clear_pending_signature(last_error)
 
                 current = await self._holding(mint)
-                already_filled = (
+                # Inlined rather than bound to a local: routing the `is None` test through a
+                # boolean loses the narrowing, so every later `current.amount` becomes an
+                # unchecked deref that only a human reading the whole block can rule out.
+                if (
                     current is None
                     or current.amount == 0
                     or current.amount <= observed_holding.amount - requested
-                )
-                if already_filled:
+                ):
                     if str(reason) == DecisionKind.EXIT_DISPOSE.value:
                         self.state.set_dispose_policy(mint, enabled=False)
                     self.state.delete("pending_exits", mint)

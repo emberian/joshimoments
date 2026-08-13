@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# The merge gate. Every swarm wave ends here.
+#
+# Why this exists: three lanes each reported green on 2026-08-13 and the tree was still only
+# provably sound once they were built TOGETHER — per-file green hides a broken downstream.
+# It also runs the checks that catch the two failure modes this project keeps meeting: a
+# vacuous test that cannot fail, and a Lean theorem resting on `sorry`.
+#
+#   scripts/check.sh          gate only (fails the build)
+#   scripts/check.sh --full   gate, then report untracked typing debt without failing
+#
+# Never runs sentinel.py / intel.py / scout.py: those sign, trade and spend.
+
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+fail=0
+step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+ok()   { printf '   \033[32mok\033[0m %s\n' "$1"; }
+bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; fail=1; }
+
+step "ruff"
+if uv run ruff check sentinel.py intel.py scout.py shitcoims_sentinel shitcoims_intelligence \
+    shitcoims_scout shitcoims_tape tests >/tmp/joshi-ruff.log 2>&1; then
+  ok "lint clean"
+else
+  tail -20 /tmp/joshi-ruff.log; bad "ruff"
+fi
+
+step "mypy (gated set: executor, transaction, domain, tape)"
+if uv run mypy >/tmp/joshi-mypy.log 2>&1; then
+  ok "$(grep -c '' /tmp/joshi-mypy.log >/dev/null && echo 'gated modules type-clean')"
+else
+  tail -20 /tmp/joshi-mypy.log; bad "mypy"
+fi
+
+step "pytest"
+if uv run pytest >/tmp/joshi-pytest.log 2>&1; then
+  ok "$(grep -aE 'passed|failed' /tmp/joshi-pytest.log | tail -1)"
+else
+  tail -25 /tmp/joshi-pytest.log; bad "pytest"
+fi
+
+step "dashboard (tsc + eslint + render tests)"
+if npm test >/tmp/joshi-npm.log 2>&1; then
+  ok "typecheck, lint and render tests pass"
+else
+  tail -20 /tmp/joshi-npm.log; bad "dashboard"
+fi
+
+step "lean kernel"
+if (cd kernel && lake build) >/tmp/joshi-lake.log 2>&1; then
+  ok "kernel builds"
+else
+  tail -20 /tmp/joshi-lake.log; bad "lake build"
+fi
+
+# A `sorry` compiles, warns once, and then sits in the tree looking like a theorem.
+step "kernel has no sorry"
+if grep -rn '\bsorry\b' kernel/Joshi >/tmp/joshi-sorry.log 2>&1; then
+  cat /tmp/joshi-sorry.log; bad "kernel contains sorry"
+else
+  ok "no sorry in kernel"
+fi
+
+# The stronger check: a theorem can be sorry-free and still rest on one transitively, and
+# `native_decide` quietly adds ofReduceBool. Only the three standard axioms are acceptable.
+step "kernel axiom audit"
+cat > /tmp/joshi-ax.lean <<'LEAN'
+import Joshi
+#print axioms Joshi.Reserves.sellOut_le_reserve
+#print axioms Joshi.Reserves.sellOut_mono
+#print axioms Joshi.Position.no_basis_never_stops
+#print axioms Joshi.decision_ignores_the_future
+#print axioms Joshi.toStrategy_ignores_the_future
+#print axioms Joshi.exposure_bounded
+#print axioms Joshi.exposure_monotone
+#print axioms Joshi.admitted_spend_within_pool
+LEAN
+if (cd kernel && LEAN_PATH=.lake/build/lib/lean lean /tmp/joshi-ax.lean) >/tmp/joshi-axout.log 2>&1; then
+  if grep -qE 'sorryAx|ofReduceBool' /tmp/joshi-axout.log; then
+    cat /tmp/joshi-axout.log; bad "a theorem rests on sorryAx or native_decide"
+  else
+    ok "all theorems rest only on propext / Quot.sound / Classical.choice"
+  fi
+else
+  tail -10 /tmp/joshi-axout.log; bad "axiom audit did not run"
+fi
+
+if [ "${1:-}" = "--full" ]; then
+  step "typing debt outside the gate (informational)"
+  uv run mypy shitcoims_sentinel shitcoims_intelligence shitcoims_scout sentinel.py intel.py scout.py \
+    2>/dev/null | tail -1 || true
+fi
+
+printf '\n'
+if [ "$fail" -eq 0 ]; then
+  printf '\033[32mgate passed\033[0m\n'
+else
+  printf '\033[31mgate FAILED\033[0m\n'
+fi
+exit "$fail"

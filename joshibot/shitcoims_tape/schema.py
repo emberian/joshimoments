@@ -591,7 +591,8 @@ def event_from_json(payload: Mapping[str, Any]) -> TapeEvent:
     except (KeyError, ValueError) as exc:
         raise TapeError("tape line has no valid kind") from exc
     body_raw = payload.get("body")
-    _require(isinstance(body_raw, Mapping), "tape line has no body object")
+    if not isinstance(body_raw, Mapping):
+        raise TapeError("tape line has no body object")
     chain_raw = payload.get("chain")
     chain = (
         Chainstamp(
@@ -604,7 +605,8 @@ def event_from_json(payload: Mapping[str, Any]) -> TapeEvent:
         else None
     )
     prov_raw = payload.get("provenance")
-    _require(isinstance(prov_raw, Mapping), "tape line has no provenance")
+    if not isinstance(prov_raw, Mapping):
+        raise TapeError("tape line has no provenance")
     provenance = Provenance(
         source=str(prov_raw["source"]),
         fetched_at=str(prov_raw["fetched_at"]),

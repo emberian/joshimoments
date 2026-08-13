@@ -36,3 +36,8 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   N computable from the grammar: 110,880 predicates at 8 features/depth 1), Envelope (exposure
   bounded over EVERY action sequence, i.e. every learner). Zero sorries; axiom audit shows only
   propext/Quot.sound/Classical.choice. Lean core only, no mathlib — builds in ~2s.
+- 2026-08-13 — merge gate: `scripts/check.sh` (ruff, mypy, pytest, dashboard tsc/eslint/render,
+  lake build, no-sorry, axiom audit). mypy introduced with a GATED set — executor, transaction,
+  domain, tape must stay clean; 65 findings elsewhere are tracked debt surfaced by `--full`.
+  Two real narrowing holes closed in the money path while gating (executor reconciliation,
+  domain no-quote guard); both now fail closed instead of relying on a reader's inference.
