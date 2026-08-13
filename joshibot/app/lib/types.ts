@@ -89,7 +89,10 @@ export type Policy = {
 };
 
 export type ProtectUnmonitoredRequest = {
-  mode: "from_quote" | "rug_only";
+  // `from_quote` is deliberately absent: seeding a basis from the current exit
+  // quote made PnL start at 0% regardless of what was paid. The server rejects
+  // it; keeping it out of the type makes reintroducing it a compile error.
+  mode: "rug_only";
   stop_loss_pct?: number;
   take_profit_pct?: number;
   trailing_stop_pct?: number;

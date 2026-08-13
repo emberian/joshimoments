@@ -115,12 +115,26 @@ def test_policy_allows_missing_basis_for_rug_only() -> None:
     assert "buy_price_sol" not in mapping
 
 
-def test_policies_for_unmonitored_from_quote_uses_exit_sol_and_skips() -> None:
+def test_seeding_a_basis_from_an_exit_quote_is_refused() -> None:
+    """The old `from_quote` mode is gone, not merely defaulted away.
+
+    It stamped the current Jupiter exit quote as cost basis, so PnL started at 0%
+    regardless of what was paid and every stop fired below the coin's already-fallen
+    price. Asking for it must fail loudly rather than silently fabricate.
+    """
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError):
+        policies_for_unmonitored(
+            unmonitored=[{"mint": mint, "name": "L00T", "exit_sol": "0.542"}],
+            current=[],
+            mode="from_quote",
+        )
+
+
+def test_unmonitored_rows_never_seed_a_basis_from_their_quote() -> None:
+    """A row carrying an exit quote still yields a basis-free, rug-only policy."""
     existing_mint = str(Keypair().pubkey())
     new_mint = str(Keypair().pubkey())
-    skip_mint = str(Keypair().pubkey())
-    zero_mint = str(Keypair().pubkey())
-    bad_mint = str(Keypair().pubkey())
     existing = policy_from_payload(
         existing_mint, {"name": "KEEP", "cost_basis_sol": 9}
     )
@@ -128,26 +142,20 @@ def test_policies_for_unmonitored_from_quote_uses_exit_sol_and_skips() -> None:
         unmonitored=[
             {"mint": existing_mint, "name": "OVERWRITE", "exit_sol": "1.0"},
             {"mint": new_mint, "name": "L00T", "exit_sol": "0.542"},
-            {"mint": skip_mint, "name": "NOQUOTE", "exit_sol": None},
-            {"mint": zero_mint, "name": "ZERO", "exit_sol": "0"},
-            {"mint": bad_mint, "name": "BAD", "exit_sol": "nope"},
             {"mint": "not-a-mint", "name": "BOGUS", "exit_sol": "1"},
         ],
         current=[existing],
-        mode="from_quote",
     )
     assert [policy.mint for policy in merged] == [existing_mint, new_mint]
+    # an operator-typed basis is never overwritten
     assert merged[0].name == "KEEP"
     assert merged[0].cost_basis_sol == existing.cost_basis_sol
+    # and the new policy carries no basis at all, despite exit_sol being present
     assert created == [new_mint]
     assert merged[1].name == "L00T"
-    assert merged[1].cost_basis_sol is not None
-    assert float(merged[1].cost_basis_sol) == 0.542
+    assert merged[1].cost_basis_sol is None
     assert merged[1].buy_price_sol is None
     skipped_by_mint = {item["mint"]: item["reason"] for item in skipped}
-    assert skip_mint in skipped_by_mint
-    assert zero_mint in skipped_by_mint
-    assert bad_mint in skipped_by_mint
     assert "not-a-mint" in skipped_by_mint
     assert existing_mint not in skipped_by_mint
 

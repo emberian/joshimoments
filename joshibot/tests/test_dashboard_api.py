@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 from decimal import Decimal
@@ -24,7 +25,7 @@ from shitcoims_sentinel.policies import (
     policy_from_payload,
     policy_to_mapping,
 )
-from shitcoims_sentinel.server import create_app
+from shitcoims_sentinel.server import _TaskReentrantLock, create_app
 from shitcoims_sentinel.storage import EventJournal
 
 TRADE_FIELDS = [
@@ -438,12 +439,12 @@ def test_protect_unmonitored_round_trips_to_mapping() -> None:
     merged, created, skipped = policies_for_unmonitored(
         unmonitored=[{"mint": mint, "name": "L00T", "exit_sol": "0.542"}],
         current=[],
-        mode="from_quote",
     )
     item = policy_to_mapping(merged[0])
     assert item["mint"] == mint
     assert item["name"] == "L00T"
-    assert item["cost_basis_sol"] == 0.542
+    # the row carries an exit quote; it must NOT become a cost basis
+    assert "cost_basis_sol" not in item
     assert "buy_price_sol" not in item
     assert created == [mint]
     assert skipped == []
@@ -529,14 +530,15 @@ async def test_protect_unmonitored_http_creates_then_noops(tmp_path: Path) -> No
     ) as client:
         created = await client.post(
             "/api/policies/protect-unmonitored",
-            json={"mode": "from_quote"},
+            json={},
         )
         assert created.status_code == 200
         body = created.json()
         assert body["can_execute"] is False
         assert body["created"] == [mint]
         assert body["skipped"] == []
-        assert body["items"][0]["cost_basis_sol"] == 0.172
+        # protecting from the dashboard must not stamp the exit quote as basis
+        assert "cost_basis_sol" not in body["items"][0]
         assert len(engine.apply_calls) == 1
 
         again = await client.post("/api/policies/protect-unmonitored", json={})
@@ -586,3 +588,203 @@ async def test_protect_unmonitored_http_rug_only_and_rejects_remote(
         assert denied.status_code == 403
         assert denied.json()["detail"] == "loopback only"
         assert len(engine.apply_calls) == 1
+
+
+class RacingEngine(FakeEngine):
+    """FakeEngine that mirrors the real engine's lock discipline.
+
+    `SentinelEngine.apply_positions` swaps `config.positions` under
+    `_policy_lock`, and it awaits before doing so. That await is the window in
+    which the engine's auto-protect pass can land its own write. This stub
+    reproduces the window so a handler that reads `config.positions` outside the
+    lock demonstrably loses the concurrent write.
+    """
+
+    def __init__(self, tmp_path: Path, unmonitored: list[dict[str, Any]]) -> None:
+        super().__init__(tmp_path, unmonitored)
+        self._policy_lock = asyncio.Lock()
+        self.entered_apply = asyncio.Event()
+        self.writes: list[str] = []
+
+    async def apply_positions(self, policies: list[Any], **_kwargs: Any) -> list[dict[str, Any]]:
+        self.apply_calls.append(list(policies))
+        # By the time persistence is entered the handler has already read
+        # config.positions, so this is precisely the lost-update window.
+        self.entered_apply.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        async with self._policy_lock:
+            self.config.positions = tuple(policies)
+            self.writes.append("handler")
+        return self.list_policies()
+
+    def skip_auto_protect(self, mint: str) -> None:
+        return None
+
+
+async def _auto_protect_writer(engine: RacingEngine, policy: Any) -> None:
+    """Stand-in for the engine cycle's auto-protect pass.
+
+    Contends for the same lock the handler must be holding, and only starts
+    contending once the handler has read config.positions.
+    """
+    await engine.entered_apply.wait()
+    async with engine._policy_lock:
+        engine.config.positions = (*engine.config.positions, policy)
+        engine.writes.append("auto")
+
+
+def _policy(mint: str, name: str) -> Any:
+    return policy_from_payload(mint, {"name": name, "cost_basis_sol": 1.0})
+
+
+@pytest.mark.asyncio
+async def test_upsert_policy_does_not_drop_a_concurrent_auto_protect_rule(
+    tmp_path: Path,
+) -> None:
+    operator_mint = str(Keypair().pubkey())
+    auto_mint = str(Keypair().pubkey())
+    engine = RacingEngine(tmp_path, [])
+    app = create_app(engine)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        racer = asyncio.create_task(_auto_protect_writer(engine, _policy(auto_mint, "AUTOBAG")))
+        response = await client.put(
+            f"/api/policies/{operator_mint}",
+            json={"name": "OPERATOR", "cost_basis_sol": 2.0},
+        )
+        await asyncio.wait_for(racer, timeout=5)
+
+    assert response.status_code == 200
+    assert len(engine.apply_calls) == 1
+    mints = {policy.mint for policy in engine.config.positions}
+    assert auto_mint in mints, "auto-protect rule was dropped: that bag lost its stop"
+    assert operator_mint in mints
+    # The handler's write must complete before the concurrent writer is let in;
+    # the reverse order is the lost update.
+    assert engine.writes == ["handler", "auto"]
+
+
+@pytest.mark.asyncio
+async def test_delete_policy_does_not_drop_a_concurrent_auto_protect_rule(
+    tmp_path: Path,
+) -> None:
+    doomed_mint = str(Keypair().pubkey())
+    kept_mint = str(Keypair().pubkey())
+    auto_mint = str(Keypair().pubkey())
+    engine = RacingEngine(tmp_path, [])
+    engine.config.positions = (_policy(doomed_mint, "DOOMED"), _policy(kept_mint, "KEPT"))
+    app = create_app(engine)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        racer = asyncio.create_task(_auto_protect_writer(engine, _policy(auto_mint, "AUTOBAG")))
+        response = await client.delete(f"/api/policies/{doomed_mint}")
+        await asyncio.wait_for(racer, timeout=5)
+
+    assert response.status_code == 200
+    assert engine.writes == ["handler", "auto"]
+    mints = {policy.mint for policy in engine.config.positions}
+    assert mints == {kept_mint, auto_mint}
+
+
+@pytest.mark.asyncio
+async def test_protect_unmonitored_does_not_drop_a_concurrent_auto_protect_rule(
+    tmp_path: Path,
+) -> None:
+    unmonitored_mint = str(Keypair().pubkey())
+    auto_mint = str(Keypair().pubkey())
+    engine = RacingEngine(
+        tmp_path,
+        [{"mint": unmonitored_mint, "name": "SPARKY", "exit_sol": "0.172"}],
+    )
+    app = create_app(engine)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+    ) as client:
+        racer = asyncio.create_task(_auto_protect_writer(engine, _policy(auto_mint, "AUTOBAG")))
+        response = await client.post(
+            "/api/policies/protect-unmonitored",
+            json={},
+        )
+        await asyncio.wait_for(racer, timeout=5)
+
+    assert response.status_code == 200
+    assert response.json()["created"] == [unmonitored_mint]
+    assert engine.writes == ["handler", "auto"]
+    mints = {policy.mint for policy in engine.config.positions}
+    assert mints == {unmonitored_mint, auto_mint}
+
+
+@pytest.mark.asyncio
+async def test_mutating_routes_reject_non_loopback_clients(tmp_path: Path) -> None:
+    mint = str(Keypair().pubkey())
+    engine = FakeEngine(tmp_path, [{"mint": mint, "name": "SPARKY", "exit_sol": "0.172"}])
+    engine.config.positions = (_policy(mint, "SPARKY"),)
+    app = create_app(engine)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("8.8.8.8", 123)),
+        base_url="http://8.8.8.8",
+    ) as remote:
+        responses = [
+            await remote.put(f"/api/policies/{mint}", json={"name": "X", "cost_basis_sol": 1.0}),
+            await remote.delete(f"/api/policies/{mint}"),
+            await remote.post("/api/policies/protect-unmonitored", json={}),
+            await remote.post(f"/api/policies/{mint}/skip-auto"),
+        ]
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403]
+    assert {response.json()["detail"] for response in responses} == {"loopback only"}
+    assert engine.apply_calls == []
+    assert {policy.mint for policy in engine.config.positions} == {mint}
+
+    # The read-only routes stay reachable, so the 403s above are the loopback
+    # check and not a blanket failure.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("8.8.8.8", 123)),
+        base_url="http://8.8.8.8",
+    ) as remote:
+        listed = await remote.get("/api/policies")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["mint"] == mint
+
+
+@pytest.mark.asyncio
+async def test_task_reentrant_lock_reenters_owner_and_excludes_other_tasks() -> None:
+    lock = _TaskReentrantLock(asyncio.Lock())
+    order: list[str] = []
+
+    async def contender() -> None:
+        async with lock:
+            order.append("other")
+
+    async with lock:
+        task = asyncio.create_task(contender())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not task.done(), "a second task must not enter while the lock is held"
+        async with lock:
+            order.append("reentered")
+        assert lock.locked()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert order == ["reentered", "other"]
+    assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_reentrant_policy_lock_install_is_idempotent(tmp_path: Path) -> None:
+    engine = RacingEngine(tmp_path, [])
+    create_app(engine)
+    first = engine._policy_lock
+    assert isinstance(first, _TaskReentrantLock)
+    create_app(engine)
+    assert engine._policy_lock is first

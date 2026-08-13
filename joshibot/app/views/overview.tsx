@@ -212,7 +212,7 @@ export function UnmonitoredBanner({
     setError(null);
     setResult(null);
     try {
-      const next = await protectUnmonitored({ mode: "from_quote" }, rows);
+      const next = await protectUnmonitored({ mode: "rug_only" }, rows);
       setResult(next);
       onChanged?.();
     } catch (err) {

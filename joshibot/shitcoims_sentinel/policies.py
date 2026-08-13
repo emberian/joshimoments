@@ -129,7 +129,7 @@ def policies_for_unmonitored(
     *,
     unmonitored: list[dict[str, Any]],
     current: list[PositionPolicy],
-    mode: str = "from_quote",
+    mode: str = "rug_only",
     stop_loss_pct: Any = -30,
     take_profit_pct: Any = 100,
     trailing_stop_pct: Any = 20,
@@ -139,12 +139,21 @@ def policies_for_unmonitored(
     floor_confirm_quotes: int = 2,
     hold_trail_until_graduated: bool = True,
 ) -> tuple[list[PositionPolicy], list[str], list[dict[str, str]]]:
-    """Merge rug-only or quote-basis policies for unmonitored holdings.
+    """Merge rug-only policies for unmonitored holdings.
 
     Never overwrites an existing policy. Does not touch files, keys, or execution.
+
+    A basis is NEVER seeded here. The old ``from_quote`` mode stamped the current
+    Jupiter exit quote as cost basis, which made PnL start at 0% regardless of what
+    was actually paid and turned every stop into a loss (measured: -29.1% mean over
+    16 round trips on 2026-08-12, versus +18.1% over 3 with an operator-typed basis).
+    Created policies carry no basis, so they are rug-only until the engine
+    reconstructs the real basis from observed on-chain buys.
     """
-    if mode not in {"from_quote", "rug_only"}:
-        raise PolicyError("mode must be from_quote or rug_only")
+    if mode != "rug_only":
+        raise PolicyError(
+            "mode must be rug_only; a basis is never seeded from an exit quote"
+        )
 
     existing = {policy.mint: policy for policy in current}
     merged = list(current)
@@ -178,21 +187,6 @@ def policies_for_unmonitored(
             "floor_confirm_quotes": floor_confirm_quotes,
             "hold_trail_until_graduated": hold_trail_until_graduated,
         }
-        if mode == "from_quote":
-            exit_sol = row.get("exit_sol")
-            try:
-                basis = (
-                    None
-                    if exit_sol in {None, ""}
-                    else decimal_from(exit_sol, field="exit_sol")
-                )
-            except Exception:
-                basis = None
-            if basis is None or basis <= 0:
-                skipped.append({"mint": mint, "reason": "missing or invalid exit_sol"})
-                continue
-            payload["cost_basis_sol"] = basis
-
         try:
             policy = policy_from_payload(mint, payload)
         except PolicyError as exc:

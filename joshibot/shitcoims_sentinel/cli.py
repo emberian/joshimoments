@@ -10,14 +10,16 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import uvicorn
 from solders.pubkey import Pubkey
 
 from .config import ConfigError, load_config
-from .domain import to_jsonable
+from .domain import DecisionKind, TokenHolding, to_jsonable
 from .engine import SentinelEngine
+from .executor import ExecutionResult
 from .notifier import telegram_bot_identity, telegram_confirm_pairing, telegram_send_test
 from .secrets import read_secret_file
 from .server import create_app
@@ -25,6 +27,8 @@ from .server import create_app
 TELEGRAM_DISCOVERY_DEFAULT_TIMEOUT_SECONDS = 600
 TELEGRAM_LONG_POLL_SECONDS = 25
 TELEGRAM_LONG_POLL_NETWORK_GRACE_SECONDS = 10
+
+OBSERVATION_ONLY_REASON = "--status runs in observation mode; its execution dispatch is removed"
 
 
 def _telegram_discovery_timeout(value: str) -> int:
@@ -48,7 +52,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="explicitly select the default dry-run mode")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--status", action="store_true", help="run one read-only cycle and print JSON")
+    mode.add_argument(
+        "--status",
+        action="store_true",
+        help=(
+            "run one observation-only cycle and print JSON; the execution dispatch is "
+            "removed first, so this can never sell even with --live"
+        ),
+    )
     mode.add_argument("--panic", action="store_true", help="sell every non-zero SPL holding, then exit")
     mode.add_argument("--arm", action="store_true", help="write the shitcoims-specific live arm file")
     mode.add_argument("--disarm", action="store_true", help="remove the local live arm file")
@@ -223,13 +234,112 @@ def _write_arm(path: Path, value: str) -> None:
     os.chmod(path, 0o600)
 
 
+class _ObservationOnlyExecutor:
+    """Stand-in for SellExecutor with no path to a signed transaction.
+
+    It holds no keypair, no RPC client, no Jupiter client and no execution gate,
+    so there is nothing here that could sign or submit. It exists because
+    ``--status`` is documented read-only while ``engine.cycle()`` reaches
+    ``SellExecutor.sell()``: ``--live --status`` was a live trading command
+    wearing a read-only label.
+
+    The ``sell`` signature deliberately mirrors ``SellExecutor.sell`` exactly. If
+    that signature changes, this raises TypeError rather than quietly falling
+    back to the real executor.
+    """
+
+    def __init__(self) -> None:
+        self.suppressed: list[dict[str, Any]] = []
+
+    async def sell(
+        self,
+        *,
+        mint: str,
+        name: str,
+        reason: DecisionKind | str,
+        observed_holding: TokenHolding,
+        amount: int | None = None,
+    ) -> ExecutionResult:
+        requested = observed_holding.amount if amount is None else int(amount)
+        self.suppressed.append(
+            {
+                "mint": mint,
+                "name": name,
+                "reason": str(reason),
+                "amount": requested,
+            }
+        )
+        return ExecutionResult(
+            status="observation_only",
+            signature=None,
+            attempts=0,
+            message=f"OBSERVATION ONLY: {name} would exit ({reason}); {OBSERVATION_ONLY_REASON}",
+            input_amount=requested,
+        )
+
+
+class _ObservationOnlyGate:
+    """Execution gate that can never report live, without hiding the real gates.
+
+    The wrapped gate's real failures are still reported so ``--status`` keeps its
+    value as a readiness check; the observation-mode line is appended so an
+    otherwise empty failure list is not mistaken for a broken arm setup.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    @property
+    def cli_live(self) -> bool:
+        return False
+
+    @property
+    def expected_arm_value(self) -> str:
+        return self._inner.expected_arm_value
+
+    def status(self, *, jupiter_ready: bool) -> tuple[bool, list[str]]:
+        _live, failures = self._inner.status(jupiter_ready=jupiter_ready)
+        return False, [*failures, OBSERVATION_ONLY_REASON]
+
+
+def _seal_engine_for_status(engine: SentinelEngine) -> _ObservationOnlyExecutor:
+    """Remove the execution dispatch from an engine before a --status cycle.
+
+    Two independent layers, either sufficient alone: the executor is replaced by
+    an object that cannot sign, and the gate is wrapped so it can never report
+    live. The post-conditions are then re-read from the engine, so a future
+    refactor that moves either attribute aborts --status instead of silently
+    restoring the ability to trade.
+    """
+    if not hasattr(engine, "executor") or not hasattr(engine, "gate"):
+        raise SystemExit("refusing --status: the engine no longer exposes executor/gate to seal")
+    observer = _ObservationOnlyExecutor()
+    engine.executor = observer
+    engine.gate = _ObservationOnlyGate(engine.gate)
+    if engine.executor is not observer or engine.gate.status(jupiter_ready=True)[0]:
+        raise SystemExit("refusing --status: the engine can still reach execution")
+    return observer
+
+
 async def _one_shot(engine: SentinelEngine, *, panic: bool) -> None:
+    """Run exactly one cycle.
+
+    ``panic=False`` is the ``--status`` path and is sealed into observation mode
+    before the cycle starts. Sealing lives here rather than at the call site so
+    there is no way to reach the status cycle unsealed.
+    """
     try:
         if panic:
             results = await engine.panic()
             print(json.dumps(to_jsonable(results), indent=2))
-        else:
-            print(json.dumps(await engine.cycle(), indent=2))
+            return
+        observer = _seal_engine_for_status(engine)
+        report = dict(await engine.cycle())
+        report["observation_only"] = {
+            "note": OBSERVATION_ONLY_REASON,
+            "suppressed_exits": observer.suppressed,
+        }
+        print(json.dumps(report, indent=2))
     finally:
         await engine.close()
 

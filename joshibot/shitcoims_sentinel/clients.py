@@ -35,6 +35,42 @@ class ExternalServiceError(RuntimeError):
     pass
 
 
+# Helius caps `simulateTransaction` account inspection at 32 addresses. The caller
+# is responsible for staying under it; a wallet with more token accounts than this
+# needs several passes over the same signed transaction.
+SIMULATION_ADDRESS_LIMIT = 32
+
+# Exit minimum-output policy.
+#
+# A blanket slippage percentage is not a risk control. AMM output is deterministic
+# from reserves, so the defensible threshold is the router's state-conditional
+# expected output minus only the drift that can occur between quoting and landing.
+# Ordinary exits therefore get a tight epsilon: a revert costs a fee and a re-quote,
+# while a loose threshold silently pays up to the full percentage. The explicit
+# panic paths keep the operator-configured wide bound, because when liquidity is
+# leaving, filling matters more than price.
+#
+# `jupiter.exit_slippage_bps` in config is honoured if the config layer grows the
+# field; until then TIGHT_EXIT_SLIPPAGE_BPS is the conservative default and the
+# operator-configured `slippage_bps` remains the ceiling.
+TIGHT_EXIT_SLIPPAGE_BPS = 250
+WIDE_EXIT_REASONS = frozenset({"panic", "exit_rug"})
+
+
+def exit_slippage_bps(reason: str, config: JupiterConfig) -> int:
+    """State-conditional output tolerance for one exit, chosen by its reason."""
+    ceiling = int(config.slippage_bps)
+    if str(reason) in WIDE_EXIT_REASONS:
+        return ceiling
+    tight = int(getattr(config, "exit_slippage_bps", TIGHT_EXIT_SLIPPAGE_BPS))
+    return max(1, min(tight, ceiling))
+
+
+def minimum_output_floor(expected_output: int, slippage_bps: int) -> int:
+    """The least output an exit may accept, in lamports. Integer math only."""
+    return int(expected_output) * (10_000 - int(slippage_bps)) // 10_000
+
+
 def _safe_transport_error(service: str, exc: Exception) -> ExternalServiceError:
     # httpx exceptions can include request URLs. Helius URLs contain the API key.
     return ExternalServiceError(f"{service} transport failed ({type(exc).__name__})")
@@ -174,7 +210,15 @@ class SolanaRpc:
         except (KeyError, TypeError, ValueError) as exc:
             raise ExternalServiceError(f"cannot decode account {address}") from exc
 
-    async def signature_confirmed(self, signature: str) -> bool:
+    async def signature_status(self, signature: str) -> str:
+        """Classify a submitted signature. The caller needs the *terminal* states.
+
+        ``confirmed`` — landed without error at or above the configured commitment.
+        ``failed``    — landed and the runtime rejected it, so nothing moved.
+        ``pending``   — landed but below the configured commitment.
+        ``unknown``   — the cluster has no record of it; it may still be in flight,
+                        which is why "unknown" alone never proves a transaction dead.
+        """
         result = await self.call(
             "getSignatureStatuses",
             [[signature], {"searchTransactionHistory": True}],
@@ -183,15 +227,44 @@ class SolanaRpc:
         if not isinstance(values, list) or len(values) != 1:
             raise ExternalServiceError("Helius returned malformed signature status data")
         status = values[0]
-        if status is None or status.get("err") is not None:
-            return False
-        return status.get("confirmationStatus") in {"confirmed", "finalized"}
+        if status is None:
+            return "unknown"
+        if status.get("err") is not None:
+            return "failed"
+        if status.get("confirmationStatus") in {"confirmed", "finalized"}:
+            return "confirmed"
+        return "pending"
+
+    async def signature_confirmed(self, signature: str) -> bool:
+        return await self.signature_status(signature) == "confirmed"
+
+    async def blockhash_valid(self, blockhash: str) -> bool:
+        """False proves a transaction on this blockhash can never be included again.
+
+        This is the only cheap primitive that turns "the cluster has never heard of
+        this signature" into proof of death, so it is what gates a retry.
+        """
+        result = await self.call(
+            "isBlockhashValid",
+            [blockhash, {"commitment": self._commitment}],
+        )
+        value = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(value, bool):
+            raise ExternalServiceError("Helius returned malformed blockhash validity data")
+        return value
 
     async def simulate_transaction_accounts(
         self, encoded: str, addresses: list[str]
     ) -> dict[str, Any]:
-        if not addresses or len(addresses) > 32 or len(addresses) != len(set(addresses)):
-            raise ExternalServiceError("simulation account set is invalid or too large")
+        if not addresses:
+            raise ExternalServiceError("simulation account set is empty")
+        if len(addresses) != len(set(addresses)):
+            raise ExternalServiceError("simulation account set contains duplicate addresses")
+        if len(addresses) > SIMULATION_ADDRESS_LIMIT:
+            raise ExternalServiceError(
+                f"simulation account set of {len(addresses)} addresses exceeds the "
+                f"{SIMULATION_ADDRESS_LIMIT}-address ceiling; the caller must split it"
+            )
         result = await self.call(
             "simulateTransaction",
             [
@@ -334,12 +407,14 @@ class JupiterClient:
             raise ExternalServiceError(f"Jupiter order failed with code {code}")
         return body
 
-    async def quote_exit(self, mint: str, amount: int) -> ExitQuote:
+    async def quote_exit(
+        self, mint: str, amount: int, *, slippage_bps: int | None = None
+    ) -> ExitQuote:
         params = {
             "inputMint": mint,
             "outputMint": WSOL_MINT,
             "amount": str(amount),
-            "slippageBps": str(self.config.slippage_bps),
+            "slippageBps": str(self.config.slippage_bps if slippage_bps is None else slippage_bps),
         }
         if self.config.excluded_routers:
             params["excludeRouters"] = ",".join(self.config.excluded_routers)
@@ -372,13 +447,18 @@ class JupiterClient:
             received_at=utc_now(),
         )
 
-    async def executable_order(self, mint: str, amount: int, taker: str) -> dict[str, Any]:
+    async def executable_order(
+        self, mint: str, amount: int, taker: str, *, slippage_bps: int | None = None
+    ) -> dict[str, Any]:
+        requested_slippage = (
+            int(self.config.slippage_bps) if slippage_bps is None else int(slippage_bps)
+        )
         params = {
             "inputMint": mint,
             "outputMint": WSOL_MINT,
             "amount": str(amount),
             "taker": taker,
-            "slippageBps": str(self.config.slippage_bps),
+            "slippageBps": str(requested_slippage),
         }
         if self.config.excluded_routers:
             params["excludeRouters"] = ",".join(self.config.excluded_routers)
@@ -400,6 +480,15 @@ class JupiterClient:
             raise ExternalServiceError("Jupiter executable order omitted output constraints") from exc
         if not 0 < minimum_output <= out_amount:
             raise ExternalServiceError("Jupiter executable order returned invalid output constraints")
+        # The on-chain instruction enforces Jupiter's own threshold, so an order whose
+        # threshold sits below our computed floor cannot be trusted to honour it —
+        # that is exactly how an auto-slippage override would pay away the exit.
+        floor = minimum_output_floor(out_amount, requested_slippage)
+        if minimum_output < floor:
+            raise ExternalServiceError(
+                f"Jupiter executable order minimum output {minimum_output} is below the "
+                f"{requested_slippage}bps floor {floor} computed from its own quote"
+            )
         return body
 
     async def execute(self, *, signed_transaction: str, request_id: str) -> dict[str, Any]:

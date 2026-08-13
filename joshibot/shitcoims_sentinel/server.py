@@ -17,7 +17,87 @@ from .history import performance_summary, read_events, read_trades
 from .policies import PolicyError, policies_for_unmonitored, policy_from_payload, policy_to_mapping
 
 
+class _TaskReentrantLock:
+    """Task-reentrant view of the engine's policy lock.
+
+    Every mutating policy route reads ``engine.config.positions``, merges, and
+    then persists through ``SentinelEngine.apply_positions``. Those two steps
+    have to be one atomic step against the engine's own writers: the auto-protect
+    pass creates default policies for new bags on the cycle task, and an
+    interleave between a handler's read and its write erases that rule from
+    config.yaml, so a bag the dashboard reported as protected silently loses its
+    stop.
+
+    ``apply_positions`` acquires the same lock internally and ``asyncio.Lock`` is
+    not reentrant, so a handler that simply held the raw lock across the call
+    would deadlock. Re-entry is granted only to the asyncio task that already
+    owns the lock, so the engine's cycle task still blocks -- which is exactly
+    the exclusion the invariant needs.
+    """
+
+    __slots__ = ("_depth", "_inner", "_owner")
+
+    def __init__(self, inner: asyncio.Lock) -> None:
+        self._inner = inner
+        self._owner: asyncio.Task | None = None
+        self._depth = 0
+
+    def locked(self) -> bool:
+        return self._inner.locked()
+
+    async def acquire(self) -> bool:
+        task = asyncio.current_task()
+        if self._depth and task is not None and task is self._owner:
+            self._depth += 1
+            return True
+        await self._inner.acquire()
+        self._owner = task
+        self._depth = 1
+        return True
+
+    def release(self) -> None:
+        if self._depth <= 0:
+            raise RuntimeError("policy lock released more times than it was acquired")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._inner.release()
+
+    async def __aenter__(self) -> _TaskReentrantLock:
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, *_exception: object) -> None:
+        self.release()
+
+
+def _install_reentrant_policy_lock(engine: SentinelEngine) -> _TaskReentrantLock:
+    """Swap the engine's policy lock for a task-reentrant one and return it.
+
+    Fails closed: a real ``SentinelEngine`` that no longer exposes an
+    ``asyncio.Lock`` named ``_policy_lock`` means the atomicity this server
+    depends on has moved, and serving a dashboard that can silently drop stops is
+    worse than refusing to start.
+    """
+    existing = getattr(engine, "_policy_lock", None)
+    if isinstance(existing, _TaskReentrantLock):
+        return existing
+    if isinstance(existing, asyncio.Lock):
+        lock = _TaskReentrantLock(existing)
+    elif isinstance(engine, SentinelEngine):
+        raise RuntimeError(
+            "SentinelEngine no longer exposes an asyncio _policy_lock; the dashboard's "
+            "read-modify-write of config.positions cannot be made atomic"
+        )
+    else:
+        lock = _TaskReentrantLock(asyncio.Lock())
+    engine._policy_lock = lock
+    return lock
+
+
 def create_app(engine: SentinelEngine) -> FastAPI:
+    policy_lock = _install_reentrant_policy_lock(engine)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         task = asyncio.create_task(engine.run(), name="shitcoims-sentinel")
@@ -91,21 +171,25 @@ def create_app(engine: SentinelEngine) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception:
             raise HTTPException(status_code=400, detail="invalid policy payload") from None
-        current = {item.mint: item for item in engine.config.positions}
-        current[policy.mint] = policy
-        items = await engine.apply_positions(
-            list(current.values()), origin="operator", touch=[policy.mint]
-        )
+        # Read and write under one lock hold: an auto-protect rule created
+        # between the two would otherwise be dropped from config.yaml.
+        async with policy_lock:
+            current = {item.mint: item for item in engine.config.positions}
+            current[policy.mint] = policy
+            items = await engine.apply_positions(
+                list(current.values()), origin="operator", touch=[policy.mint]
+            )
         return {"item": policy_to_mapping(policy), "items": items, "can_execute": False}
 
     @app.delete("/api/policies/{mint}")
     async def delete_policy(mint: str, request: Request):
         _loopback(request)
-        remaining = [item for item in engine.config.positions if item.mint != mint]
-        if len(remaining) == len(engine.config.positions):
-            raise HTTPException(status_code=404, detail="policy not found")
-        engine.skip_auto_protect(mint)
-        items = await engine.apply_positions(remaining)
+        async with policy_lock:
+            remaining = [item for item in engine.config.positions if item.mint != mint]
+            if len(remaining) == len(engine.config.positions):
+                raise HTTPException(status_code=404, detail="policy not found")
+            engine.skip_auto_protect(mint)
+            items = await engine.apply_positions(remaining)
         return {"removed": True, "items": items, "can_execute": False}
 
     @app.post("/api/policies/protect-unmonitored")
@@ -119,26 +203,32 @@ def create_app(engine: SentinelEngine) -> FastAPI:
             body = {}
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="body must be an object")
-        try:
-            snapshot = await engine.snapshot()
-            merged, created, skipped = policies_for_unmonitored(
-                unmonitored=list(snapshot.get("unmonitored") or []),
-                current=list(engine.config.positions),
-                mode=str(body.get("mode") or "from_quote"),
-                stop_loss_pct=body.get("stop_loss_pct", -30),
-                take_profit_pct=body.get("take_profit_pct", 100),
-                trailing_stop_pct=body.get("trailing_stop_pct", 20),
-                rug_exit=body.get("rug_exit", True),
-                dispose_after_break_even=body.get("dispose_after_break_even", False),
-                exit_style=body.get("exit_style") or "runner",
+        # Taken before the lock: snapshot() waits on the engine's snapshot lock,
+        # and holding the policy lock across an unrelated wait is a deadlock the
+        # merge does not need. Only `current` has to be fresh -- a stale
+        # unmonitored row is skipped by policies_for_unmonitored once a policy for
+        # that mint exists in `current`.
+        snapshot = await engine.snapshot()
+        async with policy_lock:
+            try:
+                merged, created, skipped = policies_for_unmonitored(
+                    unmonitored=list(snapshot.get("unmonitored") or []),
+                    current=list(engine.config.positions),
+                    mode=str(body.get("mode") or "rug_only"),
+                    stop_loss_pct=body.get("stop_loss_pct", -30),
+                    take_profit_pct=body.get("take_profit_pct", 100),
+                    trailing_stop_pct=body.get("trailing_stop_pct", 20),
+                    rug_exit=body.get("rug_exit", True),
+                    dispose_after_break_even=body.get("dispose_after_break_even", False),
+                    exit_style=body.get("exit_style") or "runner",
+                )
+            except PolicyError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            items = (
+                await engine.apply_positions(merged, origin="operator", touch=created)
+                if created
+                else engine.list_policies()
             )
-        except PolicyError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        items = (
-            await engine.apply_positions(merged, origin="operator", touch=created)
-            if created
-            else engine.list_policies()
-        )
         return {
             "created": created,
             "skipped": skipped,

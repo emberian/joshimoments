@@ -1,23 +1,54 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from solders.keypair import Keypair
+from solders.transaction import VersionedTransaction
 
-from .clients import JupiterClient, SolanaRpc
+from .clients import (
+    SIMULATION_ADDRESS_LIMIT,
+    ExternalServiceError,
+    JupiterClient,
+    SolanaRpc,
+    exit_slippage_bps,
+)
 from .config import AppConfig
 from .domain import DecisionKind, TokenHolding, utc_now
 from .notifier import Notifier
 from .secrets import read_secret_file
 from .storage import StateStore
 from .transaction import (
+    TransactionRejected,
     sign_validated_transaction,
     validate_jupiter_exit_transaction,
     validate_simulated_exit,
 )
+
+# A submitted signature is resolved to a terminal state before any retry. The
+# window must be able to outlive blockhash expiry (150 slots, ~60s), because
+# "the cluster has never heard of this signature" only becomes proof of death
+# once the transaction can no longer be included in a block.
+RESOLUTION_POLL_ATTEMPTS = 50
+RESOLUTION_POLL_SECONDS = 2.0
+
+# The safety simulation must cover every owned token account, and Helius accepts
+# at most SIMULATION_ADDRESS_LIMIT of them per call, so a fat wallet is covered by
+# several passes over the same signed transaction. The chunk cap only exists so a
+# pathological wallet fails loudly instead of issuing unbounded RPC traffic.
+SIMULATION_CHUNK_LIMIT = 24
+SIMULATION_CONCURRENCY = 4
+
+# Statuses whose stored signature may still land on chain.
+UNRESOLVED_STATUSES = frozenset({"submitting", "submitted", "submitted_unconfirmed"})
+
+
+class SimulationCoverageError(RuntimeError):
+    """The wallet holds more token accounts than the safety simulation can cover."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +59,48 @@ class ExecutionResult:
     message: str
     input_amount: int
     output_lamports: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SignatureResolution:
+    """Terminal verdict on a submitted signature.
+
+    ``confirmed`` — it landed and the balance moved.
+    ``dead``      — it can never move the balance (on-chain error, or its
+                    blockhash expired before inclusion). Only this permits a retry.
+    ``unresolved``— still ambiguous. Never retry; a second order could over-sell.
+    """
+
+    state: str
+    detail: str
+    leftover: int | None = None
+
+
+def describe_execution_failure(exc: BaseException) -> str:
+    """Name the failure class without carrying a URL, key, or response payload.
+
+    An operator has to be able to tell a security stop from a timeout. Helius puts
+    its API key in the query string, so httpx exceptions are reduced to their type;
+    our own error types build their messages from static text plus public data.
+    """
+    if isinstance(exc, TransactionRejected):
+        return f"security stop ({type(exc).__name__}): {exc}"
+    if isinstance(exc, SimulationCoverageError):
+        return f"simulation coverage ({type(exc).__name__}): {exc}"
+    if isinstance(exc, ExternalServiceError):
+        return f"external service ({type(exc).__name__}): {exc}"
+    if isinstance(exc, httpx.HTTPError):
+        return f"transport failure ({type(exc).__name__}); request detail withheld"
+    if isinstance(exc, TimeoutError):
+        return f"timeout ({type(exc).__name__}) waiting for an execution response"
+    return f"unexpected {type(exc).__name__}; detail withheld"
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class ExecutionGate:
@@ -102,6 +175,283 @@ class SellExecutor:
             writer.writerow({field: row.get(field) for field in fields})
             handle.flush()
 
+    # ------------------------------------------------------------------
+    # Signature resolution. Nothing may be re-submitted until a prior
+    # signature has been shown to be either landed or impossible to land.
+    # ------------------------------------------------------------------
+
+    async def _resolve_signature(
+        self,
+        *,
+        signature: str,
+        blockhash: str | None,
+        mint: str,
+        expected_remaining: int,
+    ) -> SignatureResolution:
+        detail = "signature never reached a terminal state"
+        for poll in range(RESOLUTION_POLL_ATTEMPTS):
+            if poll:
+                await asyncio.sleep(RESOLUTION_POLL_SECONDS)
+            status = await self.rpc.signature_status(signature)
+            if status == "failed":
+                return SignatureResolution("dead", "transaction landed with an on-chain error")
+            if status == "confirmed":
+                remaining = await self._holding(mint)
+                leftover = 0 if remaining is None else remaining.amount
+                if leftover <= expected_remaining:
+                    return SignatureResolution("confirmed", "confirmed onchain", leftover)
+                detail = "confirmed signature has not yet reduced the balance"
+                continue
+            detail = f"signature status is {status}"
+            if status == "unknown" and blockhash:
+                # Only blockhash expiry proves a never-seen transaction is dead.
+                try:
+                    still_valid = await self.rpc.blockhash_valid(blockhash)
+                except ExternalServiceError:
+                    still_valid = True
+                if not still_valid:
+                    return SignatureResolution(
+                        "dead", "blockhash expired before the transaction landed"
+                    )
+        return SignatureResolution("unresolved", detail)
+
+    async def _finalize_confirmed(
+        self,
+        *,
+        mint: str,
+        name: str,
+        reason: DecisionKind | str,
+        signature: str,
+        sold_amount: int,
+        output_lamports: int | None,
+        attempt: int,
+    ) -> ExecutionResult:
+        if str(reason) == DecisionKind.EXIT_DISPOSE.value:
+            # A dispose mark is a one-shot instruction. Persistently disable it
+            # after confirmed completion so a later reacquisition cannot inherit
+            # the old trigger.
+            self.state.set_dispose_policy(mint, enabled=False)
+        self.state.delete("pending_exits", mint)
+        self._append_trade(
+            {
+                "timestamp": utc_now().isoformat(),
+                "wallet": "shitcoims",
+                "mint": mint,
+                "name": name,
+                "reason": str(reason),
+                "input_amount": sold_amount,
+                "output_lamports": output_lamports,
+                "signature": signature,
+            }
+        )
+        scaled = str(reason) == DecisionKind.EXIT_SCALE.value
+        message = (
+            f"SCALE CONFIRMED: {name} sold {sold_amount} from shitcoims"
+            if scaled
+            else f"EXIT CONFIRMED: {name} sold from shitcoims"
+        )
+        await self.notifier.send(
+            severity="critical" if str(reason) == DecisionKind.EXIT_RUG.value else "warning",
+            category="execution",
+            message=message,
+            context={
+                "mint": mint,
+                "signature": signature,
+                "reason": str(reason),
+                "amount": sold_amount,
+            },
+            dedup_seconds=0,
+        )
+        return ExecutionResult("success", signature, attempt, message, sold_amount, output_lamports)
+
+    async def _block_on_unresolved(
+        self,
+        *,
+        mint: str,
+        name: str,
+        reason: DecisionKind | str,
+        intent: dict[str, Any],
+        signature: str,
+        detail: str,
+        attempt: int,
+        amount: int,
+    ) -> ExecutionResult:
+        intent.update(
+            {"status": "submitted_unconfirmed", "signature": signature, "last_error": detail}
+        )
+        self.state.set("pending_exits", mint, value=intent)
+        message = (
+            f"EXIT UNRESOLVED: {name} on shitcoims has a submitted transaction that has not "
+            "resolved; no replacement will be sent — MANUAL ACTION REQUIRED"
+        )
+        await self.notifier.send(
+            severity="critical",
+            category="execution",
+            message=message,
+            context={
+                "mint": mint,
+                "signature": signature,
+                "reason": str(reason),
+                "detail": detail,
+            },
+            # An unresolved exit is re-entered by `reconcile_pending_exits` every
+            # cycle, so this is keyed per signature rather than fired every poll.
+            dedup_key=f"exit-unresolved:{mint}:{signature}",
+            dedup_seconds=300,
+        )
+        return ExecutionResult("unresolved", signature, attempt, message, amount)
+
+    async def _resolve_prior_submission(
+        self, *, mint: str, name: str, reason: DecisionKind | str
+    ) -> ExecutionResult | None:
+        """Settle a signature left behind by an earlier call before selling again.
+
+        Returns None only when the prior transaction provably cannot land.
+        """
+        prior = self.state.get("pending_exits", mint, default=None)
+        if not isinstance(prior, dict):
+            return None
+        signature = prior.get("signature")
+        if not signature or str(prior.get("status")) not in UNRESOLVED_STATUSES:
+            return None
+        signature = str(signature)
+        prior_reason = str(prior.get("reason") or reason)
+        prior_name = str(prior.get("name") or name)
+        expected_remaining = _int_or_none(prior.get("expected_remaining"))
+        sold_amount = _int_or_none(prior.get("sell_amount")) or 0
+        blockhash = prior.get("recent_blockhash")
+        if expected_remaining is None or expected_remaining < 0:
+            # A malformed intent cannot be reasoned about, and it still carries a
+            # signature. Fail closed rather than risk a second sale.
+            return await self._block_on_unresolved(
+                mint=mint,
+                name=prior_name,
+                reason=prior_reason,
+                intent=dict(prior),
+                signature=signature,
+                detail="stored exit intent is malformed and cannot be resolved",
+                attempt=0,
+                amount=sold_amount,
+            )
+        resolution = await self._resolve_signature(
+            signature=signature,
+            blockhash=str(blockhash) if blockhash else None,
+            mint=mint,
+            expected_remaining=expected_remaining,
+        )
+        if resolution.state == "confirmed":
+            return await self._finalize_confirmed(
+                mint=mint,
+                name=prior_name,
+                reason=prior_reason,
+                signature=signature,
+                sold_amount=sold_amount,
+                output_lamports=_int_or_none(prior.get("output_lamports")),
+                attempt=0,
+            )
+        if resolution.state == "unresolved":
+            return await self._block_on_unresolved(
+                mint=mint,
+                name=prior_name,
+                reason=prior_reason,
+                intent=dict(prior),
+                signature=signature,
+                detail=resolution.detail,
+                attempt=0,
+                amount=sold_amount,
+            )
+        return None
+
+    # ------------------------------------------------------------------
+    # Simulation coverage.
+    # ------------------------------------------------------------------
+
+    def _simulation_chunks(
+        self, holdings: list[TokenHolding], target_mint: str
+    ) -> list[list[TokenHolding]]:
+        """Split the wallet so every chunk still proves the full invariant.
+
+        Each chunk carries the wallet SOL account and the whole target holding, so
+        each simulation independently proves "the target is disposed as intended and
+        the output lands in our own SOL account". Together the chunks prove "no other
+        owned token moved". A holding is never split across chunks: the validator
+        sums a holding's accounts, so a partial view would compare against the wrong
+        total.
+        """
+        target = [holding for holding in holdings if holding.mint == target_mint]
+        others = [holding for holding in holdings if holding.mint != target_mint]
+        if not target:
+            raise SimulationCoverageError(
+                f"target mint {target_mint} is not a current shitcoims holding"
+            )
+        fixed = 1 + sum(len(holding.token_accounts) for holding in target)
+        if fixed > SIMULATION_ADDRESS_LIMIT:
+            raise SimulationCoverageError(
+                f"the target holds {fixed - 1} token accounts, so covering it plus the wallet "
+                f"needs {fixed} simulation addresses and the ceiling is {SIMULATION_ADDRESS_LIMIT}"
+            )
+        budget = SIMULATION_ADDRESS_LIMIT - fixed
+        chunks: list[list[TokenHolding]] = []
+        current: list[TokenHolding] = []
+        used = 0
+        for holding in others:
+            count = len(holding.token_accounts)
+            if count > budget:
+                raise SimulationCoverageError(
+                    f"holding {holding.mint} spans {count} token accounts and only {budget} "
+                    f"fit alongside the target under the {SIMULATION_ADDRESS_LIMIT}-address ceiling"
+                )
+            if used + count > budget:
+                chunks.append([*target, *current])
+                current = []
+                used = 0
+            current.append(holding)
+            used += count
+        if current or not chunks:
+            chunks.append([*target, *current])
+        if len(chunks) > SIMULATION_CHUNK_LIMIT:
+            raise SimulationCoverageError(
+                f"covering {len(holdings)} holdings needs {len(chunks)} simulation passes and the "
+                f"cap is {SIMULATION_CHUNK_LIMIT} at {SIMULATION_ADDRESS_LIMIT} addresses each"
+            )
+        return chunks
+
+    async def _simulate_exit(
+        self,
+        *,
+        signed: str,
+        holdings: list[TokenHolding],
+        target_mint: str,
+        pre_sol_lamports: int,
+        minimum_output_lamports: int,
+        expected_remaining: int,
+    ) -> None:
+        chunks = self._simulation_chunks(holdings, target_mint)
+        wallet = str(self.keypair.pubkey())
+        address_sets = [
+            [wallet, *[account for holding in chunk for account in holding.token_accounts]]
+            for chunk in chunks
+        ]
+        semaphore = asyncio.Semaphore(SIMULATION_CONCURRENCY)
+
+        async def simulate(addresses: list[str]) -> dict[str, Any]:
+            async with semaphore:
+                return await self.rpc.simulate_transaction_accounts(signed, addresses)
+
+        simulations = await asyncio.gather(*(simulate(addresses) for addresses in address_sets))
+        for chunk, simulation in zip(chunks, simulations, strict=True):
+            validate_simulated_exit(
+                simulation=simulation,
+                holdings=chunk,
+                target_mint=target_mint,
+                pre_sol_lamports=pre_sol_lamports,
+                minimum_output_lamports=minimum_output_lamports,
+                max_sol_cost_lamports=self.config.execution.max_sol_cost_lamports,
+                expected_remaining=expected_remaining,
+            )
+
+    # ------------------------------------------------------------------
+
     async def sell(
         self,
         *,
@@ -139,6 +489,10 @@ class SellExecutor:
             )
             return ExecutionResult("dry_run", None, 0, message, requested)
 
+        settled = await self._resolve_prior_submission(mint=mint, name=name, reason=reason)
+        if settled is not None:
+            return settled
+
         intent = {
             "created_at": utc_now().isoformat(),
             "wallet": "shitcoims",
@@ -148,11 +502,61 @@ class SellExecutor:
             "status": "intent",
             "last_observed_amount": observed_holding.amount,
             "sell_amount": requested,
+            "expected_remaining": observed_holding.amount - requested,
         }
         self.state.set("pending_exits", mint, value=intent)
         last_error = "unknown execution failure"
+        pending_signature: str | None = None
+        pending_blockhash: str | None = None
+        pending_expected_remaining = 0
+        pending_amount = requested
+        pending_output_lamports: int | None = None
+
+        def clear_pending_signature(detail: str) -> None:
+            nonlocal pending_signature, pending_blockhash, pending_output_lamports
+            pending_signature = None
+            pending_blockhash = None
+            pending_output_lamports = None
+            intent.pop("signature", None)
+            intent.pop("recent_blockhash", None)
+            intent.update({"status": "retrying", "last_error": detail})
+            self.state.set("pending_exits", mint, value=intent)
+
         for attempt in range(1, self.config.execution.max_attempts + 1):
             try:
+                if pending_signature is not None:
+                    # A signature survived the previous attempt. Resolving it is the
+                    # only thing that may happen until it reaches a terminal state.
+                    resolution = await self._resolve_signature(
+                        signature=pending_signature,
+                        blockhash=pending_blockhash,
+                        mint=mint,
+                        expected_remaining=pending_expected_remaining,
+                    )
+                    if resolution.state == "confirmed":
+                        return await self._finalize_confirmed(
+                            mint=mint,
+                            name=name,
+                            reason=reason,
+                            signature=pending_signature,
+                            sold_amount=pending_amount,
+                            output_lamports=pending_output_lamports,
+                            attempt=attempt,
+                        )
+                    if resolution.state == "unresolved":
+                        return await self._block_on_unresolved(
+                            mint=mint,
+                            name=name,
+                            reason=reason,
+                            intent=intent,
+                            signature=pending_signature,
+                            detail=f"{last_error}; {resolution.detail}",
+                            attempt=attempt,
+                            amount=pending_amount,
+                        )
+                    last_error = f"{last_error}; prior submission is dead ({resolution.detail})"
+                    clear_pending_signature(last_error)
+
                 current = await self._holding(mint)
                 already_filled = (
                     current is None
@@ -180,7 +584,10 @@ class SellExecutor:
                 expected_remaining = current.amount - sell_now
 
                 order = await self.jupiter.executable_order(
-                    mint, sell_now, str(self.keypair.pubkey())
+                    mint,
+                    sell_now,
+                    str(self.keypair.pubkey()),
+                    slippage_bps=exit_slippage_bps(str(reason), self.config.jupiter),
                 )
                 validated = await validate_jupiter_exit_transaction(
                     encoded=str(order["transaction"]),
@@ -189,34 +596,38 @@ class SellExecutor:
                     max_priority_fee_lamports=self.config.jupiter.max_priority_fee_lamports,
                 )
                 signed = sign_validated_transaction(validated, self.keypair)
-                all_holdings = await self._holdings()
-                simulation_addresses = [
-                    str(self.keypair.pubkey()),
-                    *[
-                        account
-                        for wallet_holding in all_holdings
-                        for account in wallet_holding.token_accounts
-                    ],
-                ]
-                pre_sol_lamports = await self.rpc.sol_balance(str(self.keypair.pubkey()))
-                simulation = await self.rpc.simulate_transaction_accounts(
-                    signed, simulation_addresses
+                # The signature is a property of what we signed, so it is known
+                # before anything is broadcast. Persisting it here is what makes an
+                # ambiguous /execute response resolvable instead of a coin flip.
+                derived_signature = str(
+                    VersionedTransaction.from_bytes(base64.b64decode(signed)).signatures[0]
                 )
-                validate_simulated_exit(
-                    simulation=simulation,
+                recent_blockhash = str(validated.transaction.message.recent_blockhash)
+                all_holdings = await self._holdings()
+                pre_sol_lamports = await self.rpc.sol_balance(str(self.keypair.pubkey()))
+                await self._simulate_exit(
+                    signed=signed,
                     holdings=all_holdings,
                     target_mint=mint,
                     pre_sol_lamports=pre_sol_lamports,
                     minimum_output_lamports=int(order.get("otherAmountThreshold") or 0),
-                    max_sol_cost_lamports=self.config.execution.max_sol_cost_lamports,
                     expected_remaining=expected_remaining,
                 )
+                pending_signature = derived_signature
+                pending_blockhash = recent_blockhash
+                pending_expected_remaining = expected_remaining
+                pending_amount = sell_now
+                pending_output_lamports = None
                 intent.update(
                     {
                         "status": "submitting",
                         "attempt": attempt,
                         "request_id": str(order["requestId"]),
                         "last_observed_amount": current.amount,
+                        "sell_amount": sell_now,
+                        "expected_remaining": expected_remaining,
+                        "signature": derived_signature,
+                        "recent_blockhash": recent_blockhash,
                     }
                 )
                 self.state.set("pending_exits", mint, value=intent)
@@ -224,81 +635,69 @@ class SellExecutor:
                     signed_transaction=signed, request_id=str(order["requestId"])
                 )
                 if result.get("status") == "Success" and int(result.get("code", 0)) == 0:
-                    signature = str(result.get("signature") or "")
-                    output_lamports = int(result.get("totalOutputAmount") or 0)
-                    if not signature:
-                        raise RuntimeError("Jupiter success omitted signature")
-                    confirmed = False
-                    remaining = None
-                    for confirmation_attempt in range(6):
-                        if confirmation_attempt:
-                            await asyncio.sleep(2)
-                        if not await self.rpc.signature_confirmed(signature):
-                            continue
-                        remaining = await self._holding(mint)
-                        leftover = 0 if remaining is None else remaining.amount
-                        if leftover <= expected_remaining:
-                            confirmed = True
-                            break
-                    if not confirmed:
-                        intent.update(
-                            {
-                                "status": "submitted_unconfirmed",
-                                "signature": signature,
-                                "last_observed_amount": (
-                                    remaining.amount if remaining is not None else 0
-                                ),
-                            }
+                    reported = str(result.get("signature") or "")
+                    if reported and reported != derived_signature:
+                        raise TransactionRejected(
+                            "Jupiter reported a signature that is not the transaction we signed"
                         )
-                        self.state.set("pending_exits", mint, value=intent)
-                        raise RuntimeError("submitted exit was not confirmed onchain")
-                    if str(reason) == DecisionKind.EXIT_DISPOSE.value:
-                        # A dispose mark is a one-shot instruction. Persistently
-                        # disable it after confirmed completion so a later
-                        # reacquisition cannot inherit the old trigger.
-                        self.state.set_dispose_policy(mint, enabled=False)
-                    self.state.delete("pending_exits", mint)
-                    self._append_trade(
-                        {
-                            "timestamp": utc_now().isoformat(),
-                            "wallet": "shitcoims",
-                            "mint": mint,
-                            "name": name,
-                            "reason": str(reason),
-                            "input_amount": sell_now,
-                            "output_lamports": output_lamports,
-                            "signature": signature,
-                        }
+                    pending_output_lamports = int(result.get("totalOutputAmount") or 0)
+                    intent.update(
+                        {"status": "submitted", "output_lamports": pending_output_lamports}
                     )
-                    scaled = str(reason) == DecisionKind.EXIT_SCALE.value
-                    message = (
-                        f"SCALE CONFIRMED: {name} sold {sell_now} from shitcoims"
-                        if scaled
-                        else f"EXIT CONFIRMED: {name} sold from shitcoims"
+                    self.state.set("pending_exits", mint, value=intent)
+                    resolution = await self._resolve_signature(
+                        signature=derived_signature,
+                        blockhash=recent_blockhash,
+                        mint=mint,
+                        expected_remaining=expected_remaining,
                     )
-                    await self.notifier.send(
-                        severity="critical" if str(reason) == DecisionKind.EXIT_RUG else "warning",
-                        category="execution",
-                        message=message,
-                        context={
-                            "mint": mint,
-                            "signature": signature,
-                            "reason": str(reason),
-                            "amount": sell_now,
-                        },
-                        dedup_seconds=0,
-                    )
-                    return ExecutionResult(
-                        "success", signature, attempt, message, sell_now, output_lamports
-                    )
-                last_error = f"Jupiter execute code {result.get('code', 'unknown')}"
+                    if resolution.state == "confirmed":
+                        return await self._finalize_confirmed(
+                            mint=mint,
+                            name=name,
+                            reason=reason,
+                            signature=derived_signature,
+                            sold_amount=sell_now,
+                            output_lamports=pending_output_lamports,
+                            attempt=attempt,
+                        )
+                    if resolution.state == "unresolved":
+                        return await self._block_on_unresolved(
+                            mint=mint,
+                            name=name,
+                            reason=reason,
+                            intent=intent,
+                            signature=derived_signature,
+                            detail=resolution.detail,
+                            attempt=attempt,
+                            amount=sell_now,
+                        )
+                    last_error = f"submitted exit did not land ({resolution.detail})"
+                    clear_pending_signature(last_error)
+                else:
+                    # Jupiter reported a failure, but the transaction we signed may
+                    # still have gone out. The signature stays pending so the next
+                    # attempt resolves it before building anything new.
+                    last_error = f"Jupiter execute code {result.get('code', 'unknown')}"
             except Exception as exc:
-                # The next attempt begins by reconciling the on-chain balance, so an
-                # ambiguous response cannot cause a duplicate full-balance exit.
-                last_error = f"{type(exc).__name__}: execution response unavailable"
+                # Everything after signing may already have broadcast. The next
+                # attempt starts by resolving `pending_signature` to a terminal
+                # state and never builds a new order while one could still land.
+                last_error = describe_execution_failure(exc)
             if attempt < self.config.execution.max_attempts:
                 await asyncio.sleep(self.config.execution.retry_delay_seconds)
 
+        if pending_signature is not None:
+            return await self._block_on_unresolved(
+                mint=mint,
+                name=name,
+                reason=reason,
+                intent=intent,
+                signature=pending_signature,
+                detail=last_error,
+                attempt=self.config.execution.max_attempts,
+                amount=pending_amount,
+            )
         intent.update({"status": "failed", "last_error": last_error})
         self.state.set("pending_exits", mint, value=intent)
         message = f"EXIT FAILED: {name} on shitcoims — MANUAL ACTION REQUIRED"

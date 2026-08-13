@@ -16,13 +16,6 @@ const YAML_ONLY_THRESHOLDS = {
   exit_style: "runner" as const,
 };
 
-function quotedExitSol(value: string | null | undefined): number | null {
-  if (value == null || value === "") return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return parsed;
-}
-
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { cache: "no-store", credentials: "same-origin" });
   if (!response.ok) throw new Error(`${path} returned ${response.status}`);
@@ -92,14 +85,12 @@ async function protectUnmonitoredFallback(
   const skipped: { mint: string; reason: string }[] = [];
   let items: Policy[] = [];
   for (const row of rows) {
-    const cost_basis_sol = quotedExitSol(row.exit_sol);
-    if (cost_basis_sol == null) {
-      skipped.push({ mint: row.mint, reason: "missing or non-positive exit_sol" });
-      continue;
-    }
+    // No cost basis is sent. Stamping the current exit quote as basis made PnL
+    // start at 0% regardless of what was paid, so every stop fired below the
+    // coin's already-fallen price. The policy is created without a basis and is
+    // rug-only until the engine reconstructs the real one from observed buys.
     const saved = await savePolicy(row.mint, {
       name: row.name,
-      cost_basis_sol,
       stop_loss_pct: body.stop_loss_pct,
       take_profit_pct: body.take_profit_pct,
       trailing_stop_pct: body.trailing_stop_pct,
