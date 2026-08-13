@@ -12,10 +12,12 @@ nothing.
 sweeps taken two minutes apart, restricted to the same 28.5-minute creation window, each
 returned 700 mints and each was missing 218 of the other's — Jaccard 0.525. So one sweep sees
 roughly 69% of the launches in its window and a different 69% each time. The fix is repeated
-sweeps unioned over a window every sweep covers, and the residual is estimated by
-Lincoln-Petersen capture-recapture instead of being asserted away. ``--audit`` prints that
-estimate; a frame built from one sweep would silently be a ~69% sample of its own stated
-population.
+sweeps unioned over a window every sweep covers, with the residual estimated by Chao1 rather
+than asserted away; ``--audit`` prints it. Measured on this listing, coverage runs 0.708 at
+two sweeps, 0.923 at three, and reaches no-singletons at **four**, where 913 mints over a
+27.0-minute window are each seen at least twice. A frame built from one sweep would silently
+be a ~69% sample of its own stated population, and would also understate the launch rate by
+26% (2,029/hour observed against ~1,500/hour listed in a single pass).
 
 Usage:
 
@@ -32,13 +34,12 @@ import time
 import urllib.request
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from shitcoims_tape.panel import FrameMint, write_frame  # noqa: E402
+from shitcoims_tape.panel import FrameMint, frame_coverage, write_frame
 
 LISTING = "https://frontend-api-v3.pump.fun/coins"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -51,7 +52,7 @@ def _get(url: str, *, attempts: int = 4) -> list[dict[str, Any]]:
     request = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(attempts):
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=30) as response:
                 payload = json.load(response)
                 return payload if isinstance(payload, list) else []
         except Exception:
@@ -90,29 +91,21 @@ def _load_sweeps(directory: Path) -> list[dict[str, Any]]:
     return [json.loads(path.read_text()) for path in sorted(directory.glob("sweep_*.json"))]
 
 
-def _capture_recapture(sweeps: Sequence[dict[str, Any]], low: float, high: float) -> dict[str, Any]:
-    """Lincoln-Petersen over every sweep pair, restricted to a window all of them cover."""
+def _coverage_audit(sweeps: Sequence[dict[str, Any]], low: float, high: float) -> dict[str, Any]:
+    """Chao1 over how many sweeps saw each mint, inside a window all of them cover."""
 
     sets = [
         {c["mint"] for c in s["coins"] if low <= c.get("created_timestamp", 0) <= high}
         for s in sweeps
     ]
-    union = set().union(*sets) if sets else set()
-    estimates = [
-        len(a) * len(b) / len(a & b)
-        for a, b in combinations(sets, 2)
-        if a & b
-    ]
-    estimates.sort()
-    median = estimates[len(estimates) // 2] if estimates else float(len(union))
-    return {
-        "sweeps": len(sets),
-        "per_sweep_n": [len(s) for s in sets],
-        "union_n": len(union),
-        "lincoln_petersen_median": median,
-        "estimated_coverage": (len(union) / median) if median else 0.0,
-        "pairs": len(estimates),
-    }
+    union: set[str] = set().union(*sets) if sets else set()
+    counts = [sum(1 for seen in sets if mint in seen) for mint in union]
+    result = frame_coverage(counts).to_json()
+    result["sweeps"] = len(sets)
+    result["per_sweep_n"] = [len(seen) for seen in sets]
+    result["min_captures"] = min(counts, default=0)
+    result["max_captures"] = max(counts, default=0)
+    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -188,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for coin in sorted(best.values(), key=lambda c: c["created_timestamp"])
     ]
     write_frame(args.out, frame)
-    audit = _capture_recapture(sweeps, low, high)
+    audit = _coverage_audit(sweeps, low, high)
     audit |= {
         "window_low": _iso(low),
         "window_high": _iso(high),

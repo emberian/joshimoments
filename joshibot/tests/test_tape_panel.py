@@ -269,3 +269,34 @@ def test_the_feasibility_gate_reproduces_the_documented_universe_caps() -> None:
     assert feasible_universe(300, 0) == 0
     # More tokens is monotonically more headroom at a fixed floor.
     assert feasible_universe(600, 5) > feasible_universe(300, 5)
+
+
+def test_frame_coverage_reports_no_unobserved_mass_only_when_there_are_no_singletons() -> None:
+    """Chao1, not Lincoln-Petersen: the sweeps are not independent draws.
+
+    Measured over twelve sweeps of pump.fun's listing, capture counts were UNDER-dispersed —
+    every mint seen 6 to 10 times out of 12, none seen 11 or 12 and none fewer than 6 — which
+    is a rotating slice, not independent sampling. Lincoln-Petersen assumes independence and
+    is biased UP under negative dependence; it duly reported 525 against a 12-sweep union of
+    469, a shortfall no amount of further sweeping could ever close.
+    """
+
+    from shitcoims_tape.panel import frame_coverage
+
+    # Two sweeps of the real listing: 597 mints seen once, and it is nowhere near complete.
+    thin = frame_coverage([1] * 597 + [2] * 424)
+    assert thin.observed == 1021
+    assert round(thin.chao1) == 1441
+    assert 0.70 < thin.coverage < 0.71
+
+    # Four sweeps: no mint seen only once, so the lower bound meets the observed count.
+    thick = frame_coverage([2] * 441 + [3] * 300 + [4] * 172)
+    assert thick.singletons == 0
+    assert thick.chao1 == float(thick.observed)
+    assert thick.coverage == 1.0
+    assert thick.good_turing == 1.0
+
+    # A singleton with no doubletons still has to raise the estimate; the f2=0 branch is the
+    # one a bimodal capture distribution actually lands on.
+    assert frame_coverage([1, 1, 1, 5, 5]).chao1 == 5 + 3.0
+    assert frame_coverage([]).coverage == 0.0

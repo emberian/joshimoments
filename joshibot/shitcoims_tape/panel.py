@@ -435,6 +435,72 @@ def _events(path: Path) -> Iterator[TapeEvent]:
                 continue
 
 
+@dataclass(frozen=True, slots=True)
+class FrameCoverage:
+    """How much of a population a repeated-sweep frame actually caught.
+
+    Chao1 and Good-Turing rather than Lincoln-Petersen, and the difference is not academic
+    here. Lincoln-Petersen assumes independent captures; measured over twelve sweeps of
+    pump.fun's listing the capture counts were *under*-dispersed (every mint seen 6-10 times
+    out of 12, none seen 11 or 12, none seen fewer than 6), which is the signature of a
+    rotating slice rather than independent sampling. Under negative dependence
+    Lincoln-Petersen is biased UP, and it duly reported 525 against a 12-sweep union of 469,
+    i.e. a permanent 11% shortfall no amount of sweeping could close. Chao1 answers the
+    question actually being asked — *is there unobserved mass* — from the singleton and
+    doubleton counts, and needs no independence assumption.
+
+    ``chao1 == observed`` when there are no singletons. That is a LOWER BOUND meeting the
+    observed count, i.e. no evidence of anything missed. It is not proof of completeness, and
+    a frame built on it should say so.
+    """
+
+    observed: int
+    singletons: int
+    doubletons: int
+    captures: int
+
+    @property
+    def chao1(self) -> float:
+        if self.singletons == 0:
+            return float(self.observed)
+        if self.doubletons == 0:
+            return self.observed + self.singletons * (self.singletons - 1) / 2
+        return self.observed + self.singletons**2 / (2 * self.doubletons)
+
+    @property
+    def coverage(self) -> float:
+        return self.observed / self.chao1 if self.chao1 else 0.0
+
+    @property
+    def good_turing(self) -> float:
+        """Sample coverage: the share of captures that are NOT one-off sightings."""
+
+        return 1 - self.singletons / self.captures if self.captures else 0.0
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "observed": self.observed,
+            "singletons": self.singletons,
+            "doubletons": self.doubletons,
+            "captures": self.captures,
+            "chao1": self.chao1,
+            "coverage": self.coverage,
+            "good_turing": self.good_turing,
+        }
+
+
+def frame_coverage(capture_counts: Iterable[int]) -> FrameCoverage:
+    """Chao1 over how many sweeps saw each member. One count per distinct member."""
+
+    counts = [count for count in capture_counts if count > 0]
+    return FrameCoverage(
+        observed=len(counts),
+        singletons=sum(1 for count in counts if count == 1),
+        doubletons=sum(1 for count in counts if count == 2),
+        captures=sum(counts),
+    )
+
+
 def feasible_universe(tokens: int, floor: int, *, alpha: float = 0.01, tests: int = 9) -> int:
     """Largest wallet count for which a pair on ``floor`` of ``tokens`` can EVER validate.
 
@@ -473,12 +539,14 @@ def feasible_universe(tokens: int, floor: int, *, alpha: float = 0.01, tests: in
 __all__ = [
     "DEFAULT_PAGE_CAP",
     "DEFAULT_WINDOW_SECONDS",
+    "FrameCoverage",
     "FrameMint",
     "MintOutcome",
     "PanelError",
     "PanelReport",
     "collect_panel",
     "feasible_universe",
+    "frame_coverage",
     "read_frame",
     "refusal_window",
     "wallet_activity",

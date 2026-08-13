@@ -22,7 +22,6 @@ import asyncio
 import json
 import logging
 import sys
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,14 +29,14 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from shitcoims_intelligence.helius import HeliusHistoryClient  # noqa: E402
-from shitcoims_tape.panel import (  # noqa: E402
+from shitcoims_intelligence.helius import HeliusHistoryClient
+from shitcoims_tape.panel import (
     MintOutcome,
     collect_panel,
     read_frame,
 )
-from shitcoims_tape.recorder import CreditBudget  # noqa: E402
-from shitcoims_tape.writer import TapeWriter, default_tape_root  # noqa: E402
+from shitcoims_tape.recorder import CreditBudget
+from shitcoims_tape.writer import TapeWriter, default_tape_root
 
 LOGGER = logging.getLogger("shitcoims.tape.collect")
 
