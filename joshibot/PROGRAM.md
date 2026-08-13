@@ -662,6 +662,54 @@ with no text layer (`lo-mackinlay-nonsynchronous-trading`, `lo-mackinlay-contrar
 
 ---
 
+## 8. The dissipation reframe (2026-08-13, operator's insight)
+
+The operator's circuit intuition reorganized the program, and the mapping is literal, not poetic:
+a CFMM pool is a nonlinear capacitor (reserves = charge, marginal price = voltage, `x·y=k` the V–Q
+curve); the token graph is a circuit (pools = edges, conductance ≈ liquidity/fee); no-arb is KVL with
+a dead band whose width is the fee sum around the cycle; exogenous order flow is EMF injection; a
+measured ratio half-life is an RC constant; and **fees are I²R dissipation**.
+
+**The reorganizing sentence: everyone in this market predicts voltage; the money is in owning
+conductance.** It explains the audit trail in one line — every verified-then-collapsed signal
+(§4.1–4.3, the SEISMIC retraction) was a voltage-prediction claim; every revenue stream that survives
+audit is a tax on current (creator fees, LP fees on token-token pools at 26–159%/day turnover,
+studies/RESULT_swing_cluster.md), indifferent to flow direction.
+
+What this **changes**:
+
+- **Measurement is state estimation, not label prediction.** The tape's job is "where is charge
+  accumulated, where is curl standing, where is flow organic" — questions answerable *now* — not
+  "which token graduates," a question the whole literature failed. The §4 queue reorders accordingly:
+  state-measuring signals (#1 coordination = manufactured-EMF detection, #7 rotation = current
+  mapping) over outcome-predicting ones (#8 rug model).
+- **A new first-class object: the network map.** Live graph of the cluster — per-edge conductance,
+  charge state, curl residual, which edges are *ours* — merging the flow tape, the panel, and the LP
+  meter. This is the desk's actual dashboard, and it is interface-shaped (candidate #9 in SWARM.md's
+  manifest).
+- **A move the old frame could not see: deliberate edge creation.** Placing a pool between two
+  communities that lack a low-resistance path makes us the monopolist wire on a route flow wants to
+  take (the $0-TVL SOLVE/DREGG pool is an unbuilt instance). Pool placement is a *strategic* decision
+  now, informed by measured relative-vol + reversion + absence of competing paths.
+- **The closed loop is legitimate and measurable.** The DREGG null (community activity → ~1.86×
+  volume, no durable price effect) reads in this frame as: *the operator can drive current through
+  their own resistors.* Volume-linked income plus volume-driving capability is a feedback loop the
+  desk owns end-to-end; the callout-latency machinery measures its gain.
+- **Identification we already own:** the scalper's ε-explored entries are propensity-logged randomized
+  current injections — the experiment the cross-impact literature cannot run (Capponi–Cont's
+  propagation-vs-common-flow confound dissolves under randomized injection). Impedance spectroscopy
+  fell out of infrastructure built for a different reason.
+
+What this does **not** change: the envelope and its theorem (an exposure cap quantified over all
+learners is exactly "no action sequence can overcharge the book"); the verification discipline of §3;
+the scalper's clock-exit logic; the base rates. And it names the frame's own failure mode honestly —
+**capacitors leak.** Every fee stream is denominated in cluster tokens; the cluster is one correlated
+capacitor bank that can discharge together if the community dies. Discharge protection is structural:
+cluster-level (not per-token) exposure caps, and harvested fees converted to SOL on a schedule rather
+than left compounding in the bank.
+
+---
+
 ## The bar
 
 The results in this field that survived — `γ = α−1`, `β = (1−γ)/2`, `δ = ½`, Marchenko-Pastur — are
