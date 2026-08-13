@@ -557,10 +557,16 @@ Together they are exactly §5's attribution decomposition — *entry selection, 
 reaction* — which means the envelope's attribution monitor and the wallet-alpha definition are the same
 object viewed from two directions, and should be built once.
 
-**Open, and genuinely a judgment call:** the interaction term. Selection and timing are not additive in
-log-return once fees and price impact enter, and we should decide whether to attribute the cross term,
-split it, or report it separately, *before* any number is produced — not after we see which convention
-flatters the desk.
+**Decided (2026-08-13): report the interaction term separately.** Selection and timing are not additive
+in log-return once fees and price impact enter. Of the options — attribute the cross term to one side,
+split it, or report it — reporting is both the cheapest and the only reversible one. It costs nothing
+to compute (it is the residual, `total − selection − timing`) and one column to display, whereas any
+attribution rule needs a justification, invites quiet gaming, and **cannot be undone** once numbers are
+built on it. Equity performance attribution hit this exact three-way problem long ago and settled on the
+same answer for the same reason. It also carries information: a large interaction means selection and
+timing are not separable on this desk — that the wallets picking well are the wallets timing well, or
+that costs are eating the decomposition — and that is a finding, not noise. If it turns out negligible
+we can stop reporting it; the reverse is not available.
 
 ---
 
