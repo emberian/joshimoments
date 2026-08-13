@@ -104,3 +104,11 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   wrong signer set would be treated as strong evidence. Falsified both directions (all-keys-are
   -signers; guessing from the fee payer). This closes signal #2's #1 next experiment and
   unlocks its held-out custody precision check.
+- 2026-08-13 — Signal #1 (SVN co-trading): **UNRESOLVABLE-AT-THIS-N** on the signal (2-wallet
+  store, 5.15h overlap, 0 performable tests) but the INSTRUMENT result is a real measurement:
+  with zero planted coordination, heavy-tailed + active wallets give Bonferroni FWER **0.600**
+  and ~99 BH clusters **from nothing** in 30/30 worlds — all deleted by the degree-preserving
+  null. Popularity baseline out-ranks the SVN (AUPRC 0.979 vs 0.961); the SVN's contribution is
+  the threshold, not the ordering. 16/16 mutations killed. Promoted two rules to PROGRAM.md §3
+  (both-controls-always; two-nulls-at-matched-density), the first now independently discovered
+  by two lanes.

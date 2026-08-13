@@ -321,6 +321,23 @@ Every one of these was violated by published work we read, with measurable conse
 10. **Run the null.** Inhomogeneous-Poisson-with-decaying-μ and history-independent constant
     intensity. If they tie, there is no self-excitation to model.
 11. **JSONL, not CSV.** Memecoin symbols contain commas, quotes, and newlines by design.
+12. **Both controls, always — a null control alone is worthless.** Every estimator must be run
+    against a known-ZERO world *and* a known-EFFECT world. An instrument that detects nothing
+    passes a false-positive test perfectly, so a green zero-control certifies a broken
+    estimator exactly as readily as a working one. Independently discovered twice here: the
+    callout lane found a constant-zero estimator passing its known-zero test and failing only
+    recovery; the co-trading lane shipped a degenerate ranking (a z-score under a zero-variance
+    null scored every unreached pair `+inf`) that its zero-coordination control stayed green
+    through for a full iteration, and only planted recovery caught.
+13. **Two nulls, compared at matched DENSITY.** Validated-link density varies by an order of
+    magnitude across null models at the same p-value, so a single null is a knob, not a test.
+    Measured here on co-trading: 16× spread in edge count between the hypergeometric and
+    degree-preserving nulls at nominally comparable thresholds, and only 29% edge agreement
+    (Jaccard 0.169) at matched density on a world where the clusters were *planted*. Hand only
+    the intersection downstream. The stakes: with zero planted coordination but heavy-tailed
+    activity and active wallets — exactly the population worth studying — Bonferroni FWER
+    measured **0.600**, and BH produced **~99 confident clusters out of nothing in 30/30
+    worlds**. The degree-preserving null deleted 100% of them.
 
 **Instrument checks we owe ourselves.** Exponential-kernel Hawkes on a launch tape is biased in
 *both* directions: kernel misspecification pushes branching down (true kernels are power-law), while
