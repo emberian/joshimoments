@@ -118,3 +118,11 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   now yields 54 events. Fails closed on anything ambiguous; a witnessed creation still wins.
   Falsification caught a second gap: nothing had pinned that precedence, so a pool-shaped
   transaction could silently re-point an existing pool at a different mint.
+- 2026-08-13 — Phase 2 replay engine (`shitcoims_replay/`): deterministic tape replay where
+  fills are COMPUTED through the Lean-checked kernel rather than modelled, and a policy is
+  handed a causally-restricted `Snapshot` (the Python analogue of Lean's `View t`) instead of
+  the tape, so lookahead is structurally impossible. Slots are sorted, not trusted — a recorder
+  paging history backwards would otherwise run the market in reverse. Realised-only ledger, no
+  mark-to-market. 13 tests; falsification found two weak ones: `PoolState.slot` was stamped
+  from the loop variable (agreeing with the current slot by construction, witnessing nothing)
+  and the round-trip test had too much margin to catch a rounding-direction flip.
