@@ -239,7 +239,10 @@ arbitrary and they are excluded from every number in §5.
 ## 5. Wallet activity, and the verdict on signal #1
 
 Restricted to frame mints, `T = 1,047` mints with trades, **53,715 wallets**, 107,210
-wallet–token pairs.
+wallet–token pairs. (`tape/reports/audit.json` carries a slightly larger, *unrestricted* version
+of the same table — `T = 1,190`, 53,731 wallets — because it does not drop the 143 incidental
+mints. The numbers below are the frame-restricted ones and are the ones to use: a co-occurrence
+count over arbitrary coverage is not a measurement.)
 
 | tokens traded | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
