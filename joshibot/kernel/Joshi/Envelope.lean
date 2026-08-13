@@ -30,6 +30,8 @@ structure Limits where
   poolFracNumer : Nat
   poolFracDenom : Nat
   denom_pos : 0 < poolFracDenom
+  /-- Realised loss the desk may absorb before it stops trading for the day. -/
+  dailyLossBudget : Nat
 
 /-- A proposed action, carrying the pool state it would execute against. -/
 structure Action where
@@ -37,9 +39,10 @@ structure Action where
   poolSolLamports : Nat
 deriving Repr
 
-/-- What the desk currently has at risk. -/
+/-- What the desk currently has at risk, and what it has already lost today. -/
 structure DeskState where
   exposureLamports : Nat
+  realisedLossLamports : Nat := 0
 deriving Repr
 
 /-- The gate. Every clause is a reason a real trade has gone wrong on this desk. -/
@@ -47,10 +50,11 @@ def admits (l : Limits) (s : DeskState) (a : Action) : Bool :=
   decide (a.spendLamports ≤ l.maxTradeLamports)
     && decide (s.exposureLamports + a.spendLamports ≤ l.maxExposureLamports)
     && decide (a.spendLamports * l.poolFracDenom ≤ l.poolFracNumer * a.poolSolLamports)
+    && decide (s.realisedLossLamports ≤ l.dailyLossBudget)
 
-/-- State after an admitted action. -/
+/-- State after an admitted action. Losses are recorded elsewhere and only read here. -/
 def DeskState.apply (s : DeskState) (a : Action) : DeskState :=
-  { exposureLamports := s.exposureLamports + a.spendLamports }
+  { s with exposureLamports := s.exposureLamports + a.spendLamports }
 
 /-- Drive a whole sequence of proposals through the gate, admitting only what passes.
 
@@ -65,13 +69,13 @@ theorem admits_exposure {l : Limits} {s : DeskState} {a : Action}
     s.exposureLamports + a.spendLamports ≤ l.maxExposureLamports := by
   unfold admits at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  exact h.1.2
+  exact h.1.1.2
 
 theorem admits_trade_size {l : Limits} {s : DeskState} {a : Action}
     (h : admits l s a = true) : a.spendLamports ≤ l.maxTradeLamports := by
   unfold admits at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  exact h.1.1
+  exact h.1.1.1
 
 /-- The impact cap, in the form the fill semantics can consume. -/
 theorem admits_pool_fraction {l : Limits} {s : DeskState} {a : Action}
@@ -79,7 +83,7 @@ theorem admits_pool_fraction {l : Limits} {s : DeskState} {a : Action}
     a.spendLamports * l.poolFracDenom ≤ l.poolFracNumer * a.poolSolLamports := by
   unfold admits at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  exact h.2
+  exact h.1.2
 
 /-- **No sequence of proposals, from any learner, can exceed the exposure cap.**
 
@@ -146,5 +150,41 @@ theorem admitted_spend_within_pool (l : Limits) (s : DeskState) (a : Action)
     Nat.le_trans hp h2
   rw [Nat.mul_comm a.spendLamports] at h3
   exact Nat.le_of_mul_le_mul_left h3 l.denom_pos
+
+/-- The daily-loss clause, extracted. -/
+theorem admits_within_loss_budget {l : Limits} {s : DeskState} {a : Action}
+    (h : admits l s a = true) : s.realisedLossLamports ≤ l.dailyLossBudget := by
+  unfold admits at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.2
+
+/-- **A tripped breaker admits nothing, from anyone.** -/
+theorem tripped_breaker_admits_nothing (l : Limits) (s : DeskState)
+    (h : l.dailyLossBudget < s.realisedLossLamports) (a : Action) :
+    admits l s a = false := by
+  unfold admits
+  have hnot : ¬ (s.realisedLossLamports ≤ l.dailyLossBudget) := Nat.not_le.mpr h
+  simp [hnot]
+
+/-- **And it stays tripped: once the budget is blown, `run` is the identity.**
+
+A circuit breaker that can be talked back open is not a circuit breaker. Because `apply`
+only ever touches exposure, the loss field is invariant across the whole run, so no admitted
+action can lower it back under the budget — and by the previous theorem no action is admitted
+anyway. The conclusion is the strongest available form: the desk state is left *literally
+unchanged* by every remaining proposal, for any learner and any sequence length.
+
+This is what lets a loss budget be an actual stop rather than a number on a dashboard. -/
+theorem tripped_breaker_is_absorbing (l : Limits) :
+    ∀ (as : List Action) (s : DeskState),
+      l.dailyLossBudget < s.realisedLossLamports → run l s as = s := by
+  intro as
+  induction as with
+  | nil => intro s _; rfl
+  | cons a rest ih =>
+    intro s h
+    unfold run
+    rw [tripped_breaker_admits_nothing l s h a]
+    simpa using ih s h
 
 end Joshi

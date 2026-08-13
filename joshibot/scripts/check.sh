@@ -84,6 +84,8 @@ import Joshi
 #print axioms Joshi.exposure_bounded
 #print axioms Joshi.exposure_monotone
 #print axioms Joshi.admitted_spend_within_pool
+#print axioms Joshi.tripped_breaker_admits_nothing
+#print axioms Joshi.tripped_breaker_is_absorbing
 LEAN
 if (cd kernel && LEAN_PATH=.lake/build/lib/lean lean /tmp/joshi-ax.lean) >/tmp/joshi-axout.log 2>&1; then
   if grep -qE 'sorryAx|ofReduceBool' /tmp/joshi-axout.log; then
