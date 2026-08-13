@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import random
 import sys
@@ -43,7 +44,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shitcoims_intelligence.helius import HeliusHistoryClient
 from shitcoims_intelligence.pump import QuarantinedPumpEvent, decode_pump_event
-from shitcoims_intelligence.pump_layouts import PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID
+from shitcoims_intelligence.pump_layouts import (
+    PUMP_AMM_EVENT_LAYOUTS,
+    PUMP_AMM_PROGRAM_ID,
+    PUMP_EVENT_LAYOUTS,
+    PUMP_PROGRAM_ID,
+)
 from shitcoims_tape.panel import feasible_universe, read_frame
 from shitcoims_tape.recorder import (
     CREDITS_PER_TRANSACTION_PAGE,
@@ -57,6 +63,20 @@ HTTP_TEMPLATE = "https://mainnet.helius-rpc.com/?api-key={api_key}"
 LISTING = "https://frontend-api-v3.pump.fun/coins"
 PUMP_PROGRAMS = frozenset({PUMP_PROGRAM_ID, PUMP_AMM_PROGRAM_ID})
 TRADE_EVENTS = frozenset({"TradeEvent", "BuyEvent", "SellEvent"})
+_BY_DISCRIMINATOR = {
+    layout.discriminator: layout.event_name
+    for layout in (*PUMP_EVENT_LAYOUTS, *PUMP_AMM_EVENT_LAYOUTS)
+}
+
+
+def _layout_name(payload: str) -> str:
+    """Which event a quarantined payload CLAIMS to be, from its 8-byte discriminator."""
+
+    try:
+        raw = base64.b64decode(payload)
+    except (ValueError, TypeError):
+        return "undecodable"
+    return _BY_DISCRIMINATOR.get(raw[:8], "unknown_discriminator")
 
 
 def scan_tape(root: Path) -> dict[str, Any]:
@@ -192,6 +212,12 @@ async def replicate(
     missing: list[str] = []
     checked: list[str] = []
     abandoned = 0
+    # Layout drift is a coverage hole with no other symptom: the pinned Borsh layouts refuse
+    # an event they cannot decode exactly, the recorder counts it, and the trade simply is not
+    # on the tape. Counted here by event name because a drifted TradeEvent costs a trade while
+    # a drifted bookkeeping event costs nothing.
+    decoded_events: dict[str, int] = {}
+    drifted_events: dict[str, int] = {}
     async with httpx.AsyncClient(timeout=60) as http:
         client = HeliusHistoryClient(
             api_key_file=key, http_url_template=HTTP_TEMPLATE, http=http
@@ -222,7 +248,12 @@ async def replicate(
                             program_id=entry.program_id, data=entry.payload
                         )
                         if isinstance(decoded, QuarantinedPumpEvent):
+                            name = _layout_name(entry.payload)
+                            drifted_events[name] = drifted_events.get(name, 0) + 1
                             continue
+                        decoded_events[decoded.event_name] = (
+                            decoded_events.get(decoded.event_name, 0) + 1
+                        )
                         if decoded.event_name in TRADE_EVENTS:
                             signature = (item.get("transaction") or {}).get("signatures")
                             if signature:
@@ -242,7 +273,16 @@ async def replicate(
             hit = signatures & tape
             on_tape += len(hit)
             missing.extend(sorted(signatures - tape)[:2])
+    drifted_trades = sum(v for k, v in drifted_events.items() if k in TRADE_EVENTS)
+    decoded_trades = sum(v for k, v in decoded_events.items() if k in TRADE_EVENTS)
     return {
+        "decoded_events": dict(sorted(decoded_events.items())),
+        "drifted_events": dict(sorted(drifted_events.items())),
+        "trade_events_lost_to_layout_drift": (
+            drifted_trades / (drifted_trades + decoded_trades)
+            if drifted_trades + decoded_trades
+            else 0.0
+        ),
         "mints_checked": len(checked),
         "mints_abandoned_for_budget": abandoned,
         "page_size": page_size,
