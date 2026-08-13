@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import os
+import signal
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from .candles import CandleError, fetch_candles
+from .domain import utc_now
+from .engine import SentinelEngine
+from .history import performance_summary, read_events, read_trades
+from .policies import PolicyError, policies_for_unmonitored, policy_from_payload, policy_to_mapping
+
+
+def create_app(engine: SentinelEngine) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        task = asyncio.create_task(engine.run(), name="shitcoims-sentinel")
+
+        def fail_closed(completed: asyncio.Task) -> None:
+            if completed.cancelled():
+                return
+            if completed.exception() is not None:
+                # Uvicorn otherwise keeps serving a stale dashboard after its
+                # protection task dies. Terminate so launchd can restart us.
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        task.add_done_callback(fail_closed)
+        try:
+            yield
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await engine.close()
+
+    app = FastAPI(
+        title="shitcoims Sentinel local API",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(engine.config.server.allowed_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["accept", "content-type"],
+    )
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["cache-control"] = "no-store"
+        response.headers["x-content-type-options"] = "nosniff"
+        response.headers["x-frame-options"] = "DENY"
+        response.headers["referrer-policy"] = "no-referrer"
+        response.headers["permissions-policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["content-security-policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self' http://127.0.0.1:8788 http://localhost:8788; "
+            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        )
+        return response
+
+    @app.get("/api/snapshot")
+    async def snapshot():
+        return await engine.snapshot()
+
+    def _loopback(request: Request) -> None:
+        host = (request.client.host if request.client else "") or ""
+        if host not in {"127.0.0.1", "::1", "localhost"}:
+            raise HTTPException(status_code=403, detail="loopback only")
+
+    @app.get("/api/policies")
+    async def policies():
+        return {"items": engine.list_policies(), "can_execute": False}
+
+    @app.put("/api/policies/{mint}")
+    async def upsert_policy(mint: str, request: Request):
+        _loopback(request)
+        try:
+            body = await request.json()
+            policy = policy_from_payload(mint, body)
+        except PolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid policy payload") from None
+        current = {item.mint: item for item in engine.config.positions}
+        current[policy.mint] = policy
+        items = await engine.apply_positions(
+            list(current.values()), origin="operator", touch=[policy.mint]
+        )
+        return {"item": policy_to_mapping(policy), "items": items, "can_execute": False}
+
+    @app.delete("/api/policies/{mint}")
+    async def delete_policy(mint: str, request: Request):
+        _loopback(request)
+        remaining = [item for item in engine.config.positions if item.mint != mint]
+        if len(remaining) == len(engine.config.positions):
+            raise HTTPException(status_code=404, detail="policy not found")
+        engine.skip_auto_protect(mint)
+        items = await engine.apply_positions(remaining)
+        return {"removed": True, "items": items, "can_execute": False}
+
+    @app.post("/api/policies/protect-unmonitored")
+    async def protect_unmonitored(request: Request):
+        _loopback(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be an object")
+        try:
+            snapshot = await engine.snapshot()
+            merged, created, skipped = policies_for_unmonitored(
+                unmonitored=list(snapshot.get("unmonitored") or []),
+                current=list(engine.config.positions),
+                mode=str(body.get("mode") or "from_quote"),
+                stop_loss_pct=body.get("stop_loss_pct", -30),
+                take_profit_pct=body.get("take_profit_pct", 100),
+                trailing_stop_pct=body.get("trailing_stop_pct", 20),
+                rug_exit=body.get("rug_exit", True),
+                dispose_after_break_even=body.get("dispose_after_break_even", False),
+                exit_style=body.get("exit_style") or "runner",
+            )
+        except PolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        items = (
+            await engine.apply_positions(merged, origin="operator", touch=created)
+            if created
+            else engine.list_policies()
+        )
+        return {
+            "created": created,
+            "skipped": skipped,
+            "items": items,
+            "can_execute": False,
+        }
+
+    @app.post("/api/policies/{mint}/skip-auto")
+    async def skip_auto_protect(mint: str, request: Request):
+        _loopback(request)
+        engine.skip_auto_protect(mint)
+        return {"skipped": True, "mint": mint, "can_execute": False}
+
+    @app.get("/api/events")
+    async def events(limit: int = Query(200, ge=1, le=500)):
+        memory = engine.journal.recent()[:limit]
+        persisted = read_events(engine.config.events_file, limit=limit)
+        items = memory or persisted
+        return {"items": items[:limit]}
+
+    @app.get("/api/trades")
+    async def trades(limit: int = Query(200, ge=1, le=500)):
+        return {"items": read_trades(engine.config.trades_file, limit=limit)}
+
+    @app.get("/api/performance")
+    async def performance():
+        snapshot = await engine.snapshot()
+        trades = read_trades(engine.config.trades_file, limit=500)
+        events = read_events(engine.config.events_file, limit=500)
+        return performance_summary(snapshot=snapshot, trades=trades, events=events)
+
+    @app.get("/api/candles")
+    async def candles(
+        mint: str = Query(..., min_length=32, max_length=44),
+        interval: str = Query("15m"),
+        limit: int = Query(120, ge=10, le=250),
+    ):
+        try:
+            return await fetch_candles(engine.http, mint, interval=interval, limit=limit)
+        except CandleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/health")
+    async def health(response: Response):
+        value = await engine.snapshot()
+        last_cycle = value["system"].get("last_cycle_at")
+        fresh = False
+        if last_cycle:
+            observed = dt.datetime.fromisoformat(last_cycle)
+            fresh = (utc_now() - observed).total_seconds() <= max(
+                30, engine.config.poll_interval_seconds * 3
+            )
+        healthy = bool(
+            value["system"]["running"] and value["system"]["rpc_ready"] and fresh
+        )
+        if not healthy:
+            response.status_code = 503
+        return {
+            "healthy": healthy,
+            "wallet": "shitcoims",
+            "protection_state": value["system"]["protection_state"],
+            "last_cycle_at": value["system"]["last_cycle_at"],
+            "unprotected_count": value["system"].get(
+                "unprotected_count", len(value.get("unmonitored") or [])
+            ),
+        }
+
+    dashboard = engine.config.config_path.parent / "dist"
+    if dashboard.joinpath("index.html").is_file():
+        app.mount("/", StaticFiles(directory=dashboard, html=True), name="dashboard")
+
+    return app

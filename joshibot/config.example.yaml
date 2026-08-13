@@ -1,0 +1,82 @@
+rpc:
+  helius_api_key_file: "~/.helius-key"
+  http_url_template: "https://mainnet.helius-rpc.com/?api-key={api_key}"
+  websocket_url_template: "wss://mainnet.helius-rpc.com/?api-key={api_key}"
+  commitment: "confirmed"
+
+wallet:
+  name: "shitcoims"
+  secret_key_file: "~/.shitcoims-wallet"
+
+jupiter:
+  # Create a Jupiter API key at portal.jup.ag and put only the key in this file.
+  api_key_file: "~/.jup-shitcoims"
+  base_url: "https://api.jup.ag/swap/v2"
+  slippage_bps: 1500
+  max_priority_fee_lamports: 5000000
+  # Force on-chain Metis routing so the returned transaction can be narrowly validated.
+  excluded_routers: ["jupiterz", "dflow", "okx"]
+
+execution:
+  enabled: false
+  arm_file: "./state/LIVE_ARMED"
+  max_attempts: 3
+  retry_delay_seconds: 2
+  # Signed transaction simulation must not reduce wallet SOL by more than 0.02 SOL.
+  max_sol_cost_lamports: 20000000
+
+rug_detector:
+  poll_interval_seconds: 30
+  liquidity_drop_pct: 40
+  mint_supply_growth_pct: 5
+  active_mint_liquidity_drop_pct: 20
+  confirm_delay_seconds: 0.75
+  quote_collapse_pct: 20
+
+notifications:
+  telegram_bot_token_file: "~/.shitcoims-tg"
+  telegram_chat_id: null
+  heartbeat_interval_hours: 6
+
+experiments:
+  # Record-only adapters. Neither has access to an execution action.
+  wallet_activity_stream: true
+  pump_metadata: true
+  pump_metadata_poll_interval_seconds: 60
+  # Bound dusting-driven provider work.
+  max_unmonitored_holdings: 50
+  max_enrichment_concurrency: 6
+  advisory_wallets:
+    # Record-only public wallet experiment. Labels never identify assets.
+    - id: "claudekol"
+      label: "ClaudeKOL public wallet"
+      address: "6s5RoARKg1oc4eWvGof1FwTzPuPLkToP4iS1N4Mgqvz"
+
+server:
+  host: "127.0.0.1"
+  port: 8787
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+
+poll_interval_seconds: 10
+state_dir: "./state"
+auto_discover: true
+
+positions:
+  # buy_price_sol is SOL per whole token. cost_basis_sol (total paid) is also
+  # supported; set exactly one of the two.
+  # - mint: "TOKEN_MINT_ADDRESS"
+  #   name: "EXAMPLE"
+  #   cost_basis_sol: 0.5
+  #   stop_loss_pct: -30
+  #   take_profit_pct: 80          # arms the runner; does not sell
+  #   trailing_stop_pct: 20        # tightness knob (20 = canonical floors), not a % leash
+  #   exit_style: runner           # runner (default) or fixed_trail (legacy % of peak)
+  #   floor_confirm_quotes: 2      # wick grace before a floor break sells
+  #   hold_trail_until_graduated: true
+  #   rug_exit: true
+  #   # Durable sell-only policy: after an observed full-balance exit quote
+  #   # crosses from PnL <= 0 to PnL > 0, wait for the next confirmed slot,
+  #   # then sell the full balance (subject to all three live-execution gates).
+  #   dispose_after_break_even: false
