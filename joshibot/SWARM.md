@@ -97,6 +97,71 @@ bundle traces) and RED-PUMP (860k launch records, CC-BY-4.0) — the latter as l
 its outcome labels are displacement-censored. **This is do-first among the new work: data compounds
 regardless of which strategy wins and cannot be recorded retroactively.**
 
+**Findings from the signal-#3 feasibility spike (2026-08-13), measured on the live store.** The spike
+tried to run the callout→flow study on existing data and found it *structurally* impossible, not
+underpowered. Everything below is a measured number, and each item is a requirement on this track.
+
+- **BUG, fix first, ~10 lines.** `shitcoims_intelligence/helius.py` line ~942 reads
+  `event_slot = int(result["slot"])` but passes `item` to `normalize_wallet_transaction`, whose
+  `item.get("blockTime")` (schema.py line ~381) is **always `None`** on this path — Solana's
+  `transactionNotification` carries a slot but no block time. Result: **169/169 live-path rows have no
+  event clock**, while the 1,312 backfill rows do. The only rows with a usable timestamp are the ones
+  that arrive late (ingest-minus-block p50 = **31 hours**). Resolve slot→time via a cached
+  `getBlockTime` and make block time **mandatory**: a row without one goes to a defect stream, never
+  silently written. Do not substitute a slot→time linear fit — measured residual p90 ≈ 24 s against a
+  response measured in minutes.
+- **The two clocks are inverted between sources, and joining them silently fabricates latencies.**
+  Chain rows: `observed_at` = ingest, `emitted_at` = block time. Social rows: `observed_at` = post
+  time, `emitted_at` = scrape. Evidence this is not hypothetical: Spearman(`observed_at`, slot) =
+  **−0.77** on the third-party wallet — ingest time runs *backwards* against chain time, because
+  backfill paginates newest-first. 88.6% of the tape arrives in pages sharing a single `observed_at`
+  second; the worst page collapses **29.14 hours** of chain time into one instant. Name the fields
+  `t_event` / `t_ingest` so the semantics cannot invert, join analysis on `t_event` only, and make a
+  mixed join a type error — which is exactly what the kernel's causally-indexed history type is for.
+- **Three gaps in the landed `shitcoims_tape/schema.py`**, all confirmed absent:
+  1. **No control-mint concept at all** (zero occurrences of `control`/`matched`). Without matched
+     controls there is no baseline and therefore no study — see below. Needs the matching key *and*
+     the achieved caliper recorded per control row, so match quality is auditable rather than asserted.
+     Match on **curve position (vSol)**, not FDV or price: §1.1 says drops cluster at specific vSol
+     levels, so vSol is the confounder to balance.
+  2. **No `fee_payer` / `trader_paid_fee`** on `Trade`. This is the discriminator that separates real
+     trades from inbound spam, and it is not a corner case — see the dust finding below.
+  3. **No same-slot atomic/bundle field.** MEV is the dominant false positive for signal #4, and it
+     cannot be excluded after the fact.
+- **The index is the whole problem.** A wallet-indexed tape records zero flow for any (mint, hour)
+  the watched wallets ignored — a structural zero, not a measurement, so every rate ratio is `+inf`
+  or `0/0`. Measured: 64% of tape mints have exactly **one** leg; median per-mint observed span is
+  **0.00 h**. The landed schema is already mint-indexed and carries `WatchWindow`/`WatchClose`, which
+  is right — keep it, and make the window binding: absence inside a window is evidence of zero,
+  absence outside it is no information. Any analysis window overlapping a subscription gap is
+  **excluded, never zero-filled** (measured: 5 disconnects in ~17 h, ~1 per 3.4 h, so a 60-minute
+  window intersecting one is routine).
+- **Overdispersion is measured, so use it.** Hourly flow counts: mean 10.93, variance 182.99 →
+  **Fano 16.74**, negative-binomial `k ≈ 0.695`. A Poisson-assuming power calculation understates the
+  required n by ~17×. (The same numbers yield `n̂ = 1 − 1/√Fano = 0.756`, which is a *pipeline
+  diagnostic and not a branching ratio* — on a two-wallet tape a wallet's own trades are trivially
+  self-exciting. Do not quote it.)
+- **Callout supply is cheap; flow is the entire cost.** 134.7 distinct mint-resolved callouts/day
+  measured, so n=400 is ~3 days — but collect **4 weeks** so temporal folds (§3 rules 1 and 6) contain
+  regime variation. Helius: ~48% of the 10M plan at 5 controls per treated mint, ~29% at 3 controls.
+  That k is the budget knob, and per §3 rule 7 it must be reported with every number.
+- **Only one social source is fast enough to trade on.** Post→detection p50: `x_mint_mention` **209 s**,
+  `claudekol_claim` 1,280 s, `x_reply` 8,291 s, `x_tweet` 16,271 s, `x_kol_post` 15,624 s. Against
+  Marino's 4.4-minute median time-to-graduation, only `x_mint_mention` is inside the decision window at
+  all, and its p90 of 10.6 min is already outside it. Everything else is a research feed, not a signal.
+  Target p90 ≤ 60 s on mint-bearing kinds.
+- **Deduplicate calls at write time.** 357 mint-bearing rows collapse to **66 distinct called-out
+  mints** — a 5.4× re-scrape inflation, with one mint re-observed 51 times. Any n counted in rows is
+  inflated 5.4×. Needs a stable `call_id` = hash(platform, author_id, post_id, mint), where a re-scrape
+  **updates** rather than inserts. Also: 4 of the 66 mints rest on a free-text regex with **no on-chain
+  validation** — add a mint-account existence check before a mint enters any study.
+
+**Free finding for signal #4, worth more than the study that produced it:** the third-party KOL wallet
+in the store is **88.5% inbound dust** — 981 of 1,108 rows are unsolicited token transfers from 753
+distinct senders (705 one-shot) spraying 581 mints, while the wallet itself signed **three**
+transactions. Watching a famous wallet mostly measures people spamming *at* it. Any KOL-flow metric
+must filter on `trader_paid_fee`, which is gap (2) above.
+
 ### Track C — Lean kernel implementation (needs #2–#6 signatures)
 
 Fills → accounting → DSL → envelope, with the proofs PROGRAM.md §2 names. Limited internal
