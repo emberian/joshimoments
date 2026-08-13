@@ -66,3 +66,8 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   once the budget is blown, `run` is the IDENTITY on desk state for any learner and any
   sequence length. Structural, not lucky: `apply` never touches the loss field. Zero sorries,
   propext only.
+- 2026-08-13 — `resolve_pending_exit` promoted to the executor's public contract; the engine
+  no longer reaches through `getattr` into a private name, where a rename would have silently
+  degraded to "delete the intent without resolving it" — i.e. drop a confirmed fill from the
+  ledger. Still probed (test stubs legitimately omit it), but probing a public name makes a
+  rename a visible break.

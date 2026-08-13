@@ -1519,7 +1519,11 @@ class SentinelEngine:
         """
 
         signature = intent.get("signature")
-        resolve = getattr(self.executor, "_resolve_prior_submission", None)
+        # `resolve_pending_exit` is the executor's public contract. Still probed rather than
+        # called directly, because the test suite substitutes stub executors that legitimately
+        # do not implement it — but probing a PUBLIC name means a rename is a visible break
+        # instead of a silent degradation to "never resolve, just delete".
+        resolve = getattr(self.executor, "resolve_pending_exit", None)
         if not signature or resolve is None:
             return False
         settled = await resolve(

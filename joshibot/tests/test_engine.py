@@ -888,7 +888,7 @@ class ResolvingExecutor(RecordingExecutor):
         self.resolved: list[dict[str, Any]] = []
         self.ledger: list[dict[str, Any]] = []
 
-    async def _resolve_prior_submission(
+    async def resolve_pending_exit(
         self, *, mint: str, name: str, reason: str
     ) -> ExecutionResult | None:
         self.resolved.append({"mint": mint, "name": name, "reason": reason})

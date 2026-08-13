@@ -301,6 +301,22 @@ class SellExecutor:
         )
         return ExecutionResult("unresolved", signature, attempt, message, amount)
 
+    async def resolve_pending_exit(
+        self, *, mint: str, name: str, reason: DecisionKind | str
+    ) -> ExecutionResult | None:
+        """Public entry point for settling a signature the engine found at startup.
+
+        The engine must be able to resolve a signature left behind by a crash *before* it
+        deletes the pending entry, or a fill that confirmed while the process was down never
+        reaches `trades.csv` — realised money missing from the ledger, which is the class of
+        hole that made a 7.47 SOL loss invisible in the first place.
+
+        Exposed as a real method rather than reached for through `getattr` on the private one:
+        an attribute probe silently degrades to "skip resolution" the moment the private name
+        changes, and the degradation looks like normal operation.
+        """
+        return await self._resolve_prior_submission(mint=mint, name=name, reason=reason)
+
     async def _resolve_prior_submission(
         self, *, mint: str, name: str, reason: DecisionKind | str
     ) -> ExecutionResult | None:
