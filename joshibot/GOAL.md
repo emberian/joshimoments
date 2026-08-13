@@ -151,3 +151,11 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   to succeeded is ~2.5× more usable data per credit. Plus a latent bug caught in review:
   terminal watch closes weren't keyed by mint, so a neighbour's graduation inside a bundled
   transaction could swallow an `OBSERVER_LOST` record and bias the censoring rate DOWNWARD.
+- 2026-08-13 — Off-policy evaluation (`shitcoims_replay/ope.py`): IPS / SNIPS / doubly-robust
+  over propensity-logged decisions, so a candidate policy is scored against trades actually
+  made — no simulator-fidelity assumption. Effective sample size is reported and gates
+  trust: a thousand records with one dominant weight is an estimate from ONE record.
+  `require_overlap` refuses a target that acts where the logs have no support, because OPE
+  cannot extrapolate and silently trying is how it lies. 10 tests, 4/4 mutations killed — and
+  the tests caught a real bug in my own DR formula (the direct term must be the target-weighted
+  expectation over ALL actions, not the model's value for the logged one).

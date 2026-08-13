@@ -10,6 +10,7 @@ accountable, so that a bad strategy and a bad simulator can never be confused fo
 
 from __future__ import annotations
 
+from shitcoims_replay.ope import Estimate, LoggedDecision, OPEError, evaluate, require_overlap
 from shitcoims_replay.split import Fold, Sample, SplitError, assert_no_leakage, walk_forward
 from shitcoims_replay.engine import (
     Fill,
@@ -23,9 +24,12 @@ from shitcoims_replay.engine import (
 )
 
 __all__ = [
+    "Estimate",
     "Fill",
     "Fold",
     "Ledger",
+    "LoggedDecision",
+    "OPEError",
     "Order",
     "Policy",
     "PoolState",
@@ -34,6 +38,8 @@ __all__ = [
     "Snapshot",
     "SplitError",
     "assert_no_leakage",
+    "evaluate",
+    "require_overlap",
     "replay",
     "walk_forward",
 ]
