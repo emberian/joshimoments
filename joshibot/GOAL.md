@@ -126,3 +126,10 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   mark-to-market. 13 tests; falsification found two weak ones: `PoolState.slot` was stamped
   from the loop variable (agreeing with the current slot by construction, witnessing nothing)
   and the round-trip test had too much margin to catch a rounding-direction flip.
+- 2026-08-13 — Purged/embargoed/entity-grouped walk-forward (`shitcoims_replay/split.py`).
+  Three defences because each catches a different leak: temporal (insufficient alone), purge
+  (a label window reaching into test has already seen it — survives a naive temporal split),
+  and entity grouping (one actor straddling the boundary). Every removal is COUNTED, because a
+  purge that removes nothing is indistinguishable from one never needed — the published defect
+  was a purge parameter that was a literal no-op. Plus `assert_no_leakage`, an independent
+  re-check of produced indices. 11 tests, 5/5 mutations killed.
