@@ -55,3 +55,10 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   random pools. Falsified with two transcription bugs (dropped denominator term; round vs
   floor — the latter only diverges at scale, which is the class that silently corrupts a
   backtest). Parity tests skipping is now itself a gate failure.
+- 2026-08-13 — Track E spike #3 (callout→flow): **UNRESOLVABLE-AT-THIS-N**, not null — the
+  exogenous outcome was never observed (0 of 61 called-out mints touched by the exogenous
+  wallet). The finding that matters is the TRAP: including our own sentinel wallet yields
+  p=0.00498 and 6/6 surviving FDR, from a closed loop plus a mechanically-floored p
+  (n_placebo_arrivals=0 across 32,400 windows). Structural-zero guard added and pinned.
+  8/8 mutations killed their test. Also: the store's two clocks are INVERTED between kinds
+  (`emitted_at` is block time for wallet_transaction, post time is `observed_at` for social).
