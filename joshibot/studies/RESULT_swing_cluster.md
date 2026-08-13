@@ -5,6 +5,12 @@ session scratchpad (`cluster_pools.py`, `cluster_panel.py`, `cluster_panel.json`
 addresses recorded there. This is a *measurement*, run before any strategy — §3 discipline applied to
 our own idea.
 
+**Provenance correction (2026-08-13, later):** the scratchpad's dict keys carry the operator's
+original message ordering, which **transposes weave and SOLVE** (it keys `8PecVcCG…` as SOLVE and
+`GwyWFsDK…` as WEAVE). The table below is correct — `8PecVcCG… = weave`, `GwyWFsDK… = SOLVE` — and was
+independently confirmed on-chain by `shitcoims_cluster/pools.py`, which resolves each pool's vault
+mints directly. Trust the table and `pools.py`, not the scratchpad keys.
+
 ## Universe as measured
 
 | token | mint (prefix) | FDV | main pool liq | vol24 | history |
