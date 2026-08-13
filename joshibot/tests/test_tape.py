@@ -135,3 +135,35 @@ def test_tape_source_does_not_import_marketfabric() -> None:
     source = inspect.getsource(tape)
     assert "marketfabric" not in source
     assert "Keypair" not in source
+
+
+def test_a_multi_leg_transaction_is_refused_rather_than_split_evenly() -> None:
+    """One native SOL delta cannot be attributed across several mints.
+
+    Splitting it evenly invents a per-leg price for every leg, and a study cannot tell a
+    fabricated price from a measured one — it looks like a trade. Refusing keeps the
+    ambiguity visible as a smaller n instead of turning it into confident noise.
+    """
+    payload = {
+        "succeeded": True,
+        "slot": 100,
+        "sol_delta_lamports": -1_000_000_000,
+        "token_deltas": [
+            {"mint": "A" * 32, "raw_delta": 5_000, "decimals": 6},
+            {"mint": "B" * 32, "raw_delta": -7_000, "decimals": 6},
+        ],
+    }
+    assert tape.prints_from_wallet_payload(payload, wallet="W" * 32) == ()
+
+
+def test_a_single_leg_transaction_keeps_the_whole_sol_delta() -> None:
+    """The unambiguous case must still price at the FULL delta, not a fraction of it."""
+    payload = {
+        "succeeded": True,
+        "slot": 100,
+        "sol_delta_lamports": -2_000_000_000,
+        "token_deltas": [{"mint": "A" * 32, "raw_delta": 5_000, "decimals": 6}],
+    }
+    result = tape.prints_from_wallet_payload(payload, wallet="W" * 32)
+    assert len(result) == 1
+    assert result[0].quote_sol == 2.0

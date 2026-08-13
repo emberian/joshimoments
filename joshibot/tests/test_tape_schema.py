@@ -10,6 +10,7 @@ import json
 
 import pytest
 from solders.keypair import Keypair
+from solders.pubkey import Pubkey
 
 from shitcoims_tape import (
     Callout,
@@ -398,19 +399,35 @@ def test_a_naive_post_time_is_refused() -> None:
 # --- addresses are decoded, not pattern-matched ------------------------------------
 
 
-def test_a_lowercased_address_is_refused_because_base58_is_case_sensitive() -> None:
-    """The live collector emitted exactly this: 1 of 28 mint mentions, unrecoverable.
+def test_lowercasing_an_address_is_usually_caught_and_never_silently_accepted() -> None:
+    """The live collector emitted an all-lowercase 44-char address, 1 of 28, unrecoverable.
 
-    A character-class regex accepts it unchanged. Decoding and requiring 32 bytes catches
-    most of them — the residue that still decodes to 32 bytes needs write-time validation
-    at the collector, which is the honest limit of what a contract can do.
+    Deliberately a RATE test, not a single case, because the honest answer is "most, not
+    all". A lowercased address is refused when it leaves the base58 alphabet (`L` becomes
+    `l`) or when it no longer decodes to 32 bytes — but a minority still decodes to a
+    plausible 32 bytes and is indistinguishable from a real address by any local check.
+    Asserting a single case here would flake on exactly that minority, which is how the
+    residual risk would get hidden rather than measured.
     """
-    real = _mint()
-    lowered = real.lower()
-    if lowered == real:  # pragma: no cover - vanishingly unlikely, keeps the test honest
-        pytest.skip("generated key had no uppercase characters")
-    with pytest.raises(TapeError):
-        Launch(mint=lowered, creator=real)
+    import hashlib
+
+    refused = 0
+    total = 200
+    for index in range(total):
+        seed = hashlib.sha256(str(index).encode()).digest()
+        address = str(Pubkey(seed))
+        lowered = address.lower()
+        if lowered == address:
+            continue
+        try:
+            Launch(mint=lowered, creator=address)
+        except TapeError:
+            refused += 1
+
+    # Measured around 3 in 4. The bound is loose so this pins the property, not the sample.
+    assert refused >= total * 0.5, f"only {refused}/{total} lowercased addresses refused"
+    # And the part that must never regress: a REAL address is always accepted.
+    assert Launch(mint=str(Pubkey(hashlib.sha256(b"ok").digest())), creator=_mint())
 
 
 def test_a_short_address_is_refused_even_though_it_is_base58() -> None:

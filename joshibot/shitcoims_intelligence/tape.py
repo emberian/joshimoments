@@ -42,7 +42,15 @@ def prints_from_wallet_payload(
     token_legs = [delta for delta in deltas if isinstance(delta, Mapping) and delta.get("mint")]
     if not token_legs:
         return ()
-    quote_each = sol_abs / len(token_legs) if sol_abs else 0.0
+    # A transaction carries ONE native SOL delta. When it moves several mints — a route, a
+    # multi-hop swap, an arbitrage — there is no way to attribute that single number to a
+    # particular leg, and splitting it evenly invents a per-leg price for every one of them.
+    # A fabricated price is worse than a missing print, because a study cannot tell the two
+    # apart: it looks like a measured trade. Refuse the row instead, so the ambiguity stays
+    # visible as a smaller n rather than becoming confident noise.
+    if len(token_legs) > 1:
+        return ()
+    quote_each = sol_abs
     for delta in token_legs:
         raw = _as_int(delta.get("raw_delta"))
         if raw is None or raw == 0:

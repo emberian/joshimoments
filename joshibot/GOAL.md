@@ -80,3 +80,9 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   32 bytes instead of matching a character class, which catches ~3 in 4 lowercased addresses.
   Falsification found a gap in my own test — the first probe was a no-op — so the missing
   case (absent post time must not be fabricated) is now pinned too.
+- 2026-08-13 — `prints_from_wallet_payload` no longer splits one native SOL delta evenly
+  across multiple token legs (a route/arb carries one delta and no way to attribute it, so
+  the split invented a per-leg price on every leg). Multi-leg rows are refused, keeping the
+  ambiguity visible as a smaller n rather than confident noise. Also made the lowercase-address
+  test a deterministic RATE test — a single case flaked on the minority that still decodes to
+  32 bytes, which would have hidden the residual risk instead of measuring it.
