@@ -62,3 +62,7 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   (n_placebo_arrivals=0 across 32,400 windows). Structural-zero guard added and pinned.
   8/8 mutations killed their test. Also: the store's two clocks are INVERTED between kinds
   (`emitted_at` is block time for wallet_transaction, post time is `observed_at` for social).
+- 2026-08-13 — Envelope completed: daily-loss breaker with `tripped_breaker_is_absorbing` —
+  once the budget is blown, `run` is the IDENTITY on desk state for any learner and any
+  sequence length. Structural, not lucky: `apply` never touches the loss field. Zero sorries,
+  propext only.
