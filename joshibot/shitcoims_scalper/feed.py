@@ -80,12 +80,8 @@ def _snapshot(coin: dict, t_ingest: float) -> MintSnapshot | None:
         return None
 
 
-def poll_listing(limit: int = 50) -> list[MintSnapshot]:
-    """Newest-created coins. One call; failures return an empty batch, never raise."""
-    url = (
-        f"{BASE}/coins?offset=0&limit={limit}"
-        "&sort=created_timestamp&order=DESC&includeNsfw=false"
-    )
+def _listing(sort: str, limit: int) -> list[MintSnapshot]:
+    url = f"{BASE}/coins?offset=0&limit={limit}&sort={sort}&order=DESC&includeNsfw=false"
     try:
         data = _get(url)
     except Exception:
@@ -99,6 +95,21 @@ def poll_listing(limit: int = 50) -> list[MintSnapshot]:
             if snap is not None:
                 out.append(snap)
     return out
+
+
+def poll_listing(limit: int = 50) -> list[MintSnapshot]:
+    """Two listings, deduped: newest-created AND recently-traded.
+
+    The first smoke run proved created-DESC alone samples the nursery — coins
+    seconds old with empty curves; 132 decisions, zero verdict passes. The
+    coins actually matching a liveness filter are on the last_trade sort: the
+    "looked alive enough" population the operator was clicking through by hand.
+    """
+    by_mint: dict[str, MintSnapshot] = {}
+    for sort in ("created_timestamp", "last_trade_timestamp"):
+        for snap in _listing(sort, limit):
+            by_mint[snap.mint] = snap
+    return list(by_mint.values())
 
 
 def poll_mint(mint: str) -> MintSnapshot | None:
