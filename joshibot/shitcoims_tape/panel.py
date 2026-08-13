@@ -257,7 +257,7 @@ class _CountingSink:
         self._sink = sink
         self.trades = 0
         self.wallets: set[str] = set()
-        self.closes: list[WatchClose] = []
+        self.closes: list[tuple[str, WatchClose]] = []
 
     def reset(self) -> None:
         self.trades = 0
@@ -275,8 +275,13 @@ class _CountingSink:
                 self.wallets.add(wallet)
         elif event.kind is EventKind.WATCH:
             reason = getattr(event.body, "close_reason", None)
-            if isinstance(reason, WatchClose):
-                self.closes.append(reason)
+            mint = getattr(event.body, "mint", None)
+            # Keyed by mint, because one mint's transactions routinely carry pump events for
+            # OTHER mints -- a bundled launch, a router, an arbitrage leg. An unkeyed list
+            # would let a neighbour's graduation be read as this mint's terminal outcome and
+            # suppress this mint's own censoring record.
+            if isinstance(reason, WatchClose) and isinstance(mint, str):
+                self.closes.append((mint, reason))
         return written
 
 
@@ -353,7 +358,14 @@ async def collect_panel(
         # watch on chain evidence, and re-opening the mint to stamp our own clock on it would
         # both duplicate the window and throw away the panel's only chain-timed survival
         # observations.
-        terminal = next((close for close in counting.closes if close in TERMINAL_CLOSES), None)
+        terminal = next(
+            (
+                close
+                for mint, close in counting.closes
+                if mint == row.mint and close in TERMINAL_CLOSES
+            ),
+            None,
+        )
         reason = WatchClose.OBSERVER_LOST if is_truncated else WatchClose.DEADLINE
         if terminal is None:
             if row.mint not in registry and result.transactions:

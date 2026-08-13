@@ -300,3 +300,58 @@ def test_frame_coverage_reports_no_unobserved_mass_only_when_there_are_no_single
     # one a bimodal capture distribution actually lands on.
     assert frame_coverage([1, 1, 1, 5, 5]).chao1 == 5 + 3.0
     assert frame_coverage([]).coverage == 0.0
+
+
+async def test_a_neighbours_graduation_does_not_suppress_this_mints_censoring_record() -> None:
+    """One mint's transactions routinely carry pump events for OTHER mints.
+
+    A bundled launch, a router, an arbitrage leg: all of them put a second mint's CreateEvent
+    or CompleteEvent inside the transactions we fetched for the first. If the collector reads
+    "some terminal close happened while I was reading this mint" as "THIS mint graduated", the
+    truncated mint never gets its OBSERVER_LOST record and the panel reports a censoring rate
+    lower than the truth. Measured: 117 such incidental mints appeared in one 250-mint pass.
+    """
+
+    mint, neighbour, wallet = _key(), _key(), _key()
+    bundled = transaction(
+        pump_logs(
+            ("CreateEvent", _create_values(neighbour, wallet, _key())),
+            (
+                "CompleteEvent",
+                {
+                    "user": wallet,
+                    "mint": neighbour,
+                    "bonding_curve": _key(),
+                    "timestamp": 1786000264,
+                    "quote_mint": WRAPPED_SOL_MINT,
+                },
+            ),
+        ),
+        slot=11,
+        signature="4" * 88,
+    )
+    client = FakePagedClient(
+        {
+            mint: [
+                [_launch_and_trade(mint, wallet, slot=10, signature="5" * 88), bundled],
+                [_trade_only(mint, wallet, slot=12, signature="3" * 88)],
+            ]
+        }
+    )
+    sink = Sink()
+
+    report = await collect_panel(
+        client, sink, [FrameMint(mint, "cohort")], budget=CreditBudget(limit=10_000), page_cap=1
+    )
+
+    # The neighbour really did graduate, and that record stands on its own.
+    closes = {
+        (event.body.mint, event.body.close_reason)
+        for event in sink.of(EventKind.WATCH)
+        if event.body.close_reason is not None
+    }
+    assert (neighbour, WatchClose.GRADUATED) in closes
+    # The mint we were actually reading was cut off by the page cap and must say so.
+    assert report.outcomes[0].close_reason == str(WatchClose.OBSERVER_LOST)
+    assert (mint, WatchClose.OBSERVER_LOST) in closes
+    assert report.mints_truncated == 1
