@@ -276,6 +276,26 @@ inhomogeneous Poisson with the empirical decay profile at true n=0 and see what 
 and compute the kernel-free estimator `n̂ = 1 − 1/√Fano(W)` whose W-scaling doubles as a long-memory
 diagnostic.
 
+*Verified against Hardiman & Bouchaud (1403.5227), with one qualification our earlier draft omitted:*
+the mean–variance estimator is **biased downward at finite W** — "σ²_W/W is a biased estimator … and
+will generally under-estimate the branching ratio, becoming exact only in the limit W → ∞." So a low
+n̂ from this control is not evidence of low endogeneity; it is the floor. Use it to *refute* a high
+Hawkes-MLE branching ratio, never to confirm a low one. The sanity anchor is exact: Fano = 1 ⟺ Poisson
+⟺ n = 0.
+
+**Burstiness, if we ever compute it.** Goh–Barabási `B = (r−1)/(r+1)` on `r = σ/μ` of interevent times
+has a hard finite-size ceiling, because `r ≤ √(n−1)`. Exactly, `B_max(n) = (√(n−1) − 1)/(√(n−1) + 1)`
+— **0.817 at n = 100**, of which the familiar `1 − 2/√n` (0.80) is the large-n asymptotic. So B is
+confounded with event count and **cross-token B comparisons at different trade counts are invalid**.
+Kim & Jo's replacement (their eq. 22) has no such bound and is a two-line change:
+
+```
+A_n(r) = (√(n+1)·r − √(n−1)) / ((√(n+1) − 2)·r + √(n−1)),    0 ≤ r ≤ √(n−1)
+```
+
+Their framing is exactly our use case: "if two event sequences have the same r but different n, the
+original burstiness parameter cannot distinguish which is more bursty, while our novel measure can."
+
 **Live bug in our harvested numerics:** `shitcoims_intelligence/numerics.py:29` is the naive Gini —
 downward-biased at small n, pathological under infinite variance (which *is* the holder distribution),
 and computed over a deliberately fragmented address set. Bundle-correct it or drop it.
@@ -290,7 +310,7 @@ credits/call.
 
 | # | Signal | Method | Cost | Status |
 |---|---|---|---|---|
-| 1 | **Coordinated-cluster detection** | Statistically Validated Networks: hypergeometric null on wallet co-trading, BH-FDR, union-find/Infomap | 300 tokens × 5k trades = **1.5% of monthly credits** | **Best method-to-data-volume match in the review.** Power computed: overlap ≥5 tokens gives p≈3e-6–5e-11, clears Bonferroni across 10⁶ pairs |
+| 1 | **Coordinated-cluster detection** | SVN: hypergeometric null on **nine typed** (buy/sell/round-trip × same) co-occurrences per wallet pair, **pair-specific T**; Bonferroni for specificity, BH-FDR for coverage; drop opposite-action links; **weighted Infomap — not union-find** | 300 tokens × 5k trades = **1.5% of monthly credits** | **Read §4.1 before spending a credit.** The power claim was ours, not the paper's, and it was wrong |
 | 2 | **Funding-tree entity resolution** | First-funder + deposit-address reuse, CEX exclusion; then bundle-adjusted concentration delta | 50k wallets ≈ **10%** | Prerequisite for everything else. MELT recipe is fully specified |
 | 3 | **Callout → flow latency** | Intensity response on mint-resolved callouts vs hour-matched baseline, hierarchically pooled across tokens | store already collecting (28 mint-resolved/day) | Genuinely unexplored. Pipeline exists end-to-end; grok's eval ran n=0 only because events were never wired to the tape |
 | 4 | **Organic vs manufactured flow** | Union-find + position-netting + PnL-negativity + funding ancestry. Exclude same-slot atomics (MEV is the dominant false positive) | CPU once local | The classifier *is* the alpha — everyone can detect callouts; separating real from farmed is the edge |
