@@ -132,6 +132,13 @@ def dlmm_fee(base_pct: float | None = None, dynamic_pct: float | None = None) ->
     ``dynamic_fee_pct``; both are percentages. The taker pays their sum. This closes — for the
     pools that endpoint knows — the unknown the study had to sweep, and the map records which
     of the two it used, because the fee band *is* the result.
+
+    **The percent reading is cross-checked, loosely, against our own income.** On 2026-08-13 the
+    weave/nosis pool served ``base 6.0% + dynamic 0.71%`` while our position (96% of that pool's
+    TVL) had accrued $68 of lifetime fees against roughly $700 of 24h flow measured independently
+    from the tape — an implied ~10%, the same order as 6.71% and an order away from 0.671%. That
+    is a sanity check at ~1.5x precision, not a verification: it does not pin the units, and the
+    honest fix is reading the ``lb_pair`` account.
     """
 
     if base_pct is None:
