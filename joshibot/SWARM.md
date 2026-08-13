@@ -130,8 +130,15 @@ into every lane prompt so nobody has to remember to be careful:
 - AUPRC / precision@k, never accuracy or ROC-AUC at high base rates
 - JSONL, not CSV; clock-censoring, not displacement-censoring
 - Lean-authored kernel, Rust/Python FFI into it; no floats in the kernel
-- the sophisticated part is the **architecture and the methodology, not the model class** — nobody
-  builds a GNN or a transformer; both were measured *last* on this exact data
+- the sophisticated part is the **architecture and the methodology, not the model class**. The
+  published failures of GNNs and Transformers here are real but *confounded* — MELT gave its sequence
+  models raw price/volume while the tabular models got engineered features, and Elliptic's graph harm
+  is attributed to sparse, prior-shifted conditions we may not share. So the rule is not "never build
+  one," it is: **baselines first (EdgeBank / popularity / boosted trees), and any richer model class
+  must beat a matched-capacity MLP on the *same* features, under a strictly inductive protocol.**
+  Varying model class and input representation together is not an experiment, it is a confound —
+  Elliptic's own largest effect was a 39.5-point transductive-vs-inductive leakage gap, far bigger
+  than anything architecture bought
 
 ---
 

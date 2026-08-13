@@ -110,6 +110,29 @@ positives, with a chronological split and no resampling:
 - The top three are hybrids within 0.0023 of each other (MLP+LSTM 0.5827, MLP+LGBM 0.5821, MLP+RF
   0.5804) — a statistical tie — and the pure MLP trails the best by 0.0098. **The entire measured value
   of the sequence branch is about one AUPRC point.**
+
+**But the comparison is confounded, and this matters for what we build.** MELT varied *model class*
+and *input representation together*: the tabular models received engineered features (context, holding
+concentration, market activity, bundle statistics) while the sequence models received, in the paper's
+own words, "pure time-series of price and trading volumes." So the result is **not** "Transformers lose
+on this problem"; it is "Transformers lose on price-and-volume alone, against engineered features."
+Nobody has fed a sequence or graph model the *relational* structure — follower trade flows, launcher
+identity, the wallet graph, cross-token flow — which is precisely the long-range structure attention
+exists to exploit. That experiment is open, cheap, and ours to run.
+
+Two further caveats found in the source, neither in the headline:
+
+- **The ML experiments used 21,635 subsampled tokens** (16,048 high-risk / 5,587 normal), not the full
+  41,470. The 0.2589 random baseline is just that 25.82% normal share.
+- **MELT trains with class-weighted BCE**, weights inversely proportional to class counts. That is a
+  soft rebalance: it shifts the implied prior and therefore **decalibrates the output probabilities**.
+  Their AUPRC is rank-based and survives; their probabilities do not. Since our envelope needs
+  *calibrated* probabilities for an EV decision (§3 rule 3), copy MELT's features and protocol but
+  **not** its loss weighting.
+- The ablation is sharper than "concentration matters": dropping holding concentration alone costs
+  only 0.0036 AUPRC, dropping bundle stats alone costs 0.0278, but dropping **both** costs 0.0461 —
+  more than the sum. Raw concentration is near-worthless on its own and only becomes informative
+  against the bundle-adjusted baseline. That is the +24pp/+6pp delta, confirmed by ablation.
 - Economic eval: buy at migration, sell at a random time within the hour. No model: **−60.7%**.
   Best model: **−26.6%**. *The best published pre-migration model converts a catastrophic loss into
   a large loss.*
@@ -147,7 +170,14 @@ architecture**:
 - A zero-parameter hash table (EdgeBank) ranks 2nd across 13 temporal-graph benchmarks; on the crypto
   benchmark it ties TGN, and a decayed popularity counter beats both by 14 MRR points.
 - On Elliptic under strict-inductive evaluation, **random forest on tabular features beats every
-  GNN** (0.821 vs 0.689) — and *randomly shuffled edges outperform the real transaction graph*.
+  GNN** (F1 0.821 vs GraphSAGE 0.689 ± 0.017) — and *randomly shuffled edges outperform the real
+  transaction graph by 8.9 F1 points*. Read the fine print, though: the paper's largest effect is not
+  about model class at all. GraphSAGE scores **0.294 transductive vs 0.689 inductive** — a 39.5-point
+  paired gap (d = 15.8, p = 2.6e-12) "explained entirely by training-time exposure to test-period
+  adjacency." That is a *leakage* finding, and it binds us whatever architecture we pick. Run
+  leakage-free, the graph branch still contributes a real **+0.018 F1** over a matched-capacity MLP —
+  small, but not zero — and the authors attribute the harm specifically to Elliptic's "sparse,
+  prior-shifted conditions." A dense memecoin co-trading graph is not obviously that regime.
 - Union-find over funding relations does the work that GNNs claim; the only GNN wash-trading paper
   is perfectly circular (labels from DFS cycles, features from centrality on the same graph).
 
