@@ -6,6 +6,13 @@ across memecoin empirics, market impact, point processes, graph methods, and ML 
 This document is the spine. It exists so the next session (human or agent) starts from the evidence
 rather than from vibes.
 
+**Provenance.** The first draft was assembled from subagent reports. On 2026-08-13 the two anchor
+papers — Marino/Lillo (base rates, the no-go result) and MELT (the performance ceiling) — were read
+directly and every number attributed to them checked against the source; §0's fee schedule, §1.1,
+§1.2 and §1.3 now quote verified text, and the corrections are in the git history. Claims sourced to
+the *other* ~93 papers remain agent-reported and are **not** yet verified at that standard. Treat an
+unverified number as a lead, not a fact — that is exactly the discipline §3 demands of everyone else.
+
 ---
 
 ## 0. Situation
@@ -29,8 +36,12 @@ fired mid-session and realized **−20.2%** and **−31.7%**.
 
 **Money context.** Obligations ~$4,100/mo (rent ×2, utilities, AI, groceries) plus a $40k IRS debt.
 DREGG creator fees run $213–313/day at current volume — covering obligations 1.6–2.3× with
-$2.3–5.3k/mo surplus. Fees are linear in *volume*, and the pump.fun tier is *inverse* to market cap
+$2.3–5.3k/mo surplus. Fees are linear in *volume*, and the pump.fun tier is *inverse* to size
 (0.95% under $300k FDV, 0.60% to $1M, 0.35% above), so a falling price partially hedges the rate.
+Independently corroborated by Marino §VII, which states the schedule from on-chain observation:
+creators take **0.3% during the bonding-curve phase**, then a dynamic PumpSwap fee **"ranging from
+0.950% down to 0.050%"** as the token grows. Two unrelated sources, same inverse ladder — the hedge
+is a real property of the protocol, not an artifact of how we read the docs.
 **The fee stream is the business; trading is a research program funded by it, not a rent strategy.**
 
 ---
@@ -43,8 +54,11 @@ $2.3–5.3k/mo surplus. Fees are linear in *volume*, and the pump.fun tier is *i
   Best-sourced figure in the field. (A 2026 measurement suggests lower, ~0.33%+, but its collector
   was displacement-censored — see §3.)
 - **Median time-to-graduation 4.4 minutes**, median ~457 curve swaps. The decision window is minutes.
-- **92.22%** of tokens with ≥30 swaps show a ≥4σ dump event (Marino, Shewhart control chart on
-  log-returns, k=4, MAD-scaled).
+- **92.22%** of tokens with ≥30 swaps show a ≥4σ dump event — 169,938 of 184,282 (Marino, Shewhart
+  chart on log-returns, `k=4`, median–MAD with Gaussian-consistent scaling `1/0.67449`).
+- **2.55% graduate among those same 184,282 tokens with ≥30 swaps** — versus 0.63% unconditional.
+  Surviving to 30 swaps alone quadruples the base rate; it is the cheapest conditioning in the paper
+  and it is a *filter*, not a prediction.
 - **84.13%** of *migrated* tokens are high-risk; **73%** fall below 0.4× migration price within
   20 minutes (MELT, arXiv:2602.13480).
 - **~60%** of tokens live <1 day (Cernera et al., USENIX Sec'23).
@@ -52,6 +66,13 @@ $2.3–5.3k/mo surplus. Fees are linear in *volume*, and the pump.fun tier is *i
 - **98.7%** of launches have a dev buy in the create transaction — so raw dev-buy presence is
   uninformative; the *bundle-adjusted minus naive* top-10 delta is the signal (+24pp high-risk vs
   +6pp low-risk).
+- **Accumulation is multi-wallet; the dump is frequently single-wallet** (Marino §VIII: "accumulation
+  is often executed through multiple wallets, and it is common for the subsequent dump to be carried
+  out by a single" one). That asymmetry is a free structural prior for signal #4 — and Marino's other
+  half of the same finding is that predicting the *pump* leg is much harder than the dump leg.
+- **Large drops cluster at specific vSol levels**, once enough SOL has accumulated to make liquidation
+  worthwhile — dumps are not uniformly distributed along the curve, so curve position is a real
+  conditioning variable for exit timing.
 
 ### 1.2 What is actually refuted — narrower than it sounds
 
@@ -60,8 +81,16 @@ features**. Under every conditioning variable tested, P(graduate | vSol) sits be
 parabola `(vSol/115)²`. The paper explicitly notes dynamic strategies are *not* excluded.
 
 The only conditioning that ever beat breakeven: **top-10 creators by prior graduation ratio**,
-identified on a disjoint prior window (genuine temporal OOS), 4–13× lift — flagged by its own
-authors as statistically underpowered (~50–90 eligible tokens).
+identified on the first half of the month and tested on the second (genuine temporal OOS) — and only
+*at sufficiently advanced stages of the bonding curve*, i.e. the curve crosses breakeven late, not
+everywhere. Per-creator graduation ratios run **0.023–0.084** against the 0.63% base, a **3.7–13.3×
+lift**, over 51–268 tokens each (1,115 total across the ten; the filter requires ≥50 tokens per
+creator). The authors flag it themselves: *"the statistical support in this conditioning is limited."*
+
+Note what did **not** clear breakeven: conditioning on early participation by ex-ante identified
+**top traders** raises the curve above the vSol-only baseline but stays *below* breakeven throughout.
+Marino's reading is that top traders are a double-edged signal — they accelerate early liquidity but
+exit fast, often around graduation.
 
 **Not tested anywhere in the published literature:** conditional entries, time-boxed exits, exit-rule
 design of any kind, social-propagation signals as live inputs, cross-token rotation, or anything
@@ -73,7 +102,14 @@ MELT is the calibration anchor — the only paper whose negatives come from the 
 positives, with a chronological split and no resampling:
 
 - Best AUPRC **0.5827** vs 0.2589 random → **~2.25× lift**.
-- Tabular beats sequence models; the **Transformer ranked last, below logistic regression**.
+- Tabular beats sequence models, and the ordering is worth memorising: MLP 0.5729, RF 0.5688, LGBM
+  0.5642, XGBoost 0.5636, LR 0.5338 — then LSTM 0.5023, GRU 0.4972, TCN 0.4844, **Transformer 0.4841,
+  dead last and a full 5 AUPRC points below plain logistic regression**. The authors' mechanism, which
+  generalizes to our regime: *"short and noisy trading sequences lack the long-range dependencies that
+  Transformers are designed to exploit."*
+- The top three are hybrids within 0.0023 of each other (MLP+LSTM 0.5827, MLP+LGBM 0.5821, MLP+RF
+  0.5804) — a statistical tie — and the pure MLP trails the best by 0.0098. **The entire measured value
+  of the sequence branch is about one AUPRC point.**
 - Economic eval: buy at migration, sell at a random time within the hour. No model: **−60.7%**.
   Best model: **−26.6%**. *The best published pre-migration model converts a catastrophic loss into
   a large loss.*
