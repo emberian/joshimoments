@@ -138,7 +138,11 @@ def render_text(netmap: dict[str, Any]) -> str:
     for edge in netmap.get("edges", []):
         element = edge.get("element") or {}
         capacitance = element.get("capacitance_usd_per_log_price") or {}
-        if "value" in capacitance:
+        # "unavailable" is not zero: a TVL nobody served must not render as a dead pool.
+        unknown_tvl = element.get("tvl_source") == "unavailable"
+        if unknown_tvl:
+            cap_text = "—"
+        elif "value" in capacitance:
             cap_text = _money(capacitance.get("value"), 0)
         else:
             cap_text = f"{_money(capacitance.get('low'), 0)}-{_money(capacitance.get('high'), 0)}"
@@ -153,7 +157,7 @@ def render_text(netmap: dict[str, Any]) -> str:
         venue = "meteora" if edge.get("dex") == "meteora_dlmm" else "pumpswap"
         lines.append(
             f"  {_ours_cell(edge.get('ours'))} {edge.get('label', ''):<13}{venue:<9}{element_text:<15}"
-            f"{_money(element.get('tvl_usd'), 0):>9} {cap_text:>14} {fee_text:>8}  "
+            f"{('—' if unknown_tvl else _money(element.get('tvl_usd'), 0)):>9} {cap_text:>14} {fee_text:>8}  "
             f"{_flow_cell(edge.get('flow') or {}):<30}{rate_text:>5}"
         )
     lines.append(
