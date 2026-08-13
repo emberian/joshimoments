@@ -133,3 +133,10 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   purge that removes nothing is indistinguishable from one never needed — the published defect
   was a purge parameter that was a literal no-op. Plus `assert_no_leakage`, an independent
   re-check of produced indices. 11 tests, 5/5 mutations killed.
+- 2026-08-13 — Trials accounting (`shitcoims_replay/trials.py`) with N taken from the Lean
+  grammar rather than guessed: the oracle now answers `predcount`, so a DSL search reports a
+  COUNTED trial count. Deflated Sharpe implemented with the cross-trial variance term intact
+  — the term both audited reference implementations dropped — and `trial_sharpe_sd` is
+  MANDATORY, which is how it stops getting lost. 10 tests, 4 mutations (dropped variance term,
+  the invented `sr/ln(trials)`, ignored non-normality, a guessed N) all killed. Falsification
+  also caught one of my own tests turning a real failure into a skip via `except Exception`.

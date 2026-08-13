@@ -12,6 +12,8 @@ Protocol, one query per line, all values decimal integers:
 
     sell <tokenRaw> <solLamports> <amount>      -> lamports paid out
     accepts <tokenRaw> <solLamports> <amount> <floor>  -> 1 or 0
+    exprcount <features> <literals> <depth>  -> distinct expressions of that depth
+    predcount <features> <literals> <depth>  -> distinct predicates, i.e. the trial count N
 
 Malformed input is answered with `err`, never with a guess: a parse failure that silently
 returned 0 would look exactly like a pool that pays nothing.
@@ -33,6 +35,14 @@ def handle (line : String) : String :=
     | some t, some s, some a, some f =>
       if f ≤ (Reserves.mk t s).sellOut a then "1" else "0"
     | _, _, _, _ => "err"
+  | ["exprcount", n, l, d] =>
+    match n.toNat?, l.toNat?, d.toNat? with
+    | some n, some l, some d => toString (exprCount n l d)
+    | _, _, _ => "err"
+  | ["predcount", n, l, d] =>
+    match n.toNat?, l.toNat?, d.toNat? with
+    | some n, some l, some d => toString (predCount n l d)
+    | _, _, _ => "err"
   | _ => "err"
 
 partial def loop : IO Unit := do
