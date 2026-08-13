@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -98,30 +99,129 @@ async def test_a_gap_is_surfaced_rather_than_reconnected_around() -> None:
 
 
 class FakeHistoryClient:
-    def __init__(self, pages: dict[str, tuple[dict[str, Any], ...]]) -> None:
-        self.pages = pages
-        self.calls: list[str] = []
+    """A paged history service. Cursors are page indices; ``None`` means exhausted."""
 
-    async def mint_enhanced_page(self, mint: str, *, limit: int = 20) -> tuple[dict[str, Any], ...]:
-        self.calls.append(mint)
-        return self.pages.get(mint, ())
+    def __init__(self, pages: dict[str, Sequence[Sequence[dict[str, Any]]]]) -> None:
+        self.pages = pages
+        self.calls: list[tuple[str, str | None]] = []
+        self.succeeded_only: list[bool] = []
+
+    async def address_history_page(
+        self,
+        address: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        sort_order: str = "asc",
+        succeeded_only: bool = True,
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        self.calls.append((address, cursor))
+        self.succeeded_only.append(succeeded_only)
+        pages = self.pages.get(address, ())
+        index = 0 if cursor is None else int(cursor)
+        if index >= len(pages):
+            return (), None
+        # The service hands back a continuation token even after a SHORT page; only the
+        # token going away means the history is over. Reproducing that here is the whole
+        # point — a fake that stops handing out cursors after a short page would let the
+        # truncation bug pass.
+        nxt = str(index + 1) if index + 1 <= len(pages) else None
+        return tuple(pages[index]), nxt
 
 
 async def test_history_paging_stops_at_the_budget_instead_of_apologising_afterwards() -> None:
     """10 credits per 100-transaction page, charged BEFORE the request goes out."""
 
     mints = [_mint() for _ in range(5)]
-    client = FakeHistoryClient({mint: (_launch_tx(),) for mint in mints})
+    client = FakeHistoryClient({mint: [[_launch_tx()]] for mint in mints})
     budget = CreditBudget(limit=25)  # two pages, and a third would overspend
     source = HeliusHistorySource(client, mints, budget=budget)  # type: ignore[arg-type]
     _sink, recorder = _recorder()
 
     result = await run_recorder(source, recorder, budget=budget)
 
-    assert client.calls == mints[:2]
     assert budget.spent == 20
     assert result.credits_spent == 20
-    assert [gap.reason for gap in result.gaps] == ["credit_budget_exhausted"]
+    assert budget.spent <= budget.limit
+    assert [gap.reason for gap in result.gaps][-1] == "credit_budget_exhausted"
+    # Every mint the budget could not reach is named, so the caller can censor it explicitly
+    # instead of the frame quietly shrinking.
+    assert set(source.unreached) | {history.mint for history in source.histories} == set(mints)
+
+
+async def test_a_short_page_is_not_the_end_of_the_history() -> None:
+    """The service returns a cursor after a short page; stopping there truncates the tape.
+
+    This is the failure that motivated the rewrite. It is invisible on quiet mints (where a
+    short page really is the end) and eats the busy ones, which are the only testable mints.
+    """
+
+    mint = _mint()
+    client = FakeHistoryClient(
+        {
+            mint: [
+                [_launch_tx(slot=1000, signature="5" * 88)],  # SHORT, and not the end
+                [_launch_tx(slot=1001, signature="4" * 88)],
+                [_launch_tx(slot=1002, signature="3" * 88)],
+            ]
+        }
+    )
+    budget = CreditBudget(limit=10_000)
+    source = HeliusHistorySource(client, [mint], budget=budget, page_size=100)  # type: ignore[arg-type]
+    sink, recorder = _recorder()
+
+    result = await run_recorder(source, recorder, budget=budget)
+
+    assert result.transactions == 3
+    assert len(sink.of(EventKind.LAUNCH)) == 3
+    history = source.histories[0]
+    assert history.stopped_by == "exhausted"
+    assert history.truncated is False
+    assert history.pages == 4  # three pages of data, and one to prove the cursor ran out
+    # 59-62% of an unfiltered pump.fun page is failed slippage attempts the recorder throws
+    # away, and every page costs 10 credits whatever is in it.
+    assert client.succeeded_only == [True, True, True, True]
+
+
+async def test_the_page_cap_is_recorded_as_truncation_rather_than_read_as_the_whole_history() -> None:
+    mint = _mint()
+    client = FakeHistoryClient(
+        {mint: [[_launch_tx(slot=1000 + n, signature=str(n % 9 + 1) * 88)] for n in range(6)]}
+    )
+    budget = CreditBudget(limit=10_000)
+    source = HeliusHistorySource(client, [mint], budget=budget, page_cap=2)  # type: ignore[arg-type]
+    _sink, recorder = _recorder()
+
+    await run_recorder(source, recorder, budget=budget)
+
+    history = source.histories[0]
+    assert history.pages == 2
+    assert history.stopped_by == "page_cap"
+    assert history.truncated is True
+
+
+async def test_the_observation_window_is_anchored_to_the_mints_own_first_transaction() -> None:
+    """A fixed clock window per mint, so co-occurrence counts are comparable across mints."""
+
+    mint = _mint()
+    inside = _launch_tx(slot=1001, signature="4" * 88)
+    inside["blockTime"] = 1_700_000_000 + 30
+    first = _launch_tx(slot=1000, signature="5" * 88)
+    first["blockTime"] = 1_700_000_000
+    outside = _launch_tx(slot=1002, signature="3" * 88)
+    outside["blockTime"] = 1_700_000_000 + 601
+    client = FakeHistoryClient({mint: [[first], [inside], [outside]]})
+    budget = CreditBudget(limit=10_000)
+    source = HeliusHistorySource(client, [mint], budget=budget, window_seconds=600)  # type: ignore[arg-type]
+    _sink, recorder = _recorder()
+
+    result = await run_recorder(source, recorder, budget=budget)
+
+    assert result.transactions == 2  # the transaction past the window never reaches the tape
+    history = source.histories[0]
+    assert history.stopped_by == "window"
+    assert history.truncated is False  # the clock closed it, not our budget
+    assert history.observed_seconds == 30
 
 
 async def test_a_sanitised_history_failure_becomes_a_gap_and_the_run_continues() -> None:
@@ -130,13 +230,19 @@ async def test_a_sanitised_history_failure_becomes_a_gap_and_the_run_continues()
     mints = [_mint(), _mint()]
 
     class Failing(FakeHistoryClient):
-        async def mint_enhanced_page(
-            self, mint: str, *, limit: int = 20
-        ) -> tuple[dict[str, Any], ...]:
-            self.calls.append(mint)
+        async def address_history_page(
+            self,
+            address: str,
+            *,
+            limit: int = 100,
+            cursor: str | None = None,
+            sort_order: str = "asc",
+            succeeded_only: bool = True,
+        ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+            self.calls.append((address, cursor))
             if len(self.calls) == 1:
                 raise HeliusIntelligenceError("Helius history RPC returned error -32000")
-            return (_launch_tx(),)
+            return (_launch_tx(),), None
 
     client = Failing({})
     budget = CreditBudget(limit=1000)
@@ -150,6 +256,8 @@ async def test_a_sanitised_history_failure_becomes_a_gap_and_the_run_continues()
     assert "api-key" not in result.gaps[0].reason  # the client sanitises; we must not undo it
     assert result.transactions == 1
     assert sink.of(EventKind.LAUNCH)
+    assert source.histories[0].stopped_by == "error"
+    assert source.histories[0].truncated is True
 
 
 def test_the_firehose_subscribes_to_both_pinned_pump_programs(tmp_path: Path) -> None:

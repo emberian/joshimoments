@@ -11,9 +11,11 @@ Three sources:
 
 * :class:`IterableSource` — replays already-captured transactions. Used by the backfill
   loaders and by every test; costs nothing.
-* :class:`HeliusHistorySource` — bounded ``getTransactionsForAddress`` paging for one mint,
+* :class:`HeliusHistorySource` — bounded ``getTransactionsForAddress`` paging per mint,
   charged against an explicit :class:`~shitcoims_tape.recorder.CreditBudget` before the
-  request is made, so a run cannot overspend and then apologise.
+  request is made, so a run cannot overspend and then apologise. It pages to the cursor, it
+  filters out failed transactions at the source (measured 59-62% of an unfiltered pump.fun
+  page), and it reports per-mint what stopped it.
 * :class:`PumpFirehose` — the program-level ``transactionSubscribe``. This is the only source
   that can achieve full coverage: pump.fun launches tens of thousands of tokens a day and
   per-mint history polling would cost more credits than a month's allowance.
@@ -32,7 +34,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Final, Literal, Protocol
 
 from shitcoims_intelligence.helius import (
     HeliusHistoryClient,
@@ -103,13 +105,81 @@ def transactions_from_jsonl(path: Path) -> IterableSource:
     return IterableSource(items)
 
 
+#: Why a mint's backfill stopped. Only ``exhausted`` and ``window`` are benign: the other
+#: three are truncation, they correlate with how busy the mint was, and a study that treats
+#: them as complete history is reading a censored panel as an uncensored one.
+STOP_EXHAUSTED: Final[str] = "exhausted"
+STOP_WINDOW: Final[str] = "window"
+STOP_PAGE_CAP: Final[str] = "page_cap"
+STOP_BUDGET: Final[str] = "budget"
+STOP_ERROR: Final[str] = "error"
+
+#: Truncating stops. A mint that ended on one of these was cut off by *our* limits, not by
+#: the chain running out of history.
+TRUNCATING_STOPS: Final[frozenset[str]] = frozenset({STOP_PAGE_CAP, STOP_BUDGET, STOP_ERROR})
+
+
+@dataclass(frozen=True, slots=True)
+class MintHistory:
+    """What one mint's bounded backfill actually achieved. Reported, never inferred."""
+
+    mint: str
+    pages: int
+    transactions: int
+    credits: int
+    stopped_by: str
+    first_block_time: int | None = None
+    last_block_time: int | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.stopped_by in TRUNCATING_STOPS
+
+    @property
+    def observed_seconds(self) -> int | None:
+        if self.first_block_time is None or self.last_block_time is None:
+            return None
+        return self.last_block_time - self.first_block_time
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "mint": self.mint,
+            "pages": self.pages,
+            "transactions": self.transactions,
+            "credits": self.credits,
+            "stopped_by": self.stopped_by,
+            "truncated": self.truncated,
+            "first_block_time": self.first_block_time,
+            "last_block_time": self.last_block_time,
+        }
+
+
 class HeliusHistorySource:
-    """Bounded per-mint history, charged before it is spent.
+    """Bounded per-mint history paging, charged before it is spent.
 
     ``getTransactionsForAddress`` costs 10 credits per 100 transactions, so one page is
     :data:`~shitcoims_tape.recorder.CREDITS_PER_TRANSACTION_PAGE`. The budget is charged
     *before* the request, which is the only ordering under which an exhausted budget stops
     the run instead of discovering the overspend afterwards.
+
+    Three properties are load-bearing and each one was measured against mainnet:
+
+    **It pages.** The first version of this class read exactly one page per mint and dropped
+    the continuation cursor, so a mint with 3,000 transactions contributed 100 of them and
+    nothing said so. A panel built that way is not a shallow sample of each mint, it is a
+    sample of each mint's *most recent* activity, which is the same shape of error as
+    displacement censoring.
+
+    **It stops on the cursor, never on a short page.** The service returns a continuation
+    token *after* a short page, so ``len(page) < limit`` is not the end of the history. It is
+    usually the end, which is precisely what makes assuming it dangerous: the assumption is
+    right often enough to survive testing and wrong exactly on the busiest mints.
+
+    **The observation window is anchored to the mint's own first transaction**, not to the
+    wall clock. With ``sort_order='asc'`` page one begins at the mint's creation, so
+    ``window_seconds`` yields the identical ``[launch, launch+W]`` window for every mint. A
+    fixed *transaction count* would instead give busy mints a shorter time window than quiet
+    ones, tying the observation window to the outcome being studied.
     """
 
     def __init__(
@@ -119,35 +189,119 @@ class HeliusHistorySource:
         *,
         budget: CreditBudget,
         page_size: int = 100,
+        page_cap: int = 25,
+        window_seconds: int | None = None,
+        succeeded_only: bool = True,
+        sort_order: Literal["asc", "desc"] = "asc",
     ) -> None:
         if not 1 <= page_size <= 100:
             raise ValueError("page_size must be between 1 and 100")
+        if page_cap < 1:
+            raise ValueError("page_cap must be at least one page")
+        if window_seconds is not None and window_seconds <= 0:
+            raise ValueError("window_seconds must be positive when given")
         self._client = client
         self._mints = tuple(mints)
         self._budget = budget
         self._page_size = page_size
+        self._page_cap = page_cap
+        self._window_seconds = window_seconds
+        self._succeeded_only = succeeded_only
+        self._sort_order = sort_order
+        self._histories: list[MintHistory] = []
+        self._unreached: list[str] = []
 
     @property
     def budget(self) -> CreditBudget:
         return self._budget
 
+    @property
+    def histories(self) -> tuple[MintHistory, ...]:
+        """One record per mint the source actually fetched."""
+
+        return tuple(self._histories)
+
+    @property
+    def unreached(self) -> tuple[str, ...]:
+        """Mints the budget never reached. The caller owns recording them as censored."""
+
+        return tuple(self._unreached)
+
     def transactions(self) -> AsyncIterator[SourceItem]:
         async def iterator() -> AsyncIterator[SourceItem]:
-            for mint in self._mints:
+            for index, mint in enumerate(self._mints):
                 if not self._budget.can_afford(CREDITS_PER_TRANSACTION_PAGE):
+                    self._unreached.extend(self._mints[index:])
                     yield SourceGap(reason="credit_budget_exhausted")
                     return
-                self._budget.charge(CREDITS_PER_TRANSACTION_PAGE)
-                try:
-                    page = await self._client.mint_enhanced_page(mint, limit=self._page_size)
-                except HeliusIntelligenceError as exc:
-                    # `exc` is already sanitised by the intelligence client and carries no URL.
-                    yield SourceGap(reason=f"history_failed:{exc}")
-                    continue
-                for item in page:
+                async for item in self._one_mint(mint):
                     yield item
 
         return iterator()
+
+    async def _one_mint(self, mint: str) -> AsyncIterator[SourceItem]:
+        cursor: str | None = None
+        pages = 0
+        seen = 0
+        credits = 0
+        anchor: int | None = None
+        first_block_time: int | None = None
+        last_block_time: int | None = None
+        stopped_by = STOP_EXHAUSTED
+        while True:
+            if pages >= self._page_cap:
+                stopped_by = STOP_PAGE_CAP
+                break
+            if not self._budget.can_afford(CREDITS_PER_TRANSACTION_PAGE):
+                stopped_by = STOP_BUDGET
+                yield SourceGap(reason=f"credit_budget_exhausted:{mint}")
+                break
+            self._budget.charge(CREDITS_PER_TRANSACTION_PAGE)
+            credits += CREDITS_PER_TRANSACTION_PAGE
+            try:
+                page, cursor = await self._client.address_history_page(
+                    mint,
+                    limit=self._page_size,
+                    cursor=cursor,
+                    sort_order=self._sort_order,
+                    succeeded_only=self._succeeded_only,
+                )
+            except HeliusIntelligenceError as exc:
+                # `exc` is already sanitised by the intelligence client and carries no URL.
+                stopped_by = STOP_ERROR
+                yield SourceGap(reason=f"history_failed:{exc}")
+                break
+            pages += 1
+            past_window = False
+            for item in page:
+                block_time = item.get("blockTime")
+                if isinstance(block_time, int):
+                    if anchor is None:
+                        anchor = block_time
+                        first_block_time = block_time
+                    if self._window_seconds is not None and block_time > anchor + self._window_seconds:
+                        past_window = True
+                        break
+                    last_block_time = block_time
+                seen += 1
+                yield item
+            if past_window:
+                stopped_by = STOP_WINDOW
+                break
+            if cursor is None or not page:
+                stopped_by = STOP_EXHAUSTED
+                break
+        self._histories.append(
+            MintHistory(
+                mint=mint,
+                pages=pages,
+                transactions=seen,
+                credits=credits,
+                stopped_by=stopped_by,
+                first_block_time=first_block_time,
+                last_block_time=last_block_time,
+            )
+        )
 
 
 class PumpFirehose(HeliusTransactionStream):

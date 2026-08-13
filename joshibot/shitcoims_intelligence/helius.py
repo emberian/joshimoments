@@ -615,8 +615,79 @@ class HeliusHistoryClient:
                 amounts.append(amount)
         return tuple(amounts)
 
+    async def address_history_page(
+        self,
+        address: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        sort_order: Literal["asc", "desc"] = "asc",
+        succeeded_only: bool = True,
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        """One raw ``getTransactionsForAddress`` page AND its continuation cursor.
+
+        This is :meth:`mint_enhanced_page` with the two things a real backfill needs and that
+        method structurally cannot express, both of them measured against mainnet rather than
+        assumed:
+
+        * **The cursor comes back.** ``mint_enhanced_page`` drops ``paginationToken``, so a
+          caller can only ever read the first page of an address. On a graduated pump.fun mint
+          that is the first ~100 of several thousand transactions.
+        * **``succeeded_only``.** An unfiltered page of a live pump.fun mint measured **59-62%
+          failed** transactions — slippage rejections (``Custom 6004``), which the recorder
+          discards on arrival. Every page is 10 credits whatever it contains, so filtering at
+          the source is a ~2.5x improvement in usable transactions per credit. The accepted
+          filter value is ``succeeded``; ``successful``/``success``/``ok`` are all rejected
+          with ``-32602``.
+
+        The returned cursor is ``None`` exactly when the address history is exhausted. A
+        SHORT page is not that signal: the service returns a continuation token after one, so
+        stopping early on ``len(page) < limit`` is an assumption, and an unlucky one silently
+        truncates the tape.
+        """
+
+        address = _validate_pubkey(address)
+        cursor = _validate_cursor(cursor)
+        if not 1 <= limit <= 100:
+            raise ValueError("history page limit must be between 1 and 100")
+        if sort_order not in ("asc", "desc"):
+            raise ValueError("sort_order must be 'asc' or 'desc'")
+        options: dict[str, Any] = {
+            "transactionDetails": "full",
+            "sortOrder": sort_order,
+            "commitment": "finalized",
+            "limit": limit,
+            "encoding": "jsonParsed",
+            "maxSupportedTransactionVersion": 0,
+            "filters": {"status": "succeeded" if succeeded_only else "any"},
+        }
+        if cursor is not None:
+            options["paginationToken"] = cursor
+        result, _raw_blob_id = await self._rpc(address, options)
+        data = result.get("data")
+        if data is None:
+            data = result.get("transactions")
+        if not isinstance(data, list) or len(data) > limit:
+            raise HeliusIntelligenceError("Helius returned an invalid or over-limit history page")
+        page: list[dict[str, Any]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                raise HeliusIntelligenceError("Helius history page contained a non-object record")
+            page.append(item)
+        next_cursor = result.get("paginationToken")
+        if next_cursor is not None and not isinstance(next_cursor, str):
+            raise HeliusIntelligenceError("Helius history cursor was malformed")
+        if not next_cursor:
+            return tuple(page), None
+        return tuple(page), _validate_cursor(next_cursor)
+
     async def mint_enhanced_page(self, mint: str, *, limit: int = 20) -> tuple[dict[str, Any], ...]:
-        """One ``getTransactionsForAddress`` page with the mint as the address."""
+        """One ``getTransactionsForAddress`` page with the mint as the address.
+
+        Despite the name this is **not** the Enhanced Transactions API (100 credits/call); it
+        is the 10-credits-per-100-transactions RPC. Prefer :meth:`address_history_page`, which
+        returns the pagination cursor and can filter out failed transactions.
+        """
 
         mint = _validate_pubkey(mint)
         if not 1 <= limit <= 100:
