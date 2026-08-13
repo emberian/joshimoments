@@ -89,9 +89,47 @@ def _require(condition: bool, message: str) -> None:
         raise TapeError(message)
 
 
+_B58_ALPHABET: Final[str] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_B58_INDEX: Final[dict[str, int]] = {c: i for i, c in enumerate(_B58_ALPHABET)}
+
+
+def _b58_decode(text: str) -> bytes | None:
+    """Decode base58, or ``None`` if the string is not base58 at all."""
+    total = 0
+    for ch in text:
+        index = _B58_INDEX.get(ch)
+        if index is None:
+            return None
+        total = total * 58 + index
+    pad = 0
+    for ch in text:
+        if ch != "1":
+            break
+        pad += 1
+    body = total.to_bytes((total.bit_length() + 7) // 8, "big") if total else b""
+    return b"\x00" * pad + body
+
+
 def _mint(value: str, *, field: str = "mint") -> str:
+    """Validate a Solana address by DECODING it, not by matching its character class.
+
+    A regex over the base58 alphabet accepts a lowercased address unchanged, and base58 is
+    case-sensitive, so the lowercased form names a different account — or no account. The
+    live collector produced exactly that: 1 of 28 mint mentions carried an all-lowercase
+    44-character address, unrecoverable, and the store accepted it silently.
+
+    Decoding and requiring 32 bytes catches roughly three quarters of such corruptions
+    (measured 380/500 on random lowercased keys). The rest decode to a plausible 32 bytes and
+    are indistinguishable from a real address by any local check — those need write-time
+    validation at the collector, which is the honest limit of what a contract can enforce.
+    """
     text = str(value).strip()
     _require(bool(_MINT.match(text)), f"{field} is not a base58 Solana address")
+    decoded = _b58_decode(text)
+    _require(
+        decoded is not None and len(decoded) == 32,
+        f"{field} is not a 32-byte Solana address",
+    )
     return text
 
 
@@ -310,9 +348,15 @@ class Launch:
     creator: str
     name: str = ""
     symbol: str = ""
-    has_twitter: bool = False
-    has_telegram: bool = False
-    has_website: bool = False
+    #: Tri-state, and the third state is load-bearing. ``None`` means NOT OBSERVED — the
+    #: flags live in off-chain JSON behind the mint's metadata URI, which a recorder that
+    #: only reads chain never fetches. Defaulting them to ``False`` would make an unfetched
+    #: field indistinguishable from an observed absence, so a study conditioning on "no
+    #: telegram" would be reading fabricated negatives. That is the same disease as a cost
+    #: basis stamped from a quote, and it is refused here for the same reason.
+    has_twitter: bool | None = None
+    has_telegram: bool | None = None
+    has_website: bool | None = None
     initial_virtual_sol: int = 0
     dev_buy_raw: int = 0
 
@@ -325,17 +369,25 @@ class Launch:
         object.__setattr__(self, "dev_buy_raw", _raw(self.dev_buy_raw, field="dev_buy_raw"))
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "mint": self.mint,
             "creator": self.creator,
             "name": self.name[:64],
             "symbol": self.symbol[:32],
-            "has_twitter": self.has_twitter,
-            "has_telegram": self.has_telegram,
-            "has_website": self.has_website,
             "initial_virtual_sol": str(self.initial_virtual_sol),
             "dev_buy_raw": str(self.dev_buy_raw),
         }
+        # Unobserved flags are OMITTED, not emitted as false. A reader that sees no key
+        # knows the metadata was never fetched; a reader that sees `false` would believe
+        # the project was checked and found to have no telegram.
+        for key, value in (
+            ("has_twitter", self.has_twitter),
+            ("has_telegram", self.has_telegram),
+            ("has_website", self.has_website),
+        ):
+            if value is not None:
+                out[key] = value
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +404,12 @@ class Callout:
     author: str
     resolved_from: str
     text_sha256: str
+    #: When the post was MADE, which is the causal origin of the event. Distinct from
+    #: ``TapeEvent.observed_at`` (when we ingested it) and from ``Chainstamp`` (which a
+    #: social event has none of). Ingest lag on the live collector ran to a median of 368s
+    #: and a p95 of 2 hours, so anchoring a response window on ingest time measures a
+    #: window that had often already closed.
+    posted_at: str | None = None
     author_followers: int = 0
     engagement: int = 0
 
@@ -365,9 +423,11 @@ class Callout:
         )
         object.__setattr__(self, "author_followers", _raw(self.author_followers, field="author_followers"))
         object.__setattr__(self, "engagement", _raw(self.engagement, field="engagement"))
+        if self.posted_at is not None:
+            object.__setattr__(self, "posted_at", _utc(self.posted_at, field="posted_at"))
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "mint": self.mint,
             "platform": self.platform,
             "author": self.author[:64],
@@ -376,6 +436,9 @@ class Callout:
             "author_followers": self.author_followers,
             "engagement": self.engagement,
         }
+        if self.posted_at is not None:
+            out["posted_at"] = self.posted_at
+        return out
 
 
 _BODY_TYPES: Final[dict[EventKind, type]] = {
@@ -663,6 +726,7 @@ def _body_from_json(kind: EventKind, raw: Mapping[str, Any]) -> Any:
             author=str(raw["author"]),
             resolved_from=str(raw["resolved_from"]),
             text_sha256=str(raw["text_sha256"]),
+            posted_at=raw.get("posted_at"),
             author_followers=parse_amount(raw.get("author_followers", 0), field="author_followers"),
             engagement=parse_amount(raw.get("engagement", 0), field="engagement"),
         )

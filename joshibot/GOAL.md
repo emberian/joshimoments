@@ -71,3 +71,12 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   degraded to "delete the intent without resolving it" — i.e. drop a confirmed fill from the
   ledger. Still probed (test stubs legitimately omit it), but probing a public name makes a
   rename a visible break.
+- 2026-08-13 — Track B landed the tape recorder (`2d93305`, 96 tests, 31/31 mutations caught,
+  and it found a clock bug in its own instrument: graduation median 0.5s on the observer clock,
+  now 250s against Marino's 264s). It then found three holes in MY contract, now closed:
+  social flags are tri-state (`None` = not observed — `False` was a fabricated negative, the
+  same disease as a quote-stamped cost basis); `Callout` gained `posted_at` (ingest lag median
+  368s / p95 2h, so anchoring on ingest measures a closed window); and `_mint` now DECODES to
+  32 bytes instead of matching a character class, which catches ~3 in 4 lowercased addresses.
+  Falsification found a gap in my own test — the first probe was a no-op — so the missing
+  case (absent post time must not be fabricated) is now pinned too.

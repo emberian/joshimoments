@@ -325,3 +325,119 @@ def test_a_callout_records_how_the_mint_was_resolved() -> None:
     assert restored.body.resolved_from == "pumpfun-url"
     assert restored.body.author_followers == 1234
     assert "text" not in restored.body.to_json()  # the prose itself is never stored
+
+
+# --- fabricated negatives ----------------------------------------------------------
+
+
+def test_an_unobserved_social_flag_is_omitted_not_emitted_as_false() -> None:
+    """`False` would claim we checked and found no telegram; we never fetched the metadata.
+
+    The flags live in off-chain JSON behind the mint's metadata URI, which a chain-only
+    recorder does not read. Defaulting them to False makes an unfetched field
+    indistinguishable from an observed absence — the same disease as a cost basis stamped
+    from a quote, and it would silently poison any study conditioning on social presence.
+    """
+    launch = Launch(mint=_mint(), creator=_mint())
+    assert launch.has_telegram is None
+    body = launch.to_json()
+    assert "has_telegram" not in body
+    assert "has_twitter" not in body
+    assert "has_website" not in body
+
+
+def test_an_observed_absence_is_recorded_as_false_not_omitted() -> None:
+    """The tri-state has to work in both directions or it buys nothing."""
+    launch = Launch(mint=_mint(), creator=_mint(), has_telegram=False, has_twitter=True)
+    body = launch.to_json()
+    assert body["has_telegram"] is False
+    assert body["has_twitter"] is True
+    assert "has_website" not in body
+
+
+# --- the causal origin of a social event -------------------------------------------
+
+
+def test_a_callout_carries_its_post_time_separately_from_ingest_time() -> None:
+    """Ingest lag ran to a median of 368s and a p95 of 2h on the live collector.
+
+    Anchoring a response window on ingest time measures a window that had often already
+    closed, so the post time needs a typed home distinct from `observed_at`.
+    """
+    event = TapeEvent(
+        kind=EventKind.CALLOUT,
+        observed_at="2026-08-13T00:30:00Z",
+        provenance=Provenance(source="apify.x", fetched_at="2026-08-13T00:30:00Z"),
+        body=Callout(
+            mint=_mint(),
+            platform="x",
+            author="someone",
+            resolved_from="pumpfun-url",
+            text_sha256=HASH,
+            posted_at="2026-08-13T00:00:00Z",
+        ),
+    )
+    restored = event_from_json(json.loads(event.to_jsonl()))
+    assert restored.body.posted_at == "2026-08-13T00:00:00+00:00"
+    assert restored.observed_at == "2026-08-13T00:30:00+00:00"
+    assert restored.body.posted_at != restored.observed_at
+
+
+def test_a_naive_post_time_is_refused() -> None:
+    with pytest.raises(TapeError, match="timezone"):
+        Callout(
+            mint=_mint(),
+            platform="x",
+            author="a",
+            resolved_from="pumpfun-url",
+            text_sha256=HASH,
+            posted_at="2026-08-13T00:00:00",
+        )
+
+
+# --- addresses are decoded, not pattern-matched ------------------------------------
+
+
+def test_a_lowercased_address_is_refused_because_base58_is_case_sensitive() -> None:
+    """The live collector emitted exactly this: 1 of 28 mint mentions, unrecoverable.
+
+    A character-class regex accepts it unchanged. Decoding and requiring 32 bytes catches
+    most of them — the residue that still decodes to 32 bytes needs write-time validation
+    at the collector, which is the honest limit of what a contract can do.
+    """
+    real = _mint()
+    lowered = real.lower()
+    if lowered == real:  # pragma: no cover - vanishingly unlikely, keeps the test honest
+        pytest.skip("generated key had no uppercase characters")
+    with pytest.raises(TapeError):
+        Launch(mint=lowered, creator=real)
+
+
+def test_a_short_address_is_refused_even_though_it_is_base58() -> None:
+    with pytest.raises(TapeError, match="32-byte"):
+        Launch(mint="A" + "1" * 30 + "pump", creator=_mint())
+
+
+def test_a_callout_without_a_post_time_does_not_inherit_the_ingest_time() -> None:
+    """An absent post time must stay absent, never silently become `observed_at`.
+
+    A fabricated post time is worse than a missing one: it reads as a measured zero-lag
+    callout, which is precisely the shape a propagation study would treat as its strongest
+    evidence. Caught by falsification — the round-trip test above passes even with a
+    fallback, because it supplies a post time.
+    """
+    event = TapeEvent(
+        kind=EventKind.CALLOUT,
+        observed_at="2026-08-13T00:30:00Z",
+        provenance=Provenance(source="apify.x", fetched_at="2026-08-13T00:30:00Z"),
+        body=Callout(
+            mint=_mint(),
+            platform="x",
+            author="someone",
+            resolved_from="pumpfun-url",
+            text_sha256=HASH,
+        ),
+    )
+    assert "posted_at" not in event.to_json()["body"]
+    restored = event_from_json(json.loads(event.to_jsonl()))
+    assert restored.body.posted_at is None

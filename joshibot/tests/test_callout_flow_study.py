@@ -23,6 +23,7 @@ import random
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from solders.pubkey import Pubkey
 
 from shitcoims_tape.schema import Callout, Side, Trade
 from studies.callout_flow import (
@@ -47,11 +48,12 @@ from studies.callout_flow import (
 )
 
 ORIGIN = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
-# Base58 excludes 0/O/I/l, and the tape schema enforces it -- so synthetic addresses are built
-# from the real alphabet rather than from f"W{index}", which the contract rightly refuses.
-_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-MINTS = [f"{letter}{'1' * 30}pump" for letter in "ABCDEFGH"]
-WALLETS = [f"W{_B58[index]}{'1' * 29}pump" for index in range(24)]
+# The tape contract DECODES an address and requires 32 bytes, so a string that merely uses the
+# base58 alphabet is refused -- which is the point: a lowercased or truncated address names a
+# different account, or none. Synthetic addresses are therefore real 32-byte keys, built
+# deterministically so fixtures stay order-stable across runs.
+MINTS = [str(Pubkey(bytes([index + 1] * 32))) for index in range(8)]
+WALLETS = [str(Pubkey(bytes([128 + index] * 32))) for index in range(24)]
 
 # A pronounced diurnal profile. Amplitude ~4x peak-to-trough, matching the 3.6x-5.4x measured in
 # this market -- large enough that an unmatched baseline would invent an effect on its own.
