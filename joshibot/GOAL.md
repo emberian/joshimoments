@@ -10,11 +10,14 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
 
 ## Next 3 moves
 
-1. CI + mypy — gates the next swarm's output at merge; do before fanning out further.
-2. Swarm wave 1: Track B (tape recorder → `/tank`, bootstrapped from MELT + RED-PUMP) and
-   Track E spike #3 (callout→flow, runs today on the existing intelligence store).
-3. Track C: deepen the kernel (competing-risks accounting, envelope daily-loss budget) and
-   wire the `@[export]` C ABI so Python/Rust call into the emitted artifact.
+1. Wave 2 in flight: signal #1 (SVN co-trading clusters) and signal #2 (funding-tree entity
+   resolution). #2 is a prerequisite for #1, #4, #5, #6 — nothing splits train/test correctly
+   until wallets collapse to entities.
+2. Drive the recorder against live mints so the signal lanes have real multi-wallet data; the
+   existing store has only 2 wallets, which is why spike #3 came back UNRESOLVABLE.
+3. Phase 2: replay + search harness (exact AMM fills via the kernel, MAP-Elites over DSL terms,
+   OPE over propensity-logged trades, purged walk-forward, honest trials accounting from the
+   grammar cardinality).
 
 ## Done log
 
