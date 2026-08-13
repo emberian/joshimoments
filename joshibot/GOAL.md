@@ -140,10 +140,21 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   MANDATORY, which is how it stops getting lost. 10 tests, 4 mutations (dropped variance term,
   the invented `sr/ln(trials)`, ignored non-normality, a guessed N) all killed. Falsification
   also caught one of my own tests turning a real failure into a skip via `except Exception`.
-- 2026-08-13 — Panel collection (interim, 33.3k/100k credits): stratum B complete — 250 mints,
-  221,184 trades, 443,039 tape events, 0 malformed, 0 duplicate ids, 0 displaced. **Signal #1
-  is FEASIBLE**: 2,230 wallets at an activity floor of 5 against a Bonferroni cap of 3,880; at
-  floor 2 it is infeasible by three orders of magnitude, exactly as PROGRAM.md §4.1 predicted.
+- 2026-08-13 — **Panel collection LANDED** (`studies/PANEL.md`, 77.6k/100k credits, 22.4k
+  unspent): 1,157 mints, 306,216 fills, 307,549 reserve readings, 53,715 wallets, 617,236 tape
+  lines, 0 malformed, 0 duplicate ids, 0 mints displaced. Two strata — a *census* of every
+  launch in a contiguous 27-minute window (913, no outcome conditioning) and a uniform random
+  subsample of the previous day's graduated tokens (250, seed quoted before the draw). Frame
+  built free from pump.fun's listing, which is **not a census**: two sweeps two minutes apart
+  disagreed on 31% of the same window, so the frame is a 4-sweep union at the widest window
+  with zero Chao1 singletons. **Signal #1 is FEASIBLE**: 3,915 wallets at an activity floor of
+  5 against a Bonferroni ceiling of 151,912 (39× headroom; 43× buy-side-only); at floor 2 it is
+  infeasible by three orders of magnitude, exactly as PROGRAM.md §4.1 predicted. Tape checks:
+  replication at a different page size found 7,090 of 7,090 signatures already recorded
+  (coverage 1.00000); cross-vendor reserve reconciliation 93/100 exact and the other 7 off by
+  one base unit; `tape_health` honestly **SOUND=False** on 2.54% of trades lost to *pinned Borsh
+  layout drift* — the one real coverage hole, and it is in `pump_layouts`, not here. Graduation
+  timing passes §3 rule 8: n=230, all chain-timed, median 21s with a 3,308s max (tail 157×).
   Two real recorder defects found against live chain and fixed: (1) pump.fun spells native SOL
   as the ALL-ZERO pubkey on the bonding curve, so the recorder dropped *every* curve trade
   (735 → 1,123 on the same 5 mints, verified against a checked-in mainnet fixture reconciling
