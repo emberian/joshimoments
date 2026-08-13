@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 import httpx
 from solders.pubkey import Pubkey
@@ -91,6 +91,26 @@ def _credentialed_endpoint(template: str, key: str, *, websocket: bool) -> str:
     ):
         raise HeliusIntelligenceError("Helius endpoint template is not an approved Helius origin")
     return endpoint
+
+
+def _http_template_from_websocket(template: str) -> str:
+    """Derive the JSON-RPC template from the subscription template.
+
+    Helius serves both from one account on one credential, and the two templates
+    differ only in scheme -- plus, on the Atlas tier, an ``atlas-`` host prefix
+    that carries ``transactionSubscribe`` but does not serve JSON-RPC.  Deriving
+    the RPC template keeps ``getBlockTime`` available to a caller that only
+    configured a WebSocket (``helius_live.run_helius_live`` is exactly that), and
+    the derived value still has to pass :func:`_credentialed_endpoint`.
+    """
+
+    parsed = urlsplit(template)
+    if parsed.scheme != "wss" or not parsed.hostname:
+        raise HeliusIntelligenceError("Helius websocket template is not a wss URL")
+    host = parsed.netloc
+    if host.lower().startswith("atlas-"):
+        host = host[len("atlas-") :]
+    return urlunsplit(("https", host, parsed.path, parsed.query, ""))
 
 
 def _validate_pubkey(value: str) -> str:
@@ -240,12 +260,19 @@ class WatchlistSnapshot:
 
 
 SourceStatus = Literal["connecting", "healthy", "degraded", "stopped"]
-StreamKind = Literal["source_health", "gap", "transaction"]
+StreamKind = Literal["source_health", "gap", "transaction", "defect"]
+
+# A ``defect`` names a notification the stream REFUSED to emit as a transaction --
+# today only because its slot could not be resolved to a block time.  It is a
+# first-class stream event so the refusal is recorded evidence (``stream_defect``
+# once persisted, carrying the slot and the signature needed to backfill it) and
+# not a hole a later reader has to infer.
+DEFECT_BLOCK_TIME_UNRESOLVED = "block_time_unresolved"
 
 
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
-    """A transaction or an explicit statement about source continuity."""
+    """A transaction, a defect, or an explicit statement about source continuity."""
 
     kind: StreamKind
     watchlist_version: str
@@ -615,6 +642,29 @@ class HeliusHistoryClient:
                 amounts.append(amount)
         return tuple(amounts)
 
+    async def block_time(self, slot: int) -> int | None:
+        """``getBlockTime`` → the slot's unix block time, or ``None`` if unavailable.
+
+        ``None`` is the cluster's own "not yet": the node answers null for a slot it
+        has not caught up to, and answers a number for the same slot moments later.
+        It is therefore a RETRYABLE miss and never a fact about the slot.  A slot
+        the node refuses outright (skipped, or below its first available block)
+        raises, because that is a different and permanent condition.
+        """
+
+        if isinstance(slot, bool) or not isinstance(slot, int):
+            raise ValueError("slot must be an integer")
+        if not 0 <= slot < 2**63:
+            raise ValueError("slot must be a non-negative 64-bit integer")
+        result = await self._jsonrpc("getBlockTime", [slot])
+        if result is None:
+            return None
+        if isinstance(result, bool) or not isinstance(result, int):
+            raise HeliusIntelligenceError("Helius block time was malformed")
+        if result <= 0:
+            raise HeliusIntelligenceError("Helius block time was invalid")
+        return result
+
     async def address_history_page(
         self,
         address: str,
@@ -788,6 +838,15 @@ class HeliusHistoryClient:
                 if transaction.signature in seen_signatures:
                     duplicate_count += 1
                     continue
+                if transaction.block_time is None:
+                    # The history envelope carries blockTime, so this is a provider
+                    # anomaly rather than the routine gap the live path has.  Say so
+                    # instead of writing an event-clock-less row in silence.
+                    LOGGER.warning(
+                        "Helius history transaction %s at slot %s has no block time",
+                        transaction.signature,
+                        transaction.slot,
+                    )
                 seen_signatures.add(transaction.signature)
                 transactions.append(transaction)
                 if len(transactions) >= bounds.max_transactions:
@@ -819,12 +878,131 @@ class HeliusHistoryClient:
         )
 
 
+BlockTimeResolver = Callable[[int], Awaitable[int | None]]
+BlockTimeFetcher = Callable[[int], Awaitable[int | None]]
+
+DEFAULT_BLOCK_TIME_CACHE_SIZE = 8_192
+
+
+@dataclass(frozen=True, slots=True)
+class BlockTimeCacheStats:
+    """Observability for a cache whose hit rate is a credit bill."""
+
+    lookups: int
+    hits: int
+    misses: int
+    evictions: int
+    size: int
+
+
+class SlotBlockTimeCache:
+    """Bounded slot → block time cache over ``getBlockTime``.
+
+    A slot's block time is immutable once its block exists, so a hit is
+    PERMANENTLY valid and never needs revalidation.  The bound exists only so a
+    process that streams for weeks does not retain one entry per slot forever:
+    eviction is strict LRU at ``max_entries`` (default 8192 slots, roughly 55
+    minutes of mainnet at ~400 ms per slot), which is far more history than the
+    same-slot bursts this cache exists to collapse.  Nothing is evicted by age,
+    because age cannot make an entry wrong.
+
+    A failed lookup is deliberately NOT cached.  ``getBlockTime`` answers null
+    for a slot the node has not caught up to and answers a number for that same
+    slot seconds later, so caching the miss would poison the entry for the life
+    of the process.  Failures instead retry with bounded exponential backoff and
+    then give up, leaving the caller to defect the row.
+
+    REJECTED, on purpose: interpolating block time from a slot → time linear fit.
+    It was measured at p90 ≈ 24 s residual against a response variable measured
+    in minutes, so a fit would silently manufacture the very timing precision the
+    downstream studies exist to measure.  A row with no real block time is a
+    defect, not a row with an estimated clock.
+    """
+
+    def __init__(
+        self,
+        *,
+        fetch: BlockTimeFetcher,
+        max_entries: int = DEFAULT_BLOCK_TIME_CACHE_SIZE,
+        max_attempts: int = 3,
+        backoff_seconds: float = 0.25,
+        max_backoff_seconds: float = 2.0,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if not 1 <= max_entries <= 1_000_000:
+            raise ValueError("max_entries must be between 1 and 1000000")
+        if not 1 <= max_attempts <= 5:
+            raise ValueError("max_attempts must be between 1 and 5")
+        if not 0 <= backoff_seconds <= 30:
+            raise ValueError("backoff_seconds must be between 0 and 30")
+        if not backoff_seconds <= max_backoff_seconds <= 60:
+            raise ValueError("max_backoff_seconds must be between backoff_seconds and 60")
+        self._fetch = fetch
+        self._max_entries = max_entries
+        self._max_attempts = max_attempts
+        self._backoff_seconds = backoff_seconds
+        self._max_backoff_seconds = max_backoff_seconds
+        self._sleeper = sleeper
+        self._entries: OrderedDict[int, int] = OrderedDict()
+        self._lookups = 0
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
+
+    def stats(self) -> BlockTimeCacheStats:
+        return BlockTimeCacheStats(
+            lookups=self._lookups,
+            hits=self._hits,
+            misses=self._misses,
+            evictions=self._evictions,
+            size=len(self._entries),
+        )
+
+    async def resolve(self, slot: int) -> int | None:
+        """The slot's block time, or ``None`` once the bounded retries are spent."""
+
+        if isinstance(slot, bool) or not isinstance(slot, int):
+            raise ValueError("slot must be an integer")
+        if slot < 0:
+            raise ValueError("slot cannot be negative")
+        self._lookups += 1
+        cached = self._entries.get(slot)
+        if cached is not None:
+            self._entries.move_to_end(slot)
+            self._hits += 1
+            return cached
+        self._misses += 1
+        for attempt in range(self._max_attempts):
+            try:
+                value = await self._fetch(slot)
+            except HeliusIntelligenceError:
+                value = None
+            if value is not None:
+                self._entries[slot] = value
+                while len(self._entries) > self._max_entries:
+                    self._entries.popitem(last=False)
+                    self._evictions += 1
+                return value
+            if attempt + 1 < self._max_attempts:
+                await self._sleeper(
+                    min(self._backoff_seconds * (2**attempt), self._max_backoff_seconds)
+                )
+        return None
+
+
 class HeliusTransactionStream:
     """Reconnectable confirmed ``transactionSubscribe`` wallet stream.
 
     Reconnection and watchlist replacement are reported as explicit ``gap``
     events.  Callers can then schedule bounded HTTP backfill rather than assume
     that a WebSocket was continuously authoritative.
+
+    ``transactionNotification`` carries a slot but NO block time, so every emitted
+    row has its slot resolved through ``getBlockTime`` behind
+    :class:`SlotBlockTimeCache` first.  Block time is mandatory: a notification
+    whose slot cannot be resolved is emitted as a ``defect`` event and never as a
+    transaction, because a row with no event clock is invisible to every timing
+    question the tape exists to answer.
     """
 
     def __init__(
@@ -838,6 +1016,11 @@ class HeliusTransactionStream:
         max_addresses: int = 2_000,
         dedupe_size: int = 50_000,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        http_url_template: str | None = None,
+        http: httpx.AsyncClient | None = None,
+        block_time_resolver: BlockTimeResolver | None = None,
+        block_time_cache_size: int = DEFAULT_BLOCK_TIME_CACHE_SIZE,
+        block_time_timeout_seconds: float = 8.0,
     ) -> None:
         if not 5 <= keepalive_seconds <= 300:
             raise ValueError("keepalive_seconds must be between 5 and 300")
@@ -847,6 +1030,8 @@ class HeliusTransactionStream:
             raise ValueError("max_addresses must be between 1 and 50000")
         if not 1 <= dedupe_size <= 1_000_000:
             raise ValueError("dedupe_size must be between 1 and 1000000")
+        if not 0.1 <= block_time_timeout_seconds <= 60:
+            raise ValueError("block_time_timeout_seconds must be between 0.1 and 60")
         key = _read_helius_key(api_key_file)
         self._url = _credentialed_endpoint(websocket_url_template, key, websocket=True)
         self._factory = websocket_factory
@@ -857,6 +1042,29 @@ class HeliusTransactionStream:
         self._sleeper = sleeper
         self._request_id = 0
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
+
+        self._api_key_file = api_key_file
+        self._block_time_timeout_seconds = block_time_timeout_seconds
+        self._http = http
+        self._owned_http: httpx.AsyncClient | None = None
+        self._history: HeliusHistoryClient | None = None
+        self._http_url_template: str | None = None
+        self._block_time_cache: SlotBlockTimeCache | None = None
+        self._defect_count = 0
+        if block_time_resolver is not None:
+            self._resolver: BlockTimeResolver = block_time_resolver
+        else:
+            template = http_url_template or _http_template_from_websocket(websocket_url_template)
+            # Fail fast on a bad RPC template the same way the socket URL does,
+            # and discard the credentialed URL: only the history client holds it.
+            _credentialed_endpoint(template, key, websocket=False)
+            self._http_url_template = template
+            self._block_time_cache = SlotBlockTimeCache(
+                fetch=self._fetch_block_time,
+                max_entries=block_time_cache_size,
+                sleeper=sleeper,
+            )
+            self._resolver = self._block_time_cache.resolve
 
     def subscription_request(self, snapshot: WatchlistSnapshot) -> dict[str, Any]:
         if len(snapshot.addresses) > self._max_addresses:
@@ -907,6 +1115,55 @@ class HeliusTransactionStream:
             logger=logging.getLogger("shitcoims.intelligence.helius.transport"),
         )
 
+    def _history_client(self) -> HeliusHistoryClient:
+        """The RPC client used for block-time resolution, created on first need.
+
+        Creation is lazy so that constructing a stream opens no sockets and so the
+        HTTP client is built inside the running loop that will use it.
+        """
+
+        if self._history is None:
+            assert self._http_url_template is not None
+            if self._http is not None:
+                http = self._http
+            else:
+                if self._owned_http is None or self._owned_http.is_closed:
+                    self._owned_http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+                http = self._owned_http
+            self._history = HeliusHistoryClient(
+                api_key_file=self._api_key_file,
+                http_url_template=self._http_url_template,
+                http=http,
+                # ONE retry policy, owned by the cache. Leaving the transport's own
+                # attempts on would multiply the two (3 x 3 requests, two nested
+                # backoffs) for every unreachable slot.
+                max_attempts=1,
+                sleeper=self._sleeper,
+            )
+        return self._history
+
+    async def _fetch_block_time(self, slot: int) -> int | None:
+        return await self._history_client().block_time(slot)
+
+    async def _block_time(self, slot: int) -> int | None:
+        """Resolve a slot within a hard deadline; ``None`` means defect the row.
+
+        The deadline is the reason the subscription cannot stall: retries and
+        backoff live inside the resolver, but this bound holds however the
+        resolver misbehaves, so the socket always gets drained again.
+        """
+
+        try:
+            return await asyncio.wait_for(
+                self._resolver(slot), timeout=self._block_time_timeout_seconds
+            )
+        except TimeoutError:
+            LOGGER.warning("Helius block time lookup timed out for slot %s", slot)
+            return None
+        except HeliusIntelligenceError as exc:
+            LOGGER.warning("Helius block time lookup failed for slot %s: %s", slot, exc)
+            return None
+
     @staticmethod
     def _notification_item(result: dict[str, Any]) -> tuple[dict[str, Any], str]:
         try:
@@ -914,10 +1171,17 @@ class HeliusTransactionStream:
             transaction = wrapper["transaction"]
             meta = wrapper["meta"]
             signature = str(result["signature"])
+            # Measured on the live subscription: neither envelope carries blockTime,
+            # which is the whole reason the slot has to be resolved before emit.
+            # Read it anyway, so that a provider which starts sending one costs no
+            # RPC rather than being ignored.
+            block_time = result.get("blockTime")
+            if block_time is None and isinstance(wrapper, dict):
+                block_time = wrapper.get("blockTime")
             item = {
                 "slot": result["slot"],
                 "transactionIndex": result.get("transactionIndex"),
-                "blockTime": None,
+                "blockTime": block_time,
                 "transaction": transaction,
                 "meta": meta,
             }
@@ -940,6 +1204,25 @@ class HeliusTransactionStream:
         return True
 
     async def events(
+        self,
+        watchlist_provider: WatchlistProvider,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream events, releasing any HTTP client this stream created itself."""
+
+        try:
+            async for event in self._events(watchlist_provider, stop=stop):
+                yield event
+        finally:
+            owned, self._owned_http = self._owned_http, None
+            if owned is not None:
+                # The history client holds the closed transport; drop it so a later
+                # events() call rebuilds both rather than reusing a dead client.
+                self._history = None
+                await owned.aclose()
+
+    async def _events(
         self,
         watchlist_provider: WatchlistProvider,
         *,
@@ -1012,6 +1295,7 @@ class HeliusTransactionStream:
                         item, signature = self._notification_item(result)
                         event_slot = int(result["slot"])
                         last_slot = max(last_slot or event_slot, event_slot)
+                        relevant: list[tuple[str, WalletTransaction]] = []
                         for wallet in snapshot.addresses:
                             transaction = normalize_wallet_transaction(
                                 item,
@@ -1028,13 +1312,44 @@ class HeliusTransactionStream:
                                 and not transaction.token_deltas
                             ):
                                 continue
+                            relevant.append((wallet, transaction))
+                        if not relevant:
+                            continue
+
+                        # One resolution per notification, not per watched wallet: a
+                        # notification relevant to several wallets is still one slot,
+                        # and a failing slot must not multiply its retries.
+                        block_time = relevant[0][1].block_time
+                        if block_time is None:
+                            block_time = await self._block_time(event_slot)
+                        if block_time is None:
+                            self._defect_count += 1
+                            LOGGER.warning(
+                                "Helius stream defect: no block time for slot %s (%s); "
+                                "defects so far: %s",
+                                event_slot,
+                                signature,
+                                self._defect_count,
+                            )
+                            yield StreamEvent(
+                                kind="defect",
+                                watchlist_version=snapshot.version,
+                                reason=f"{DEFECT_BLOCK_TIME_UNRESOLVED}:{signature}",
+                                last_observed_slot=last_slot,
+                            )
+                            continue
+                        for wallet, transaction in relevant:
                             if not self._remember(wallet, signature):
                                 continue
                             yield StreamEvent(
                                 kind="transaction",
                                 watchlist_version=snapshot.version,
                                 last_observed_slot=last_slot,
-                                transaction=transaction,
+                                transaction=(
+                                    transaction
+                                    if transaction.block_time is not None
+                                    else replace(transaction, block_time=block_time)
+                                ),
                             )
                     else:
                         yield StreamEvent(
