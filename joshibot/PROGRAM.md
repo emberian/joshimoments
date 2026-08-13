@@ -713,10 +713,17 @@ What this **changes**:
   volume, no durable price effect) reads in this frame as: *the operator can drive current through
   their own resistors.* Volume-linked income plus volume-driving capability is a feedback loop the
   desk owns end-to-end; the callout-latency machinery measures its gain.
-- **Identification we already own:** the scalper's ε-explored entries are propensity-logged randomized
-  current injections — the experiment the cross-impact literature cannot run (Capponi–Cont's
-  propagation-vs-common-flow confound dissolves under randomized injection). Impedance spectroscopy
-  fell out of infrastructure built for a different reason.
+- **Identification we already own — but the experiment is NOT ready to run.** The scalper's ε-explored
+  entries are propensity-logged randomized current injections — the design the cross-impact literature
+  cannot run (Capponi–Cont's propagation-vs-common-flow confound dissolves under randomized injection).
+  But its **power gate is uncomputed**, and the study shows why that bites: cluster pools print 3–46
+  times a *day*, so informative observations run one to two orders of magnitude below sample counts.
+  Computing the gate first is mandatory — skipping it is precisely the §4.1 failure mode.
+- **Analysis landmine, recorded before anyone steps on it:** the naive excursion-relaxation test on
+  curl (condition on |residual| > band, observe drift back) is **confounded by construction** — any
+  stationary series shows negative drift after conditioning on an exceedance. The discriminating
+  version is a *kink in the drift exactly at the band edge* (diode dead-zone geometry), not a sign
+  difference. studies/RESULT_circuit_model.md §8.2.
 
 What this does **not** change: the envelope and its theorem (an exposure cap quantified over all
 learners is exactly "no action sequence can overcharge the book"); the verification discipline of §3;
