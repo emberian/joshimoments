@@ -300,10 +300,26 @@ class Trade:
     pool: str | None = None
     fee_lamports: int = 0
     routed_via_frontend: bool | None = None
+    #: Every account that signed the transaction. Signing REQUIRES the private key, so a
+    #: shared signer set is strong evidence of shared custody — the highest-confidence
+    #: linkage available for entity resolution.
+    signers: tuple[str, ...] = ()
+    #: Who paid the fee. **This is NOT evidence of shared custody and must never be used as
+    #: a funding link.** Anyone can sponsor anyone's fee. The distinction is not academic:
+    #: in the live store a single sponsor touched both watched wallets, so merging on
+    #: fee-payer would have fused our own sentinel with a third-party KOL into one entity —
+    #: a closed loop feeding every downstream signal — and a fan-out/degree rule does not
+    #: catch it, because the fan-out was 2. Only the type of the edge catches it.
+    fee_payer: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mint", _mint(self.mint))
         object.__setattr__(self, "wallet", _mint(self.wallet, field="wallet"))
+        object.__setattr__(
+            self, "signers", tuple(_mint(s, field="signers") for s in self.signers)
+        )
+        if self.fee_payer is not None:
+            object.__setattr__(self, "fee_payer", _mint(self.fee_payer, field="fee_payer"))
         object.__setattr__(
             self,
             "sol_delta_lamports",
@@ -337,6 +353,10 @@ class Trade:
             out["pool"] = self.pool
         if self.routed_via_frontend is not None:
             out["routed_via_frontend"] = self.routed_via_frontend
+        if self.signers:
+            out["signers"] = list(self.signers)
+        if self.fee_payer is not None:
+            out["fee_payer"] = self.fee_payer
         return out
 
 
@@ -696,6 +716,8 @@ def _body_from_json(kind: EventKind, raw: Mapping[str, Any]) -> Any:
             pool=raw.get("pool"),
             fee_lamports=parse_amount(raw.get("fee_lamports", 0), field="fee_lamports"),
             routed_via_frontend=raw.get("routed_via_frontend"),
+            signers=tuple(raw.get("signers") or ()),
+            fee_payer=raw.get("fee_payer"),
         )
     if kind is EventKind.RESERVE:
         return Reserves(

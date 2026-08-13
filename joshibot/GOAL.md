@@ -89,3 +89,12 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   ambiguity visible as a smaller n rather than confident noise. Also made the lowercase-address
   test a deterministic RATE test — a single case flaked on the minority that still decodes to
   32 bytes, which would have hidden the residual risk instead of measuring it.
+- 2026-08-13 — Signal #2 (funding-tree entity resolution): **NO-LINKS-AT-THIS-N** on the live
+  store (2 wallets wide), reported as the null it is. Its real-data finding is a false positive
+  it *refused*: the store's only linkage-shaped relation is fee-payer sponsorship, and one
+  sponsor touched both watched wallets — trusting it would have fused OUR OWN SENTINEL with a
+  third-party KOL into one entity. A fan-out rule does not catch that (fan-out 2); only the
+  typed edge does. 15/15 mutations killed, including one that tunes the generator to flatter
+  the resolver. Pair precision 1.000 at every hub threshold — the knobs buy recall, never
+  errors. Contract updated in response: `Trade` now carries `signers` (custody evidence) and
+  `fee_payer` (explicitly NOT custody), which was its #1 next experiment.

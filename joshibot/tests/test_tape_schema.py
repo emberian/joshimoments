@@ -458,3 +458,48 @@ def test_a_callout_without_a_post_time_does_not_inherit_the_ingest_time() -> Non
     assert "posted_at" not in event.to_json()["body"]
     restored = event_from_json(json.loads(event.to_jsonl()))
     assert restored.body.posted_at is None
+
+
+# --- custody evidence vs fee sponsorship -------------------------------------------
+
+
+def test_a_signer_set_round_trips_because_it_is_custody_evidence() -> None:
+    """Signing requires the private key, so a shared signer set is the strongest link."""
+    a, b = _mint(), _mint()
+    event = TapeEvent(
+        kind=EventKind.TRADE,
+        observed_at="2026-08-13T00:00:00Z",
+        provenance=_prov(),
+        chain=_chain(),
+        body=_trade(wallet=a, signers=(a, b)),
+    )
+    restored = event_from_json(json.loads(event.to_jsonl()))
+    assert restored.body.signers == (a, b)
+
+
+def test_fee_payer_is_recorded_separately_from_the_signer_set() -> None:
+    """Sponsorship is NOT custody, and conflating them fuses unrelated actors.
+
+    In the live store one sponsor touched both watched wallets, so merging on fee-payer
+    would have fused our own sentinel with a third-party KOL into a single entity — a closed
+    loop feeding every downstream signal. A fan-out rule does not catch it (the fan-out was
+    2); only keeping the two relations in distinct fields does.
+    """
+    wallet, sponsor = _mint(), _mint()
+    trade = _trade(wallet=wallet, signers=(wallet,), fee_payer=sponsor)
+    body = trade.to_json()
+    assert body["fee_payer"] == sponsor
+    assert body["signers"] == [wallet]
+    assert sponsor not in body["signers"]
+
+
+def test_a_trade_without_custody_evidence_says_so_by_omission() -> None:
+    """An empty signer set must not be confused with a recorded singleton."""
+    body = _trade().to_json()
+    assert "signers" not in body
+    assert "fee_payer" not in body
+
+
+def test_a_malformed_signer_is_refused_rather_than_carried() -> None:
+    with pytest.raises(TapeError, match="signers"):
+        _trade(signers=("not-an-address",))
