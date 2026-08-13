@@ -190,8 +190,17 @@ dominate), unpooled 0.717 ± 0.139 (prior-dominated), **partial 0.742 ± 0.026 �
 sharper**.
 
 The name for why 3-token pooling produced incoherent signs: **Pesaran & Smith 1995** — pooling
-dynamic panels with heterogeneous slopes is inconsistent and misleading. Prescription is
-empirical-Bayes shrinkage toward a group mean (Huij & Verbeek: ~40% RMSE reduction on fund alphas).
+dynamic panels with heterogeneous slopes is inconsistent and misleading. (Their own prescription is the
+*mean-group estimator*; hierarchical/EB shrinkage is the Swamy random-coefficients route — a fine fix,
+but not the one P&S wrote.) Empirical-Bayes shrinkage buys **18.8% RMSE reduction on real fund alphas**
+(Huij & Verbeek Table 11: 1.12% → 0.91%, t = 9.98). The ~40% figure quoted in the first draft is from
+their *Monte Carlo*, where the data-generating process is exactly the estimator's assumed prior — the
+best case a correctly-specified prior can buy, not an empirical result. Note also that they shrink
+toward a **common** cross-sectional mean; the *group*-conditional variant this document prescribes is
+the one they tested and found marginal (0.26% → 0.28% top-decile alpha, "the benefits from using
+conditional priors are only marginal"). Shrinkage is applied to betas as well as alpha, and is stronger
+for short histories — at our record lengths a wallet is pulled essentially onto the group mean, so what
+this buys is **ranking across many units, not per-unit identification**.
 
 ---
 
@@ -315,7 +324,7 @@ credits/call.
 | 3 | **Callout → flow latency** | Intensity response on mint-resolved callouts vs hour-matched baseline, hierarchically pooled across tokens | store already collecting (28 mint-resolved/day) | Genuinely unexplored. Pipeline exists end-to-end; grok's eval ran n=0 only because events were never wired to the tape |
 | 4 | **Organic vs manufactured flow** | Union-find + position-netting + PnL-negativity + funding ancestry. Exclude same-slot atomics (MEV is the dominant false positive) | CPU once local | The classifier *is* the alpha — everyone can detect callouts; separating real from farmed is the edge |
 | 5 | **Deployer ancestry prior** | Creator history extended from "this creator" to "this creator's wallet cluster" via (2) | cheap | Only published variable that ever beat breakeven; undermined solely by small n, which clustering fixes |
-| 6 | **Per-wallet skill screen** | **Sign-randomization null** (re-run each wallet's exact sequence 10,000× with directions flipped), then Storey π₀ + BH over *entities* | CPU | Published benchmark: 3.14% skilled, **44% of skilled classifications persist OOS**. Beat or match that |
+| 6 | **Population skill *fraction*** (not a per-wallet screen — see §4.2) | Storey π̂₀ over a **jointly**-randomized null on a shared clock; report a proportion, not per-entity verdicts | CPU, but needs **breadth** | Rewritten. Both numbers in the original row were fabricated, and the per-entity framing is unsupported by its own sources |
 | 7 | **Rotation / attention flow** | `F[i,j,t]` = SOL moved token i→j through shared wallets; cluster tokens by wallet overlap; lead-lag on flow | moderate | Direct observation, no inference needed — the thing equities must estimate, we can read |
 | 8 | **Rug model** | MELT recipe: pre-migration behavioral + bundle features → GBM, chronological split | moderate | Calibrate to AUPRC ≈0.58 and a still-negative naive backtest |
 | 9 | **Metaorder reconstruction** | Splitter-vs-random wallet classification; measure `P(L) ∝ L^{−α−1}`, check `γ = α−1` | moderate | Took nine years of privileged exchange access to do once (PRL 2023). Public firehose here. Unpublished in this domain |
@@ -384,6 +393,76 @@ wash-trading signature, so adopting it verbatim would discard the thing we most 
 predictive test (it defers that to a companion paper), and only 7 of its 30 largest clusters show any
 validated compositional signature. It establishes that coordinated groups are *detectable*. It
 establishes nothing about whether detecting them pays.
+
+### 4.2 Signal #6, rewritten against Barras/Scaillet/Wermers, Fama–French, and Huij–Verbeek
+
+The original row cited "3.14% skilled, 44% of skilled classifications persist OOS." **Neither number
+exists in any of the three papers.** "3.14" appears twice in Fama–French Table IV — once as a
+percent-of-simulations count, once as an average simulated t(α) — both unrelated to a skilled
+proportion. "44%" appears nowhere; the nearest real figures are a 36.7–55.9% *portfolio turnover*
+retention (funds re-selected by the same rule a year later, on an 80%-overlapping formation window —
+not out-of-sample persistence of a classification) and **41.5%, which is the achieved FDR: the fraction
+of the portfolio that *are* false discoveries.** We had cited the failure rate as if it were the
+success rate.
+
+**The real benchmark, stated honestly.** Barras' headline is **75.4% zero-alpha, 24.0% unskilled, 0.6%
+skilled** — and of that 0.6% they write it is *"statistically indistinguishable from zero"* and that
+they *"cannot reject that all of the right tail funds are merely lucky."* The flagship application of
+this technique returns a **null**. Their FDR portfolio earns 1.45%/yr out-of-sample while holding 41.5%
+false members, retains 36.7% of picks after one year and under 6% after three, and its edge
+*"consistently declines"* to nothing by the mid-2000s. That is the bar — worth knowing before writing
+"beat or match" next to it.
+
+**Why the per-wallet framing has to go.** Power in this literature comes from **M (cross-sectional
+breadth), never from T**, and it buys a *population parameter* — π₀ or σ — not per-entity verdicts.
+Fama–French say it outright: *"The source of the power is our large sample of funds."* Neither paper
+claims to identify an individual skilled fund; Barras explicitly decline to. So the defensible version
+of #6 is **"what fraction of wallets are skilled"**, which is cheap and well-supported — and which
+requires exactly the breadth §4's "not worth it" list rules out on cost. **That contradiction is
+unresolved and must be resolved before this signal is built.**
+
+**Four ways the sign-randomization null breaks, in severity order:**
+
+1. **Cross-wallet dependence — the failure mode Barras name as unrecoverable.** They write that under
+   perfect herding "the p-value histogram would *not* converge... we would make serious errors no matter
+   where we set λ*." They escape only by measurement: mean residual correlation **0.08**, and 15% of
+   fund pairs share *zero* months. Wallets long the same token in the same minute are correlated ≈1 by
+   construction. Fama–French quantified the cost of ignoring joint structure: a significance statistic
+   falling from *">99% of runs"* to **68–82%** once months are sampled jointly, biasing inference
+   **toward false positive performance**. Independent per-wallet flips are the maximally wrong response.
+   Fix: randomize **jointly on a shared clock**, or block-permute the token's price path.
+2. **Discrete p-values break Storey.** π̂₀ needs a near-uniform histogram above λ*; a k-trade wallet has
+   2^k sign assignments (a 12-trade wallet floors at p ≈ 2.4e-4). π̂₀ is biased **up**, the skilled
+   proportion biased **down** — yielding an unfalsifiable "no skilled wallets" that is indistinguishable
+   from a true negative.
+3. **The null is not risk-adjusted.** Both papers measure alpha against a factor benchmark; π₀ is a
+   statement about a *residual*. Sign-flipping raw wallet PnL adjusts for nothing, so "everyone long a
+   token that went up" scores as skill in every long wallet. **We have never defined what a wallet's
+   alpha is relative to.** That is the prerequisite question.
+4. **Every sample-length floor is violated by an order of magnitude** — Barras ≥60 monthly obs,
+   Huij–Verbeek >12, Fama–French ≥8 (and they flag *8* as a tail-bias source). Our wallets have tens of
+   trades. Plus: flipping directions preserves timing exactly, so the test has power only against
+   *directional* skill and none against timing, sizing, or exit skill — which is where a memecoin edge
+   would actually live. And own-trade price impact (§1.4, `ρ_exit = B/Y`) means the flipped sequence is
+   not a realizable history at all.
+
+**Terminology.** "Storey π₀ + BH" misnames the method: Barras split two-sided p-values into tails
+(`F̂γ± = π̂₀γ/2`) and target a right-tail **FDR⁺**, explicitly *"an extension of the traditional FDR...
+since the latter does not distinguish between bad and good luck."* It is not BH, and calling it BH here
+collides with §4 #1's genuine BH-FDR, making two different methods read as one.
+
+**The deeper tension our first draft got backwards.** Fama–French never cite Barras — they pass in the
+night, both JF 2010, and the "dispute" is literature-level, not in-paper. The *live* disagreement is
+structural: Barras impose a **point mass at exactly α = 0** carrying π₀ ≈ 75%; Fama–French model true α
+as **continuous** (normal, σ ≈ 1.25%/yr pre-expense), under which the mass at exactly zero is zero and
+"75.4% are zero-alpha" is not a well-posed statement. Under a continuous truth, every small-but-real α
+produces near-uniform p-values and is **absorbed into π̂₀**. That is the low-power critique in its
+structural form, and it applies to any π₀-based screen we build. (They agree on the headline, though:
+net of costs skill is undetectable; pre-expense there is real dispersion in both tails.)
+
+**Unresolved, and worth a line in §3:** multiplicity is now accounted **twice and never composed** —
+§3 rule 9 counts trials over the DSL grammar, §4 #6 corrects FDR over entities. If a wallet screen feeds
+strategy selection, the trial counts *multiply* and neither correction covers the product.
 
 ---
 
