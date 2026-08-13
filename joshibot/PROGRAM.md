@@ -42,6 +42,12 @@ Independently corroborated by Marino §VII, which states the schedule from on-ch
 creators take **0.3% during the bonding-curve phase**, then a dynamic PumpSwap fee **"ranging from
 0.950% down to 0.050%"** as the token grows. Two unrelated sources, same inverse ladder — the hedge
 is a real property of the protocol, not an artifact of how we read the docs.
+**Measured correction (studies/RESULT_circuit_model.md §dissipation):** the operator's actual DREGG
+income against actual volume implies a realized creator take of **0.81–1.19%**, statistically
+excluding the 0.60% tier this section assumed. The income model above is therefore *conservative* —
+real coverage runs ~1.5–2× the tier-table figures. Why the realized rate exceeds the published tier
+(fee-structure change, bonding-curve component, or tier misread) is unresolved; the direction is
+favourable either way.
 **The fee stream is the business; trading is a research program funded by it, not a rent strategy.**
 
 ---
@@ -666,12 +672,24 @@ with no text layer (`lo-mackinlay-nonsynchronous-trading`, `lo-mackinlay-contrar
 
 The operator's circuit intuition reorganized the program, and the mapping is literal, not poetic:
 a CFMM pool is a nonlinear capacitor (reserves = charge, marginal price = voltage, `x·y=k` the V–Q
-curve); the token graph is a circuit (pools = edges, conductance ≈ liquidity/fee); no-arb is KVL with
-a dead band whose width is the fee sum around the cycle; exogenous order flow is EMF injection; a
-measured ratio half-life is an RC constant; and **fees are I²R dissipation**.
+curve); the token graph is a circuit (pools = edges); no-arb is KVL with a dead band whose width is
+the fee sum around the cycle; exogenous order flow is EMF injection; a measured ratio half-life is an
+RC constant.
 
-**The reorganizing sentence: everyone in this market predicts voltage; the money is in owning
-conductance.** It explains the audit trail in one line — every verified-then-collapsed signal
+**Corrected by the formalization (studies/RESULT_circuit_model.md, which derived rather than
+analogized):** three identities are exact — `C = w_x·w_y·TVL` (TVL/4 at 50/50, verified to 6 s.f.), a
+DLMM is strictly a *series battery-cell stack* (C = ∞ inside a bin, 0 at an edge, concentration factor
+`4/W ≈ 5–20×`), and the per-swap energy ledger closes to 94–98% with the gap being exactly the
+third-order term. But two of this section's original components were **wrong**: (i) fees are *not*
+I²R — dissipation is linear in |flow|, so the fee element is a **back-to-back diode pair**, and the
+no-trade band is literally the diode dead-zone; (ii) **liquidity sets capacitance, not conductance** —
+price displacement scales with accumulated charge (`V = Q/C`), not current. The only genuinely ohmic
+element is *behavioural* — arbitrageur response — and it is the model's single free parameter,
+identified rather than fitted via `R = τ/C` with both sides measured.
+
+**The reorganizing sentence, corrected: everyone in this market predicts voltage; the money is in
+owning the junctions.** Fee income is the diode forward-drop collected on every crossing — direction-
+indifferent, prediction-free. It explains the audit trail in one line — every verified-then-collapsed signal
 (§4.1–4.3, the SEISMIC retraction) was a voltage-prediction claim; every revenue stream that survives
 audit is a tax on current (creator fees, LP fees on token-token pools at 26–159%/day turnover,
 studies/RESULT_swing_cluster.md), indifferent to flow direction.
