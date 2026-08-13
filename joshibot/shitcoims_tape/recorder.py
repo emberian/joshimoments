@@ -24,9 +24,11 @@ what makes ``sol_delta`` reconcile exactly against the recorded reserves under t
 identity, with fees as a separate, additive term.
 
 **Non-SOL quote pools are skipped, not coerced.** Both pump and PumpSwap events carry a
-``quote_mint``. When it is not wrapped SOL, ``quote_amount``/``sol_amount`` are not lamports,
-and writing them into ``sol_delta_lamports`` would be a unit error of exactly the kind that
-cost this desk 7.47 SOL. Those events are counted and dropped.
+``quote_mint``. When it is not SOL, ``quote_amount``/``sol_amount`` are not lamports, and
+writing them into ``sol_delta_lamports`` would be a unit error of exactly the kind that cost
+this desk 7.47 SOL. Those events are counted and dropped. **SOL has two spellings**, though,
+and reading only one of them is how this module spent its first day recording zero
+bonding-curve trades — see :data:`SOL_QUOTE_MINTS`.
 
 Credit arithmetic (Helius Developer, $49/mo = 10M credits):
 
@@ -79,6 +81,28 @@ from shitcoims_tape.watch import WatchRegistry
 LOGGER = logging.getLogger("shitcoims.tape.recorder")
 
 WRAPPED_SOL_MINT: Final[str] = "So11111111111111111111111111111111111111112"
+
+#: pump.fun names native SOL with the ALL-ZERO pubkey (the System Program) in its bonding-curve
+#: events, and with wrapped SOL only once a PumpSwap pool exists. Treating the zero pubkey as
+#: "some other token" is not a small miss: measured on real mainnet history, **every** curve
+#: TradeEvent on a 2026 pump.fun mint carries it, so the recorder dropped 42 of 42 and 69 of 69
+#: trades on the two mints it was first caught on and recorded nothing at all for the entire
+#: bonding-curve phase — the phase that holds Marino/Lillo's median 457 curve swaps and every
+#: sniper.
+#:
+#: The identification is corroborated by two sources that do not share a code path with Helius:
+#: the zero pubkey is Solana's System Program, the canonical marker for native lamports, and
+#: pump.fun's own public listing reports ``quote_decimals: 9`` for these mints together with
+#: ``virtual_quote_reserves == virtual_sol_reserves`` and ``real_quote_reserves ==
+#: real_sol_reserves``. It is also checked against chain directly in
+#: ``tests/test_tape_recorder.py``: a recorded curve trade's ``sol_delta_lamports`` must
+#: reconcile with the trader's own lamport delta, which is only true if the quote is lamports.
+NATIVE_SOL_MINT: Final[str] = "11111111111111111111111111111111"
+
+#: The quote mints whose amounts are lamports. Anything else is a real unit change and stays
+#: refused: writing a non-SOL quote amount into ``sol_delta_lamports`` is precisely the class
+#: of unit error that cost this desk 7.47 SOL.
+SOL_QUOTE_MINTS: Final[frozenset[str]] = frozenset({WRAPPED_SOL_MINT, NATIVE_SOL_MINT})
 
 #: One page of ``getTransactionsForAddress`` is <=100 transactions at 10 credits per 100.
 CREDITS_PER_TRANSACTION_PAGE: Final[int] = 10
@@ -175,9 +199,14 @@ def resolve_pool_facts(
     replaying real transactions: 27 of 27 decoded AMM trades were dropped as unattributed.
 
     The pool holds a token account per side, and jsonParsed balances name the owner and mint of
-    each, so the pair is recoverable with no extra RPC. Fails closed: anything other than
-    exactly two distinct mints, one of them wrapped SOL, returns ``None`` rather than a guess —
-    attributing a trade to the wrong mint is worse than not recording it.
+    each, so the pair is recoverable with no extra RPC. Fails closed: anything it cannot pin
+    down returns ``None`` rather than a guess — attributing a trade to the wrong mint is worse
+    than not recording it.
+
+    A **native-SOL** pool holds no wrapped-SOL token account at all, so it shows exactly one
+    owned mint. That alone is not enough to conclude the other side is SOL (a two-token pool
+    whose second balance is simply absent from this transaction looks identical), so the quote
+    is only called native when the pool's OWN lamport balance moved in this same transaction.
     """
     meta = transaction.get("meta")
     if not isinstance(meta, Mapping):
@@ -195,10 +224,61 @@ def resolve_pool_facts(
             mint = balance.get("mint")
             if isinstance(mint, str):
                 mints.add(mint)
-    if len(mints) != 2 or WRAPPED_SOL_MINT not in mints:
-        return None
-    base = next(mint for mint in mints if mint != WRAPPED_SOL_MINT)
-    return base, WRAPPED_SOL_MINT
+    if len(mints) == 2 and WRAPPED_SOL_MINT in mints:
+        base = next(mint for mint in mints if mint != WRAPPED_SOL_MINT)
+        return base, WRAPPED_SOL_MINT
+    if len(mints) == 1 and WRAPPED_SOL_MINT not in mints and _lamports_moved(transaction, pool):
+        return next(iter(mints)), NATIVE_SOL_MINT
+    return None
+
+
+def _account_keys(transaction: Mapping[str, Any]) -> list[str]:
+    """Every account in balance order: static keys, then writable then readonly lookups.
+
+    ``preBalances``/``postBalances`` are indexed over that concatenation, so resolving an
+    address to a balance requires reassembling it in exactly this order.
+    """
+    inner = transaction.get("transaction")
+    message = inner.get("message") if isinstance(inner, Mapping) else None
+    raw = message.get("accountKeys") if isinstance(message, Mapping) else None
+    keys: list[str] = []
+    if isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
+        for key in raw:
+            pubkey = key.get("pubkey") if isinstance(key, Mapping) else key
+            keys.append(pubkey if isinstance(pubkey, str) else "")
+    meta = transaction.get("meta")
+    loaded = meta.get("loadedAddresses") if isinstance(meta, Mapping) else None
+    if isinstance(loaded, Mapping):
+        for group in ("writable", "readonly"):
+            addresses = loaded.get(group)
+            if isinstance(addresses, Sequence) and not isinstance(addresses, str | bytes):
+                keys.extend(a if isinstance(a, str) else "" for a in addresses)
+    return keys
+
+
+def _lamports_moved(transaction: Mapping[str, Any], address: str) -> bool:
+    """Did this address's own lamport balance change in this transaction?"""
+
+    meta = transaction.get("meta")
+    if not isinstance(meta, Mapping):
+        return False
+    pre, post = meta.get("preBalances"), meta.get("postBalances")
+    if not isinstance(pre, Sequence) or not isinstance(post, Sequence):
+        return False
+    if isinstance(pre, str | bytes) or isinstance(post, str | bytes):
+        return False
+    keys = _account_keys(transaction)
+    if address not in keys:
+        return False
+    index = keys.index(address)
+    if index >= len(pre) or index >= len(post):
+        return False
+    before, after = pre[index], post[index]
+    if isinstance(before, bool) or isinstance(after, bool):
+        return False
+    if not isinstance(before, int) or not isinstance(after, int):
+        return False
+    return before != after
 
 
 def extract_custody(transaction: Mapping[str, Any]) -> Custody:
@@ -318,6 +398,11 @@ class RecorderCounters:
     graduations: int = 0
     deaths: int = 0
     non_sol_quote_skipped: int = 0
+    #: Trades whose quote was SOL under the ALL-ZERO spelling. Counted separately so the
+    #: volume flowing through that identification is visible rather than assumed: if it ever
+    #: goes to zero on live data the convention changed again, and if it ever carries a mint
+    #: whose amounts are NOT lamports the error is loud instead of silent.
+    native_sol_quote_trades: int = 0
     unattributed_pool_skipped: int = 0
     pools_resolved_from_balances: int = 0
     rejected_by_schema: int = 0
@@ -341,6 +426,7 @@ class RecorderCounters:
             "graduations": self.graduations,
             "deaths": self.deaths,
             "non_sol_quote_skipped": self.non_sol_quote_skipped,
+            "native_sol_quote_trades": self.native_sol_quote_trades,
             "unattributed_pool_skipped": self.unattributed_pool_skipped,
             "pools_resolved_from_balances": self.pools_resolved_from_balances,
             "rejected_by_schema": self.rejected_by_schema,
@@ -713,9 +799,12 @@ class TapeRecorder:
         custody: Custody = NO_CUSTODY,
     ) -> int:
         fields = decoded.fields
-        if _pubkey(fields, "quote_mint") != WRAPPED_SOL_MINT:
+        quote_mint = _pubkey(fields, "quote_mint")
+        if quote_mint not in SOL_QUOTE_MINTS:
             self._counters.non_sol_quote_skipped += 1
             return 0
+        if quote_mint == NATIVE_SOL_MINT:
+            self._counters.native_sol_quote_trades += 1
         mint = _pubkey(fields, "mint")
         is_buy = bool(fields.get("is_buy"))
         sol_amount = _u64(fields, "sol_amount")
@@ -782,7 +871,7 @@ class TapeRecorder:
         self._pool_facts[pool] = PoolFacts(
             base_mint=_pubkey(fields, "base_mint"), quote_mint=_pubkey(fields, "quote_mint")
         )
-        if _pubkey(fields, "quote_mint") != WRAPPED_SOL_MINT:
+        if _pubkey(fields, "quote_mint") not in SOL_QUOTE_MINTS:
             self._counters.non_sol_quote_skipped += 1
             return 0
         return self._write_reserves(
@@ -819,9 +908,11 @@ class TapeRecorder:
             # every per-token statistic downstream.
             self._counters.unattributed_pool_skipped += 1
             return 0
-        if facts.quote_mint != WRAPPED_SOL_MINT:
+        if facts.quote_mint not in SOL_QUOTE_MINTS:
             self._counters.non_sol_quote_skipped += 1
             return 0
+        if facts.quote_mint == NATIVE_SOL_MINT:
+            self._counters.native_sol_quote_trades += 1
         is_buy = decoded.event_name == "BuyEvent"
         if is_buy:
             token_amount = _u64(fields, "base_amount_out")
@@ -994,6 +1085,8 @@ def graduation_seconds(opened_at: str, closed_at: str) -> float:
 __all__ = [
     "CREDITS_PER_ENHANCED_CALL",
     "CREDITS_PER_TRANSACTION_PAGE",
+    "NATIVE_SOL_MINT",
+    "SOL_QUOTE_MINTS",
     "WRAPPED_SOL_MINT",
     "AttributedLog",
     "AttributedLogs",
@@ -1006,4 +1099,5 @@ __all__ = [
     "WatchClose",
     "attribute_program_data",
     "graduation_seconds",
+    "resolve_pool_facts",
 ]

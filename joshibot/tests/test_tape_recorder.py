@@ -8,8 +8,10 @@ recorder bug.
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -832,3 +834,147 @@ def test_a_witnessed_pool_creation_is_not_overwritten_by_balance_inference() -> 
     )
     assert recorder._pool_facts[pool].base_mint == truth
     assert recorder._counters.pools_resolved_from_balances == 0
+
+
+# --- native SOL: the second spelling ------------------------------------------------
+
+
+NATIVE_SOL_FIXTURE = Path(__file__).parent / "fixtures" / "pump_native_sol_curve_trade.json"
+
+
+def test_a_real_native_sol_curve_trade_is_recorded_and_its_amount_really_is_lamports() -> None:
+    """A REAL mainnet transaction, checked in, because this bug was invisible to every fake.
+
+    pump.fun spells native SOL as the ALL-ZERO pubkey in bonding-curve events and as wrapped
+    SOL only once a PumpSwap pool exists. Reading one spelling dropped every curve trade on
+    every modern mint — 42 of 42 and 69 of 69 on the first two mints it was caught on — so the
+    recorder produced trades only for the post-migration phase and silently recorded nothing
+    for the bonding curve, where Marino/Lillo's median 457 swaps and every sniper live.
+
+    The assertion that matters is the last one. Accepting a new quote-mint spelling is exactly
+    the move that writes a foreign token's base units into ``sol_delta_lamports``, so the unit
+    is checked against the chain rather than asserted: the trader's own lamport delta, read
+    from this transaction's ``preBalances``/``postBalances``, must agree with the recorded
+    ``sol_delta_lamports`` net of the event's declared fees and rebate. It agrees to 349,103
+    lamports on a 0.267 SOL sell — 0.13%, the transaction fee and tip. A quote denominated in
+    anything else would be out by orders of magnitude, not by a tip.
+    """
+
+    transaction = json.loads(NATIVE_SOL_FIXTURE.read_text())
+    sink, recorder = build()
+
+    recorder.record_transaction(transaction)
+
+    trades = [event.body for event in sink.of(EventKind.TRADE)]
+    assert len(trades) == 1
+    trade = trades[0]
+    assert isinstance(trade, Trade)
+    assert trade.side is Side.SELL
+    assert trade.sol_delta_lamports == 267_360_722
+    assert trade.fee_lamports == 3_809_890
+    assert recorder.counters.native_sol_quote_trades == 1
+    assert recorder.counters.non_sol_quote_skipped == 0
+    # No reserve reading: TradeEvent carries no bonding-curve address (see the pinned layout),
+    # so the curve is known only from a witnessed CreateEvent. Reading this one transaction in
+    # isolation therefore has nowhere to file the depth, and the recorder counts that rather
+    # than filing it under a guessed pool.
+    assert sink.of(EventKind.RESERVE) == []
+    assert recorder.counters.unattributed_pool_skipped == 1
+
+    keys = [key["pubkey"] for key in transaction["transaction"]["message"]["accountKeys"]]
+    index = keys.index(trade.wallet)
+    observed = (
+        transaction["meta"]["postBalances"][index]
+        - transaction["meta"]["preBalances"][index]
+    )
+    # cashback is a rebate rather than a fee, which is why the recorder excludes it from
+    # `fee_lamports` and why it has to be added back here.
+    expected = trade.sol_delta_lamports - trade.fee_lamports + 802_083
+    unexplained = expected - observed
+    assert 0 <= unexplained <= expected // 100, (expected, observed)
+
+
+def test_a_quote_mint_that_is_not_sol_at_all_is_still_refused() -> None:
+    """The fix widens the SOL spelling; it must not widen the unit check."""
+
+    mint, wallet, curve = _mint(), _mint(), _mint()
+    usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    sink, recorder = build()
+    recorder.record_transaction(
+        transaction(pump_logs(("CreateEvent", _create_values(mint, wallet, curve))))
+    )
+    recorder.record_transaction(
+        transaction(
+            pump_logs(
+                ("TradeEvent", _trade_values(mint, wallet, is_buy=True, quote_mint=usdc))
+            ),
+            slot=1001,
+            signature="4" * 88,
+        )
+    )
+    assert sink.of(EventKind.TRADE) == []
+    assert recorder.counters.non_sol_quote_skipped == 1
+    assert recorder.counters.native_sol_quote_trades == 0
+
+
+def test_a_native_sol_pool_is_resolved_only_when_its_own_lamports_moved() -> None:
+    """A native-SOL pool holds one token account, so one owned mint is ambiguous on its own.
+
+    A two-token pool whose second balance simply does not appear in this transaction looks
+    identical, and calling that second side SOL would price a trade in the wrong unit. The
+    pool's own lamport movement is the corroboration, and without it this fails closed.
+    """
+    from shitcoims_tape.recorder import NATIVE_SOL_MINT, resolve_pool_facts
+
+    pool, base, other = "P" * 32, "B" * 32, "C" * 32
+    moved = {
+        "transaction": {"message": {"accountKeys": [{"pubkey": other}, {"pubkey": pool}]}},
+        "meta": {
+            "postTokenBalances": [{"owner": pool, "mint": base}],
+            "preBalances": [5, 1_000_000],
+            "postBalances": [5, 1_500_000],
+        },
+    }
+    assert resolve_pool_facts(moved, pool) == (base, NATIVE_SOL_MINT)
+
+    still = {
+        "transaction": {"message": {"accountKeys": [{"pubkey": other}, {"pubkey": pool}]}},
+        "meta": {
+            "postTokenBalances": [{"owner": pool, "mint": base}],
+            "preBalances": [5, 1_000_000],
+            "postBalances": [5, 1_000_000],
+        },
+    }
+    assert resolve_pool_facts(still, pool) is None
+
+    absent = {
+        "transaction": {"message": {"accountKeys": [{"pubkey": other}]}},
+        "meta": {
+            "postTokenBalances": [{"owner": pool, "mint": base}],
+            "preBalances": [5],
+            "postBalances": [9],
+        },
+    }
+    assert resolve_pool_facts(absent, pool) is None
+
+
+def test_lookup_table_addresses_are_indexed_after_the_static_keys() -> None:
+    """``preBalances`` spans static keys then writable then readonly lookups, in that order.
+
+    Getting the concatenation wrong reads some other account's balance and answers a question
+    about the pool with a stranger's lamports.
+    """
+    from shitcoims_tape.recorder import _lamports_moved
+
+    pool = "P" * 32
+    tx = {
+        "transaction": {"message": {"accountKeys": [{"pubkey": "A" * 32}]}},
+        "meta": {
+            "loadedAddresses": {"writable": ["W" * 32], "readonly": [pool]},
+            "preBalances": [1, 2, 3],
+            "postBalances": [1, 2, 7],
+        },
+    }
+    assert _lamports_moved(tx, pool) is True
+    assert _lamports_moved(tx, "W" * 32) is False
+    assert _lamports_moved(tx, "A" * 32) is False
