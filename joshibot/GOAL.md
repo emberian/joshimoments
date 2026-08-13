@@ -46,3 +46,12 @@ unblocked and swarmable, because a lane can be handed real signatures instead of
   "cannot sell" corrected to "cannot sell directly" (it can write a rule that causes a later
   sale); `lots.py` grace comment no longer describes the deleted fabrication. `policy_to_mapping`
   float exception documented with the condition under which it must be split.
+- 2026-08-13 — Track C: the kernel is now load-bearing, not a parallel document. `@[export]`
+  C ABI (`joshi_sell_out`, `joshi_accepts`) with a proof that narrowing back to UInt64 is
+  lossless — `sellOut_le_reserve` is what licenses the signature. Shipped as `joshi-oracle`
+  (macOS dylib linking dropped the objects; the executable is lake-supported and robust).
+  `shitcoims_kernel/` is the Python binding: an authoritative subprocess oracle plus a fast
+  path for replay, held to exact agreement by 15 parity tests over adversarial sizes and 600
+  random pools. Falsified with two transcription bugs (dropped denominator term; round vs
+  floor — the latter only diverges at scale, which is the class that silently corrupts a
+  backtest). Parity tests skipping is now itself a gate failure.

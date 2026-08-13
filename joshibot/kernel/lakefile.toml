@@ -8,3 +8,9 @@ defaultTargets = ["Joshi"]
 
 [[lean_lib]]
 name = "Joshi"
+
+# The oracle binary. Lets the Python side be differential-tested against the artifact these
+# proofs are about, instead of against a second implementation that happens to agree today.
+[[lean_exe]]
+name = "joshi-oracle"
+root = "Oracle"

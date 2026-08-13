@@ -46,6 +46,7 @@ files = [
   "shitcoims_sentinel/transaction.py",
   "shitcoims_sentinel/domain.py",
   "shitcoims_tape",
+  "shitcoims_kernel",
 ]
 warn_unused_configs = true
 warn_redundant_casts = true
@@ -57,7 +58,7 @@ check_untyped_defs = true
 # The execution path and the tape contract are held to the full standard. These are the two
 # places where a wrong type is money or a corrupt study rather than an inconvenience.
 [[tool.mypy.overrides]]
-module = ["shitcoims_sentinel.executor", "shitcoims_sentinel.transaction", "shitcoims_tape.*"]
+module = ["shitcoims_sentinel.executor", "shitcoims_sentinel.transaction", "shitcoims_tape.*", "shitcoims_kernel.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true

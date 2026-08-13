@@ -41,6 +41,14 @@ else
   tail -25 /tmp/joshi-pytest.log; bad "pytest"
 fi
 
+# A skipped parity test hides Python/Lean drift exactly as well as no test at all.
+step "kernel parity did not skip"
+if grep -qE '[0-9]+ skipped' /tmp/joshi-pytest.log; then
+  grep -E '[0-9]+ skipped' /tmp/joshi-pytest.log; bad "tests skipped (is the lean oracle built?)"
+else
+  ok "no skipped tests"
+fi
+
 step "dashboard (tsc + eslint + render tests)"
 if npm test >/tmp/joshi-npm.log 2>&1; then
   ok "typecheck, lint and render tests pass"
@@ -49,8 +57,8 @@ else
 fi
 
 step "lean kernel"
-if (cd kernel && lake build) >/tmp/joshi-lake.log 2>&1; then
-  ok "kernel builds"
+if (cd kernel && lake build && lake build joshi-oracle) >/tmp/joshi-lake.log 2>&1; then
+  ok "kernel and oracle build"
 else
   tail -20 /tmp/joshi-lake.log; bad "lake build"
 fi
