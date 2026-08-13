@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -184,6 +184,11 @@ class PanelReport:
     page_cap: int
     gaps: tuple[str, ...]
     outcomes: tuple[MintOutcome, ...]
+    #: The recorder's own tally of everything it chose not to write, and why. Carried on the
+    #: report because a panel that silently discards a whole class of event -- a quote-mint
+    #: spelling, an unattributed pool -- produces a well-formed tape with a hole in it, and
+    #: the only place that hole is visible is here.
+    counters: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -200,6 +205,7 @@ class PanelReport:
             "window_seconds": self.window_seconds,
             "page_cap": self.page_cap,
             "gaps": list(self.gaps),
+            "counters": dict(self.counters),
             "outcomes": [outcome.to_json() for outcome in self.outcomes],
         }
 
@@ -390,6 +396,7 @@ async def collect_panel(
         page_cap=page_cap,
         gaps=tuple(gaps),
         outcomes=tuple(outcomes),
+        counters=recorder.counters.to_json(),
     )
 
 

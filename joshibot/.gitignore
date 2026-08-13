@@ -39,6 +39,9 @@ yarn-error.log*
 /outputs/
 /work/
 
+# recorded tape + its frames: data, not code. Findings go to studies/, bytes stay here.
+/tape/
+
 # shitcoims sentinel: local secrets, policy, and runtime artifacts
 /config.yaml
 /state/
