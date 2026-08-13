@@ -333,6 +333,58 @@ raw top-10 holder share; PnL leaderboards (several top-10 wallets in Marino's da
 bonding-curve imitation penalty alone, before MEV — and adversaries deliberately build
 profitable-looking wallets to bait copiers. Any follow-the-wallet strategy must clear that gap.
 
+### 4.1 Signal #1, corrected against Tumminello (arXiv:1107.3942)
+
+The first draft of the row above was written from a summary. Reading the paper broke it in four places,
+and one of them was arithmetic.
+
+**The power calculation was never in the paper.** Tumminello contains *no* power analysis at all — no
+MDE, no sample-size calculation. The "overlap ≥5 → p ≈ 3e-6–5e-11" figure was our own construction, and
+its conclusion was **false**. Bonferroni at `pt = 0.01` over `10⁶` pairs with nine tests each is
+`0.01/(9·10⁶) = 1.1e-9`. The quoted `3e-6` misses that by ~2,700×; only the `5e-11` end — two wallets on
+exactly 5 of 300 tokens overlapping on all five, i.e. the single most favourable configuration in the
+range — clears. Worse, `10⁶` pairs is only ~1,415 wallets. Signal #2 plans **50k**, giving 1.1e10 tests
+and a threshold of `8.9e-13`, while the *minimum attainable* p for a 5-of-300 pair is `5.1e-11`. **At
+that scope no such pair can ever validate, regardless of the data.** Pairs grow as n²; the claim did not
+survive one order of magnitude.
+
+The honest form is a feasibility gate, checkable before spending anything:
+
+```
+C(T, N) ≥ 9·n(n−1) / (2α)          T = tokens, N = tokens per wallet, n = wallets
+```
+
+And "overlap ≥5" is not a criterion in the first place — significance depends on `λ = Ni·Nj/T`. For the
+*active bot wallets we actually want*, the rule inverts: two wallets each on 100 of 300 tokens have
+λ = 33, so an overlap of 5 is **under**-expressed, p ≈ 1.
+
+**Three method errors.** (i) It is **nine typed tests per pair**, not one — a 3-state variable (buy /
+sell / both) crossed with itself, which is exactly where Bonferroni's ×9 comes from. (ii) **Union-find
+is not in the paper and does not work**: connected components give one blob holding 99.6% of the FDR
+network and 81% of the Bonferroni network. Clustering is **weighted Infomap**, weights = count of
+validated co-occurrences (1–3). (iii) `T` is **pair-specific** — the intersection of the two actors'
+activity periods, defined by holding *anything*, not by activity in the studied asset. Using a global T
+for a short-lived wallet inflates significance, and short-lived wallets are our whole population.
+
+**The blocking risk, and it is not small.** The hypergeometric null assumes roughly uniform marginals
+across the index; the paper justifies this explicitly because Nokia's daily state counts fluctuate over
+"a range smaller than one decade" (§3). Memecoin activity is a launch spike with power-law decay —
+*several* decades — and token popularity is heavy-tailed. Under a non-uniform baseline the
+hypergeometric massively overstates significance: everything co-occurs in the first minutes by
+construction, the null validates nearly every pair, and the output is a dense meaningless network.
+**A stratified or configuration-model null is a precondition, not a refinement.**
+
+**What we should steal that we had missed.** The paper carries a *second* hypergeometric layer for
+over/under-expression of cluster attributes — precisely the tool for "is this cluster over-expressed in
+rugs, in sniper labels, in one deployer's tokens," and it is also the paper's only real validation.
+Also note the recipe **removes opposite-action links before clustering**; for us those are the likeliest
+wash-trading signature, so adopting it verbatim would discard the thing we most want to see.
+
+**Finally, calibrate expectations:** this paper does *no* economic validation — no returns, no PnL, no
+predictive test (it defers that to a companion paper), and only 7 of its 30 largest clusters show any
+validated compositional signature. It establishes that coordinated groups are *detectable*. It
+establishes nothing about whether detecting them pays.
+
 ---
 
 ## 5. The envelope

@@ -1,9 +1,0 @@
-{"plugins": [],
- "package": "joshi",
- "options": {},
- "name": "Joshi.Dsl",
- "isModule": false,
- "importArts":
- {"Joshi.History":
-  [["~/dev/joshibot/kernel/.lake/build/lib/lean/Joshi/History.olean"]]},
- "dynlibs": []}
