@@ -1,0 +1,10 @@
+name = "joshi"
+defaultTargets = ["Joshi"]
+
+# NO mathlib, on purpose. This kernel is integer arithmetic over lamports and raw base
+# units plus a few inductive types; there is no analysis here. Lean core keeps `lake build`
+# at seconds instead of an hour, so the proofs stay checkable by anyone with a clone —
+# which is the whole point of putting the decision core in Lean rather than in Rust.
+
+[[lean_lib]]
+name = "Joshi"

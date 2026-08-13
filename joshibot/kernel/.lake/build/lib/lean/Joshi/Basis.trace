@@ -1,0 +1,29 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["a1b3bdf8027093e3.olean"],
+  "m": false,
+  "i": "0039a457a884e4af.ilean",
+  "c": "e73f43d5a0dc3518.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=~/dev/joshibot/kernel/.lake/build/lib/lean ~/.elan/toolchains/leanprover--lean4---v4.33.0/bin/lean ~/dev/joshibot/kernel/Joshi/Basis.lean -o ~/dev/joshibot/kernel/.lake/build/lib/lean/Joshi/Basis.olean -i ~/dev/joshibot/kernel/.lake/build/lib/lean/Joshi/Basis.ilean -c ~/dev/joshibot/kernel/.lake/build/ir/Joshi/Basis.c --setup ~/dev/joshibot/kernel/.lake/build/ir/Joshi/Basis.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["deps",
+   [["joshi/Joshi:extraDep", [["@joshi:extraDep", "00000000000006bb"]]],
+    ["imports", "00000000000006bb"]]],
+  ["libs",
+   [["import dynlibs", "00000000000006bb"],
+    ["package external libraries", "00000000000006bb"],
+    ["module dynlibs", "00000000000006bb"],
+    ["module plugins", "00000000000006bb"]]],
+  ["Lean 4.33.0, commit d8b18978322de05a8f3dba51ef03cf5461676c17",
+   "3eca9d16ab6c877d"],
+  ["~/dev/joshibot/kernel/Joshi/Basis.lean", "2fba6ea0879569ac"],
+  ["options", "00000000000006bb"],
+  ["isModule: false", "feefd2a0d3a1847e"],
+  ["Module.name: Joshi.Basis", "7ae50fb2f7185d47"],
+  ["Package.id?: (some joshi)", "d6a3211ab8875afb"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "7cdd55eb11402c38"}

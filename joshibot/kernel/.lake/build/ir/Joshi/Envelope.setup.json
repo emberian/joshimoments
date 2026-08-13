@@ -1,0 +1,9 @@
+{"plugins": [],
+ "package": "joshi",
+ "options": {},
+ "name": "Joshi.Envelope",
+ "isModule": false,
+ "importArts":
+ {"Joshi.Fill":
+  [["~/dev/joshibot/kernel/.lake/build/lib/lean/Joshi/Fill.olean"]]},
+ "dynlibs": []}
