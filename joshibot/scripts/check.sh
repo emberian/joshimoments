@@ -88,6 +88,9 @@ import Joshi
 #print axioms Joshi.toStrategy_reads_only_the_visible_prefix
 #print axioms Joshi.exposure_bounded
 #print axioms Joshi.admitted_spend_within_pool
+#print axioms Joshi.Dlmm.outAmount_le_holdings
+#print axioms Joshi.Dlmm.outAmount_never_overpays
+#print axioms Joshi.Dlmm.powQ64_zero
 #print axioms Joshi.run_exposure_conserved
 #print axioms Joshi.exposure_monotone_of_entries
 #print axioms Joshi.capacity_recoverable
