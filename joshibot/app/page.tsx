@@ -1,14 +1,21 @@
-import { Activity, CandlestickChart, Gauge, History as HistoryIcon, Radar, Shield } from "lucide-react";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  Activity,
+  CandlestickChart,
+  CircuitBoard,
+  Gauge,
+  History as HistoryIcon,
+  Radar,
+  Shield,
+} from "lucide-react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-import { Lamp } from "@/components/desk";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { loadPolicies, loadSnapshot } from "@/lib/api";
-import { deskBags, feeTank, gateLamps, parseSol, protectionTone } from "@/lib/desk";
-import { loadIntelligence } from "@/lib/intelligence";
-import type { IntelligenceSnapshot, Policy, Snapshot, ViewId } from "@/lib/types";
-import { age, cn, number, shortAddress } from "@/lib/utils";
+import { Lamp, StatusPill } from "@/components/instrument";
+import { NowProvider } from "@/components/now";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { gateLamps, protectionTone, snapshotOf, useDesk } from "@/lib/desk";
+import { cn, relativeAge, shortAddress } from "@/lib/format";
+import type { ViewId } from "@/lib/types";
+import { Circuit } from "@/views/circuit";
 import { History } from "@/views/history";
 import { Intelligence } from "@/views/intelligence";
 import { Markets } from "@/views/markets";
@@ -17,25 +24,25 @@ import { Performance } from "@/views/performance";
 import { Positions } from "@/views/positions";
 
 const NAV: { id: ViewId; label: string; hint: string; icon: typeof Gauge }[] = [
-  { id: "overview", label: "Watch", hint: "1", icon: Gauge },
-  { id: "positions", label: "Bags", hint: "2", icon: Shield },
-  { id: "markets", label: "Chart", hint: "3", icon: CandlestickChart },
-  { id: "intelligence", label: "Wire", hint: "4", icon: Radar },
-  { id: "history", label: "Tape", hint: "5", icon: HistoryIcon },
-  { id: "performance", label: "Ledger", hint: "6", icon: Activity },
+  { id: "desk", label: "Desk", hint: "1", icon: Gauge },
+  { id: "bags", label: "Positions", hint: "2", icon: Shield },
+  { id: "chart", label: "Price", hint: "3", icon: CandlestickChart },
+  { id: "circuit", label: "Circuit", hint: "4", icon: CircuitBoard },
+  { id: "tape", label: "Tape", hint: "5", icon: HistoryIcon },
+  { id: "ledger", label: "Ledger", hint: "6", icon: Activity },
+  { id: "wire", label: "Wire", hint: "7", icon: Radar },
 ];
 
 const VIEW_IDS = new Set<ViewId>(NAV.map((item) => item.id));
 
 function parseHash(hash: string): { view: ViewId; selectedMint: string | null } {
   const raw = hash.startsWith("#") ? hash.slice(1) : hash;
-  if (!raw) return { view: "overview", selectedMint: null };
+  if (!raw) return { view: "desk", selectedMint: null };
   const slash = raw.indexOf("/");
   const id = (slash === -1 ? raw : raw.slice(0, slash)) as ViewId;
   const rest = slash === -1 ? "" : raw.slice(slash + 1);
-  const view = VIEW_IDS.has(id) ? id : "overview";
-  const selectedMint = view === "markets" && rest ? rest : null;
-  return { view, selectedMint };
+  const view = VIEW_IDS.has(id) ? id : "desk";
+  return { view, selectedMint: view === "chart" && rest ? rest : null };
 }
 
 function hashFor(view: ViewId, mint?: string | null) {
@@ -47,63 +54,32 @@ function subscribeHash(onStoreChange: () => void) {
   return () => window.removeEventListener("hashchange", onStoreChange);
 }
 
-function getHash() {
-  return window.location.hash;
-}
-
-function getServerHash() {
-  return "";
-}
+const getHash = () => window.location.hash;
+const getServerHash = () => "";
 
 export default function Home() {
   const hash = useSyncExternalStore(subscribeHash, getHash, getServerHash);
   const { view, selectedMint } = parseHash(hash);
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [policies, setPolicies] = useState<Policy[]>([]);
-  const [intel, setIntel] = useState<IntelligenceSnapshot | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(0);
-  const [copied, setCopied] = useState(false);
+  const desk = useDesk();
+  const snapshot = snapshotOf(desk.snapshot);
 
   const go = useCallback((next: ViewId, mint?: string | null) => {
     window.location.hash = hashFor(next, mint);
   }, []);
 
-  const refresh = useCallback(async () => {
-    const [sentinel, policyPage, intelligence] = await Promise.allSettled([
-      loadSnapshot(),
-      loadPolicies(),
-      loadIntelligence(),
-    ]);
-    if (sentinel.status === "fulfilled") {
-      setSnapshot(sentinel.value);
-      setError(null);
-    } else {
-      setError("local API unavailable");
-    }
-    if (policyPage.status === "fulfilled") setPolicies(policyPage.value.items);
-    if (intelligence.status === "fulfilled") setIntel(intelligence.value);
-  }, []);
-
-  useEffect(() => {
-    const kickoff = window.setTimeout(() => {
-      setNow(Date.now());
-      void refresh();
-    }, 0);
-    const poll = window.setInterval(() => void refresh(), 4_000);
-    const clock = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => {
-      window.clearTimeout(kickoff);
-      window.clearInterval(poll);
-      window.clearInterval(clock);
-    };
-  }, [refresh]);
-
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
       const index = Number(event.key) - 1;
       if (index >= 0 && index < NAV.length) {
         event.preventDefault();
@@ -111,123 +87,153 @@ export default function Home() {
       }
       if (event.key === "r" || event.key === "R") {
         event.preventDefault();
-        void refresh();
+        desk.refresh();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, refresh]);
+  }, [go, desk]);
 
   const system = snapshot?.system;
-  const bags = deskBags(snapshot);
+  const gates = gateLamps(system?.gate_failures ?? []);
+  const closed = gates.filter((gate) => gate.closed).length;
   const unprotected = snapshot?.unmonitored.length ?? 0;
-  const tank = feeTank(snapshot?.wallet.sol);
-  const gatesClosed = gateLamps(system?.gate_failures ?? []).filter((gate) => gate.closed).length;
-  const tone = protectionTone(system?.protection_state);
 
   return (
-    <div className="flex min-h-svh">
-      <aside className="flex w-60 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-        <div className="px-5 pb-4 pt-6">
-          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-primary/80">Local night watch</p>
-          <h1 className="font-display mt-1 text-[1.65rem] font-medium leading-none">
-            shitcoims
-            <span className="text-muted-foreground"> / sentinel</span>
-          </h1>
-        </div>
-        <nav className="flex flex-1 flex-col gap-0.5 px-3">
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            const active = view === item.id;
-            return (
-              <Button
-                key={item.id}
-                variant="ghost"
-                className={cn(
-                  "h-10 justify-start gap-3 rounded-lg px-3 font-medium",
-                  active && "bg-sidebar-accent text-sidebar-accent-foreground",
+    <NowProvider value={desk.now}>
+    <TooltipProvider delayDuration={120} skipDelayDuration={300}>
+      <div className="flex min-h-svh flex-col">
+        <header className="sticky top-0 z-40 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
+          <div className="flex items-center gap-2">
+            <Lamp
+              tone={protectionTone(system?.protection_state)}
+              live={Boolean(system?.running)}
+              title={system?.protection_state}
+            />
+            <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em]">
+              shitcoims
+              <span className="text-muted-foreground">/console</span>
+            </span>
+          </div>
+
+          <nav className="flex flex-wrap items-center gap-0.5">
+            {NAV.map((item) => {
+              const Icon = item.icon;
+              const active = view === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => go(item.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[11px] uppercase tracking-wider",
+                    active
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {item.label}
+                  <span className="text-[9px] opacity-50">{item.hint}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {desk.snapshot.state === "error" && (
+              <StatusPill
+                label="api down"
+                tone="bad"
+                help="The sentinel is not answering. Nothing on screen is current."
+              />
+            )}
+            {system && (
+              <>
+                <StatusPill
+                  label={system.protection_state}
+                  tone={protectionTone(system.protection_state)}
+                />
+                <StatusPill
+                  label={closed === 0 ? "gates open" : `${closed}/3 closed`}
+                  tone={closed === 0 ? "warn" : "ok"}
+                  help={
+                    closed === 0
+                      ? "All three live gates are open: the sentinel can sign and submit sell-only exits on its own cycle. This console still cannot."
+                      : `${closed} gate(s) closed — no sell can be constructed.`
+                  }
+                />
+                {unprotected > 0 && (
+                  <StatusPill label={`${unprotected} unprotected`} tone="bad" />
                 )}
-                onClick={() => go(item.id)}
-              >
-                <Icon className={cn("size-4", active ? "text-primary" : "text-muted-foreground")} />
-                <span>{item.label}</span>
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">{item.hint}</span>
-              </Button>
-            );
-          })}
-        </nav>
-        <div className="space-y-3 border-t border-sidebar-border p-4 text-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span>Wallet</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  cycle {relativeAge(system.last_cycle_at, desk.now)}
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {shortAddress(system.wallet_address, 4, 4)}
+                </span>
+              </>
+            )}
+            <StatusPill
+              label="view only"
+              tone="idle"
+              help="This browser holds no key, signs nothing, and submits nothing. Its only write is a policy rule into config.yaml, which the sentinel reads on its own cycle and is free to ignore."
+            />
             <button
-              className="font-mono text-primary"
-              onClick={() => {
-                if (!system?.wallet_address) return;
-                void navigator.clipboard.writeText(system.wallet_address);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1200);
-              }}
+              type="button"
+              onClick={desk.refresh}
+              className="rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider hover:bg-muted"
             >
-              {copied ? "copied" : shortAddress(system?.wallet_address ?? "")}
+              refresh
             </button>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Book</span>
-            <span className="font-mono tnum">{number(snapshot?.wallet.portfolio_exit_sol, 3)} SOL</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Gas</span>
-            <span className={cn("font-mono tnum", tank !== "ok" && "text-lamp-warn")}>
-              {number(snapshot?.wallet.sol, 3)}
-            </span>
-          </div>
-          {system?.mode === "live" ? (
-            <Badge variant="warning">signer armed</Badge>
-          ) : (
-            <Badge variant="destructive">CANNOT EXECUTE</Badge>
-          )}
-          <p className="font-mono text-[10px] text-muted-foreground/70">1–6 to move · R to refresh</p>
-        </div>
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between gap-4 border-b px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <Lamp tone={tone} live={Boolean(system?.running)} />
-            <Badge variant={system?.protection_state === "LIVE_ARMED" ? "default" : tone === "bad" ? "destructive" : "warning"}>
-              {system?.protection_state ?? "STARTING"}
-            </Badge>
-            <span className="truncate text-xs text-muted-foreground">
-              {system?.last_cycle_at ? `cycle ${age(system.last_cycle_at, now)}` : "awaiting first sweep"}
-              {unprotected > 0 ? ` · ${unprotected} unprotected` : ""}
-              {` · ${gatesClosed} gates closed`}
-              {parseSol(snapshot?.wallet.sol) != null ? ` · ${number(snapshot?.wallet.sol, 3)} SOL gas` : ""}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden font-mono text-[10px] text-muted-foreground sm:inline">
-              {bags.length} bag{bags.length === 1 ? "" : "s"}
-            </span>
-            <Button size="sm" variant="outline" onClick={() => void refresh()}>
-              Refresh
-            </Button>
-          </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-6">
-          {error && (
-            <p className="mb-4 text-sm text-destructive">{error}. Start the local Python sentinel on port 8787.</p>
+
+        <main className="min-w-0 flex-1 p-3">
+          {view === "desk" && (
+            <Overview snapshot={desk.snapshot} now={desk.now} onChanged={desk.refresh} />
           )}
-          {view === "overview" && (
-            <Overview snapshot={snapshot} policies={policies} intel={intel} now={now} onChanged={() => void refresh()} onChart={(mint) => go("markets", mint)} onBags={() => go("positions")} />
+          {view === "bags" && (
+            <Positions
+              snapshot={desk.snapshot}
+              policies={desk.policies}
+              now={desk.now}
+              onChanged={desk.refresh}
+              onChart={(mint) => go("chart", mint)}
+            />
           )}
-          {view === "positions" && (
-            <Positions snapshot={snapshot} policies={policies} onChanged={() => void refresh()} onChart={(mint) => go("markets", mint)} />
+          {view === "chart" && (
+            <Markets
+              snapshot={desk.snapshot}
+              selectedMint={selectedMint}
+              onSelect={(mint) => go("chart", mint)}
+            />
           )}
-          {view === "markets" && <Markets snapshot={snapshot} selectedMint={selectedMint} />}
-          {view === "intelligence" && <Intelligence intel={intel} now={now} />}
-          {view === "history" && <History now={now} />}
-          {view === "performance" && <Performance />}
+          {view === "circuit" && (
+            <Circuit
+              netmap={desk.netmap}
+              now={desk.now}
+              onRefresh={desk.refreshNetmap}
+              loading={desk.netmapLoading}
+            />
+          )}
+          {view === "tape" && (
+            <History events={desk.events} trades={desk.trades} now={desk.now} />
+          )}
+          {view === "ledger" && (
+            <Performance performance={desk.performance} trades={desk.trades} now={desk.now} />
+          )}
+          {view === "wire" && <Intelligence intel={desk.intel} now={desk.now} />}
         </main>
+
+        <footer className="border-t border-border px-4 py-1.5">
+          <p className="font-mono text-[10px] text-muted-foreground">
+            1–7 switch view · R refresh · hover any figure for its source, both clocks, sample size
+            and caveats
+          </p>
+        </footer>
       </div>
-    </div>
+    </TooltipProvider>
+    </NowProvider>
   );
 }

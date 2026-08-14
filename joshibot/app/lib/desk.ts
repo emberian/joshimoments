@@ -1,29 +1,186 @@
-import type { ExitStyle, Policy, Snapshot } from "./types";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  EVENTS_PATH,
+  PERFORMANCE_PATH,
+  POLICIES_PATH,
+  SNAPSHOT_PATH,
+  TRADES_PATH,
+  load,
+  loadEvents,
+  loadPerformance,
+  loadPolicies,
+  loadSnapshot,
+  loadTrades,
+  type Loaded,
+} from "./api";
+import { loadIntelligence } from "./intelligence";
+import { loadNetmap, type NetMapLoad } from "./netmap";
+import { clockOf, type Clock, type Origin } from "./measure";
+import type {
+  EventRow,
+  ExitStyle,
+  IntelligenceSnapshot,
+  Performance,
+  Policy,
+  Snapshot,
+  TradeRow,
+} from "./types";
 
 export const FEE_TANK_SOL = 0.02;
 
-export type DeskBag = {
-  mint: string;
-  name: string;
-  ui_amount: string;
-  exit_sol: string | null;
-  kind: "protected" | "observe";
-  pnl_pct: string | null;
-  unit_price_sol: string | null;
-  trailing_peak_unit_price_sol: string | null;
-  trailing_active: boolean;
-  exit_style: ExitStyle | null;
-  floor_multiple: string | null;
-  scale_rungs_fired: string[];
-  decision: string;
-  decision_reason: string;
-  rug_emergency: boolean;
-  rug_reason: string | null;
-  liquidity_usd: string | null;
-  mint_revoked: boolean | null;
-  errors: string[];
-  stop_live: boolean;
+/** Fast plane: the protection loop's own state. */
+const FAST_MS = 4_000;
+/** Slow plane: history and aggregates that do not move every cycle. */
+const SLOW_MS = 15_000;
+
+export type Desk = {
+  snapshot: Loaded<Snapshot>;
+  policies: Loaded<{ items: Policy[]; can_execute: false }>;
+  performance: Loaded<Performance>;
+  events: Loaded<{ items: EventRow[] }>;
+  trades: Loaded<{ items: TradeRow[] }>;
+  intel: IntelligenceSnapshot | null;
+  netmap: NetMapLoad;
+  now: number;
+  refresh: () => void;
+  refreshNetmap: () => void;
+  netmapLoading: boolean;
 };
+
+export function useDesk(): Desk {
+  const [snapshot, setSnapshot] = useState<Loaded<Snapshot>>({
+    state: "loading",
+    source: SNAPSHOT_PATH,
+  });
+  const [policies, setPolicies] = useState<Loaded<{ items: Policy[]; can_execute: false }>>({
+    state: "loading",
+    source: POLICIES_PATH,
+  });
+  const [performance, setPerformance] = useState<Loaded<Performance>>({
+    state: "loading",
+    source: PERFORMANCE_PATH,
+  });
+  const [events, setEvents] = useState<Loaded<{ items: EventRow[] }>>({
+    state: "loading",
+    source: EVENTS_PATH,
+  });
+  const [trades, setTrades] = useState<Loaded<{ items: TradeRow[] }>>({
+    state: "loading",
+    source: TRADES_PATH,
+  });
+  const [intel, setIntel] = useState<IntelligenceSnapshot | null>(null);
+  const [netmap, setNetmap] = useState<NetMapLoad>({ state: "loading" });
+  const [netmapLoading, setNetmapLoading] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const mounted = useRef(true);
+
+  const refreshFast = useCallback(async () => {
+    const [snap, pol] = await Promise.all([
+      load(loadSnapshot, SNAPSHOT_PATH),
+      load(loadPolicies, POLICIES_PATH),
+    ]);
+    if (!mounted.current) return;
+    setSnapshot(snap);
+    setPolicies(pol);
+  }, []);
+
+  const refreshSlow = useCallback(async () => {
+    const [perf, ev, tr, intelligence] = await Promise.all([
+      load(loadPerformance, PERFORMANCE_PATH),
+      load(() => loadEvents(300), EVENTS_PATH),
+      load(() => loadTrades(300), TRADES_PATH),
+      loadIntelligence(),
+    ]);
+    if (!mounted.current) return;
+    setPerformance(perf);
+    setEvents(ev);
+    setTrades(tr);
+    setIntel(intelligence);
+  }, []);
+
+  const refreshNetmap = useCallback(async () => {
+    setNetmapLoading(true);
+    const next = await loadNetmap();
+    if (!mounted.current) return;
+    setNetmap(next);
+    setNetmapLoading(false);
+  }, []);
+
+  const refresh = useCallback(() => {
+    void refreshFast();
+    void refreshSlow();
+  }, [refreshFast, refreshSlow]);
+
+  useEffect(() => {
+    mounted.current = true;
+    // Deferred by a tick so the first paint is the loading state rather than a
+    // synchronous cascade out of the effect body.
+    const kickoff = window.setTimeout(() => {
+      void refreshFast();
+      void refreshSlow();
+      void refreshNetmap();
+    }, 0);
+    const fast = window.setInterval(() => void refreshFast(), FAST_MS);
+    const slow = window.setInterval(() => void refreshSlow(), SLOW_MS);
+    const clock = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(kickoff);
+      window.clearInterval(fast);
+      window.clearInterval(slow);
+      window.clearInterval(clock);
+    };
+  }, [refreshFast, refreshSlow, refreshNetmap]);
+
+  return {
+    snapshot,
+    policies,
+    performance,
+    events,
+    trades,
+    intel,
+    netmap,
+    now,
+    refresh,
+    refreshNetmap: () => void refreshNetmap(),
+    netmapLoading,
+  };
+}
+
+export function snapshotOf(loaded: Loaded<Snapshot>): Snapshot | null {
+  return loaded.state === "ok" ? loaded.fetched.data : null;
+}
+
+/**
+ * The clock pair for anything served inside a snapshot: the engine's own
+ * `generated_at` is the closest thing to event time it publishes, and the
+ * browser's receipt is ingest time.
+ */
+export function snapshotClock(loaded: Loaded<Snapshot>): Clock {
+  if (loaded.state !== "ok") return clockOf(null, null);
+  return clockOf(loaded.fetched.data.generated_at, loaded.fetched.receivedAt);
+}
+
+export function loadedClock<T>(loaded: Loaded<T>, eventAt?: string | null): Clock {
+  if (loaded.state !== "ok") return clockOf(null, null);
+  return clockOf(eventAt ?? null, loaded.fetched.receivedAt);
+}
+
+export function originOf<T>(
+  loaded: Loaded<T>,
+  path: string,
+  clock: Clock,
+  extra: Partial<Origin> = {},
+): Origin {
+  return {
+    source: loaded.state === "loading" ? loaded.source : loaded.state === "error" ? loaded.source : loaded.fetched.source,
+    path,
+    kind: "served",
+    clock,
+    ...extra,
+  };
+}
 
 export type GateLamp = {
   id: string;
@@ -32,78 +189,10 @@ export type GateLamp = {
   detail: string;
 };
 
-export function parseSol(value: string | number | null | undefined): number | null {
-  if (value == null || value === "") return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function exitStyleOf(value: string | null | undefined): ExitStyle | null {
-  if (value === "fixed_trail" || value === "runner") return value;
-  return null;
-}
-
-export function deskBags(snapshot: Snapshot | null): DeskBag[] {
-  if (!snapshot) return [];
-  const protectedRows = snapshot.positions.map((row) => ({
-    mint: row.mint,
-    name: row.name,
-    ui_amount: row.ui_amount,
-    exit_sol: row.exit_sol ?? null,
-    kind: "protected" as const,
-    pnl_pct: row.pnl_pct ?? null,
-    unit_price_sol: row.unit_price_sol ?? null,
-    trailing_peak_unit_price_sol: row.trailing_peak_unit_price_sol ?? null,
-    trailing_active: Boolean(row.trailing_active),
-    exit_style: exitStyleOf(row.thresholds?.exit_style),
-    floor_multiple: row.runner?.floor_multiple ?? null,
-    scale_rungs_fired: row.runner?.scale_rungs_fired ?? [],
-    decision: row.decision,
-    decision_reason: row.decision_reason,
-    rug_emergency: Boolean(row.rug?.emergency),
-    rug_reason: null,
-    liquidity_usd: row.pool?.liquidity_usd ?? null,
-    mint_revoked: row.mint_safety ? row.mint_safety.mint_authority == null : null,
-    errors: row.errors ?? [],
-    stop_live: row.stop_live !== false,
-  }));
-  const observeRows = snapshot.unmonitored.map((row) => ({
-    mint: row.mint,
-    name: row.name,
-    ui_amount: row.ui_amount,
-    exit_sol: row.exit_sol ?? null,
-    kind: "observe" as const,
-    pnl_pct: null,
-    unit_price_sol: null,
-    trailing_peak_unit_price_sol: null,
-    trailing_active: false,
-    exit_style: null,
-    floor_multiple: null,
-    scale_rungs_fired: [],
-    decision: "observe",
-    decision_reason: "no policy",
-    rug_emergency: Boolean(row.rug?.emergency),
-    rug_reason: row.rug?.reason ?? null,
-    liquidity_usd: row.pool?.liquidity_usd ?? null,
-    mint_revoked: null,
-    errors: row.errors ?? [],
-    stop_live: true,
-  }));
-  return [...protectedRows, ...observeRows].sort((left, right) => {
-    return (parseSol(right.exit_sol) ?? 0) - (parseSol(left.exit_sol) ?? 0);
-  });
-}
-
-export function bookTotalSol(bags: DeskBag[]): number {
-  return bags.reduce((sum, bag) => sum + (parseSol(bag.exit_sol) ?? 0), 0);
-}
-
-export function shareOfBook(bag: DeskBag, total: number): number | null {
-  const exit = parseSol(bag.exit_sol);
-  if (exit == null || total <= 0) return null;
-  return (exit / total) * 100;
-}
-
+/**
+ * The three live gates. All must be open before a sell can exist, and this UI
+ * can open none of them — it has no route that touches any.
+ */
 export function gateLamps(failures: string[]): GateLamp[] {
   const text = failures.join(" · ").toLowerCase();
   return [
@@ -111,28 +200,27 @@ export function gateLamps(failures: string[]): GateLamp[] {
       id: "enabled",
       label: "execution.enabled",
       closed: text.includes("execution.enabled"),
-      detail: "config execution.enabled is false",
+      detail: "config.yaml execution.enabled is false. Set in the file the sentinel reads at boot.",
     },
     {
       id: "live",
       label: "--live",
       closed: text.includes("--live"),
-      detail: "process was not started with --live",
+      detail: "The sentinel process was not started with --live. Process argv, not config.",
     },
     {
       id: "arm",
       label: "arm file",
       closed: text.includes("arm file") || text.includes("live arm"),
-      detail: "arm file absent or pubkey mismatch",
+      detail: "The 0600 arm file is absent or its pubkey does not match the loaded signer.",
     },
   ];
 }
 
-export function feeTank(sol: string | null | undefined): "ok" | "low" | "empty" {
-  const value = parseSol(sol);
-  if (value == null) return "empty";
-  if (value <= 0) return "empty";
-  if (value < FEE_TANK_SOL) return "low";
+export function feeTank(sol: number | null): "ok" | "low" | "empty" | "unknown" {
+  if (sol == null) return "unknown";
+  if (sol <= 0) return "empty";
+  if (sol < FEE_TANK_SOL) return "low";
   return "ok";
 }
 
@@ -143,84 +231,54 @@ export function protectionTone(state: string | undefined): "ok" | "warn" | "bad"
   return "warn";
 }
 
-export function stopFiresAt(exitSol: string | null | undefined, stopLossPct: number): number | null {
-  const exit = parseSol(exitSol);
-  if (exit == null || !Number.isFinite(stopLossPct)) return null;
-  return exit * (1 + stopLossPct / 100);
-}
-
 export function policyFor(policies: Policy[], mint: string): Policy | undefined {
   return policies.find((policy) => policy.mint === mint);
+}
+
+export function policiesOf(loaded: Loaded<{ items: Policy[]; can_execute: false }>): Policy[] {
+  return loaded.state === "ok" ? loaded.fetched.data.items : [];
 }
 
 export function isFixedTrail(style: string | null | undefined): boolean {
   return style === "fixed_trail";
 }
 
-export function formatMultiple(value: string | number | null | undefined, digits = 2): string | null {
-  const parsed = parseSol(value);
-  if (parsed == null) return null;
-  return `${parsed.toFixed(digits)}x`;
+export function exitStyleOf(value: string | null | undefined): ExitStyle | null {
+  if (value === "fixed_trail" || value === "runner") return value;
+  return null;
 }
 
-export function entryUnitPrice(policy: Policy | undefined, uiAmount: string | null | undefined): number | null {
+/**
+ * Entry unit price from a policy, or null.
+ *
+ * Returns null rather than guessing. A basis stamped from the current exit quote
+ * makes PnL start at 0% regardless of what was paid, which fired every stop
+ * below an already-fallen price; the absence of a basis is displayed, never
+ * filled in.
+ */
+export function entryUnitPrice(
+  policy: Policy | undefined,
+  uiAmount: string | null | undefined,
+): number | null {
   if (!policy) return null;
   if (policy.buy_price_sol != null && policy.buy_price_sol > 0) return policy.buy_price_sol;
-  const amount = parseSol(uiAmount);
-  if (policy.cost_basis_sol != null && policy.cost_basis_sol > 0 && amount != null && amount > 0) {
+  const amount = uiAmount == null ? null : Number(uiAmount);
+  if (
+    policy.cost_basis_sol != null &&
+    policy.cost_basis_sol > 0 &&
+    amount != null &&
+    Number.isFinite(amount) &&
+    amount > 0
+  ) {
     return policy.cost_basis_sol / amount;
   }
   return null;
 }
 
-export function runnerMultiples(
-  bag: Pick<DeskBag, "unit_price_sol" | "trailing_peak_unit_price_sol" | "pnl_pct" | "ui_amount" | "floor_multiple">,
-  policy?: Policy,
-): { peak: number | null; now: number | null; floor: number | null } {
-  const floor = parseSol(bag.floor_multiple);
-  const unit = parseSol(bag.unit_price_sol);
-  const peakUnit = parseSol(bag.trailing_peak_unit_price_sol);
-  const entry = entryUnitPrice(policy, bag.ui_amount);
-  if (unit != null && entry != null && entry > 0) {
-    const now = unit / entry;
-    const peak = peakUnit != null && peakUnit > 0 ? peakUnit / entry : now;
-    return { peak, now, floor };
-  }
-  const pnl = parseSol(bag.pnl_pct);
-  if (pnl != null) {
-    const now = 1 + pnl / 100;
-    const peak = unit != null && unit > 0 && peakUnit != null ? (peakUnit / unit) * now : now;
-    return { peak, now, floor };
-  }
-  return { peak: null, now: null, floor };
-}
-
-export function policyRuleLabel(policy: Policy | undefined, bag?: DeskBag): string {
+export function policyRuleLabel(policy: Policy | undefined): string {
   if (!policy) return "observe-only";
-  const sl = policy.stop_loss_pct;
-  const tp = policy.take_profit_pct;
-  if (isFixedTrail(policy.exit_style ?? bag?.exit_style)) {
-    return `SL ${sl}% · TP ${tp}% · trail ${policy.trailing_stop_pct}%`;
+  if (isFixedTrail(policy.exit_style)) {
+    return `SL ${policy.stop_loss_pct}% · TP ${policy.take_profit_pct}% · trail ${policy.trailing_stop_pct}%`;
   }
-  const floor = formatMultiple(bag?.floor_multiple);
-  if (floor) return `SL ${sl}% · arm +${tp}% · floor ${floor}`;
-  return `SL ${sl}% · arm +${tp}%`;
-}
-
-export function liveRunnerLine(bag: DeskBag, policy?: Policy): string | null {
-  if (bag.kind !== "protected" || isFixedTrail(policy?.exit_style ?? bag.exit_style)) return null;
-  const { peak, now, floor } = runnerMultiples(bag, policy);
-  if (peak != null && floor != null && now != null) {
-    return `peak ${formatMultiple(peak)} · floor ${formatMultiple(floor)} · now ${formatMultiple(now)}`;
-  }
-  return bag.decision_reason || null;
-}
-
-export function waitingGraduation(reason: string | null | undefined): boolean {
-  return Boolean(reason && reason.toLowerCase().includes("graduation"));
-}
-
-export function scaleRungsLabel(rungs: string[] | null | undefined): string | null {
-  if (!rungs?.length) return null;
-  return `scaled ${rungs.join(" · ")}`;
+  return `SL ${policy.stop_loss_pct}% · arm +${policy.take_profit_pct}% · trail ${policy.trailing_stop_pct}%`;
 }

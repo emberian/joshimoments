@@ -1,6 +1,6 @@
 import type { EvidenceClass, IntelEvidence, IntelligenceSnapshot } from "./types";
 
-const INTELLIGENCE_BASE_URL = "http://127.0.0.1:8788/api";
+export const INTELLIGENCE_BASE_URL = "http://127.0.0.1:8788/api";
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -66,12 +66,20 @@ export async function loadIntelligence(): Promise<IntelligenceSnapshot> {
     };
   });
   const runtime = record(health.runtime);
+  // Whether the service answered at all. Every counter below is null when it did
+  // not: a service that is not reachable has NOT reported zero collectors and
+  // zero items today, and rendering it as `0` was a measurement claim we could
+  // not make.
+  const reachable = results[0].status === "fulfilled" && results[0].value.ok;
+  const counter = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
   return {
+    reachable,
     service: {
-      status: health.healthy === true ? "healthy" : "degraded",
-      collectors_active: typeof runtime.collectors_active === "number" ? runtime.collectors_active : 0,
+      status: !reachable ? "unreachable" : health.healthy === true ? "healthy" : "degraded",
+      collectors_active: counter(runtime.collectors_active),
       last_cycle_at: text(runtime.last_cycle_at, "", 64) || null,
-      x_items_today: typeof runtime.x_items_today === "number" ? runtime.x_items_today : 0,
+      x_items_today: counter(runtime.x_items_today),
       cycle_in_progress: runtime.cycle_in_progress === true,
       last_cycle_partial: runtime.last_cycle_partial === true,
       last_error: text(runtime.last_error, "", 160) || null,
@@ -91,7 +99,7 @@ export async function loadIntelligence(): Promise<IntelligenceSnapshot> {
       return {
         id: text(value.id, `wl-${index}`, 40),
         name: text(value.name, "watchlist", 80),
-        member_count: typeof value.member_count === "number" ? value.member_count : 0,
+        member_count: counter(value.member_count),
       };
     }),
     candidates: (Array.isArray(candidatesPage.items) ? candidatesPage.items : []).slice(0, 24).map((raw) => {

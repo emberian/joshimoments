@@ -1,56 +1,158 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 
-import { BagCard, EmptyRoom, PageKicker, PageLede, PageTitle } from "@/components/desk";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
-import { deletePolicy, savePolicy } from "@/lib/api";
-import { bookTotalSol, deskBags, isFixedTrail, policyRuleLabel, shareOfBook, stopFiresAt } from "@/lib/desk";
-import type { Policy, Snapshot } from "@/lib/types";
-import { number, shortAddress } from "@/lib/utils";
+import { Explain, Figure } from "@/components/figure";
+import {
+  Absent,
+  Copyable,
+  Field,
+  FieldGrid,
+  Panel,
+  Scroller,
+  StatusPill,
+  Table,
+  Td,
+  Th,
+} from "@/components/instrument";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { deletePolicy, savePolicy, type Loaded } from "@/lib/api";
+import {
+  entryUnitPrice,
+  isFixedTrail,
+  originOf,
+  policiesOf,
+  policyRuleLabel,
+  snapshotClock,
+  snapshotOf,
+} from "@/lib/desk";
+import { cn, decimals, shortAddress, sol } from "@/lib/format";
+import { clockOf, fromDecimalString, unobserved, type Measured } from "@/lib/measure";
+import type { ExitStyle, Policy, PositionRow, Snapshot } from "@/lib/types";
 import { UnmonitoredBanner } from "@/views/overview";
 
+/**
+ * The rule an operator can edit.
+ *
+ * `cost_basis_sol` and `buy_price_sol` are STRUCTURALLY ABSENT from this type.
+ *
+ * The previous editor pre-filled `cost_basis_sol` with the bag's CURRENT EXIT
+ * QUOTE and PUT it unmodified. That makes PnL start at 0% by construction, so a
+ * "-30% stop" fires 30% below wherever the coin had already fallen to — the
+ * mechanism that cost this desk 7.47 SOL on 2026-08-12. The engine now derives
+ * basis from observed chain history, but a policy PUT carries origin="operator"
+ * and the claim path preserves `needs_basis`, so an operator-supplied number can
+ * be trusted without re-observation. The front end must therefore never be the
+ * thing standing between a fabricated number and the money path.
+ *
+ * Keeping the fields off this type means no market value can reach a basis by
+ * construction: a draft has nowhere to put one. Basis travels separately, in
+ * `Basis` below, and can only originate from the engine (round-tripped verbatim)
+ * or from a string a human deliberately typed.
+ */
+type RuleDraft = {
+  name: string;
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  trailing_stop_pct: number;
+  rug_exit: boolean;
+  dispose_after_break_even: boolean;
+  exit_style: ExitStyle;
+  floor_confirm_quotes: number;
+  hold_trail_until_graduated: boolean;
+};
+
+/**
+ * Where a cost basis is allowed to come from. There is deliberately no variant
+ * that derives one from a quote, a mark, or any other live market value.
+ */
+type Basis =
+  /** New rule: send nothing. The engine observes the real basis from chain. */
+  | { kind: "unset" }
+  /** Existing rule: pass the engine's own observed value straight back. */
+  | { kind: "engine"; cost_basis_sol: number | null; buy_price_sol: number | null }
+  /** An override a human typed into an empty field, on purpose. */
+  | { kind: "operator"; text: string };
+
+const DEFAULT_DRAFT: Omit<RuleDraft, "name"> = {
+  // Policy constants, not measurements. None of these derive from a quote.
+  stop_loss_pct: -30,
+  take_profit_pct: 100,
+  trailing_stop_pct: 20,
+  rug_exit: true,
+  dispose_after_break_even: false,
+  exit_style: "runner",
+  floor_confirm_quotes: 2,
+  hold_trail_until_graduated: true,
+};
+
+type Editing = {
+  mint: string;
+  draft: RuleDraft;
+  basis: Basis;
+  /** The basis as opened, so cancelling an override restores it rather than nulling it. */
+  original: Basis;
+  existing: boolean;
+};
+
 export function Positions({
-  snapshot,
-  policies,
+  snapshot: loaded,
+  policies: policyLoad,
+  now,
   onChanged,
   onChart,
 }: {
-  snapshot: Snapshot | null;
-  policies: Policy[];
+  snapshot: Loaded<Snapshot>;
+  policies: Loaded<{ items: Policy[]; can_execute: false }>;
+  now: number;
   onChanged: () => void;
   onChart: (mint: string) => void;
 }) {
-  const [editing, setEditing] = useState<Policy | null>(null);
+  const snapshot = snapshotOf(loaded);
+  const policies = policiesOf(policyLoad);
+  const clock = snapshotClock(loaded);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const byMint = useMemo(() => new Map(policies.map((policy) => [policy.mint, policy])), [policies]);
-  const bags = deskBags(snapshot);
-  const total = bookTotalSol(bags);
 
-  const openNew = (mint: string, name: string, exitSol?: string | null) => {
+  const openEditor = (mint: string, name: string) => {
     setError(null);
     const existing = byMint.get(mint);
     if (existing) {
-      setEditing({ ...existing, exit_style: existing.exit_style ?? "runner" });
+      const loadedBasis: Basis = {
+        kind: "engine",
+        cost_basis_sol: existing.cost_basis_sol ?? null,
+        buy_price_sol: existing.buy_price_sol ?? null,
+      };
+      setEditing({
+        mint,
+        existing: true,
+        original: loadedBasis,
+        draft: {
+          name: existing.name,
+          stop_loss_pct: existing.stop_loss_pct,
+          take_profit_pct: existing.take_profit_pct,
+          trailing_stop_pct: existing.trailing_stop_pct,
+          rug_exit: existing.rug_exit,
+          dispose_after_break_even: existing.dispose_after_break_even,
+          exit_style: existing.exit_style ?? "runner",
+          floor_confirm_quotes: existing.floor_confirm_quotes ?? 2,
+          hold_trail_until_graduated: existing.hold_trail_until_graduated ?? true,
+        },
+        // Round-trip the engine's own basis verbatim. Omitting it on a PUT would
+        // null an observed basis, which is its own kind of damage.
+        basis: loadedBasis,
+      });
       return;
     }
-    const quoted = exitSol == null || exitSol === "" ? Number.NaN : Number(exitSol);
     setEditing({
       mint,
-      name,
-      cost_basis_sol: Number.isFinite(quoted) ? quoted : null,
-      stop_loss_pct: -30,
-      take_profit_pct: 100,
-      trailing_stop_pct: 20,
-      rug_exit: true,
-      dispose_after_break_even: false,
-      exit_style: "runner",
-      floor_confirm_quotes: 2,
-      hold_trail_until_graduated: true,
+      existing: false,
+      draft: { name, ...DEFAULT_DRAFT },
+      // No basis is sent for a new rule. The rule is rug-only until the engine
+      // reconstructs the real basis from observed buys.
+      basis: { kind: "unset" },
+      original: { kind: "unset" },
     });
   };
 
@@ -60,8 +162,23 @@ export function Positions({
     setSaving(true);
     setError(null);
     try {
-      const { mint, ...body } = editing;
-      await savePolicy(mint, body);
+      const body: Omit<Policy, "mint"> = { ...editing.draft };
+      const basis = editing.basis;
+      if (basis.kind === "engine") {
+        // Exactly one of the two may be set; the server rejects both.
+        if (basis.buy_price_sol != null) body.buy_price_sol = basis.buy_price_sol;
+        else if (basis.cost_basis_sol != null) body.cost_basis_sol = basis.cost_basis_sol;
+      } else if (basis.kind === "operator") {
+        const typed = basis.text.trim();
+        if (typed !== "") {
+          const parsed = Number(typed);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error("cost basis must be a positive number of SOL, or left empty");
+          }
+          body.cost_basis_sol = parsed;
+        }
+      }
+      await savePolicy(editing.mint, body);
       setEditing(null);
       onChanged();
     } catch (err) {
@@ -71,181 +188,104 @@ export function Positions({
     }
   };
 
-  const previewExit = editing ? bags.find((bag) => bag.mint === editing.mint)?.exit_sol : null;
-  const fireAt = editing ? stopFiresAt(previewExit, editing.stop_loss_pct) : null;
+  if (loaded.state === "error") {
+    return (
+      <Panel title="Positions" source={loaded.source} tone="alert">
+        <Absent reason="error" detail={<p className="font-mono">{loaded.error}</p>} />
+      </Panel>
+    );
+  }
+  if (!snapshot) {
+    return (
+      <Panel title="Positions" source="/api/snapshot">
+        <Absent reason="loading" />
+      </Panel>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <PageKicker>Positions</PageKicker>
-        <PageTitle>Exit rules</PageTitle>
-        <PageLede>
-          Configure stop / runner floors / rug / dispose. Writes config.yaml only. Cannot execute. Cannot arm.
-        </PageLede>
-      </div>
+    <div className="space-y-3">
       <UnmonitoredBanner snapshot={snapshot} onChanged={onChanged} />
 
-      {bags.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {bags.map((bag) => {
-            const policy = byMint.get(bag.mint);
-            return (
-              <BagCard
-                key={bag.mint}
-                bag={bag}
-                share={shareOfBook(bag, total)}
-                policy={policy}
-                policyLabel={policyRuleLabel(policy, bag)}
-                onChart={() => onChart(bag.mint)}
-                onProtect={() => openNew(bag.mint, bag.name, bag.exit_sol)}
-                onDelete={
-                  policy
-                    ? async () => {
-                        setDeleting(bag.mint);
-                        try {
-                          await deletePolicy(bag.mint);
-                          onChanged();
-                        } finally {
-                          setDeleting(null);
-                        }
-                      }
-                    : undefined
-                }
-                deleting={deleting === bag.mint}
-                limits={
-                  policy ? (
-                    <InlineLimits
-                      key={`${policy.mint}-${policy.stop_loss_pct}-${policy.take_profit_pct}-${policy.trailing_stop_pct}-${policy.exit_style ?? "runner"}`}
-                      policy={policy}
-                      onCommit={async (next) => {
-                        const { mint, ...body } = next;
-                        await savePolicy(mint, body);
-                        onChanged();
-                      }}
-                    />
-                  ) : null
-                }
-              />
-            );
-          })}
-        </div>
-      ) : (
-        <EmptyRoom title="No holdings." lede="When a bag lands on shitcoims it will appear here, unprotected, until you write a rule." />
-      )}
+      <Panel
+        title={`Positions (${snapshot.positions.length})`}
+        source="/api/snapshot → positions[]"
+        clock={clock}
+        now={now}
+        note={
+          <>
+            Rules live in config.yaml. Editing one writes that file; the sentinel reads it on its own
+            cycle and decides for itself. This console holds no key and submits no transaction.
+          </>
+        }
+      >
+        {snapshot.positions.length === 0 ? (
+          <Absent reason="no-rows" detail="No configured positions." />
+        ) : (
+          <Scroller>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>position</Th>
+                  <Th>decision</Th>
+                  <Th align="right" hint="Wallet balance in UI units.">amount</Th>
+                  <Th align="right" hint="Full-balance Jupiter exit quote.">exit quote</Th>
+                  <Th align="right" hint="Requires an observed cost basis. Absent basis means no PnL, not 0%.">
+                    pnl
+                  </Th>
+                  <Th hint="The engine's observed basis. Never derived from a quote.">basis</Th>
+                  <Th>rule</Th>
+                  <Th>flags</Th>
+                  <Th />
+                </tr>
+              </thead>
+              <tbody>
+                {snapshot.positions.map((row) => (
+                  <PositionTableRow
+                    key={row.mint}
+                    row={row}
+                    policy={byMint.get(row.mint)}
+                    loaded={loaded}
+                    clock={clock}
+                    onEdit={() => openEditor(row.mint, row.name)}
+                    onChart={() => onChart(row.mint)}
+                    onDelete={
+                      byMint.has(row.mint)
+                        ? async () => {
+                            setDeleting(row.mint);
+                            try {
+                              await deletePolicy(row.mint);
+                              onChanged();
+                            } finally {
+                              setDeleting(null);
+                            }
+                          }
+                        : undefined
+                    }
+                    deleting={deleting === row.mint}
+                  />
+                ))}
+              </tbody>
+            </Table>
+          </Scroller>
+        )}
+      </Panel>
 
-      <Sheet open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
-        <SheetContent>
+      <Sheet open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+        <SheetContent className="max-w-xl overflow-y-auto">
           <SheetHeader>
-            <SheetTitle className="font-display text-2xl font-medium">{editing?.name ?? "Policy"}</SheetTitle>
-            <SheetDescription>Writes config.yaml only. Cannot execute. Cannot arm.</SheetDescription>
+            <SheetTitle className="font-mono text-sm uppercase tracking-wider">
+              {editing?.existing ? "Edit rule" : "New rule"} · {editing?.draft.name}
+            </SheetTitle>
           </SheetHeader>
           {editing && (
-            <form className="flex flex-1 flex-col gap-5 overflow-y-auto" onSubmit={submit}>
-              <div className="rounded-lg border bg-muted/30 p-3 font-mono text-[11px] text-muted-foreground">
-                {shortAddress(editing.mint)}
-              </div>
-              <Field label="Name">
-                <Input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} />
-              </Field>
-              <Field label="Cost basis SOL (total paid)">
-                <Input
-                  type="number"
-                  step="0.0001"
-                  value={editing.cost_basis_sol ?? ""}
-                  onChange={(event) =>
-                    setEditing({
-                      ...editing,
-                      cost_basis_sol: event.target.value === "" ? null : Number(event.target.value),
-                      buy_price_sol: null,
-                    })
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Leave empty for rug-only. Defaults to this bag&apos;s quoted exit when present — never a fake 0.1.
-                </p>
-              </Field>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-                <div className="pr-3">
-                  <Label htmlFor="exit-style">Runner lock-in floors</Label>
-                  <p className="text-[11px] text-muted-foreground">
-                    Off uses the old trail-%-of-peak leash.
-                  </p>
-                </div>
-                <Switch
-                  id="exit-style"
-                  checked={!isFixedTrail(editing.exit_style)}
-                  onCheckedChange={(on) =>
-                    setEditing({ ...editing, exit_style: on ? "runner" : "fixed_trail" })
-                  }
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="Stop %">
-                  <Input
-                    type="number"
-                    value={editing.stop_loss_pct}
-                    onChange={(event) => setEditing({ ...editing, stop_loss_pct: Number(event.target.value) })}
-                  />
-                </Field>
-                <Field label={isFixedTrail(editing.exit_style) ? "Take profit %" : "Arm runner at +%"}>
-                  <Input
-                    type="number"
-                    value={editing.take_profit_pct}
-                    onChange={(event) => setEditing({ ...editing, take_profit_pct: Number(event.target.value) })}
-                  />
-                </Field>
-                <Field label={isFixedTrail(editing.exit_style) ? "Trail %" : "Tightness"}>
-                  <Input
-                    type="number"
-                    value={editing.trailing_stop_pct}
-                    onChange={(event) => setEditing({ ...editing, trailing_stop_pct: Number(event.target.value) })}
-                  />
-                </Field>
-              </div>
-              {!isFixedTrail(editing.exit_style) && (
-                <p className="text-xs text-muted-foreground">
-                  Tightness 20 = canonical floors; lower = tighter; not a % leash.
-                </p>
-              )}
-              {fireAt != null && (
-                <p className="text-xs text-muted-foreground">
-                  From the current quote, a {editing.stop_loss_pct}% stop would fire near{" "}
-                  <span className="font-mono tnum text-foreground">{number(fireAt, 4)} SOL</span>.
-                  {editing.cost_basis_sol == null && " Empty basis means this stop will not arm — rug-only."}
-                </p>
-              )}
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-                <Label htmlFor="rug">Rug exit</Label>
-                <Switch id="rug" checked={editing.rug_exit} onCheckedChange={(rug_exit) => setEditing({ ...editing, rug_exit })} />
-              </div>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-                <Label htmlFor="dispose">Dispose after break-even</Label>
-                <Switch
-                  id="dispose"
-                  checked={editing.dispose_after_break_even}
-                  onCheckedChange={(dispose_after_break_even) => setEditing({ ...editing, dispose_after_break_even })}
-                />
-              </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
-              <div className="mt-auto flex gap-2">
-                <Button type="submit" disabled={saving}>
-                  {saving ? "Saving…" : "Save policy"}
-                </Button>
-                {byMint.has(editing.mint) && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={async () => {
-                      await deletePolicy(editing.mint);
-                      setEditing(null);
-                      onChanged();
-                    }}
-                  >
-                    Remove
-                  </Button>
-                )}
-              </div>
-            </form>
+            <RuleEditor
+              editing={editing}
+              onChange={setEditing}
+              onSubmit={submit}
+              saving={saving}
+              error={error}
+            />
           )}
         </SheetContent>
       </Sheet>
@@ -253,88 +293,431 @@ export function Positions({
   );
 }
 
-function InlineLimits({
+function PositionTableRow({
+  row,
   policy,
-  onCommit,
+  loaded,
+  clock,
+  onEdit,
+  onChart,
+  onDelete,
+  deleting,
 }: {
-  policy: Policy;
-  onCommit: (policy: Policy) => Promise<void>;
+  row: PositionRow;
+  policy: Policy | undefined;
+  loaded: Loaded<Snapshot>;
+  clock: ReturnType<typeof snapshotClock>;
+  onEdit: () => void;
+  onChart: () => void;
+  onDelete?: () => void;
+  deleting: boolean;
 }) {
-  const [draft, setDraft] = useState(policy);
-  const [busy, setBusy] = useState(false);
-  const fixed = isFixedTrail(policy.exit_style);
-  const dirty =
-    draft.stop_loss_pct !== policy.stop_loss_pct ||
-    draft.take_profit_pct !== policy.take_profit_pct ||
-    draft.trailing_stop_pct !== policy.trailing_stop_pct;
+  const quoteClock = clockOf(row.quote_received_at ?? null, clock.ingest);
+  const exitSol = fromDecimalString(
+    row.exit_sol,
+    originOf(loaded, `positions[${row.mint}].exit_sol`, quoteClock, {
+      note: "Full-balance Jupiter exit quote for this position.",
+    }),
+  );
+
+  const basisSol = policy?.cost_basis_sol ?? null;
+  const buyPrice = policy?.buy_price_sol ?? null;
+  const hasBasis = basisSol != null || buyPrice != null;
+
+  /**
+   * PnL requires a basis. Without one it is UNOBSERVED, not 0%. This is the
+   * distinction the fabricated-basis defect erased.
+   */
+  const pnl: Measured<number> = hasBasis
+    ? fromDecimalString(
+        row.pnl_pct,
+        originOf(loaded, `positions[${row.mint}].pnl_pct`, quoteClock, {
+          kind: "derived",
+          note: "Exit quote measured against the engine's observed cost basis.",
+        }),
+      )
+    : unobserved(
+        originOf(loaded, `positions[${row.mint}].pnl_pct`, quoteClock, {
+          kind: "derived",
+          note: "No cost basis has been observed for this position, so there is no reference to measure PnL against. This is not 0%.",
+          caveats: [
+            {
+              kind: "unbounded",
+              note: "A basis stamped from the current exit quote would make this read 0% by construction and put every stop below an already-fallen price. It is left unobserved instead.",
+            },
+          ],
+        }),
+      );
+
+  const entry = entryUnitPrice(policy, row.ui_amount);
+
   return (
-    <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
-      <div className="grid grid-cols-3 gap-2">
-        <TinyField
-          label="SL %"
-          value={draft.stop_loss_pct}
-          onChange={(stop_loss_pct) => setDraft({ ...draft, stop_loss_pct })}
+    <tr className="hover:bg-muted/30">
+      <Td>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onChart} className="font-mono text-xs hover:text-primary">
+            {row.name}
+          </button>
+        </div>
+        <Copyable
+          value={row.mint}
+          display={<span className="text-[10px] text-muted-foreground">{shortAddress(row.mint)}</span>}
         />
-        <TinyField
-          label={fixed ? "TP % (arms trail)" : "Arm at +%"}
-          value={draft.take_profit_pct}
-          onChange={(take_profit_pct) => setDraft({ ...draft, take_profit_pct })}
+      </Td>
+      <Td>
+        <Explain of={<span className="font-mono text-[11px]">{row.decision}</span>}>
+          {row.decision_reason || "no reason published"}
+        </Explain>
+        {row.confirmed_slot != null && (
+          <div className="font-mono text-[10px] text-muted-foreground">slot {row.confirmed_slot}</div>
+        )}
+      </Td>
+      <Td align="right">
+        <span className="font-mono text-[11px]">{row.ui_amount}</span>
+      </Td>
+      <Td align="right">
+        <Figure m={exitSol} format={(value) => sol(value)} />
+      </Td>
+      <Td align="right">
+        <Figure
+          m={pnl}
+          format={(value) => `${decimals(value, 2)}%`}
+          className={
+            pnl.state === "observed" ? (pnl.value >= 0 ? "text-lamp-ok" : "text-destructive") : undefined
+          }
         />
-        <TinyField
-          label={fixed ? "Trail % of peak" : "Tightness"}
-          value={draft.trailing_stop_pct}
-          onChange={(trailing_stop_pct) => setDraft({ ...draft, trailing_stop_pct })}
-        />
-      </div>
-      {!fixed && (
-        <p className="text-[10px] text-muted-foreground">
-          20 = canonical floors; lower = tighter; not a % leash.
-        </p>
-      )}
-      {dirty && (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            void onCommit(draft).finally(() => setBusy(false));
-          }}
-        >
-          {busy ? "Writing…" : "Save limits"}
-        </Button>
-      )}
-    </div>
+      </Td>
+      <Td>
+        {hasBasis ? (
+          <Explain
+            of={
+              <span className="font-mono text-[11px]">
+                {buyPrice != null ? `${decimals(buyPrice, 9)}/u` : sol(basisSol ?? 0)}
+              </span>
+            }
+          >
+            <p>
+              The engine&apos;s observed basis, read from config.yaml via /api/policies. Derived from
+              observed chain history, not from any quote.
+            </p>
+            {entry != null && (
+              <p className="mt-1 font-mono">entry unit price {entry.toExponential(4)} SOL</p>
+            )}
+          </Explain>
+        ) : (
+          <StatusPill
+            label="not observed"
+            tone="warn"
+            help="No basis. The rule behaves as rug-only until the engine reconstructs one from observed buys. It is deliberately not filled in from the current quote."
+          />
+        )}
+      </Td>
+      <Td>
+        <span className="font-mono text-[10px] text-muted-foreground">{policyRuleLabel(policy)}</span>
+        {policy && (
+          <div className="font-mono text-[10px] text-muted-foreground">
+            {isFixedTrail(policy.exit_style) ? "fixed_trail" : "runner"}
+          </div>
+        )}
+      </Td>
+      <Td>
+        <div className="flex flex-wrap gap-1">
+          {row.rug?.emergency && <StatusPill label="rug" tone="bad" help={row.rug.reason ?? undefined} />}
+          {row.trailing_active && <StatusPill label="trailing" tone="info" />}
+          {row.stop_live === false && (
+            <StatusPill
+              label="stop not live"
+              tone="warn"
+              help={row.sl_live_after ? `Stop arms after ${row.sl_live_after}` : undefined}
+            />
+          )}
+          {row.mint_safety && row.mint_safety.mint_authority == null && (
+            <StatusPill label="mint revoked" tone="ok" help="Mint authority is null: no further supply can be minted." />
+          )}
+          {row.errors.map((err) => (
+            <StatusPill key={err} label="error" tone="bad" help={err} />
+          ))}
+        </div>
+      </Td>
+      <Td align="right">
+        <div className="flex justify-end gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider hover:bg-muted"
+          >
+            rule
+          </button>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting}
+              className="rounded border border-destructive/50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-destructive hover:bg-destructive/10 disabled:opacity-50"
+            >
+              {deleting ? "…" : "drop"}
+            </button>
+          )}
+        </div>
+      </Td>
+    </tr>
   );
 }
 
-function TinyField({
+function NumberField({
   label,
   value,
   onChange,
+  step = 1,
+  hint,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  step?: number;
+  hint?: string;
 }) {
   return (
-    <label className="space-y-1">
-      <span className="block font-mono text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
-      <Input
+    <Field label={label} hint={hint}>
+      <input
         type="number"
-        className="h-8 font-mono tnum text-xs"
+        step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
       />
-    </label>
+    </Field>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Toggle({
+  label,
+  checked,
+  onChange,
+  hint,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  hint?: string;
+}) {
   return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
+    <Field label={label} hint={hint}>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
+          checked ? "border-primary/60 bg-primary/15 text-primary" : "text-muted-foreground",
+        )}
+      >
+        {checked ? "on" : "off"}
+      </button>
+    </Field>
+  );
+}
+
+function RuleEditor({
+  editing,
+  onChange,
+  onSubmit,
+  saving,
+  error,
+}: {
+  editing: Editing;
+  onChange: (next: Editing) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  saving: boolean;
+  error: string | null;
+}) {
+  const { draft, basis } = editing;
+  const set = (patch: Partial<RuleDraft>) => onChange({ ...editing, draft: { ...draft, ...patch } });
+  const overriding = basis.kind === "operator";
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="rounded border border-border/70">
+        <p className="border-b border-border/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          thresholds
+        </p>
+        <FieldGrid columns={3}>
+          <NumberField
+            label="stop loss %"
+            value={draft.stop_loss_pct}
+            onChange={(value) => set({ stop_loss_pct: value })}
+            hint="Negative. Measured against the observed basis — with no basis the rule is rug-only."
+          />
+          <NumberField
+            label="take profit %"
+            value={draft.take_profit_pct}
+            onChange={(value) => set({ take_profit_pct: value })}
+            hint="For the runner style this arms the trail rather than selling outright."
+          />
+          <NumberField
+            label="trailing %"
+            value={draft.trailing_stop_pct}
+            onChange={(value) => set({ trailing_stop_pct: value })}
+          />
+          <NumberField
+            label="floor confirm quotes"
+            value={draft.floor_confirm_quotes}
+            onChange={(value) => set({ floor_confirm_quotes: value })}
+            hint="Consecutive quotes below the floor before the runner exits. Guards against a single bad quote."
+          />
+          <Field label="exit style">
+            <select
+              value={draft.exit_style}
+              onChange={(event) => set({ exit_style: event.target.value as ExitStyle })}
+              className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
+            >
+              <option value="runner">runner</option>
+              <option value="fixed_trail">fixed_trail</option>
+            </select>
+          </Field>
+        </FieldGrid>
+        <FieldGrid columns={3} className="border-t border-border/70">
+          <Toggle
+            label="rug exit"
+            checked={draft.rug_exit}
+            onChange={(value) => set({ rug_exit: value })}
+            hint="Exit on a detected liquidity collapse. Works without a cost basis."
+          />
+          <Toggle
+            label="dispose after break-even"
+            checked={draft.dispose_after_break_even}
+            onChange={(value) => set({ dispose_after_break_even: value })}
+          />
+          <Toggle
+            label="hold trail until graduated"
+            checked={draft.hold_trail_until_graduated}
+            onChange={(value) => set({ hold_trail_until_graduated: value })}
+          />
+        </FieldGrid>
+      </div>
+
+      <BasisEditor editing={editing} onChange={onChange} />
+
+      {error && <p className="font-mono text-xs text-destructive">{error}</p>}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded border border-primary/60 bg-primary/15 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-primary disabled:opacity-50"
+        >
+          {saving ? "writing config.yaml…" : "write rule"}
+        </button>
+        <p className="text-[11px] text-muted-foreground">
+          Writes config.yaml. No key, no signature, no submission.
+          {overriding && basis.text.trim() !== "" && " Includes a manual basis override."}
+        </p>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Basis is presented as two clearly separated things: what the engine observed
+ * (read-only) and an override a human may deliberately type (empty by default).
+ * Nothing here reads a quote.
+ */
+function BasisEditor({
+  editing,
+  onChange,
+}: {
+  editing: Editing;
+  onChange: (next: Editing) => void;
+}) {
+  const { basis } = editing;
+  const engineBasis = basis.kind === "engine" ? basis : null;
+  const observedBasis =
+    engineBasis && (engineBasis.cost_basis_sol != null || engineBasis.buy_price_sol != null);
+
+  return (
+    <div className="rounded border border-border/70">
+      <p className="border-b border-border/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        cost basis
+      </p>
+      <div className="space-y-3 p-3">
+        <div className="space-y-1">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            engine-observed
+          </p>
+          {observedBasis && engineBasis ? (
+            <div className="font-mono text-xs">
+              {engineBasis.buy_price_sol != null
+                ? `${decimals(engineBasis.buy_price_sol, 9)} SOL / unit`
+                : sol(engineBasis.cost_basis_sol ?? 0)}
+              <span className="ml-2 text-[10px] text-muted-foreground">
+                round-tripped unchanged on save
+              </span>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {basis.kind === "unset"
+                ? "None sent. The engine reconstructs the real basis from observed buys on chain; until it does, the rule is rug-only."
+                : "The engine has not observed a basis for this position yet."}
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-2 border-t border-border/70 pt-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  ...editing,
+                  basis:
+                    basis.kind === "operator"
+                      ? engineBasisFallback(editing)
+                      : // Starts EMPTY. Never seeded from a quote, a mark, or the
+                        // engine's own value.
+                        { kind: "operator", text: "" },
+                })
+              }
+              className={cn(
+                "rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider",
+                basis.kind === "operator"
+                  ? "border-destructive/60 bg-destructive/10 text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              {basis.kind === "operator" ? "override on" : "override basis"}
+            </button>
+            <span className="text-[11px] text-muted-foreground">
+              Manual entry. Leave this alone unless you know the SOL you actually paid.
+            </span>
+          </div>
+
+          {basis.kind === "operator" && (
+            <div className="space-y-2">
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="total SOL paid for this position"
+                value={basis.text}
+                onChange={(event) =>
+                  onChange({ ...editing, basis: { kind: "operator", text: event.target.value } })
+                }
+                className="w-full rounded border border-destructive/50 bg-background px-2 py-1 font-mono text-xs"
+              />
+              <p className="text-[11px] leading-relaxed text-destructive">
+                A typed basis overrides chain observation and becomes the reference every stop on
+                this position is measured against. A wrong number silently mis-prices all of them.
+                Entering the position&apos;s current value makes PnL read 0% by construction and puts
+                the stop below an already-fallen price — that is the mechanism that cost 7.47 SOL on
+                2026-08-12. Leave it empty to let the engine observe the truth.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
+}
+
+/** Cancelling an override returns the basis to exactly what was loaded. */
+function engineBasisFallback(editing: Editing): Basis {
+  return editing.original;
 }

@@ -1,166 +1,413 @@
-import { Lamp, PageKicker, PageLede, PageTitle } from "@/components/desk";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { IntelligenceSnapshot } from "@/lib/types";
-import { age, BASE58_ADDRESS, shortAddress } from "@/lib/utils";
+import { useState } from "react";
 
-export function Intelligence({ intel, now }: { intel: IntelligenceSnapshot | null; now: number }) {
-  const kols = new Map<string, { handle: string; summary: string; cashtags: string[]; url: string | null; when: string | null }>();
-  for (const item of intel?.inbox ?? []) {
-    const handle = item.watched_handle || (item.kind === "x_kol_post" ? item.author : null);
-    if (!handle || kols.has(handle)) continue;
-    kols.set(handle, {
-      handle,
-      summary: item.summary,
-      cashtags: item.cashtags,
-      url: item.url,
-      when: item.observed_at,
-    });
+import { Figure } from "@/components/figure";
+import {
+  Absent,
+  Copyable,
+  Field,
+  FieldGrid,
+  Panel,
+  Scroller,
+  StatusPill,
+  Table,
+  Td,
+  Th,
+} from "@/components/instrument";
+import { INTELLIGENCE_BASE_URL } from "@/lib/intelligence";
+import { cn, relativeAge, shortAddress, stampUtc } from "@/lib/format";
+import { clockOf, observed, unwatched, type Measured } from "@/lib/measure";
+import type { EvidenceClass, IntelEvidence, IntelligenceSnapshot } from "@/lib/types";
+
+const CLASSES: EvidenceClass[] = ["fact", "claim", "speculation"];
+
+export function Intelligence({
+  intel,
+  now,
+}: {
+  intel: IntelligenceSnapshot | null;
+  now: number;
+}) {
+  const [classes, setClasses] = useState<Set<EvidenceClass>>(new Set(CLASSES));
+  const [onlyWatched, setOnlyWatched] = useState(false);
+
+  if (!intel) {
+    return (
+      <Panel title="Wire" source={INTELLIGENCE_BASE_URL}>
+        <Absent reason="loading" />
+      </Panel>
+    );
   }
-  const service = intel?.service;
-  const tone = service?.status === "healthy" ? "ok" : "warn";
+
+  const clock = clockOf(intel.service.last_cycle_at, null);
+  const reachable = intel.reachable;
+
+  /**
+   * A service that did not answer has NOT reported zero. Every counter is a
+   * `Measured` so an unreachable collector cannot render as a quiet one.
+   */
+  const counter = (value: number | null, path: string, note?: string): Measured<number> =>
+    !reachable
+      ? unwatched({
+          source: `${INTELLIGENCE_BASE_URL}/health`,
+          path,
+          kind: "served",
+          clock,
+          note: "The intelligence service did not answer. This is not a report of zero.",
+        })
+      : value == null
+        ? unwatched({ source: `${INTELLIGENCE_BASE_URL}/health`, path, kind: "served", clock, note })
+        : observed(value, {
+            source: `${INTELLIGENCE_BASE_URL}/health`,
+            path,
+            kind: "served",
+            clock,
+            note,
+          });
+
+  const items = intel.inbox.filter((item) => {
+    if (!classes.has(item.classification)) return false;
+    if (onlyWatched && !item.watched_handle) return false;
+    return true;
+  });
 
   return (
-    <div className="space-y-6">
-      <div>
-        <PageKicker>Intelligence</PageKicker>
-        <PageTitle>Observatory</PageTitle>
-        <PageLede>
-          Claims become hypotheses. None of it can touch the signer. CANNOT EXECUTE. KOL BOARD and X / APIFY TAPE live
-          here. Watchlist x-kols is the configured handle set.
-        </PageLede>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Lamp tone={tone} live={service?.cycle_in_progress} />
-        <Badge>{service?.status ?? "offline"}</Badge>
-        <Badge variant="outline">{service?.collectors_active ?? 0} collectors</Badge>
-        <Badge variant="outline">{service?.x_items_today ?? 0} X items today</Badge>
-        {service?.last_cycle_partial && <Badge variant="warning">partial cycle</Badge>}
-        {service?.last_error && <span className="text-muted-foreground">{service.last_error}</span>}
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Sieve</CardTitle>
-          <CardDescription>
-            pass = look. veto = serial/wash. watch_exit = KOL named a bag you hold. skip = not enough tape.
-            Never a buy order. execution_effect none.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(intel?.candidates ?? []).slice(0, 12).map((card) => (
-            <div key={card.mint} className="flex items-start justify-between gap-3 border-b py-2 last:border-0">
+    <div className="space-y-3">
+      <Panel
+        title="Intelligence service"
+        source={INTELLIGENCE_BASE_URL}
+        clock={clock}
+        now={now}
+        tone={reachable ? "neutral" : "warn"}
+        actions={
+          <StatusPill
+            label={intel.service.status}
+            tone={
+              !reachable ? "idle" : intel.service.status === "healthy" ? "ok" : "warn"
+            }
+            help={
+              reachable
+                ? intel.service.last_error ?? undefined
+                : "No response on the intelligence port. Every counter below is shown as not-watching rather than zero."
+            }
+          />
+        }
+        note={
+          <>
+            A separate process on port 8788. Everything it produces is evidence, never an
+            instruction: nothing on this page can reach an execution path, and cashtags stay labels
+            rather than resolving to mints on their own.
+          </>
+        }
+      >
+        <FieldGrid columns={4}>
+          <Field label="collectors active">
+            <Figure m={counter(intel.service.collectors_active, "runtime.collectors_active")} emphasis="strong" />
+          </Field>
+          <Field label="x items today">
+            <Figure m={counter(intel.service.x_items_today, "runtime.x_items_today")} emphasis="strong" />
+          </Field>
+          <Field label="last cycle">
+            {intel.service.last_cycle_at ? (
               <div>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={
-                      card.verdict === "veto"
-                        ? "destructive"
-                        : card.verdict === "watch_exit"
-                          ? "warning"
-                          : card.verdict === "pass"
-                            ? "default"
-                            : "secondary"
-                    }
-                  >
-                    {card.verdict}
-                  </Badge>
-                  <span className="font-mono text-xs">{card.name || shortAddress(card.mint)}</span>
+                <div className="font-mono text-sm">{relativeAge(intel.service.last_cycle_at, now)}</div>
+                <div className="font-mono text-[10px] text-muted-foreground">
+                  {stampUtc(intel.service.last_cycle_at)}
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{card.reasons[0]}</p>
               </div>
+            ) : (
+              <span className="font-mono text-xs text-muted-foreground">never</span>
+            )}
+          </Field>
+          <Field label="cycle state">
+            <div className="flex flex-wrap gap-1">
+              {intel.service.cycle_in_progress && <StatusPill label="running" tone="info" />}
+              {intel.service.last_cycle_partial && (
+                <StatusPill
+                  label="partial"
+                  tone="warn"
+                  help="The last cycle did not complete every collector, so the feed below is an incomplete view of the window."
+                />
+              )}
+              {!intel.service.cycle_in_progress && !intel.service.last_cycle_partial && (
+                <StatusPill label="idle" tone="idle" />
+              )}
             </div>
-          ))}
-          {!intel?.candidates.length && (
-            <p className="text-sm text-muted-foreground">No candidate cards this window.</p>
-          )}
-        </CardContent>
-      </Card>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>KOL BOARD</CardTitle>
-            <CardDescription>watched handles · cashtags stay labels</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {[...kols.values()].map((kol) => (
-              <article key={kol.handle} className="rounded-lg border bg-muted/20 p-3">
-                <div className="flex items-baseline justify-between gap-2">
-                  <div className="font-mono text-sm text-primary">@{kol.handle}</div>
-                  <span className="font-mono text-[10px] text-muted-foreground">{age(kol.when, now)}</span>
-                </div>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{kol.summary}</p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {kol.cashtags.map((tag) => (
-                    <Badge key={tag} variant="warning">
-                      ${tag}
-                    </Badge>
+          </Field>
+        </FieldGrid>
+        {intel.service.last_error && (
+          <p className="border-t border-border/70 px-3 py-2 font-mono text-xs text-destructive">
+            {intel.service.last_error}
+          </p>
+        )}
+      </Panel>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Panel title={`Sources (${intel.sources.length})`} source={`${INTELLIGENCE_BASE_URL}/sources`}>
+          {intel.sources.length === 0 ? (
+            <Absent reason={reachable ? "no-rows" : "not-wired"} />
+          ) : (
+            <Scroller>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>source</Th>
+                    <Th>status</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {intel.sources.map((source) => (
+                    <tr key={source.id} className="hover:bg-muted/30">
+                      <Td>
+                        <span className="font-mono text-[11px]">{source.label}</span>
+                        <div className="font-mono text-[10px] text-muted-foreground">{source.id}</div>
+                      </Td>
+                      <Td>
+                        <StatusPill
+                          label={source.status}
+                          tone={source.status === "healthy" || source.status === "ok" ? "ok" : "warn"}
+                        />
+                      </Td>
+                    </tr>
                   ))}
-                </div>
-              </article>
-            ))}
-            {!kols.size && <p className="text-sm text-muted-foreground">No watched handles in the current window.</p>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>X / APIFY TAPE</CardTitle>
-            <CardDescription>Cashtags stay labels until a mint URL appears.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-0">
-            {(intel?.x_tape ?? []).slice(0, 10).map((item) => (
-              <article key={item.id} className="border-b py-3 last:border-0">
-                <div className="flex justify-between text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <span>{item.author ? `@${item.author}` : item.kind}</span>
-                  <span>{age(item.observed_at, now)}</span>
-                </div>
-                <p className="mt-1 text-sm leading-relaxed">{item.summary}</p>
-                <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-                  {item.mint_candidates
-                    .filter((mint) => BASE58_ADDRESS.test(mint))
-                    .map((mint) => (
-                      <a
-                        key={mint}
-                        className="text-primary"
-                        href={`https://solscan.io/token/${mint}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {shortAddress(mint)}
-                      </a>
-                    ))}
-                </div>
-              </article>
-            ))}
-            {!intel?.x_tape.length && <p className="py-6 text-sm text-muted-foreground">Tape is empty this window.</p>}
-          </CardContent>
-        </Card>
+                </tbody>
+              </Table>
+            </Scroller>
+          )}
+        </Panel>
+
+        <Panel title={`Watchlists (${intel.watchlists.length})`} source={`${INTELLIGENCE_BASE_URL}/watchlists`}>
+          {intel.watchlists.length === 0 ? (
+            <Absent reason={reachable ? "no-rows" : "not-wired"} />
+          ) : (
+            <Scroller>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>watchlist</Th>
+                    <Th align="right" hint="null means the service did not report a count — not that the list is empty.">
+                      members
+                    </Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {intel.watchlists.map((list) => (
+                    <tr key={list.id} className="hover:bg-muted/30">
+                      <Td>
+                        <span className="font-mono text-[11px]">{list.name}</span>
+                      </Td>
+                      <Td align="right">
+                        <Figure
+                          m={counter(list.member_count, `watchlists[${list.id}].member_count`)}
+                        />
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Scroller>
+          )}
+        </Panel>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Evidence inbox</CardTitle>
-          <CardDescription>fact / claim / speculation. Contradicting evidence is shown when present.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(intel?.inbox ?? []).slice(0, 16).map((item) => (
-            <div key={item.id} className="flex items-start justify-between gap-3 border-b py-2 last:border-0">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={
-                      item.classification === "fact" ? "default" : item.classification === "claim" ? "warning" : "secondary"
-                    }
-                  >
-                    {item.classification}
-                  </Badge>
-                  <span className="text-sm font-medium">{item.title}</span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">{item.summary}</p>
-              </div>
-              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{age(item.observed_at, now)}</span>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+
+      <Panel
+        title={`Evidence (${items.length}/${intel.inbox.length})`}
+        source={`${INTELLIGENCE_BASE_URL}/intelligence/feed?limit=50`}
+        note="Classification is assigned by this client from the item kind, and is a reading aid rather than a claim the upstream service made. Contradicting evidence is not reconciled anywhere: two rows may disagree and both are shown."
+        actions={
+          <div className="flex flex-wrap gap-1.5">
+            {CLASSES.map((klass) => (
+              <button
+                key={klass}
+                type="button"
+                onClick={() =>
+                  setClasses((current) => {
+                    const next = new Set(current);
+                    if (next.has(klass)) next.delete(klass);
+                    else next.add(klass);
+                    return next;
+                  })
+                }
+                className={cn(
+                  "rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+                  classes.has(klass) ? toneFor(klass) : "text-muted-foreground/50",
+                )}
+              >
+                {klass}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setOnlyWatched((value) => !value)}
+              className={cn(
+                "rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+                onlyWatched ? "border-primary/60 bg-primary/15 text-primary" : "text-muted-foreground/50",
+              )}
+            >
+              watched handles
+            </button>
+          </div>
+        }
+      >
+        {items.length === 0 ? (
+          <Absent
+            reason={reachable ? "no-rows" : "not-wired"}
+            detail={
+              reachable
+                ? "No evidence matches the current filter."
+                : "The intelligence service is not answering, so no evidence is available. This is distinct from a quiet wire."
+            }
+          />
+        ) : (
+          <Scroller>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>class</Th>
+                  <Th>observed (event t)</Th>
+                  <Th>item</Th>
+                  <Th>labels</Th>
+                  <Th>effect</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <EvidenceLine key={item.id} item={item} now={now} />
+                ))}
+              </tbody>
+            </Table>
+          </Scroller>
+        )}
+      </Panel>
+
+      {intel.candidates.length > 0 && (
+        <Panel
+          title={`Sieve candidates (${intel.candidates.length})`}
+          source={`${INTELLIGENCE_BASE_URL}/intelligence/candidates`}
+          note="Verdicts from the candidate sieve. execution_effect is 'none' on every row by construction — this plane cannot buy anything."
+        >
+          <Scroller>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>mint</Th>
+                  <Th>verdict</Th>
+                  <Th>reasons</Th>
+                  <Th>effect</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {intel.candidates.map((card) => (
+                  <tr key={card.mint} className="hover:bg-muted/30">
+                    <Td>
+                      <Copyable
+                        value={card.mint}
+                        display={<span className="font-mono text-[11px]">{card.name ?? shortAddress(card.mint)}</span>}
+                      />
+                    </Td>
+                    <Td>
+                      <StatusPill
+                        label={card.verdict}
+                        tone={card.verdict === "skip" ? "idle" : "warn"}
+                      />
+                    </Td>
+                    <Td>
+                      <span className="text-[11px] text-muted-foreground">
+                        {card.reasons.join(" · ") || "—"}
+                      </span>
+                    </Td>
+                    <Td>
+                      <StatusPill label={card.execution_effect} tone="idle" />
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </Scroller>
+        </Panel>
+      )}
     </div>
+  );
+}
+
+function toneFor(klass: EvidenceClass) {
+  return klass === "fact"
+    ? "border-lamp-ok/60 bg-lamp-ok/15 text-lamp-ok"
+    : klass === "claim"
+      ? "border-chart-3/60 bg-chart-3/15 text-chart-3"
+      : "border-border bg-muted text-muted-foreground";
+}
+
+function EvidenceLine({ item, now }: { item: IntelEvidence; now: number }) {
+  return (
+    <tr className="hover:bg-muted/30">
+      <Td>
+        <span
+          className={cn(
+            "inline-flex rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+            toneFor(item.classification),
+          )}
+        >
+          {item.classification}
+        </span>
+      </Td>
+      <Td>
+        {item.observed_at ? (
+          <div>
+            <span className="font-mono text-[11px]">{relativeAge(item.observed_at, now)}</span>
+            <div className="font-mono text-[10px] text-muted-foreground">
+              {stampUtc(item.observed_at)}
+            </div>
+          </div>
+        ) : (
+          <span className="font-mono text-[11px] text-muted-foreground">no stamp</span>
+        )}
+      </Td>
+      <Td>
+        <div className="flex flex-wrap items-center gap-2">
+          {item.author && <span className="font-mono text-[11px] text-primary">@{item.author}</span>}
+          <span className="font-mono text-[10px] text-muted-foreground">{item.kind}</span>
+          {item.url && (
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="font-mono text-[10px] text-muted-foreground underline decoration-dotted underline-offset-4 hover:text-primary"
+            >
+              source ↗
+            </a>
+          )}
+        </div>
+        <p className="mt-0.5 max-w-2xl text-[11px] text-muted-foreground">{item.summary}</p>
+      </Td>
+      <Td>
+        <div className="flex flex-wrap gap-1">
+          {item.watched_handle && (
+            <StatusPill label={`@${item.watched_handle}`} tone="info" help="A watched handle." />
+          )}
+          {item.cashtags.map((tag) => (
+            <StatusPill
+              key={tag}
+              label={tag}
+              tone="idle"
+              help="Cashtags stay labels. They are never resolved to a mint automatically — a ticker is not an identifier."
+            />
+          ))}
+          {item.mint_candidates.slice(0, 2).map((mint) => (
+            <Copyable
+              key={mint}
+              value={mint}
+              display={<span className="text-[10px] text-muted-foreground">{shortAddress(mint)}</span>}
+            />
+          ))}
+        </div>
+      </Td>
+      <Td>
+        <StatusPill
+          label="none"
+          tone="idle"
+          help="Evidence has no execution effect. Nothing on this plane can open, close, or size a position."
+        />
+      </Td>
+    </tr>
   );
 }

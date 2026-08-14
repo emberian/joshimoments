@@ -1,6 +1,100 @@
+/**
+ * Typed against the LIVE sentinel responses (schema_version 2), captured from
+ * a running desk, not reconstructed from prose.
+ *
+ * The previous model was a stale subset: it omitted `readiness`, `freshness`,
+ * `experiments`, `signals`, `schema_version`, `wallet.sol_lamports` and the
+ * per-signal `provenance` array. `freshness` in particular is the server's own
+ * two-clock block (`observed_at` / `received_at`) and the old UI never drew it.
+ */
+
 export type Severity = "info" | "warning" | "critical";
 
 export type ExitStyle = "runner" | "fixed_trail";
+
+/** `shitcoims_sentinel/engine.py::_operational_sections` */
+export type CapabilityState = "ready" | "blocked" | "degraded" | "disabled";
+
+/** `shitcoims_sentinel/engine.py::_operational_sections` */
+export type FreshnessStatus =
+  | "fresh"
+  | "never"
+  | "disabled"
+  | "unknown"
+  | "degraded"
+  | "stalled"
+  | (string & {});
+
+export type Capability = {
+  id: string;
+  label: string;
+  state: CapabilityState;
+  reason: string | null;
+  /** null means this capability has never been checked — not "checked at epoch". */
+  checked_at: string | null;
+  required_for: ("observe" | "shadow" | "live")[];
+};
+
+export type Readiness = {
+  overall: "ready" | "degraded" | "blocked";
+  capabilities: Capability[];
+};
+
+/**
+ * The two-clock row. `observed_at` is event time, `received_at` is ingest time.
+ * They are currently equal for every producer, which means event time is being
+ * PROXIED by ingest time — the UI must say so, not imply a measured latency.
+ */
+export type FreshnessRow = {
+  id: string;
+  label: string;
+  status: FreshnessStatus;
+  observed_at: string | null;
+  received_at: string | null;
+  ttl_seconds: number | null;
+  last_error: string | null;
+};
+
+export type ExperimentRow = {
+  id: string;
+  label: string;
+  mode: string;
+  health: string;
+  last_sample_at: string | null;
+  last_error_type: string | null;
+  signals_seen: number;
+  can_execute: boolean;
+  note: string | null;
+};
+
+/** Per-signal provenance, emitted by the server itself. */
+export type SignalProvenance = {
+  source_id: string;
+  observed_at: string | null;
+  received_at: string | null;
+  adapter_version: string | null;
+  endpoint_family: string | null;
+  evidence: Record<string, unknown>;
+};
+
+export type SignalRow = {
+  id: string;
+  mint: string | null;
+  token_name: string | null;
+  kind: string;
+  severity: Severity;
+  status: string;
+  summary: string;
+  source_ids: string[];
+  corroboration_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  expires_at: string | null;
+  policy_effect: string;
+  signature?: string;
+  slot?: number;
+  provenance: SignalProvenance[];
+};
 
 export type PositionThresholds = {
   stop_loss_pct: string;
@@ -19,42 +113,77 @@ export type PositionRunner = {
   sell_amount?: number | string | null;
 };
 
+export type PositionPool = {
+  dex_id?: string;
+  liquidity_usd?: string;
+  reserve_value?: string;
+  reserve_unit?: string;
+  observed_at?: string | null;
+};
+
 export type PositionRow = {
   mint: string;
   name: string;
+  amount?: string;
   ui_amount: string;
   exit_sol?: string | null;
   pnl_pct?: string | null;
   unit_price_sol?: string | null;
   decision: string;
   decision_reason: string;
+  dispose_after_break_even?: boolean;
+  confirmed_slot?: number | null;
+  /** Ingest time of the exit quote behind `exit_sol`. */
+  quote_received_at?: string | null;
   trailing_active?: boolean;
   trailing_peak_unit_price_sol?: string | null;
   errors: string[];
-  rug?: { emergency: boolean; liquidity_drop_pct?: string | null };
-  pool?: { dex_id: string; liquidity_usd: string; reserve_value: string; reserve_unit: string } | null;
+  rug?: { emergency: boolean; liquidity_drop_pct?: string | null; reason?: string | null };
+  pool?: PositionPool | null;
   mint_safety?: { mint_authority: string | null; freeze_authority: string | null } | null;
+  pump_metadata?: PumpMetadata | null;
   thresholds?: PositionThresholds;
   runner?: PositionRunner;
   stop_live?: boolean;
   sl_live_after?: string | null;
 };
 
+export type PumpMetadata = {
+  symbol?: string | null;
+  name?: string | null;
+  complete?: boolean | null;
+  creator?: string | null;
+  last_trade_at?: string | null;
+  received_at?: string | null;
+};
+
 export type UnmonitoredRow = {
   mint: string;
   name: string;
+  amount?: string;
   ui_amount: string;
   protection: string;
   exit_sol?: string | null;
-  pool?: { liquidity_usd: string } | null;
+  quote_received_at?: string | null;
+  pool?: PositionPool | null;
   rug?: { emergency: boolean; reason?: string | null };
   errors?: string[];
-  pump_metadata?: { symbol: string | null; complete: boolean | null } | null;
+  pump_metadata?: PumpMetadata | null;
+};
+
+export type EventRow = {
+  timestamp: string;
+  severity: Severity;
+  category: string;
+  message: string;
+  context?: Record<string, unknown>;
 };
 
 export type Snapshot = {
+  schema_version?: number;
   generated_at: string;
   system: {
+    wallet_name?: string;
     wallet_address: string;
     mode: "live" | "dry-run";
     protection_state: string;
@@ -62,15 +191,22 @@ export type Snapshot = {
     rpc_ready: boolean;
     jupiter_ready: boolean;
     telegram_ready: boolean;
+    telegram_configured?: boolean;
+    telegram_last_error_type?: string | null;
     gate_failures: string[];
+    poll_interval_seconds?: number;
     last_cycle_at: string | null;
     last_cycle_error: string | null;
     unprotected_count?: number;
   };
-  wallet: { sol: string | null; portfolio_exit_sol: string | null };
+  wallet: { sol_lamports?: number; sol: string | null; portfolio_exit_sol: string | null };
   positions: PositionRow[];
   unmonitored: UnmonitoredRow[];
-  events: { timestamp: string; severity: Severity; category: string; message: string }[];
+  readiness?: Readiness;
+  freshness?: FreshnessRow[];
+  experiments?: ExperimentRow[];
+  signals?: SignalRow[];
+  events: EventRow[];
 };
 
 export type Policy = {
@@ -109,6 +245,25 @@ export type ProtectUnmonitoredResult = {
 
 export type CandleBar = { t: number; o: number; h: number; l: number; c: number; v: number };
 
+export type CandlePayload = {
+  mint: string;
+  interval: string;
+  bars: CandleBar[];
+  source: string;
+  dex?: string;
+  stats?: Record<string, number | null>;
+};
+
+export type TradeRow = {
+  timestamp: string;
+  mint: string;
+  name: string;
+  reason: string;
+  input_amount?: string;
+  output_lamports: string;
+  signature: string;
+};
+
 export type Performance = {
   native_sol: string | null;
   portfolio_exit_sol: string | null;
@@ -120,6 +275,14 @@ export type Performance = {
   last_exit_at: string | null;
   mode: string | null;
   protection_state: string | null;
+};
+
+export type Health = {
+  healthy: boolean;
+  wallet: string;
+  protection_state: string;
+  last_cycle_at: string | null;
+  unprotected_count: number;
 };
 
 export type EvidenceClass = "fact" | "claim" | "speculation";
@@ -149,12 +312,18 @@ export type SieveCard = {
   execution_effect: "none";
 };
 
+/**
+ * Counters are nullable on purpose. The previous loader defaulted every missing
+ * counter to `0`, which rendered a service that was not answering as a service
+ * reporting zero activity. `null` here means "not observed".
+ */
 export type IntelligenceSnapshot = {
+  reachable: boolean;
   service: {
     status: string;
-    collectors_active: number;
+    collectors_active: number | null;
     last_cycle_at: string | null;
-    x_items_today: number;
+    x_items_today: number | null;
     cycle_in_progress: boolean;
     last_cycle_partial: boolean;
     last_error: string | null;
@@ -162,8 +331,15 @@ export type IntelligenceSnapshot = {
   inbox: IntelEvidence[];
   x_tape: IntelEvidence[];
   sources: { id: string; label: string; status: string }[];
-  watchlists: { id: string; name: string; member_count: number }[];
+  watchlists: { id: string; name: string; member_count: number | null }[];
   candidates: SieveCard[];
 };
 
-export type ViewId = "overview" | "positions" | "markets" | "intelligence" | "history" | "performance";
+export type ViewId =
+  | "desk"
+  | "bags"
+  | "chart"
+  | "circuit"
+  | "tape"
+  | "ledger"
+  | "wire";

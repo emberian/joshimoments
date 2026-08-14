@@ -1,10 +1,13 @@
 import type {
-  CandleBar,
+  CandlePayload,
+  Health,
   Performance,
   Policy,
   ProtectUnmonitoredRequest,
   ProtectUnmonitoredResult,
   Snapshot,
+  EventRow,
+  TradeRow,
   UnmonitoredRow,
 } from "./types";
 
@@ -16,18 +19,86 @@ const YAML_ONLY_THRESHOLDS = {
   exit_style: "runner" as const,
 };
 
-async function getJson<T>(path: string): Promise<T> {
+/**
+ * Every read carries the browser's own ingest clock and the endpoint it came
+ * from, so a figure can name its producer and when THIS page learned it. The
+ * server's `generated_at` is a separate, earlier clock; both are shown.
+ */
+export type Fetched<T> = {
+  data: T;
+  source: string;
+  /** Browser ingest time — when this tab received the bytes. */
+  receivedAt: string;
+  latencyMs: number;
+};
+
+export type Loaded<T> =
+  | { state: "ok"; fetched: Fetched<T> }
+  | { state: "error"; source: string; error: string; receivedAt: string }
+  | { state: "loading"; source: string };
+
+async function getJson<T>(path: string): Promise<Fetched<T>> {
+  const started = performance.now();
   const response = await fetch(path, { cache: "no-store", credentials: "same-origin" });
   if (!response.ok) throw new Error(`${path} returned ${response.status}`);
-  return (await response.json()) as T;
+  const data = (await response.json()) as T;
+  return {
+    data,
+    source: path,
+    receivedAt: new Date().toISOString(),
+    latencyMs: Math.round(performance.now() - started),
+  };
 }
 
+export async function load<T>(fn: () => Promise<Fetched<T>>, source: string): Promise<Loaded<T>> {
+  try {
+    return { state: "ok", fetched: await fn() };
+  } catch (error) {
+    return {
+      state: "error",
+      source,
+      error: error instanceof Error ? error.message : "request failed",
+      receivedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export const SNAPSHOT_PATH = "/api/snapshot";
+export const POLICIES_PATH = "/api/policies";
+export const EVENTS_PATH = "/api/events";
+export const TRADES_PATH = "/api/trades";
+export const PERFORMANCE_PATH = "/api/performance";
+export const CANDLES_PATH = "/api/candles";
+export const HEALTH_PATH = "/api/health";
+
 export function loadSnapshot() {
-  return getJson<Snapshot>("/api/snapshot");
+  return getJson<Snapshot>(SNAPSHOT_PATH);
 }
 
 export function loadPolicies() {
-  return getJson<{ items: Policy[] }>("/api/policies");
+  return getJson<{ items: Policy[]; can_execute: false }>(POLICIES_PATH);
+}
+
+export function loadHealth() {
+  return getJson<Health>(HEALTH_PATH);
+}
+
+export function loadEvents(limit = 300) {
+  return getJson<{ items: EventRow[] }>(`${EVENTS_PATH}?limit=${limit}`);
+}
+
+export function loadTrades(limit = 300) {
+  return getJson<{ items: TradeRow[] }>(`${TRADES_PATH}?limit=${limit}`);
+}
+
+export function loadPerformance() {
+  return getJson<Performance>(PERFORMANCE_PATH);
+}
+
+export function loadCandles(mint: string, interval = "15m", limit = 200) {
+  return getJson<CandlePayload>(
+    `${CANDLES_PATH}?mint=${encodeURIComponent(mint)}&interval=${interval}&limit=${limit}`,
+  );
 }
 
 async function policyError(response: Response, fallback: string) {
@@ -35,6 +106,12 @@ async function policyError(response: Response, fallback: string) {
   throw new Error(typeof detail.detail === "string" ? detail.detail : fallback);
 }
 
+/**
+ * Writes a rule into config.yaml. This is the ONLY class of mutation the browser
+ * can cause, and it is a policy write, not an order: the sentinel reads the rule
+ * on its own cycle and decides for itself. No key, no signature, no submission
+ * ever crosses into this process.
+ */
 export async function savePolicy(mint: string, body: Omit<Policy, "mint">) {
   const response = await fetch(`/api/policies/${mint}`, {
     method: "PUT",
@@ -43,7 +120,7 @@ export async function savePolicy(mint: string, body: Omit<Policy, "mint">) {
     body: JSON.stringify(body),
   });
   if (!response.ok) await policyError(response, "policy save failed");
-  return (await response.json()) as { item: Policy; items: Policy[] };
+  return (await response.json()) as { item: Policy; items: Policy[]; can_execute: false };
 }
 
 export async function protectUnmonitored(
@@ -105,29 +182,9 @@ async function protectUnmonitoredFallback(
 }
 
 export async function deletePolicy(mint: string) {
-  const response = await fetch(`/api/policies/${mint}`, { method: "DELETE", credentials: "same-origin" });
+  const response = await fetch(`/api/policies/${mint}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
   if (!response.ok) throw new Error("policy delete failed");
-}
-
-export function loadEvents() {
-  return getJson<{ items: { timestamp: string; severity: string; category: string; message: string }[] }>("/api/events?limit=200");
-}
-
-export function loadTrades() {
-  return getJson<{ items: { timestamp: string; mint: string; name: string; reason: string; output_lamports: string; signature: string }[] }>("/api/trades?limit=200");
-}
-
-export function loadPerformance() {
-  return getJson<Performance>("/api/performance");
-}
-
-export function loadCandles(mint: string, interval = "15m") {
-  return getJson<{
-    mint: string;
-    interval: string;
-    bars: CandleBar[];
-    source: string;
-    dex?: string;
-    stats?: Record<string, number | null>;
-  }>(`/api/candles?mint=${encodeURIComponent(mint)}&interval=${interval}&limit=120`);
 }

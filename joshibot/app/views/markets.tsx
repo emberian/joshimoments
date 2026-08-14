@@ -1,155 +1,245 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { PageKicker, PageLede, PageTitle } from "@/components/desk";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { loadCandles } from "@/lib/api";
-import { deskBags, parseSol } from "@/lib/desk";
-import type { CandleBar, Snapshot } from "@/lib/types";
-import { number, shortAddress } from "@/lib/utils";
+import { Figure } from "@/components/figure";
+import { useNow } from "@/components/now";
+import {
+  Absent,
+  Copyable,
+  Field,
+  FieldGrid,
+  Panel,
+  StatusPill,
+} from "@/components/instrument";
+import { PriceChart, hoverTime, shapeOf, useHover } from "@/components/pricechart";
+import { CANDLES_PATH, loadCandles, type Loaded } from "@/lib/api";
+import { snapshotOf } from "@/lib/desk";
+import { NO_DATA, cn, decimals, shortAddress, stampUtc, usd } from "@/lib/format";
+import { clockOf, observed, unobserved, type Measured, type Origin } from "@/lib/measure";
+import type { CandlePayload, Snapshot } from "@/lib/types";
 
-const INTERVALS = ["5m", "15m", "1h", "4h", "1d"] as const;
+export function Markets({
+  snapshot: loaded,
+  selectedMint = null,
+  onSelect,
+}: {
+  snapshot: Loaded<Snapshot>;
+  selectedMint?: string | null;
+  onSelect: (mint: string) => void;
+}) {
+  const snapshot = snapshotOf(loaded);
+  const tokens = useMemo(() => {
+    if (!snapshot) return [];
+    return [
+      ...snapshot.positions.map((row) => ({ mint: row.mint, name: row.name })),
+      ...snapshot.unmonitored.map((row) => ({ mint: row.mint, name: row.name })),
+    ];
+  }, [snapshot]);
 
-export function Markets({ snapshot, selectedMint = null }: { snapshot: Snapshot | null; selectedMint?: string | null }) {
-  const tokens = useMemo(() => deskBags(snapshot), [snapshot]);
-  const [localMint, setLocalMint] = useState<string | null>(null);
-  const [interval, setInterval] = useState<(typeof INTERVALS)[number]>("15m");
-  const [bars, setBars] = useState<CandleBar[]>([]);
-  const [stats, setStats] = useState<Record<string, number | null> | null>(null);
+  const selected = selectedMint ?? tokens[0]?.mint ?? null;
+  const [payload, setPayload] = useState<CandlePayload | null>(null);
+  const [receivedAt, setReceivedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const selected = selectedMint ?? localMint ?? tokens[0]?.mint ?? null;
-  const token = tokens.find((item) => item.mint === selected);
+  const [hover, setHover] = useHover();
+  const now = useNow();
 
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
-    void loadCandles(selected, interval)
-      .then((payload) => {
-        if (!cancelled) {
-          setBars(payload.bars);
-          setStats(payload.stats ?? null);
-        }
+    void loadCandles(selected)
+      .then((fetched) => {
+        if (cancelled) return;
+        setPayload(fetched.data);
+        setReceivedAt(fetched.receivedAt);
+        setError(null);
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setBars([]);
-          setError(err instanceof Error ? err.message : "candles unavailable");
-        }
+        if (cancelled) return;
+        setPayload(null);
+        setError(err instanceof Error ? err.message : "candles unavailable");
       });
     return () => {
       cancelled = true;
     };
-  }, [selected, interval]);
+  }, [selected]);
 
-  const last = bars.at(-1);
-  const first = bars[0];
-  const change =
-    last && first && first.c
-      ? ((last.c - first.c) / first.c) * 100
-      : null;
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <PageKicker>Markets</PageKicker>
-        <PageTitle>History / candles</PageTitle>
-        <PageLede>
-          History / candles are proxied through the local sentinel from DexScreener windows (m5/h1/h6/h24). The browser
-          never talks to that host.
-        </PageLede>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {tokens.map((item) => (
-          <Button
-            key={item.mint}
-            size="sm"
-            variant={item.mint === selected ? "default" : "outline"}
-            onClick={() => setLocalMint(item.mint)}
-          >
-            {item.name}
-            <span className="font-mono tnum text-[10px] opacity-70">{number(item.exit_sol, 3)}</span>
-          </Button>
-        ))}
-        {!tokens.length && <p className="text-sm text-muted-foreground">No holdings to chart.</p>}
-      </div>
-      <Card>
-        <CardHeader className="flex-row items-start justify-between gap-4">
-          <div>
-            <CardTitle className="font-display text-2xl font-medium">{token?.name ?? "Select a token"}</CardTitle>
-            <CardDescription className="font-mono">{token ? shortAddress(token.mint) : "—"}</CardDescription>
-          </div>
-          <div className="flex gap-1">
-            {INTERVALS.map((item) => (
-              <Button key={item} size="sm" variant={item === interval ? "default" : "ghost"} onClick={() => setInterval(item)}>
-                {item}
-              </Button>
-            ))}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <Badge variant="outline">last {last ? number(last.c, 6) : "—"} USD</Badge>
-            {change != null && (
-              <span className={change < 0 ? "text-destructive" : "text-primary"}>{number(change, 1)}% window</span>
-            )}
-            {stats?.change_h24 != null && <span>24h {number(stats.change_h24, 1)}%</span>}
-            {stats?.liquidity_usd != null && <span>liq ${number(stats.liquidity_usd, 0)}</span>}
-            {stats?.volume_h24 != null && <span>vol ${number(stats.volume_h24, 0)}</span>}
-            {parseSol(token?.exit_sol) != null && <span>exit {number(token?.exit_sol, 4)} SOL</span>}
-          </div>
-          <div className="h-[380px] w-full">
-            {bars.length ? (
-              <CandleStrip bars={bars} />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                {error ?? "No candle history for this mint yet."}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+  const bars = payload?.bars ?? [];
+  const shape = shapeOf(bars);
+  const clock = clockOf(
+    bars.length ? new Date(bars[bars.length - 1].t * 1000).toISOString() : null,
+    receivedAt,
   );
-}
+  const statOrigin = (path: string, note?: string): Origin => ({
+    source: CANDLES_PATH,
+    path,
+    kind: "served",
+    clock,
+    note,
+  });
 
-function CandleStrip({ bars }: { bars: CandleBar[] }) {
-  const pad = { top: 12, right: 12, bottom: 8, left: 12 };
-  const width = 920;
-  const height = 360;
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const lows = bars.map((bar) => bar.l);
-  const highs = bars.map((bar) => bar.h);
-  const min = Math.min(...lows);
-  const max = Math.max(...highs);
-  const span = max - min || 1;
-  const gap = innerW / bars.length;
-  const body = Math.max(2, gap * 0.62);
-  const y = (value: number) => pad.top + ((max - value) / span) * innerH;
+  const stats = payload?.stats ?? {};
+  const stat = (key: string, note?: string): Measured<number> => {
+    const value = stats[key];
+    return value == null
+      ? unobserved(statOrigin(`stats.${key}`, note))
+      : observed(value, statOrigin(`stats.${key}`, note));
+  };
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label="candles">
-      {bars.map((bar, index) => {
-        const x = pad.left + index * gap + gap / 2;
-        const up = bar.c >= bar.o;
-        const color = up ? "var(--primary)" : "var(--destructive)";
-        const top = y(Math.max(bar.o, bar.c));
-        const bottom = y(Math.min(bar.o, bar.c));
-        return (
-          <g key={`${bar.t}-${index}`}>
-            <line x1={x} x2={x} y1={y(bar.h)} y2={y(bar.l)} stroke={color} strokeWidth={1} />
-            <rect
-              x={x - body / 2}
-              y={top}
-              width={body}
-              height={Math.max(1, bottom - top)}
-              fill={color}
-              opacity={up ? 0.85 : 0.7}
+    <div className="space-y-3">
+      <Panel title="Instrument" source="/api/snapshot → positions[] + unmonitored[]">
+        <div className="flex flex-wrap gap-1.5 p-3">
+          {tokens.map((token) => (
+            <button
+              key={token.mint}
+              type="button"
+              onClick={() => onSelect(token.mint)}
+              className={cn(
+                "rounded border px-2 py-1 font-mono text-[11px]",
+                token.mint === selected
+                  ? "border-primary/60 bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {token.name}
+            </button>
+          ))}
+          {!tokens.length && (
+            <span className="text-xs text-muted-foreground">No holdings to chart.</span>
+          )}
+        </div>
+      </Panel>
+
+      {!selected ? (
+        <Panel title="Price" source={CANDLES_PATH}>
+          <Absent reason="no-rows" detail="Select an instrument." />
+        </Panel>
+      ) : (
+        <Panel
+          title={`Price · ${payload?.mint ? shortAddress(payload.mint) : shortAddress(selected)}`}
+          source={CANDLES_PATH}
+          clock={clock}
+          now={now}
+          tone={shape === "reconstructed-path" ? "warn" : "neutral"}
+          actions={
+            payload && (
+              <>
+                <StatusPill label={payload.source} tone="idle" />
+                {payload.dex && <StatusPill label={payload.dex} tone="idle" />}
+              </>
+            )
+          }
+          note={
+            shape === "reconstructed-path" ? (
+              <>
+                <strong className="text-chart-3">This is not an OHLC series.</strong>{" "}
+                <code className="font-mono">/api/candles</code> back-solves at most five prior
+                prices out of DexScreener&apos;s percentage windows (m5 / h1 / h6 / h24) as{" "}
+                <code className="font-mono">price ÷ (1 + pct/100)</code>, and emits each one with
+                open = high = low = close and volume 0. Drawn as candlesticks those become five doji
+                over a flat volume pane, which reads as a quiet market when the truth is that no
+                high, low, or volume was ever measured. It is drawn as what it is: a handful of
+                reconstructed points. The line between them is interpolation, not observed movement.
+              </>
+            ) : undefined
+          }
+        >
+          {error ? (
+            <Absent reason="error" detail={<p className="font-mono">{error}</p>} />
+          ) : !bars.length ? (
+            <Absent reason="no-rows" detail="No price history reconstructed for this mint." />
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/70 px-3 py-1.5 font-mono text-[11px]">
+                {hover ? (
+                  <>
+                    <span className="text-muted-foreground">{hoverTime(hover.time)}</span>
+                    <span>
+                      close{" "}
+                      {hover.close < 0.01 ? hover.close.toExponential(4) : decimals(hover.close, 6)}
+                    </span>
+                    {hover.high != null && hover.low != null && (
+                      <span className="text-muted-foreground">
+                        h {hover.high.toExponential(4)} · l {hover.low.toExponential(4)}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">
+                    {bars.length} point{bars.length === 1 ? "" : "s"} · hover for values · log price
+                    scale
+                  </span>
+                )}
+              </div>
+              <PriceChart bars={bars} shape={shape} onHover={setHover} />
+            </>
+          )}
+        </Panel>
+      )}
+
+      <Panel
+        title="Served statistics"
+        source={`${CANDLES_PATH} → stats`}
+        clock={clock}
+        now={now}
+        note="These are the aggregator's own window statistics, and unlike the price path they were measured rather than reconstructed. They carry ingest time only — no block time — so they must not be joined against chain events."
+      >
+        <FieldGrid columns={4}>
+          <Field label="price usd">
+            <Figure
+              m={stat("price_usd", "DexScreener's current price for the chosen pair.")}
+              format={(value) => (value < 0.01 ? value.toExponential(4) : usd(value, 6))}
             />
-          </g>
-        );
-      })}
-    </svg>
+          </Field>
+          <Field label="liquidity usd">
+            <Figure m={stat("liquidity_usd")} format={(value) => usd(value, 0)} />
+          </Field>
+          <Field label="volume 24h">
+            <Figure m={stat("volume_h24")} format={(value) => usd(value, 0)} />
+          </Field>
+          <Field label="fdv">
+            <Figure m={stat("fdv")} format={(value) => usd(value, 0)} />
+          </Field>
+          {(["m5", "h1", "h6", "h24"] as const).map((window) => (
+            <Field key={window} label={`change ${window}`}>
+              <Figure
+                m={stat(
+                  `change_${window}`,
+                  "The percentage window the price path above is reconstructed from. This is the measurement; the path is the inference.",
+                )}
+                format={(value) => `${decimals(value, 2)}%`}
+                className={
+                  stats[`change_${window}`] == null
+                    ? undefined
+                    : (stats[`change_${window}`] ?? 0) >= 0
+                      ? "text-lamp-ok"
+                      : "text-destructive"
+                }
+              />
+            </Field>
+          ))}
+          <Field label="volume per bar" hint="Every reconstructed bar carries v = 0 as a filler.">
+            <Figure
+              m={unobserved({
+                source: CANDLES_PATH,
+                path: "bars[].v",
+                kind: "served",
+                clock,
+                note: "The reconstruction emits v = 0 for every bar. No per-bar volume is measured anywhere in this path, so it is shown as absent rather than as zero volume.",
+              })}
+            />
+          </Field>
+          <Field label="pair">
+            {payload?.mint ? (
+              <Copyable value={payload.mint} display={shortAddress(payload.mint)} />
+            ) : (
+              <span className="font-mono text-xs text-muted-foreground">{NO_DATA}</span>
+            )}
+          </Field>
+          <Field label="fetched">
+            <span className="font-mono text-[11px]">{stampUtc(receivedAt)}</span>
+          </Field>
+        </FieldGrid>
+      </Panel>
+    </div>
   );
 }
