@@ -25,6 +25,17 @@ resolution is signal #2 and why nothing downstream splits correctly until it exi
 Every fold reports how many samples each defence removed. A purge that silently removes
 nothing looks identical to a purge that was never needed, and telling those apart afterwards
 is impossible.
+
+**And a fold with no training data left is refused, not returned.** The mirror image of a
+no-op purge is a total one: all-one-entity data, all-identical timestamps, a label window
+longer than the dataset, or an embargo wider than it, each consume every training row and
+leave ``Fold(train=())``. Returned silently that is indistinguishable from a successful
+purge — an adversarial audit found three of this module's own tests running on exactly that
+fixture, where the independent verifier iterated zero rows and certified nothing while
+staying green. ``walk_forward`` therefore raises :class:`DegenerateFoldError` by default and
+names which defence consumed the fold, which is what the counters are for; a caller who
+genuinely wants the empty folds asks for them with ``allow_degenerate=True``. For the same
+reason ``assert_no_leakage`` refuses an empty train or test set instead of vacuously passing.
 """
 
 from __future__ import annotations
@@ -35,6 +46,14 @@ from dataclasses import dataclass
 
 class SplitError(ValueError):
     """The split contract was violated. Always fail closed."""
+
+
+class DegenerateFoldError(SplitError):
+    """A fold came back with no training data, so it is not a split at all.
+
+    Separate from :class:`SplitError` only so a caller can distinguish "your data cannot be
+    split this way" from "you asked for something incoherent". Both fail closed.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +88,15 @@ class Fold:
     def removed(self) -> int:
         return self.purged_by_label + self.purged_by_entity + self.embargoed
 
+    @property
+    def is_degenerate(self) -> bool:
+        """No training data survived. Nothing can be fitted, and nothing can be certified.
+
+        Named rather than left as an incidental ``not fold.train`` because the failure it
+        describes is silent: every downstream check over an empty train set passes.
+        """
+        return not self.train
+
 
 def walk_forward(
     samples: Sequence[Sample],
@@ -76,16 +104,28 @@ def walk_forward(
     folds: int,
     embargo: int = 0,
     expanding: bool = True,
+    allow_degenerate: bool = False,
 ) -> list[Fold]:
     """Split ``samples`` into ``folds`` forward-chained train/test divisions.
 
     ``embargo`` is a gap, in the same units as ``at``, held empty immediately before each test
     window. Purge removes leakage that is *visible* in the label interval; the embargo covers
     serial correlation that is not — an autocorrelated feature right at the boundary leaks
-    without any label window reaching across it.
+    without any label window reaching across it. The boundary is inclusive on the training
+    side: a sample exactly ``embargo`` units before the test start is the last one kept, so
+    ``embargo=0`` is exactly "no embargo" rather than "drop the sample on the line".
 
     ``expanding`` grows the training set each fold (the honest default: it is what a live desk
     would actually have). Set it False for a rolling window when non-stationarity dominates.
+
+    ``allow_degenerate`` is the escape hatch for folds the defences emptied completely. The
+    default refuses them, because a returned ``Fold(train=())`` is the failure this module
+    exists to prevent wearing the costume of the success: every leakage check over an empty
+    training set passes, so "the purge worked" and "the training data was deleted" produce
+    identical green. Pass True only when the emptiness is itself the measurement.
+
+    Samples are ordered by ``at`` rather than by position, so a tape paged newest-first — the
+    real behaviour of the history sources feeding this — does not silently invert time.
     """
     if folds < 2:
         raise SplitError("walk-forward needs at least 2 folds")
@@ -144,6 +184,19 @@ def walk_forward(
                 embargoed=embargoed,
             )
         )
+
+    if not allow_degenerate:
+        empty = [i for i, produced in enumerate(out) if produced.is_degenerate]
+        if empty:
+            first = out[empty[0]]
+            raise DegenerateFoldError(
+                f"folds {empty} have no training data left after purging "
+                f"(fold {empty[0]}: {first.purged_by_label} purged by label, "
+                f"{first.purged_by_entity} by entity, {first.embargoed} embargoed). "
+                "An empty training set cannot be fitted and cannot be checked for leakage, "
+                "so it is refused rather than returned; pass allow_degenerate=True if the "
+                "emptiness is the measurement you want."
+            )
     return out
 
 
@@ -152,9 +205,18 @@ def assert_no_leakage(samples: Sequence[Sample], fold: Fold) -> None:
 
     A splitter is exactly the kind of code that looks right and silently does nothing, so the
     guarantee is verified against the produced indices rather than trusted from the producer.
+
+    An empty train or test set is refused rather than passed. A loop over zero rows raises
+    nothing, so a verifier that accepted one would report "no leakage" about a fold that
+    contains no data — which is how three of this module's own tests came to certify nothing
+    while staying green.
     """
     if not fold.test:
-        return
+        raise SplitError("fold has no test data; there is nothing to certify")
+    if not fold.train:
+        raise SplitError(
+            "fold has no training data; a leakage check over zero rows certifies nothing"
+        )
     test_start = min(samples[i].at for i in fold.test)
     test_entities = {samples[i].entity for i in fold.test}
     for index in fold.train:

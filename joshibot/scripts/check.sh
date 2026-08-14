@@ -14,6 +14,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# Never write bytecode during a gate run. CPython invalidates a cached .pyc on
+# (source mtime in SECONDS, source size), so a mutation that is the SAME BYTE LENGTH and is
+# written and reverted inside one second leaves the MUTATED bytecode running against the
+# RESTORED source. That was reproduced live in this repo: a `>=` changed to `> ` (identical
+# length) kept failing after the file was restored, and only a __pycache__ purge cleared it.
+# It corrupts mutation testing in BOTH directions, including a false "killed" that lets a real
+# hole through -- which is worse, because it reads as evidence. Anyone doing write/run/restore
+# mutation work by hand must clear __pycache__ between steps; this makes the gate itself immune.
+export PYTHONDONTWRITEBYTECODE=1
+
 fail=0
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok()   { printf '   \033[32mok\033[0m %s\n' "$1"; }

@@ -21,9 +21,17 @@ from shitcoims_replay.engine import (
     replay,
 )
 from shitcoims_replay.ope import Estimate, LoggedDecision, OPEError, evaluate, require_overlap
-from shitcoims_replay.split import Fold, Sample, SplitError, assert_no_leakage, walk_forward
+from shitcoims_replay.split import (
+    DegenerateFoldError,
+    Fold,
+    Sample,
+    SplitError,
+    assert_no_leakage,
+    walk_forward,
+)
 
 __all__ = [
+    "DegenerateFoldError",
     "Estimate",
     "Fill",
     "Fold",

@@ -13,6 +13,7 @@ from shitcoims_kernel import Reserves as KernelReserves
 from shitcoims_kernel import sell_out
 from shitcoims_replay import Order, ReplayError, Snapshot, replay
 from shitcoims_tape import (
+    Callout,
     Chainstamp,
     EventKind,
     Provenance,
@@ -143,6 +144,37 @@ def test_a_sell_actually_happens_and_is_priced_by_the_kernel() -> None:
     assert ledger.realised_lamports < 0
 
 
+def test_the_ledger_totals_are_exact_lamport_counts() -> None:
+    """`realised_lamports` is the only number this module asks anyone to believe.
+
+    Every other ledger assertion in this file checks the totals against the engine's own
+    fills, which is self-consistency rather than correctness: a run that mis-prices both in
+    the same direction still agrees with itself. These are hand-computed from the constant
+    product and the rounding rule, so the totals are pinned to arithmetic, not to the engine.
+    """
+    mint, pool, wallet = _addr(), _addr(), _addr()
+    events = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000), (20, 1_000_000, 500_000)])
+
+    def policy(snap: Snapshot) -> Order | None:
+        if snap.slot == 10:
+            return Order(mint=mint, side=Side.BUY, amount_raw=10_000)
+        held = snap.holdings.get(mint, 0)
+        return Order(mint=mint, side=Side.SELL, amount_raw=held) if held else None
+
+    ledger = replay(events, policy, starting_lamports=10**9)
+
+    # Buy:  ceil(500_000 * 10_000 / (1_000_000 - 10_000)) = ceil(5050.505...) = 5_051.
+    # Sell: floor(500_000 * 10_000 / (1_000_000 + 10_000)) = floor(4950.495...) = 4_950,
+    #       priced against the fresh slot-20 reading, which is unchanged from slot 10.
+    assert ledger.lamports_spent == 5_051
+    assert ledger.lamports_received == 4_950
+    assert ledger.realised_lamports == -101
+    assert [f.lamports for f in ledger.fills] == [5_051, 4_950]
+    assert [f.slot for f in ledger.fills] == [10, 20]
+    assert ledger.rejected_orders == 0
+    assert ledger.rejected_for_participation == 0
+
+
 def test_a_round_trip_never_returns_more_than_it_cost() -> None:
     """The Lean round-trip identity, checked end to end through the replay.
 
@@ -233,14 +265,22 @@ def test_a_zero_or_negative_order_is_refused_at_construction() -> None:
         Order(mint=_addr(), side=Side.BUY, amount_raw=-1)
 
 
-def test_an_unorderable_event_is_refused_rather_than_placed_arbitrarily() -> None:
-    """A trade with no chainstamp cannot be sequenced, and guessing its place corrupts everything."""
+def test_a_chainless_event_is_skipped_rather_than_placed_at_slot_zero() -> None:
+    """A callout has no chainstamp by design; it must be skipped, not mis-sequenced.
+
+    The previous version of this test ran a policy of ``lambda s: None`` and asserted the
+    ledger was empty — true of every possible implementation, including one that dumps every
+    unstamped event at slot 0 and hands the policy a phantom decision point before the market
+    exists. The policy here decides on every call and the slots it sees are pinned, so a
+    fabricated slot is visible.
+    """
     mint, pool, wallet = _addr(), _addr(), _addr()
-    bad = TapeEvent(
+    tape = _tape(mint, pool, wallet, [(10, 1_000_000, 500_000), (20, 1_000_000, 500_000)])
+    callout = TapeEvent(
         kind=EventKind.CALLOUT,
         observed_at="2026-08-13T00:00:00Z",
         provenance=_prov(),
-        body=__import__("shitcoims_tape").Callout(
+        body=Callout(
             mint=mint,
             platform="x",
             author="a",
@@ -248,9 +288,45 @@ def test_an_unorderable_event_is_refused_rather_than_placed_arbitrarily() -> Non
             text_sha256="a" * 64,
         ),
     )
-    # A callout has no chainstamp by design; it must be skipped, not mis-sequenced.
-    ledger = replay([*_tape(mint, pool, wallet, [(10, 1_000, 500)]), bad], lambda s: None)
-    assert ledger.fills == []
+
+    slots: list[int] = []
+
+    def policy(snap: Snapshot) -> Order | None:
+        slots.append(snap.slot)
+        return Order(mint=mint, side=Side.BUY, amount_raw=1_000) if snap.slot == 10 else None
+
+    ledger = replay([callout, *tape], policy, starting_lamports=10**9)
+    assert slots == [10, 20], "the unstamped callout created a decision point of its own"
+    assert len(ledger.fills) == 1
+    assert ledger.rejected_orders == 0
+
+
+def test_an_orderable_event_without_a_chainstamp_is_refused_rather_than_guessed() -> None:
+    """A trade cannot be sequenced without a chainstamp, and guessing corrupts everything.
+
+    The schema already refuses to build one, so this reaches past the constructor to make the
+    engine's own guard testable. That the guard is unreachable through the front door is the
+    point: it is the second lock, and a second lock nobody has ever turned is not a lock.
+    """
+    from shitcoims_replay.engine import _slot_of
+
+    mint, pool, wallet = _addr(), _addr(), _addr()
+    orphan = TapeEvent(
+        kind=EventKind.TRADE,
+        observed_at="2026-08-13T00:00:00Z",
+        provenance=_prov(),
+        chain=_chain(15),
+        body=Trade(
+            mint=mint, wallet=wallet, side=Side.BUY,
+            sol_delta_lamports=-1, token_delta_raw=1, pool=pool,
+        ),
+    )
+    object.__setattr__(orphan, "chain", None)
+
+    with pytest.raises(ReplayError, match="cannot be ordered"):
+        _slot_of(orphan)
+    with pytest.raises(ReplayError, match="cannot be ordered"):
+        replay([*_tape(mint, pool, wallet, [(10, 1_000, 500)]), orphan], lambda s: None)
 
 
 def test_a_policy_sees_the_current_slots_reserves_not_a_later_slots() -> None:

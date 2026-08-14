@@ -254,6 +254,24 @@ Note for whoever runs this next: the first three waves of this project shipped w
 gate run every time and the adversarial audit run ZERO times, because the build gate kept
 coming back green and green feels like enough. It is not. Schedule the audit.
 
+## Mutation testing lies by default — clear the bytecode cache
+
+Falsification is this project's main evidence that a test asserts anything, so the harness
+being unreliable is a first-order problem.
+
+CPython invalidates a cached `.pyc` on **(source mtime in seconds, source size)**. A mutation
+that is the SAME BYTE LENGTH and is written and reverted inside one second therefore leaves
+the **mutated bytecode running against the restored source**. Reproduced live here: `>=`
+changed to `> ` in `split.py` kept failing after the file was restored on disk, with a clean
+`git diff`, until `__pycache__` was purged.
+
+It corrupts results in both directions. A false SURVIVED wastes a lane's time. A false KILLED
+is worse — it reads as evidence that a test guards something it does not.
+
+**Rule: clear `__pycache__` (or bump mtime) between every mutation step.** `scripts/check.sh`
+now exports `PYTHONDONTWRITEBYTECODE=1` so a gate run cannot be poisoned, but hand-run
+mutation loops are on their own and every lane prompt should say so.
+
 ## Swarm-safety mechanics (paid for in real debugging)
 
 - Commit **named files** while lanes are live; never `git add -A` (half-written siblings).
