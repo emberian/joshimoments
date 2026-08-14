@@ -164,7 +164,13 @@ class ScalperPolicy:
         ranges: JitterRanges | None = None,
         explore_eps: float = 0.05,
         swap_fee_bps: int = 100,
-        priority_fee_lamports: int = 500_000,
+        # MEASURED, not assumed. studies/RESULT_execution_landing.md put the real
+        # network fee on a transaction shaped like ours at 21,000-53,000 lamports;
+        # this was 500,000, i.e. ~14x too high. Since B* = sqrt(priority * Y), that
+        # oversized every clip by ~4x for an entire shadow run and moved the optimum
+        # from ~$2.45 to ~$9.28 at a 30-SOL pool. The operator's instinct for $3
+        # clips was right and this constant is why the model disagreed.
+        priority_fee_lamports: int = 35_000,
         rho_max_bps: int = 200,
         bankroll_cap_lamports: int = LAMPORTS_PER_SOL // 2,
         max_friction: float = 0.05,

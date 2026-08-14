@@ -12,9 +12,14 @@ endpoint can be swapped without touching policy, book, or marking.
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from shitcoims_scalper.shadow import CurveState
 
@@ -121,3 +126,111 @@ def poll_mint(mint: str) -> MintSnapshot | None:
     if not isinstance(data, dict):
         return None
     return _snapshot(data, time.time())
+
+
+# ---------------------------------------------------------------------------------
+# callout-sourced candidates — the strategy the operator actually described
+# ---------------------------------------------------------------------------------
+#
+# The operator's original account was: "clicking on every coin in the callout feed
+# and glancing at it for a few seconds". The first probe never did that — it polled
+# the general listing, i.e. every coin alive on the platform. That is a DIFFERENT
+# STRATEGY over a different population, and it is the one that lost 15%.
+#
+# This reads the intelligence store's already-collected social stream. It is
+# strictly read-only over a COPY: the inteld daemon holds a write lock, and opening
+# the live file directly raises "database is locked".
+#
+# Detection latency matters and is measured: x_mint_mention runs p50 209s, which is
+# inside Marino's 4.4-minute median time-to-graduation. Everything else is far
+# slower (claudekol_claim p50 1,280s, x_reply 8,291s) and is research-grade, not
+# trade-grade. `max_age_s` enforces that rather than trusting the source.
+
+INTEL_DB = Path(__file__).resolve().parent.parent / "intelligence_state" / "intelligence.sqlite3"
+
+#: Kinds that carry a mint, ordered by measured detection latency (fastest first).
+CALLOUT_KINDS: tuple[str, ...] = ("x_mint_mention", "claudekol_claim", "x_cashtag")
+
+
+@dataclass(frozen=True, slots=True)
+class Callout:
+    """One social mention resolved to a mint, with the clock we can defend."""
+
+    mint: str
+    kind: str
+    t_post_unix: float
+    author: str | None
+    resolved_from: str  # "payload_mint" | "mint_candidates" | "subject_id"
+
+
+def _b58_mintish(text: str) -> bool:
+    return 32 <= len(text) <= 44 and not set(text) & set("0OIl")
+
+
+def poll_callouts(*, max_age_s: float = 900.0, limit: int = 200) -> list[Callout]:
+    """Recent mint-resolved callouts from the intelligence store. Never raises."""
+    if not INTEL_DB.exists():
+        return []
+    cutoff = datetime.now(UTC) - timedelta(seconds=max_age_s)
+    tmp = Path(tempfile.gettempdir()) / "scalper_intel_snapshot.sqlite3"
+    try:
+        shutil.copy2(INTEL_DB, tmp)  # the daemon holds a write lock on the original
+        conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+    except Exception:
+        return []
+    out: list[Callout] = []
+    seen: set[str] = set()
+    try:
+        placeholders = ",".join("?" for _ in CALLOUT_KINDS)
+        rows = conn.execute(
+            f"SELECT kind, subject_type, subject_id, observed_at, payload_json "
+            f"FROM observations WHERE kind IN ({placeholders}) AND observed_at > ? "
+            f"ORDER BY observed_at DESC LIMIT ?",
+            (*CALLOUT_KINDS, cutoff.isoformat(), limit),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+    for kind, subject_type, subject_id, observed_at, payload_json in rows:
+        try:
+            payload = json.loads(payload_json) if payload_json else {}
+        except json.JSONDecodeError:
+            payload = {}
+        mint, source = None, ""
+        if isinstance(payload.get("mint"), str) and _b58_mintish(payload["mint"]):
+            mint, source = payload["mint"], "payload_mint"
+        elif subject_type == "token" and isinstance(subject_id, str) and _b58_mintish(subject_id):
+            mint, source = subject_id, "subject_id"
+        else:
+            for cand in payload.get("mint_candidates") or []:
+                if isinstance(cand, str) and _b58_mintish(cand):
+                    mint, source = cand, "mint_candidates"
+                    break
+        if not mint or mint in seen:
+            continue
+        seen.add(mint)
+        try:
+            t_post = datetime.fromisoformat(observed_at).timestamp()
+        except (TypeError, ValueError):
+            continue
+        out.append(
+            Callout(
+                mint=mint,
+                kind=kind,
+                t_post_unix=t_post,
+                author=payload.get("author_username") or payload.get("author"),
+                resolved_from=source,
+            )
+        )
+    return out
+
+
+def poll_callout_snapshots(*, max_age_s: float = 900.0) -> list[tuple[MintSnapshot, Callout]]:
+    """Callouts joined to live curve state — the candidate stream, paired with its provenance."""
+    paired: list[tuple[MintSnapshot, Callout]] = []
+    for callout in poll_callouts(max_age_s=max_age_s):
+        snap = poll_mint(callout.mint)
+        if snap is not None:
+            paired.append((snap, callout))
+    return paired
