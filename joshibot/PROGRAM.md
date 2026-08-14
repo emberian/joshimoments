@@ -705,10 +705,31 @@ What this **changes**:
   charge state, curl residual, which edges are *ours* — merging the flow tape, the panel, and the LP
   meter. This is the desk's actual dashboard, and it is interface-shaped (candidate #9 in SWARM.md's
   manifest).
-- **A move the old frame could not see: deliberate edge creation.** Placing a pool between two
-  communities that lack a low-resistance path makes us the monopolist wire on a route flow wants to
-  take (the $0-TVL SOLVE/DREGG pool is an unbuilt instance). Pool placement is a *strategic* decision
-  now, informed by measured relative-vol + reversion + absence of competing paths.
+- **A move the old frame could not see: deliberate edge creation** — *and its stated mechanism was
+  wrong, see below.* Pool placement is a strategic decision, informed by measured relative-vol and
+  the absence of competing paths.
+
+  **CORRECTION (2026-08-14, studies/RESULT_edge_creation.md — the premise inverted).** This bullet
+  originally said a new pool makes us "the monopolist wire on a route flow wants to take."
+  **There is no route.** Across all seven token-token pools the desk has ever opened — 593 swaps of
+  full on-chain history — **exactly one** was a genuine direct A↔B trade. 84.5% were closed
+  arbitrage cycles; 15.3% were SOL↔token routes using our pool as one leg. Measured two-hop demand
+  over 30 hours of tape: **0.04 SOL, about $3/day.** The arithmetic was available in advance and we
+  never did it: two-hop A→SOL→B costs **2.12–2.88%**, our tiers are **5.00–6.00%**, so a direct pool
+  is **1.7–2.8× more expensive than the route it replaces**. Nobody routes through it because it is
+  the dearer path.
+
+  The confirming experiment was already in our own book: `A8ga6XM3`, weave/DREGG at **0.20%** —
+  eleven times cheaper than the alternative — captured **zero** direct trades and now shows no volume.
+  Cheapness does not summon flow, because the flow was never going A→B.
+
+  **What the product actually is: a toll on a cycle we closed, not a cheaper wire.** That inverts the
+  design rules. A toll booth wants a *high* fee and tolerates a *low* capital floor; a competing wire
+  would want the opposite. We priced like a toll booth and described it as a wire — the instinct was
+  right and the story was wrong, which is the dangerous combination, because the story is what
+  generalises to the next decision. Min viable TVL `= 2·G·W/band²` runs the counterintuitive way: a
+  **cheaper pool needs more capital** ($632 at 0.20% vs $97 at 5.00%), and `A8ga6XM3` was funded at
+  $537 against a $632 floor — the formula predicted the dormancy rather than being fitted to it.
 - **The closed loop is legitimate and measurable.** The DREGG null (community activity → ~1.86×
   volume, no durable price effect) reads in this frame as: *the operator can drive current through
   their own resistors.* Volume-linked income plus volume-driving capability is a feedback loop the
