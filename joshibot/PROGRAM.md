@@ -752,6 +752,67 @@ What this **changes**:
   version is a *kink in the drift exactly at the band edge* (diode dead-zone geometry), not a sign
   difference. studies/RESULT_circuit_model.md §8.2.
 
+### 8.1 The LP decision rule, and what it did to the LP thesis (2026-08-14)
+
+`studies/RESULT_circuit_theory.md` replaced the hand-waving with one dimensionless criterion, derived
+and Monte-Carlo verified against the LVR budget identity:
+
+> **LP is +EV ⟺ `η > VR(T)`**, where `η ≡ 2fN/(C·RV)` is a churn number and `VR(T)` is the variance
+> ratio at the horizon.
+
+The mechanism is the useful part: **fees accrue on quadratic variation** (the whole path) while **IL
+depends only on the net move** (a single frequency). *The LP is long the entire spectrum and short
+exactly one bin — the pool is a **notch**, not a low-pass.* `η = 1` exactly on arbitrage flow, so
+`η − 1` is the non-arbitrage share of revenue in LVR units. And concentration `4/W` scales **both**
+ledger terms equally: it is pure leverage on `(η − VR)`, **sign-preserving**, so concentration can
+never turn a −EV pool +EV — it only amplifies the sign you already have.
+
+Measured: **η = 0.055–0.235** on token/SOL pools (−EV by 1.9–9.2×); **η = 0.59–1.08** on the flagship
+weave/nosis DLMM ($93 of fees against $157 of adverse selection). Near break-even, not catastrophic.
+
+**Three things this and the edge-creation study did to the "LP is our measured edge" claim:**
+
+1. **Outcome:** across 10 closed cluster positions earning **$879 in fees**, the desk is **−$130.80 net
+   and −$595.14 versus holding the baskets**. The harvest rates quoted throughout this document
+   (31.6%/day etc.) are correct — they are the **numerator**. The book is up overall because the tokens
+   rose, not because LPing beat holding.
+2. **The edge is router-attention rent, not pricing power.** Routing cost through a pool is
+   `f·Φ + Φ²/2C`, so `1/C` is an **elastance** that adds along a route. Both token-token pools are
+   *more expensive and thinner* than the SOL substitute — a cost-minimising router should send them
+   **nothing at any size**, and the median trade through them pays **2.67×** the best available route.
+   The failure mode is therefore **a Jupiter routing update, not a competitor** — a step function, not
+   an elasticity. §8's earlier "monopolist wire" and the "toll booth" correction are both superseded
+   by this.
+3. **The reversion premise is unchecked at its own horizons.** The ~7.2h/8.9h half-lives came from
+   last-trade closes, which carry bid-ask bounce. Recomputed **bounce-free from per-swap vault
+   balances: VR = 0.80–1.01 at 15m–1h on four of four pools — a random walk.** SOLVE/SOL at 4h reads
+   1.50 bounce-free vs 0.587 from closes. One pool, one horizon: a lead, not a refutation. But every
+   argument resting on "IL is temporary because the ratio reverts" is now provisional.
+
+**Correction to `RESULT_power_gate.md` §2.5:** it inferred from fee-invariant arbitrage revenue that
+"half the edge is competition-invariant." The revenue half is now *exact* (`½Cσ²`), but it is matched
+dollar-for-dollar by adverse selection under the LVR budget identity, so its **profit** contribution is
+zero. **A rival taking only taker flow takes 100% of the profit while leaving 36% of the revenue.**
+
+**Max power transfer did land, cleanly:** optimal depth is where captured volume is unit-elastic in
+depth, `d ln(volume) / d ln C = 1`, with closed form **`C* = α·C₀`** for Pareto trade sizes with tail
+index α (measured 1–2). At α = 1 that is exactly the textbook matched condition `R_L = R_s`, with the
+tail index as the entire correction. **Demoted with reasons:** transmission-line/reflection (no
+inductance exists in an AMM, so no wave equation), Q factor (the feedback margin is 10⁵–10⁶×; it is a
+first-order lag), Johnson–Nyquist as an FDT (no temperature, no detailed balance — though the
+*available-power* structure survives exactly and buys a volatility bound), Onsager (untestable), and
+"low-pass on order flow" (wrong as stated — a dead-zone is rate-independent, so the fee element has no
+frequency response at all).
+
+**What is now the highest-value open question in the project:** the **rebalance rule**. DREGG/nosis
+proves range exit is what kills these positions — it harvested *better* per hour in service (67.6%/day
+vs weave/nosis's 57.6%) and still lost, because its **duty cycle was 49.4% against 99.4%**: 1.88 hours
+out of range, 48% of its life, taking zero flow while the ratio moved against it. A range-exited DLMM
+is literally an open circuit. Realized divergence ran **4.7× and 8.2× the constant-product IL**,
+confirming the full-range formula badly understates concentrated IL.
+
+---
+
 What this does **not** change: the envelope and its theorem (an exposure cap quantified over all
 learners is exactly "no action sequence can overcharge the book"); the verification discipline of §3;
 the scalper's clock-exit logic; the base rates. And it names the frame's own failure mode honestly —
