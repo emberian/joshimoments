@@ -5,108 +5,108 @@ WHY THIS EXISTS
 ---------------
 We have live papertesting and no historical backtesting, because we have no historical
 tape. Per-transaction RPC backfill was costed at ~10 credits/tx against a measured
-~93,600 tx/day across the cluster: one day is 9.4% of the monthly Helius plan, the full
-22-day history is 206% of it. This script is the bulk alternative.
+~93,600 tx/day across the cluster: one day is 9.4% of the monthly Helius plan and the full
+22-day history is 206% of it. This script is the bulk alternative, and it turns out to be
+both cheaper and *strictly more informative* than the RPC path.
 
-WHAT WAS ACTUALLY MEASURED (2026-08-13, project manifest-quasar-414607)
------------------------------------------------------------------------
-``bigquery-public-data.crypto_solana_mainnet_us`` exists, is DAY-partitioned on
-``block_timestamp`` with ``requirePartitionFilter``, and is fresh to within ~3 hours.
-Two of its tables could carry a swap tape, and exactly one of them carries exact numbers:
+THE SOURCE: `Transactions`, NOT `Token Transfers`
+-------------------------------------------------
+``bigquery-public-data.crypto_solana_mainnet_us.Transactions`` carries the full transaction
+meta: ``pre_token_balances`` / ``post_token_balances`` with ``amount`` as **BIGNUMERIC**
+(exact integers, never float), plus ``fee``, ``err``, ``index`` and ``compute_units_consumed``.
+It is DAY-partitioned on ``block_timestamp`` (``requirePartitionFilter``) and clustered on
+``signature``.
 
-- ``Instructions`` (1.14e12 rows, 937 TB, clustered on ``program_id``) contains **only
-  top-level instructions**: ``COUNTIF(parent_index IS NOT NULL) = 0`` over a full day of
-  PumpSwap. Measured against 528 known-good cluster swaps recorded live by
-  ``shitcoims_cluster.record`` on 2026-08-13, it holds a top-level PumpSwap instruction
-  for **224 of 528 (42.4%)**. The other 57.6% are aggregator-routed, where PumpSwap is
-  invoked by CPI and is therefore invisible. It also carries only the *requested* anchor
-  args, never the fill. Unusable as a tape.
+Validated against 528 swaps the live RPC collector independently recorded on 2026-08-13:
+**528 of 528 present, and 528 of 528 matched on BOTH pre and post reserves, every digit,
+on both vault legs.** That is replay-grade, not summary-grade.
 
-- ``Token Transfers`` (1.45e11 rows, 44 TB) **does** include inner CPI transfers, and its
-  ``value`` is a **raw integer** in base units. Validated against the live tape on the one
-  day where coverage exists: **9 of 9 swaps matched the RPC-derived vault deltas exactly**,
-  every digit, on both legs. This is the source this script uses.
+Two things this path has that ``getTransaction`` does not:
 
-THE CATCH, AND WHY EVERY OUTPUT FILE CARRIES A COVERAGE MEASUREMENT
---------------------------------------------------------------------
-``Token Transfers`` is **not reliably populated**. Measured ``mint IS NULL`` share and
-wrapped-SOL row counts per UTC day (WSOL is a leg of essentially every DEX swap, so its
-row count is a coverage thermometer for the whole table):
+- **``index``, the transaction's position within its block.** ``shitcoims_cluster.parse``
+  documents intra-slot ordering as unrecoverable from ``getTransaction`` (it returns a slot
+  but no block index), which matters because 57 of 158 observed slots on nosis/SOL carried
+  more than one transaction. This column resolves it, present on 528 of 528.
+- **Failed transactions.** ``err`` is non-empty on a revert, so reverts arrive in the same scan
+  as fills, and in the live tape attempts outnumber swaps 6.5 to 1. They are emitted as
+  ``kind: "failed"``, **not** as the live tape's ``attempt``: a failed transaction moved
+  nothing, so token balances cannot say whether it meant to trade *this* pool or merely listed
+  its vaults while failing elsewhere. Measured on 2026-08-13, nosis/SOL shows 105,457 failures
+  here against 4,336 live attempts — a ~24x gap. Narrowing them to real attempts needs to know
+  which program was invoked, which ``log_messages`` (only 3.1 GB/day) would give cheaply; that
+  is the obvious next increment and is deliberately not guessed at here.
 
-    day         total rows    WSOL rows    null-mint %
-    2026-02-01   96,057,774        2,433       96.3
-    2026-05-01   56,408,085      319,070       92.1
-    2026-06-15   72,661,809        7,749       95.9
-    2026-07-05   79,926,733        3,280       95.8
-    2026-07-20   81,097,859        2,763       95.2
-    2026-07-28   94,899,755        2,586       94.2
-    2026-08-04  105,818,194        2,620       95.1
-    2026-08-08  103,375,291       10,149       95.5
-    2026-08-10  111,066,785       14,156       95.4
-    2026-08-11  107,453,910       14,488       95.9
-    2026-08-12  216,717,409   42,627,164       55.6   <- fully loaded, 2x rows
-    2026-08-13  122,628,992    3,302,998       90.1   <- ~first 2 hours only
+WHY NOT THE OTHER TABLES (measured, not assumed)
+-------------------------------------------------
+- ``Token Transfers`` looked promising — it does contain inner CPI transfers and its values
+  are exact — but it is **not reliably populated**: ``mint IS NULL`` on 92-96% of rows across
+  six sampled months, and our four cluster mints show 1-7 transfer rows per day against
+  hundreds of real swaps. Of the same 528 known-good swaps, it contained **0**. One day in
+  the sample (2026-08-12) is loaded, at 2x the normal row count, consistent with a one-off
+  reprocessing. It also carries deltas only, never reserve levels, and cannot represent a
+  failed transaction at all, since a failed swap moves no tokens.
+- ``Instructions`` contains **only top-level instructions** (``COUNTIF(parent_index IS NOT
+  NULL) = 0`` over a full day of PumpSwap), so it holds a top-level PumpSwap instruction for
+  only **224 of those 528 swaps (42.4%)** — the rest are aggregator-routed and invisible. It
+  also carries the requested Anchor args, never the realised fill.
+- ``Accounts`` returns **zero rows** for every cluster pool address.
 
-Across six months, one day is fully loaded. On 2026-08-13 our pools' vault transfers stop
-at slot 438,930,102 while the day runs to 439,117,724 — and the slots past that point are
-*not* empty (369-1690 transfers each), they simply do not contain our pools. So the
-failure is silent row loss, not a partition lag that will fill in later.
+COST, AND WHY IT IS A FULL-DAY SCAN
+------------------------------------
+BigQuery bills on bytes scanned, and on this table the bill is set by which columns you
+touch, not by how many pools you filter for. Measured per column for one day:
 
-That is the whole reason this tool refuses to be a dumb extractor. A backtest built on a
-day that silently dropped 95% of its swaps is worse than no backtest, because it looks
-like a result. ``preflight`` measures loadedness per day *and per slot bucket within the
-day* before any expensive pull, ``pull`` records the measurement in the output file, and
-``verify`` re-checks extracted rows against the live tape wherever the two overlap.
+    signature 30.7 GB   pre_token_balances 114.3 GB   post_token_balances 114.4 GB
+    err 7.8 GB   fee 7.5 GB   compute_units 7.5 GB   index 5.0 GB   block_slot 5.0 GB
+    accounts 267.0 GB   balance_changes 434.1 GB   log_messages 3.1 GB
 
-FIDELITY: SUMMARY-GRADE, NOT REPLAY-GRADE
-------------------------------------------
-``Token Transfers`` gives **deltas, never levels**. There is no pre/post reserve anywhere
-in this dataset — ``Accounts`` returns zero rows for every cluster pool address, so it is
-not a fallback. Exact AMM replay needs the reserves, because impact is a deterministic
-function of them. Therefore:
+The replay set costs **263.1 GB/day billed** on a real run (269.8 GB was the dry-run bound), plus
+2.5 GB/day of preflight. So 22 days is ~5.84 TB = 5.31 TiB: **$0 for the first TiB each month and
+~$27 total** at the $6.25/TiB on-demand rate. ``accounts`` would more than double that for the
+signer list alone, so it is opt-in behind ``--with-signers``.
 
-- ``reserves`` is emitted as ``null`` with an explicit ``reserves_absent_reason``. It is
-  never guessed, never back-filled from a price, and never omitted silently.
-- Reserve *levels* are reconstructible in principle by cumulative-summing the deltas from
-  one anchor balance per vault (one cheap RPC call each), but only if the transfer stream
-  for that vault is complete over the whole interval — which, per the table above, it is
-  not. This script does not pretend otherwise and does not implement the reconstruction.
-- Even with perfect reserves, the three Meteora DLMM pools remain non-replayable from
-  vault totals; that is a property of concentrated liquidity, documented in
-  ``shitcoims_cluster.parse`` and recorded per-pool as
-  ``PoolSpec.replay_sufficient_reserves``.
+Filtering by signature *does* prune (clustering), but only pays off for sparse sets: measured
+13.6 GB for 200 signatures and 34.2 GB for 528, i.e. ~65 MB per transaction, so it beats the
+full-day scan only below ~4,000 transactions/day. The cluster sees 11,103 (2026-08-13) to
+65,884 (2026-08-14) transactions/day touching its pools, so the full-day scan wins by a wide
+margin and is what ``pull`` does.
 
-So this tape backtests **flow, volume, attempt rate, trader attribution, inter-pool
-timing**. It cannot backtest fills.
+COMPLETENESS
+------------
+Unlike ``Token Transfers``, this table is uniformly populated. Transactions per UTC day over
+the target window ran 255M-314M with no collapse and no gap (2026-07-24 .. 2026-08-13), which
+is why ``preflight`` here is a cheap sanity check (~2.5 GB/day, the ``block_timestamp`` column
+alone) rather than the load-bearing guard it had to be against the transfers table. It still
+runs by default, because a silently short tape is the failure mode worth spending 1% of the
+pull cost to rule out.
 
-ONE THING THE BULK PATH DOES BETTER THAN RPC
----------------------------------------------
-``Token Transfers.authority`` is the signing authority of the token account being debited.
-On the inbound leg of a swap that is the trader, stated by the chain rather than inferred.
-The RPC parser has to identify the counterparty by mirroring vault deltas, which failed on
-0-of-13 in early live data and still returns ``None`` when a route nets to zero. On the 9
-validated swaps, ``authority`` recovered the trader on all 9, including one where the live
-parser returned ``counterparty: None``, and one where it differed from ``fee_payer``
-because the fee was sponsored — the exact confusion ``shitcoims_tape.schema`` warns is a
-fabricated-provenance bug. It is still not a beneficial-owner claim: for an
-aggregator-routed fill the authority is the router's PDA, so it is emitted as
-``attributed_authority``, never as ``wallet``.
+VAULT DISCOVERY IS INHERENT, NOT TABULATED
+-------------------------------------------
+``pools.py`` is deliberate that a pool's vaults are exactly the token accounts whose ``owner``
+is the pool address, and that hard-coding a vault table per DEX creates a second source of
+truth that drifts. This tool never needs a vault list: the query filters on
+``post_token_balances.owner IN (pool addresses)``, so vault discovery happens in the WHERE
+clause and is protocol-agnostic across PumpSwap and Meteora alike.
 
-MAPPING ONTO THE CONTRACTS  (see also studies/RESULT_bulk_history.md)
----------------------------------------------------------------------
-Rows are emitted under their own marker, ``"schema": "bulk_history.v1"``, and are *not*
-drop-in ``shitcoims_cluster`` swap rows. Sharing the field names while missing
-``reserves``/``fee_lamports``/``signers`` would let a consumer read a summary row as a
-replay row, so the marker is the guard. ``row_id`` deliberately uses the cluster's own
-``sha256(f"{pool}:{signature}")`` so bulk and live rows dedupe against each other.
+WHAT IS STILL MISSING  (see studies/RESULT_bulk_history.md for the full mapping)
+---------------------------------------------------------------------------------
+- **Vault account addresses.** Token balances carry ``mint``, ``owner`` and ``account_index``
+  but not the account pubkey; resolving the index needs the ``accounts`` array at 267 GB/day.
+  Vaults are therefore keyed by **mint** rather than address. For these pools that is
+  sufficient (two distinct mints each) but it is not the live tape's shape.
+- **Signers / fee payer** need the same expensive column; ``--with-signers`` turns it on.
+- **A DLMM fill is still not a function of vault totals.** Meteora's price and depth live in
+  bins. Reserves recorded for the three Meteora pools are a state *summary*, exactly as
+  ``PoolSpec.replay_sufficient_reserves`` already records. That is a property of concentrated
+  liquidity, not a gap in this source, and no data source fixes it.
 
 USAGE
 -----
-    python3 scripts/bulk_history.py vaults
-    python3 scripts/bulk_history.py preflight --start 2026-08-10 --end 2026-08-13
-    python3 scripts/bulk_history.py pull --start 2026-08-12 --end 2026-08-12 --out state/bulk_history
+    python3 scripts/bulk_history.py selftest                       # offline, no network
+    python3 scripts/bulk_history.py preflight --start ... --end ...
+    python3 scripts/bulk_history.py pull --start 2026-08-13 --end 2026-08-13 \
+        --project <billing-project> --out state/bulk_history
     python3 scripts/bulk_history.py verify --out state/bulk_history
-    python3 scripts/bulk_history.py selftest          # offline, fixtures, no network
 """
 
 from __future__ import annotations
@@ -116,11 +116,12 @@ import hashlib
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -136,37 +137,26 @@ from shitcoims_cluster.pools import (  # noqa: E402
     PoolSpec,
 )
 
-TOOL_VERSION = "bulk_history/1"
-ROW_SCHEMA = "bulk_history.v1"
+TOOL_VERSION = "bulk_history/2"
+ROW_SCHEMA = "bulk_history.v2"
 
-#: Source of truth for the bulk tape. ``Token Transfers`` has a space in its table id,
-#: which is why every reference to it is backquoted.
 BQ_DATASET = "bigquery-public-data.crypto_solana_mainnet_us"
-BQ_TRANSFERS = f"`{BQ_DATASET}.Token Transfers`"
-PROVENANCE_SOURCE = "bigquery.crypto_solana_mainnet_us.token_transfers"
+BQ_TX = f"`{BQ_DATASET}.Transactions`"
+PROVENANCE_SOURCE = "bigquery.crypto_solana_mainnet_us.transactions"
 
 DEFAULT_OUT = REPO_ROOT / "state" / "bulk_history"
-#: Read-only. The live collector owns this tree; we only ever read vault addresses and
-#: ground-truth rows out of it.
+#: Read-only. The live collector owns this tree; `verify` only reads ground truth from it.
 LIVE_TAPE = REPO_ROOT / "state" / "cluster_tape" / "swaps"
 
 _B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 
-#: A day whose wrapped-SOL rows are below this share of its total rows has not been
-#: loaded with inner-CPI transfers. Measured separation is not marginal: a fully loaded
-#: day sits at 19.7%, a half-loaded day at 2.7%, an unloaded day at 0.013%.
-WSOL_RATIO_LOADED = 0.10
-#: Slot buckets per UTC day for the within-day coverage measurement. A day can be loaded
-#: for its first two hours and empty afterwards; a day-level ratio hides exactly that.
-DEFAULT_BUCKETS = 24
-#: Guard rail on every billable query. BigQuery bills on bytes scanned and the free tier
-#: is 1 TiB/month; a runaway query is a real bill, so no query runs uncapped.
-DEFAULT_MAX_BYTES = 80_000_000_000
-
-
-# --------------------------------------------------------------------------------------
-# small helpers
-# --------------------------------------------------------------------------------------
+#: A day whose transaction count falls below this share of the window median was not fully
+#: loaded. Real days over the target window sat in a 255M-314M band, so a day at half the
+#: median is not natural variation.
+TX_COUNT_MIN_RATIO = 0.5
+#: Guard rail on every billable query. The free tier is 1 TiB/month and a full-day replay
+#: scan is ~270 GB, so an unguarded mistake is real money.
+DEFAULT_MAX_BYTES = 400_000_000_000
 
 
 def _b58(value: str, *, what: str) -> str:
@@ -196,11 +186,13 @@ def _now() -> str:
 
 
 def _raw_int(value: Any, *, what: str) -> int:
-    """Parse a BigQuery NUMERIC into an exact integer, or fail.
+    """Parse a BigQuery BIGNUMERIC into an exact integer, or fail.
 
-    Never float. ``shitcoims_tape.schema`` exists partly to stop f64 from silently
-    rounding a 1e15-raw-unit balance, and this is the boundary where that would happen.
+    Never float. ``shitcoims_tape.schema`` exists partly to stop f64 from silently rounding
+    a 1e15-raw-unit balance, and this is the boundary where that would happen.
     """
+    if isinstance(value, bool | float):
+        raise ValueError(f"{what} must never arrive as a float")
     text = str(value).strip()
     if "." in text:
         head, _, tail = text.partition(".")
@@ -223,80 +215,6 @@ def _atomic_write(path: Path, payload: str) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# vault discovery — derived, never hard-coded
-# --------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Vault:
-    account: str
-    pool: str
-    mint: str
-    decimals: int
-
-
-def load_vaults(vaults_file: Path | None = None, tape_dir: Path = LIVE_TAPE) -> dict[str, Vault]:
-    """Vault account -> Vault, derived from an explicit file or from the live tape.
-
-    ``shitcoims_cluster.pools`` is deliberate that a pool's vaults are *discovered*
-    (the token accounts the pool owns), not tabulated per DEX, because a hard-coded vault
-    table is a second source of truth that drifts. So this does not carry one. It reads
-    the addresses the live collector already resolved on chain, and refuses to guess when
-    it cannot: an unknown vault means an incomplete filter, which means a silently short
-    tape, which is the failure mode this whole script is built to avoid.
-    """
-    if vaults_file is not None:
-        raw = json.loads(vaults_file.read_text())
-        out: dict[str, Vault] = {}
-        for item in raw:
-            account = _b58(item["account"], what="vault account")
-            pool = _b58(item["pool"], what="pool")
-            if pool not in POOLS_BY_ADDRESS:
-                raise ValueError(f"{pool} is not a cluster pool")
-            out[account] = Vault(account, pool, _b58(item["mint"], what="mint"), int(item["decimals"]))
-        return out
-
-    if not tape_dir.is_dir():
-        raise SystemExit(
-            f"no vault source: {tape_dir} does not exist and no --vaults-file was given.\n"
-            "Run the live collector once, or pass --vaults-file with "
-            '[{"account":...,"pool":...,"mint":...,"decimals":...}].'
-        )
-
-    found: dict[str, Vault] = {}
-    for path in sorted(tape_dir.glob("*.jsonl")):
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if row.get("kind") != "swap":
-                continue
-            pool = row.get("pool")
-            if pool not in POOLS_BY_ADDRESS:
-                continue
-            for vault in row.get("reserves", {}).get("vaults", []):
-                account = vault["account"]
-                found[account] = Vault(account, pool, vault["mint"], int(vault["decimals"]))
-    if not found:
-        raise SystemExit(f"no vaults recoverable from {tape_dir}; pass --vaults-file")
-
-    # A pool whose vaults we do not know cannot be extracted, and quietly returning a
-    # short tape for it would be indistinguishable from that pool being idle.
-    for spec in CLUSTER_POOLS:
-        mints = {v.mint for v in found.values() if v.pool == spec.address}
-        if not mints:
-            print(
-                f"  WARNING: no vaults known for {spec.address} ({spec.label})"
-                " — it will be MISSING from the pull", file=sys.stderr,
-            )
-        else:
-            unexpected = spec.mint_mismatch(frozenset(mints))
-            if unexpected:
-                raise SystemExit(f"vault/pool disagreement, refusing to continue: {unexpected}")
-    return found
-
-
-# --------------------------------------------------------------------------------------
 # BigQuery driver (the `bq` CLI, so there is no new python dependency)
 # --------------------------------------------------------------------------------------
 
@@ -306,13 +224,11 @@ class BigQuery:
     project: str
     max_bytes: int = DEFAULT_MAX_BYTES
     dry_run: bool = False
-    verbose: bool = True
 
     def _base(self) -> list[str]:
         return ["bq", f"--project_id={self.project}", "--format=json"]
 
     def estimate(self, sql: str) -> int:
-        """Bytes BigQuery says it *may* scan. An upper bound: it ignores cluster pruning."""
         proc = subprocess.run(
             [*self._base(), "query", "--use_legacy_sql=false", "--dry_run"],
             input=sql, capture_output=True, text=True, check=False,
@@ -326,22 +242,18 @@ class BigQuery:
                 "If BigQuery is not enabled on that project, pass --project or set "
                 "BULK_HISTORY_PROJECT to one where it is."
             )
-        payload = json.loads(proc.stdout)
-        return int(payload["statistics"]["totalBytesProcessed"])
+        return int(json.loads(proc.stdout)["statistics"]["totalBytesProcessed"])
 
-    def run(self, sql: str, *, max_rows: int = 1_000_000) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Execute and return (rows, job stats). Always capped by ``--maximum_bytes_billed``."""
+    def run(self, sql: str, *, max_rows: int = 2_000_000) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         estimate = self.estimate(sql)
-        if self.verbose:
-            print(f"    dry-run upper bound: {estimate / 1e9:.2f} GB", file=sys.stderr)
+        print(f"    dry-run upper bound: {estimate / 1e9:.2f} GB", file=sys.stderr)
         if estimate > self.max_bytes:
             raise RuntimeError(
                 f"refusing to run: estimate {estimate / 1e9:.1f} GB exceeds cap "
                 f"{self.max_bytes / 1e9:.1f} GB (raise with --max-bytes)"
             )
         if self.dry_run:
-            return [], {"dryRun": True, "totalBytesProcessed": estimate, "totalBytesBilled": 0}
-
+            return [], {"dryRun": True, "total_bytes_processed": estimate, "total_bytes_billed": 0}
         proc = subprocess.run(
             [
                 *self._base(), "query", "--use_legacy_sql=false", "--nouse_cache",
@@ -350,267 +262,236 @@ class BigQuery:
             input=sql, capture_output=True, text=True, check=False,
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"query failed:\n{proc.stderr.strip()}")
-        rows = json.loads(proc.stdout or "[]")
-        return rows, self._stats_for(sql)
+            raise RuntimeError(f"query failed:\n{proc.stderr.strip()}\n{proc.stdout.strip()}")
+        return json.loads(proc.stdout or "[]"), self._stats_for(sql)
 
     def _stats_for(self, sql: str) -> dict[str, Any]:
         """Recover job id + billed bytes by matching the query text in recent job history.
 
-        Matching on the text rather than taking the newest job keeps this correct when
-        other jobs (or another agent's session) interleave on the same project.
+        Matching on the text rather than taking the newest job keeps this correct when other
+        jobs (or another agent's session) interleave on the same project.
         """
-        proc = subprocess.run(
-            [*self._base(), "ls", "-j", "-n", "20"], capture_output=True, text=True, check=False
-        )
+        proc = subprocess.run([*self._base(), "ls", "-j", "-n", "20"],
+                              capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             return {}
         for job in json.loads(proc.stdout or "[]"):
-            text = job.get("configuration", {}).get("query", {}).get("query", "")
-            if text.strip() == sql.strip():
+            if job.get("configuration", {}).get("query", {}).get("query", "").strip() == sql.strip():
                 q = job.get("statistics", {}).get("query", {})
                 return {
                     "job_id": job.get("jobReference", {}).get("jobId"),
                     "total_bytes_processed": int(q.get("totalBytesProcessed", 0)),
                     "total_bytes_billed": int(q.get("totalBytesBilled", 0)),
-                    "cache_hit": q.get("cacheHit"),
                 }
         return {}
 
 
 # --------------------------------------------------------------------------------------
-# preflight — is this day actually loaded, and how much of it
+# preflight — cheap completeness sanity check (~2.5 GB/day)
 # --------------------------------------------------------------------------------------
 
 
-def preflight_sql(days: list[date], buckets: int) -> str:
+def preflight_sql(days: list[date]) -> str:
     day_list = ",".join(f"DATE '{d.isoformat()}'" for d in days)
-    if buckets <= 0:
-        return f"""
-SELECT DATE(block_timestamp) AS d, 0 AS bucket, COUNT(*) AS total_rows,
-       COUNTIF(mint = '{WSOL_MINT}') AS wsol_rows
-FROM {BQ_TRANSFERS}
-WHERE DATE(block_timestamp) IN ({day_list})
-GROUP BY d, bucket ORDER BY d, bucket
-""".strip()
-    # Slot is monotone within a UTC day, so bucketing on it splits the day into equal slot
-    # ranges without timestamp arithmetic. The bucket must be computed in a CTE because an
-    # analytic function cannot appear in GROUP BY.
     return f"""
-WITH rows_in_range AS (
-  SELECT DATE(block_timestamp) AS d, block_slot, mint = '{WSOL_MINT}' AS is_wsol
-  FROM {BQ_TRANSFERS}
-  WHERE DATE(block_timestamp) IN ({day_list})
-), bucketed AS (
-  SELECT d, is_wsol,
-         CAST(FLOOR({buckets} * SAFE_DIVIDE(
-              block_slot - MIN(block_slot) OVER (PARTITION BY d),
-              1 + MAX(block_slot) OVER (PARTITION BY d)
-                - MIN(block_slot) OVER (PARTITION BY d))) AS INT64) AS bucket
-  FROM rows_in_range
-)
-SELECT d, bucket, COUNT(*) AS total_rows, COUNTIF(is_wsol) AS wsol_rows
-FROM bucketed GROUP BY d, bucket ORDER BY d, bucket
+SELECT DATE(block_timestamp) AS d, COUNT(*) AS txs
+FROM {BQ_TX}
+WHERE DATE(block_timestamp) IN ({day_list})
+GROUP BY d ORDER BY d
 """.strip()
 
 
 @dataclass
 class DayCoverage:
     day: str
-    total_rows: int = 0
-    wsol_rows: int = 0
-    buckets_total: int = 0
-    buckets_loaded: int = 0
-    detail: list[dict[str, Any]] = field(default_factory=list)
+    txs: int = 0
+    median: int = 0
 
     @property
-    def wsol_ratio(self) -> float:
-        return self.wsol_rows / self.total_rows if self.total_rows else 0.0
-
-    @property
-    def covered_fraction(self) -> float:
-        if not self.buckets_total:
-            return 1.0 if self.wsol_ratio >= WSOL_RATIO_LOADED else 0.0
-        return self.buckets_loaded / self.buckets_total
+    def ratio(self) -> float:
+        return self.txs / self.median if self.median else 0.0
 
     @property
     def verdict(self) -> str:
-        frac = self.covered_fraction
-        if frac >= 0.95:
-            return "LOADED"
-        if frac <= 0.02:
+        if not self.txs:
             return "EMPTY"
-        return "PARTIAL"
+        return "LOADED" if self.ratio >= TX_COUNT_MIN_RATIO else "PARTIAL"
 
     def to_json(self) -> dict[str, Any]:
-        return {
-            "day": self.day,
-            "total_rows": self.total_rows,
-            "wsol_rows": self.wsol_rows,
-            "wsol_ratio": round(self.wsol_ratio, 6),
-            "buckets_total": self.buckets_total,
-            "buckets_loaded": self.buckets_loaded,
-            "covered_fraction": round(self.covered_fraction, 4),
-            "verdict": self.verdict,
-            "threshold_wsol_ratio": WSOL_RATIO_LOADED,
-        }
+        return {"day": self.day, "txs": self.txs, "window_median_txs": self.median,
+                "ratio": round(self.ratio, 4), "verdict": self.verdict,
+                "threshold_ratio": TX_COUNT_MIN_RATIO}
 
 
 def summarise_preflight(rows: list[dict[str, Any]]) -> dict[str, DayCoverage]:
-    out: dict[str, DayCoverage] = {}
-    for row in rows:
-        day = str(row["d"])
-        cov = out.setdefault(day, DayCoverage(day=day))
-        total = int(row["total_rows"])
-        wsol = int(row["wsol_rows"])
-        cov.total_rows += total
-        cov.wsol_rows += wsol
-        cov.buckets_total += 1
-        ratio = wsol / total if total else 0.0
-        if ratio >= WSOL_RATIO_LOADED:
-            cov.buckets_loaded += 1
-        cov.detail.append({"bucket": int(row["bucket"]), "total_rows": total, "wsol_rows": wsol})
-    return out
+    counts = {str(r["d"]): int(r["txs"]) for r in rows}
+    if not counts:
+        return {}
+    median = int(statistics.median(counts.values()))
+    return {d: DayCoverage(day=d, txs=n, median=median) for d, n in counts.items()}
 
 
 # --------------------------------------------------------------------------------------
-# pull — one UTC day of cluster-pool flow
+# pull — one UTC day of replay-grade cluster history
 # --------------------------------------------------------------------------------------
 
 
-def pull_sql(day: date, vaults: list[str], *, with_transfer_type: bool) -> str:
+def pull_sql(day: date, pools: list[str], *, with_signers: bool) -> str:
+    """One day, every transaction that touches a cluster pool's vaults.
+
+    The pre/post arrays are narrowed to the pools inside the query so the returned payload
+    stays small; the *scan* cost is unaffected, since BigQuery bills the whole column either
+    way. ``owner IN (pools)`` is the protocol-agnostic vault discovery ``pools.py`` prescribes.
+    """
     nxt = day + timedelta(days=1)
-    vault_list = _sql_list(vaults)
-    ttype = ", transfer_type" if with_transfer_type else ""
+    plist = _sql_list(pools)
+    signers = ""
+    if with_signers:
+        signers = ",\n       ARRAY(SELECT a.pubkey FROM UNNEST(accounts) a WHERE a.signer) AS signers"
     return f"""
-SELECT tx_signature, block_slot, UNIX_SECONDS(block_timestamp) AS block_time,
-       source, destination, authority,
-       CAST(value AS STRING) AS value, CAST(decimals AS STRING) AS decimals, mint{ttype}
-FROM {BQ_TRANSFERS}
+SELECT signature, block_slot, UNIX_SECONDS(block_timestamp) AS block_time, index AS tx_index,
+       CAST(fee AS STRING) AS fee, err, CAST(compute_units_consumed AS STRING) AS compute_units,
+       ARRAY(SELECT AS STRUCT owner, mint, CAST(amount AS STRING) AS amount, decimals, account_index
+             FROM UNNEST(pre_token_balances) WHERE owner IN ({plist})) AS pre,
+       ARRAY(SELECT AS STRUCT owner, mint, CAST(amount AS STRING) AS amount, decimals, account_index
+             FROM UNNEST(post_token_balances) WHERE owner IN ({plist})) AS post{signers}
+FROM {BQ_TX}
 WHERE block_timestamp >= TIMESTAMP('{day.isoformat()}')
   AND block_timestamp < TIMESTAMP('{nxt.isoformat()}')
-  AND (source IN ({vault_list}) OR destination IN ({vault_list}))
-ORDER BY block_slot, tx_signature
+  AND EXISTS(SELECT 1 FROM UNNEST(post_token_balances) b WHERE b.owner IN ({plist}))
+ORDER BY block_slot, tx_index
 """.strip()
 
 
 def build_rows(
-    transfers: list[dict[str, Any]],
-    vaults: dict[str, Vault],
+    transactions: list[dict[str, Any]],
     *,
     provenance: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Fold raw transfer rows into one row per (pool, transaction).
+    """Fold transaction meta into one row per (pool, transaction).
 
-    Netting per transaction is the same choice ``shitcoims_cluster.parse`` makes and for
-    the same reason: a transaction that touches one pool twice yields one netted row, and
-    pretending otherwise would silently double-count flow. ``transfer_count`` is carried
-    so a consumer can tell a plain fill from a netted multi-leg one, mirroring the live
-    tape's ``swap_legs``.
+    Netting per transaction is the same choice ``shitcoims_cluster.parse`` makes and for the
+    same reason: pre/post balances are transaction-scoped, so a transaction that swaps
+    through the same pool twice yields one netted row. That is recorded rather than hidden —
+    a consumer must be able to tell a single fill from a net.
     """
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    stats = {"transfers": 0, "skipped_unknown_vault": 0, "defects": 0}
-
-    for t in transfers:
-        stats["transfers"] += 1
-        touched = {side: vaults.get(t.get(side) or "") for side in ("source", "destination")}
-        pools = {v.pool for v in touched.values() if v is not None}
-        if not pools:
-            stats["skipped_unknown_vault"] += 1
-            continue
-        for pool in pools:
-            grouped[(pool, t["tx_signature"])].append(t)
-
     rows: list[dict[str, Any]] = []
-    def _order(kv: tuple[tuple[str, str], list[dict[str, Any]]]) -> tuple[int, str, str]:
-        return (int(kv[1][0]["block_slot"]), kv[0][1], kv[0][0])
+    stats = {"transactions": 0, "defects": 0, "failed": 0, "swaps": 0, "other": 0}
 
-    for (pool, signature), items in sorted(grouped.items(), key=_order):
-        spec: PoolSpec = POOLS_BY_ADDRESS[pool]
-        deltas: dict[str, int] = defaultdict(int)
-        meta: dict[str, Vault] = {}
-        authority_in: list[str] = []
+    for tx in transactions:
+        stats["transactions"] += 1
+        signature = tx["signature"]
+        failed = bool(tx.get("err"))
+
+        # Group the pool-side balances by pool, then by mint. The vault account address is
+        # not in this table (it would need the 267 GB/day `accounts` column), so the mint is
+        # the vault key — sufficient here because each pool holds two distinct mints.
+        per_pool: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         try:
-            for t in items:
-                amount = _raw_int(t["value"], what="value")
-                dst, src = t.get("destination") or "", t.get("source") or ""
-                if (v := vaults.get(dst)) is not None and v.pool == pool:
-                    deltas[v.account] += amount
-                    meta[v.account] = v
-                    if t.get("authority"):
-                        authority_in.append(t["authority"])
-                if (v := vaults.get(src)) is not None and v.pool == pool:
-                    deltas[v.account] -= amount
-                    meta[v.account] = v
+            for side in ("pre", "post"):
+                for rec in tx.get(side) or []:
+                    pool = rec["owner"]
+                    if pool not in POOLS_BY_ADDRESS:
+                        continue
+                    slot_for_mint = per_pool[pool].setdefault(
+                        rec["mint"], {"mint": rec["mint"], "decimals": int(rec["decimals"])}
+                    )
+                    slot_for_mint[f"{side}_raw"] = _raw_int(rec["amount"], what=f"{side} amount")
         except ValueError:
             stats["defects"] += 1
             continue
 
-        credited = [a for a, d in deltas.items() if d > 0]
-        debited = [a for a, d in deltas.items() if d < 0]
-        is_swap = len(credited) == 1 and len(debited) == 1
+        for pool, vaults_by_mint in per_pool.items():
+            spec: PoolSpec = POOLS_BY_ADDRESS[pool]
+            observed = frozenset(vaults_by_mint)
+            mismatch = spec.mint_mismatch(observed)
 
-        slot = int(items[0]["block_slot"])
-        block_time = int(items[0]["block_time"])
-        row: dict[str, Any] = {
-            "schema": ROW_SCHEMA,
-            "row_id": hashlib.sha256(f"{pool}:{signature}".encode()).hexdigest(),
-            "kind": "swap" if is_swap else "flow",
-            "grade": "summary",
-            "pool": pool,
-            "dex": spec.dex,
-            "label": spec.label,
-            "t_event": datetime.fromtimestamp(block_time, UTC).isoformat(),
-            "chain": {"slot": slot, "signature": signature, "block_time": block_time},
-            "vault_deltas": [
-                {
-                    "account": account,
-                    "mint": meta[account].mint,
-                    "decimals": meta[account].decimals,
-                    "delta_raw": str(delta),
-                }
-                for account, delta in sorted(deltas.items())
-            ],
-            "transfer_count": len(items),
-            # Levels are not in this dataset at all. Saying so in the row, every row, is
-            # what stops a downstream replay from treating a summary tape as a fill tape.
-            "reserves": None,
-            "reserves_absent_reason": (
-                "bigquery Token Transfers carries deltas only; no pre/post pool balance "
-                "exists in this dataset (Accounts returns 0 rows for cluster pools)"
-            ),
-            "replay_sufficient": False,
-            "pool_replay_sufficient_reserves": spec.replay_sufficient_reserves,
-            "attributed_authority": authority_in[0] if len(set(authority_in)) == 1 else None,
-            "attribution_note": (
-                "authority of the inbound vault transfer; the router PDA for a routed"
-                " fill, not a beneficial-owner claim"
-            ),
-            "fee_lamports": None,
-            "signers": None,
-            "confirmation_status": None,
-            "provenance": dict(provenance),
-        }
-        if is_swap:
-            cred, deb = credited[0], debited[0]
-            row["token_in_mint"] = meta[cred].mint
-            row["token_in_raw"] = str(deltas[cred])
-            row["token_out_mint"] = meta[deb].mint
-            row["token_out_raw"] = str(-deltas[deb])
-        rows.append(row)
+            vaults = []
+            for mint in sorted(vaults_by_mint):
+                v = vaults_by_mint[mint]
+                # A balance present on only one side is a vault created or closed inside the
+                # transaction; treat the absent side as 0 rather than dropping the leg.
+                pre_raw = v.get("pre_raw", 0)
+                post_raw = v.get("post_raw", 0)
+                vaults.append({
+                    "mint": mint, "decimals": v["decimals"],
+                    "pre_raw": str(pre_raw), "post_raw": str(post_raw),
+                    "delta_raw": str(post_raw - pre_raw),
+                })
 
+            deltas = {v["mint"]: int(v["delta_raw"]) for v in vaults}
+            credited = [m for m, d in deltas.items() if d > 0]
+            debited = [m for m, d in deltas.items() if d < 0]
+            if failed:
+                # NOT the live tape's `attempt`. A failed transaction moved nothing, so the
+                # balances cannot say whether it meant to trade *this* pool or merely listed
+                # its vaults while failing somewhere else. Measured, the difference is a
+                # factor of ~24 on nosis/SOL (105,457 failures here vs 4,336 live attempts),
+                # so calling these attempts would inflate any attempt-rate study by more than
+                # an order of magnitude. Narrowing them needs to know which program was
+                # invoked — see `log_messages` (3.1 GB/day) in the module docstring.
+                kind = "failed"
+            elif len(credited) == 1 and len(debited) == 1:
+                kind = "swap"
+            elif any(deltas.values()):
+                kind = "liquidity"
+            else:
+                kind = "reference"
+            stats["failed" if kind == "failed" else "swaps" if kind == "swap" else "other"] += 1
+
+            row: dict[str, Any] = {
+                "schema": ROW_SCHEMA,
+                "row_id": hashlib.sha256(f"{pool}:{signature}".encode()).hexdigest(),
+                "kind": kind,
+                "grade": "replay" if spec.replay_sufficient_reserves else "summary",
+                "pool": pool,
+                "dex": spec.dex,
+                "label": spec.label,
+                "t_event": datetime.fromtimestamp(int(tx["block_time"]), UTC).isoformat(),
+                "chain": {
+                    "slot": int(tx["block_slot"]),
+                    "signature": signature,
+                    "block_time": int(tx["block_time"]),
+                    # Not recoverable from getTransaction; this table has it, which is what
+                    # makes two transactions in one slot orderable.
+                    "tx_index": int(tx["tx_index"]),
+                },
+                "reserves": {
+                    "pool": pool,
+                    "dex": spec.dex,
+                    # A DLMM fill walks bins; vault totals do not determine price or depth.
+                    "replay_sufficient": spec.replay_sufficient_reserves,
+                    "vaults": vaults,
+                },
+                "fee_lamports": str(_raw_int(tx["fee"], what="fee")),
+                "compute_units": int(tx["compute_units"]) if tx.get("compute_units") else None,
+                "err": tx.get("err") or None,
+                # The vault *address* needs the `accounts` column at 267 GB/day; vaults are
+                # keyed by mint here. Stated so nobody reads its absence as "no vault".
+                "vault_addresses_available": False,
+                "provenance": dict(provenance),
+            }
+            if mismatch:
+                # pools.py turns a table/chain disagreement into a defect rather than a
+                # silent relabel; carry it on the row instead of dropping the row.
+                row["defect"] = mismatch
+            if tx.get("signers") is not None:
+                row["signers"] = list(tx["signers"])
+            if kind == "swap":
+                cin, dout = credited[0], debited[0]
+                row["token_in_mint"] = cin
+                row["token_in_raw"] = str(deltas[cin])
+                row["token_out_mint"] = dout
+                row["token_out_raw"] = str(-deltas[dout])
+            rows.append(row)
+
+    rows.sort(key=lambda r: (r["chain"]["slot"], r["chain"]["tx_index"], r["pool"]))
     return rows, stats
 
 
 def pull_day(
-    bq: BigQuery,
-    day: date,
-    vaults: dict[str, Vault],
-    out_dir: Path,
-    *,
-    with_transfer_type: bool,
-    coverage: DayCoverage | None,
-    force: bool,
+    bq: BigQuery, day: date, pools: list[str], out_dir: Path, *,
+    with_signers: bool, coverage: DayCoverage | None, force: bool,
 ) -> dict[str, Any]:
     stamp = day.strftime("%Y%m%d")
     data_path = out_dir / "swaps" / f"{stamp}.jsonl"
@@ -624,41 +505,31 @@ def pull_day(
             # it had just been spent again: a resumed run must read as the $0 it was.
             return {**meta, "reused": True}
 
-    sql = pull_sql(day, sorted(vaults), with_transfer_type=with_transfer_type)
-    transfers, stats = bq.run(sql)
-    fetched_at = _now()
-    provenance = {
-        "source": PROVENANCE_SOURCE,
-        "fetched_at": fetched_at,
-        "cursor": stats.get("job_id"),
-    }
-    rows, fold = build_rows(transfers, vaults, provenance=provenance)
+    sql = pull_sql(day, pools, with_signers=with_signers)
+    txs, stats = bq.run(sql)
+    provenance = {"source": PROVENANCE_SOURCE, "fetched_at": _now(), "cursor": stats.get("job_id")}
+    rows, fold = build_rows(txs, provenance=provenance)
 
     if not bq.dry_run:
         _atomic_write(data_path, "".join(
             json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n" for r in rows))
 
-    per_pool: dict[str, int] = defaultdict(int)
+    per_pool: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in rows:
-        per_pool[r["pool"]] += 1
+        per_pool[r["label"]][r["kind"]] += 1
 
     meta = {
-        "tool": TOOL_VERSION,
-        "day": day.isoformat(),
-        "complete": not bq.dry_run,
-        "rows": len(rows),
-        "raw_transfers": fold["transfers"],
-        "defects": fold["defects"],
-        "rows_per_pool": dict(sorted(per_pool.items())),
-        "pools_requested": sorted({v.pool for v in vaults.values()}),
-        "vaults_used": sorted(vaults),
-        "provenance": provenance,
-        "query": sql,
+        "tool": TOOL_VERSION, "day": day.isoformat(), "complete": not bq.dry_run,
+        "rows": len(rows), "transactions": fold["transactions"], "defects": fold["defects"],
+        "by_kind": {"swap": fold["swaps"], "failed": fold["failed"], "other": fold["other"]},
+        "rows_per_pool": {k: dict(sorted(v.items())) for k, v in sorted(per_pool.items())},
+        "pools_requested": sorted(pools),
+        "grade": "replay for constant-product pools, summary for DLMM (see PoolSpec)",
+        "reserves": "pre_raw/post_raw per vault mint, exact integers",
+        "signers_included": with_signers,
+        "provenance": provenance, "query": sql,
         "query_sha256": hashlib.sha256(sql.encode()).hexdigest(),
-        "job": stats,
-        "coverage": coverage.to_json() if coverage else None,
-        "grade": "summary",
-        "reserves": "absent — see reserves_absent_reason on every row",
+        "job": stats, "coverage": coverage.to_json() if coverage else None,
         "data_file": str(data_path.relative_to(out_dir)),
     }
     if not bq.dry_run:
@@ -671,28 +542,18 @@ def pull_day(
 # --------------------------------------------------------------------------------------
 
 
-def load_live(tape_dir: Path = LIVE_TAPE) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
-    if not tape_dir.is_dir():
-        return out
-    for path in sorted(tape_dir.glob("*.jsonl")):
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if row.get("kind") == "swap":
-                out[row["row_id"]] = row
-    return out
-
-
 def verify(out_dir: Path) -> int:
-    live = load_live()
+    live: dict[str, dict[str, Any]] = {}
+    if LIVE_TAPE.is_dir():
+        for path in sorted(LIVE_TAPE.glob("*.jsonl")):
+            for line in path.read_text().splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    if row.get("kind") == "swap":
+                        live[row["row_id"]] = row
     if not live:
         print("no live tape to verify against", file=sys.stderr)
         return 0
-    exact = differ = 0
-    missing_from_bulk: list[str] = []
-    examples: list[str] = []
 
     bulk: dict[str, dict[str, Any]] = {}
     for path in sorted((out_dir / "swaps").glob("*.jsonl")):
@@ -700,20 +561,21 @@ def verify(out_dir: Path) -> int:
             if line.strip():
                 row = json.loads(line)
                 bulk[row["row_id"]] = row
-
-    # Only days we actually pulled can be compared; a live row outside the pulled range
-    # is not evidence of loss.
     pulled_days = {json.loads(p.read_text())["day"] for p in sorted((out_dir / "meta").glob("*.json"))}
 
+    exact = differ = missing = 0
+    examples: list[str] = []
     for row_id, lrow in live.items():
         if lrow["t_event"][:10] not in pulled_days:
             continue
         brow = bulk.get(row_id)
         if brow is None:
-            missing_from_bulk.append(row_id)
+            missing += 1
             continue
-        want = {v["account"]: int(v["delta_raw"]) for v in lrow["reserves"]["vaults"]}
-        got = {v["account"]: int(v["delta_raw"]) for v in brow["vault_deltas"]}
+        # Compare pre AND post, keyed by mint. Levels, not just deltas: that is the whole
+        # difference between a replay tape and a summary tape.
+        want = {v["mint"]: (int(v["pre_raw"]), int(v["post_raw"])) for v in lrow["reserves"]["vaults"]}
+        got = {v["mint"]: (int(v["pre_raw"]), int(v["post_raw"])) for v in brow["reserves"]["vaults"]}
         if want == got:
             exact += 1
         else:
@@ -721,15 +583,15 @@ def verify(out_dir: Path) -> int:
             if len(examples) < 5:
                 examples.append(f"    {lrow['chain']['signature'][:20]} live={want} bulk={got}")
 
-    comparable = exact + differ + len(missing_from_bulk)
-    print(f"live swaps inside pulled days : {comparable}")
-    print(f"  exact raw-delta match       : {exact}")
-    print(f"  disagreed                   : {differ}")
-    print(f"  absent from bulk            : {len(missing_from_bulk)}")
+    comparable = exact + differ + missing
+    print(f"live swaps inside pulled days   : {comparable}")
+    print(f"  exact pre+post reserve match  : {exact}")
+    print(f"  disagreed                     : {differ}")
+    print(f"  absent from bulk              : {missing}")
     for line in examples:
         print(line)
     if comparable:
-        print(f"  recall                      : {100 * exact / comparable:.1f}%")
+        print(f"  recall                        : {100 * exact / comparable:.1f}%")
     return 1 if differ else 0
 
 
@@ -737,65 +599,56 @@ def verify(out_dir: Path) -> int:
 # selftest — offline, fixtures, no network
 # --------------------------------------------------------------------------------------
 
-#: Real rows, captured from BigQuery job bqjob_re26863bd325e487 on 2026-08-13, for two
-#: SOLVE/SOL swaps on 2026-08-12. The expected deltas below are the ones the live RPC
-#: collector independently recorded for the same signatures, so this fixture pins the
-#: agreement that justified choosing this source at all.
-FIXTURE_TRANSFERS: list[dict[str, Any]] = [
+#: Shaped exactly like a BigQuery `Transactions` row. The numbers are the ones the live RPC
+#: collector independently recorded for these signatures, so the fixture pins the agreement
+#: that justified choosing this source.
+_FIX_SWAP_SIG = (
+    "3JYWwLFzEvrEaT94FRrN9VL3V6PoBKVHuEeGD3yKHYMB"
+    "BwXtQEezxHMnYZWSaRpWxbYcxrHqCHHtzQNWT5tQnzRx"
+)
+_FIX_ATTEMPT_SIG = (
+    "1cCKoGk1FtPpYuFiYc1CX8boksF3usScZu84RvAU6AQp"
+    "sLtiiTcm3tQeZMBwFBwFeDmhu8QHrJmai97RRM6tiVj"
+)
+
+FIXTURE_TX: list[dict[str, Any]] = [
     {
-        "tx_signature": "511HcJatcMRa2Ut9E3EW1111111111111111111111111111111111111111111111",
-        "block_slot": "438800001", "block_time": "1786500000",
-        "source": "FJ5qM8FMRsK6fb2iYaZLiWUCDwWprsxrC5NyxXyVZMb5",
-        "destination": "So1solveOutAta1111111111111111111111111111",
-        "authority": "BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr",
-        "value": "958296764612", "decimals": "6",
-        "mint": "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump",
+        "signature": _FIX_SWAP_SIG,
+        "block_slot": "439117814", "block_time": "1786665636", "tx_index": "42",
+        "fee": "58296", "err": "", "compute_units": "234295",
+        "pre": [
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump",
+             "amount": "745708166270", "decimals": "6", "account_index": "5"},
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump",
+             "amount": "4417042298150", "decimals": "6", "account_index": "6"},
+        ],
+        "post": [
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump",
+             "amount": "726574810760", "decimals": "6", "account_index": "5"},
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump",
+             "amount": "4461156942807", "decimals": "6", "account_index": "6"},
+        ],
     },
-    {
-        "tx_signature": "511HcJatcMRa2Ut9E3EW1111111111111111111111111111111111111111111111",
-        "block_slot": "438800001", "block_time": "1786500000",
-        "source": "TraderWsolAta11111111111111111111111111111",
-        "destination": "DsfKXLXngaQiUdJiHqwt5TZ6usMmapyoVC3WcZzsqjM8",
-        "authority": "gtagyESa99t49VmUqnnfsuowYnigSNKuYXdXWyXWNdd",
-        "value": "511234144", "decimals": "9",
-        "mint": WSOL_MINT,
-    },
-    {
-        "tx_signature": "5pu27bwjE7SkLMCEzpZ7222222222222222222222222222222222222222222222",
-        "block_slot": "438800900", "block_time": "1786500400",
-        "source": "DsfKXLXngaQiUdJiHqwt5TZ6usMmapyoVC3WcZzsqjM8",
-        "destination": "TraderWsolAta11111111111111111111111111111",
-        "authority": "BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr",
-        "value": "129508704", "decimals": "9", "mint": WSOL_MINT,
-    },
-    {
-        "tx_signature": "5pu27bwjE7SkLMCEzpZ7222222222222222222222222222222222222222222222",
-        "block_slot": "438800900", "block_time": "1786500400",
-        "source": "TraderSolveAta1111111111111111111111111111",
-        "destination": "FJ5qM8FMRsK6fb2iYaZLiWUCDwWprsxrC5NyxXyVZMb5",
-        "authority": "3T9jp4kfrEKfWU63JGuioa31sHFuW61B5ZRbv3D4JDpQ",
-        "value": "242639648703", "decimals": "6",
-        "mint": "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump",
-    },
-    {   # a transfer between accounts we do not watch: must be dropped, not attributed
-        "tx_signature": "9zzUnrelated333333333333333333333333333333333333333333333333333333",
-        "block_slot": "438800950", "block_time": "1786500500",
-        "source": "SomeoneElseAta1111111111111111111111111111",
-        "destination": "AnotherAta11111111111111111111111111111111",
-        "authority": "Whoever1111111111111111111111111111111111",
-        "value": "5", "decimals": "6", "mint": WSOL_MINT,
+    {   # a reverted attempt: balances unchanged, err set
+        "signature": _FIX_ATTEMPT_SIG,
+        "block_slot": "439117814", "block_time": "1786665636", "tx_index": "7",
+        "fee": "5000", "err": "{'InstructionError': [1, {'Custom': 1004}]}", "compute_units": "12000",
+        "pre": [
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump",
+             "amount": "745708166270", "decimals": "6", "account_index": "5"},
+        ],
+        "post": [
+            {"owner": "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD",
+             "mint": "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump",
+             "amount": "745708166270", "decimals": "6", "account_index": "5"},
+        ],
     },
 ]
-
-FIXTURE_VAULTS = {
-    "DsfKXLXngaQiUdJiHqwt5TZ6usMmapyoVC3WcZzsqjM8": Vault(
-        "DsfKXLXngaQiUdJiHqwt5TZ6usMmapyoVC3WcZzsqjM8",
-        "BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr", WSOL_MINT, 9),
-    "FJ5qM8FMRsK6fb2iYaZLiWUCDwWprsxrC5NyxXyVZMb5": Vault(
-        "FJ5qM8FMRsK6fb2iYaZLiWUCDwWprsxrC5NyxXyVZMb5",
-        "BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr",
-        "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump", 6),
-}
 
 
 def selftest() -> int:
@@ -805,89 +658,100 @@ def selftest() -> int:
         if condition:
             print(f"  ok   {name}")
         else:
-            failures.append(f"{name}: {detail}")
+            failures.append(name)
             print(f"  FAIL {name} {detail}")
 
-    prov = {"source": PROVENANCE_SOURCE, "fetched_at": "2026-08-13T00:00:00+00:00", "cursor": "job-fixture"}
-    rows, stats = build_rows(FIXTURE_TRANSFERS, FIXTURE_VAULTS, provenance=prov)
-    by_sig = {r["chain"]["signature"][:20]: r for r in rows}
+    prov = {"source": PROVENANCE_SOURCE, "fetched_at": "2026-08-14T00:00:00+00:00", "cursor": "job-fixture"}
+    rows, stats = build_rows(FIXTURE_TX, provenance=prov)
+    swap = next((r for r in rows if r["kind"] == "swap"), None)
+    attempt = next((r for r in rows if r["kind"] == "failed"), None)
 
-    check("unwatched transfer dropped", stats["skipped_unknown_vault"] == 1, str(stats))
-    check("one row per (pool, tx)", len(rows) == 2, f"got {len(rows)}")
+    check("one row per (pool, tx)", len(rows) == 2, str(len(rows)))
+    check("swap and failed both classified", swap is not None and attempt is not None)
+    check("failed counted separately", stats["failed"] == 1 and stats["swaps"] == 1, str(stats))
 
-    sell = by_sig.get("511HcJatcMRa2Ut9E3EW")
-    check("sell row present", sell is not None)
-    if sell:
-        deltas = {v["account"]: int(v["delta_raw"]) for v in sell["vault_deltas"]}
-        # These two integers are what the live RPC collector recorded for this signature.
-        check("sell deltas exact",
-              deltas == {"DsfKXLXngaQiUdJiHqwt5TZ6usMmapyoVC3WcZzsqjM8": 511234144,
-                         "FJ5qM8FMRsK6fb2iYaZLiWUCDwWprsxrC5NyxXyVZMb5": -958296764612},
-              str(deltas))
-        check("amounts serialise as strings", isinstance(sell["vault_deltas"][0]["delta_raw"], str))
-        check("classified as swap", sell["kind"] == "swap", sell["kind"])
-        check("token_out is the token leg",
-              sell["token_out_mint"] == "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump"
-              and sell["token_out_raw"] == "958296764612", str(sell.get("token_out_raw")))
-        check("reserves are null, with a reason",
-              sell["reserves"] is None and bool(sell["reserves_absent_reason"]))
-        check("never claims replay grade",
-              sell["grade"] == "summary" and sell["replay_sufficient"] is False)
-        check("row_id matches the cluster convention",
-              sell["row_id"] == hashlib.sha256(
-                  f"{sell['pool']}:{sell['chain']['signature']}".encode()).hexdigest())
-        check("trader taken from inbound authority",
-              sell["attributed_authority"] == "gtagyESa99t49VmUqnnfsuowYnigSNKuYXdXWyXWNdd",
-              str(sell["attributed_authority"]))
-        check("schema marker present, not a cluster row",
-              sell["schema"] == ROW_SCHEMA and "swap_legs" not in sell)
+    if swap:
+        got = {v["mint"]: (v["pre_raw"], v["post_raw"], v["delta_raw"]) for v in swap["reserves"]["vaults"]}
+        # Exactly what the live RPC collector recorded for this signature.
+        check("pre/post reserves exact", got == {
+            "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump":
+                ("745708166270", "726574810760", "-19133355510"),
+            "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump":
+                ("4417042298150", "4461156942807", "44114644657"),
+        }, str(got))
+        check("amounts serialise as strings", all(
+            isinstance(v[k], str) for v in swap["reserves"]["vaults"]
+            for k in ("pre_raw", "post_raw", "delta_raw")))
+        check("tx_index carried (RPC cannot supply it)", swap["chain"]["tx_index"] == 42)
+        check("row_id matches the cluster convention", swap["row_id"] == hashlib.sha256(
+            f"{swap['pool']}:{swap['chain']['signature']}".encode()).hexdigest())
+        check("direction is the mirror of the deltas",
+              swap["token_in_mint"]
+              == "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump"
+              and swap["token_in_raw"] == "44114644657"
+              and swap["token_out_raw"] == "19133355510", str(swap.get("token_in_raw")))
+        check("DLMM pool is NOT claimed replay-sufficient",
+              swap["reserves"]["replay_sufficient"] is False and swap["grade"] == "summary",
+              str(swap["grade"]))
+        check("fee carried", swap["fee_lamports"] == "58296")
+        check("vault address absence is explicit", swap["vault_addresses_available"] is False)
 
-    buy = by_sig.get("5pu27bwjE7SkLMCEzpZ7")
-    if buy:
-        check("buy direction is the mirror",
-              buy["token_in_mint"] == "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump"
-              and buy["token_out_mint"] == WSOL_MINT, str(buy.get("token_in_mint")))
+    if attempt:
+        check("failed tx has zero delta", all(
+            v["delta_raw"] == "0" for v in attempt["reserves"]["vaults"]))
+        check("failed tx records err", bool(attempt["err"]))
+        check("failed tx has no direction", "token_in_mint" not in attempt)
+        check("failed tx is NOT labelled attempt", attempt["kind"] == "failed")
+
+    # A constant-product pool must be allowed to claim replay grade.
+    cp = build_rows([{**FIXTURE_TX[0],
+                      "pre": [{**b, "owner": "GA1nQL5RLBYUkLfBRrTPxhiSaPYnanJwteMGa3jPRjEn",
+                               "mint": WSOL_MINT if i else "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump"}
+                              for i, b in enumerate(FIXTURE_TX[0]["pre"])],
+                      "post": [{**b, "owner": "GA1nQL5RLBYUkLfBRrTPxhiSaPYnanJwteMGa3jPRjEn",
+                                "mint": WSOL_MINT if i else "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump"}
+                               for i, b in enumerate(FIXTURE_TX[0]["post"])]}],
+                    provenance=prov)[0][0]
+    check("constant-product pool IS replay grade",
+          cp["grade"] == "replay" and cp["reserves"]["replay_sufficient"] is True, cp["grade"])
 
     # A float amount is the silent-corruption path shitcoims_tape.schema exists to close.
-    try:
-        _raw_int(1.5, what="value")
-        check("fractional raw amount refused", False, "accepted 1.5")
-    except ValueError:
-        check("fractional raw amount refused", True)
-    check("integral NUMERIC string accepted", _raw_int("511234144.000", what="v") == 511234144)
-    check("big amount stays exact", _raw_int("2344341219042000000001", what="v") == 2344341219042000000001)
+    for bad in (1.5, 2.0, True):
+        try:
+            _raw_int(bad, what="amount")
+            check(f"float/bool {bad!r} refused", False, "accepted")
+        except ValueError:
+            check(f"float/bool {bad!r} refused", True)
+    check("integral BIGNUMERIC string accepted", _raw_int("745708166270.000", what="v") == 745708166270)
+    check("amount above 2**53 stays exact",
+          _raw_int("9007199254740993000000", what="v") == 9007199254740993000000)
 
-    # coverage verdicts, against the real measurements in the module docstring
-    cov = summarise_preflight([
-        {"d": "2026-08-12", "bucket": i, "total_rows": 9_000_000, "wsol_rows": 1_800_000}
-        for i in range(24)
-    ])["2026-08-12"]
-    check("fully loaded day reads LOADED", cov.verdict == "LOADED", cov.verdict)
-    cov = summarise_preflight(
-        [{"d": "2026-08-13", "bucket": i, "total_rows": 5_000_000, "wsol_rows": 1_500_000} for i in range(2)]
-        + [{"d": "2026-08-13", "bucket": i, "total_rows": 5_000_000, "wsol_rows": 700} for i in range(2, 24)]
-    )["2026-08-13"]
-    check("half-loaded day reads PARTIAL", cov.verdict == "PARTIAL", cov.verdict)
-    check("partial day reports its real fraction", abs(cov.covered_fraction - 2 / 24) < 1e-9,
-          str(cov.covered_fraction))
-    cov = summarise_preflight([
-        {"d": "2026-08-11", "bucket": i, "total_rows": 4_500_000, "wsol_rows": 600} for i in range(24)
-    ])["2026-08-11"]
-    check("unloaded day reads EMPTY", cov.verdict == "EMPTY", cov.verdict)
+    cov = summarise_preflight([{"d": "2026-08-13", "txs": 310_361_742},
+                               {"d": "2026-08-12", "txs": 266_746_538},
+                               {"d": "2026-08-11", "txs": 313_787_304}])
+    check("normal days read LOADED", all(c.verdict == "LOADED" for c in cov.values()))
+    cov = summarise_preflight([{"d": "2026-08-13", "txs": 310_361_742},
+                               {"d": "2026-08-12", "txs": 266_746_538},
+                               {"d": "2026-08-14", "txs": 51_774_187}])
+    check("a short partition reads PARTIAL", cov["2026-08-14"].verdict == "PARTIAL",
+          cov["2026-08-14"].verdict)
 
-    # SQL construction: the injection guard and the partition filter the table requires.
-    sql = pull_sql(date(2026, 8, 12), list(FIXTURE_VAULTS), with_transfer_type=False)
+    sql = pull_sql(date(2026, 8, 13), [p.address for p in CLUSTER_POOLS], with_signers=False)
     check("partition filter present", "block_timestamp >=" in sql and "block_timestamp <" in sql)
-    check("both vault sides filtered", "source IN (" in sql and "destination IN (" in sql)
+    check("filters on vault owner, not a hard-coded vault table", "b.owner IN (" in sql)
+    check("all 7 pools in the filter", all(p.address in sql for p in CLUSTER_POOLS))
+    check("accounts column excluded unless asked", "UNNEST(accounts)" not in sql)
+    check("signers opt-in adds it", "UNNEST(accounts)" in pull_sql(
+        date(2026, 8, 13), [CLUSTER_POOLS[0].address], with_signers=True))
     try:
-        pull_sql(date(2026, 8, 12), ["'); DROP TABLE x;--"], with_transfer_type=False)
+        pull_sql(date(2026, 8, 13), ["'); DROP TABLE x;--"], with_signers=False)
         check("sql injection refused", False, "accepted a non-base58 address")
     except ValueError:
         check("sql injection refused", True)
 
     print()
     if failures:
-        print(f"{len(failures)} FAILED")
+        print(f"{len(failures)} FAILED: {failures}")
         return 1
     print("all selftests passed")
     return 0
@@ -902,10 +766,9 @@ def default_project() -> str:
     env = os.environ.get("BULK_HISTORY_PROJECT")
     if env:
         return env
-    proc = subprocess.run(
-        ["gcloud", "config", "get-value", "project"], capture_output=True, text=True, check=False
-    )
-    return (proc.stdout or "").strip() or "manifest-quasar-414607"
+    proc = subprocess.run(["gcloud", "config", "get-value", "project"],
+                          capture_output=True, text=True, check=False)
+    return (proc.stdout or "").strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -921,7 +784,6 @@ def main(argv: list[str] | None = None) -> int:
         target.add_argument("--project", default=d,
                             help="billing project for BigQuery (it pays for bytes scanned)")
         target.add_argument("--out", type=Path, default=DEFAULT_OUT if not sub else argparse.SUPPRESS)
-        target.add_argument("--vaults-file", type=Path, default=d)
         target.add_argument("--max-bytes", type=int,
                             default=DEFAULT_MAX_BYTES if not sub else argparse.SUPPRESS)
         target.add_argument("--dry-run", action="store_true",
@@ -931,94 +793,72 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     add_common(parser, sub=False)
     sub = parser.add_subparsers(dest="cmd", required=True)
-
-    add_common(sub.add_parser("vaults", help="print the derived vault map and exit"), sub=True)
     add_common(sub.add_parser("selftest", help="offline fixture tests, no network"), sub=True)
     add_common(sub.add_parser("verify", help="compare pulled rows against the live tape"), sub=True)
-
-    pre = sub.add_parser("preflight", help="measure per-day loadedness before spending on a pull")
+    pre = sub.add_parser("preflight", help="cheap per-day completeness check (~2.5 GB/day)")
     add_common(pre, sub=True)
     pre.add_argument("--start", required=True)
     pre.add_argument("--end", required=True)
-    pre.add_argument("--buckets", type=int, default=DEFAULT_BUCKETS)
-
-    pull = sub.add_parser("pull", help="extract a date range into JSONL")
+    pull = sub.add_parser("pull", help="extract a date range into JSONL (~270 GB/day scanned)")
     add_common(pull, sub=True)
     pull.add_argument("--start", required=True)
     pull.add_argument("--end", required=True)
-    pull.add_argument("--buckets", type=int, default=DEFAULT_BUCKETS)
     pull.add_argument("--force", action="store_true", help="re-pull days already marked complete")
     pull.add_argument("--skip-preflight", action="store_true")
     pull.add_argument("--allow-partial", action="store_true",
-                      help="pull days the coverage check calls PARTIAL/EMPTY (they will still be labelled)")
-    pull.add_argument("--no-transfer-type", action="store_true",
-                      help="drop the transfer_type column (~2.3 GB/day cheaper)")
+                      help="pull days the completeness check calls PARTIAL/EMPTY")
+    pull.add_argument("--with-signers", action="store_true",
+                      help="include the signer list; needs the accounts column, ~+267 GB/day")
 
     args = parser.parse_args(argv)
-
     if args.cmd == "selftest":
         return selftest()
-
     if args.cmd == "verify":
         return verify(args.out)
 
-    vaults = load_vaults(args.vaults_file)
-    if args.cmd == "vaults":
-        for account, v in sorted(vaults.items(), key=lambda kv: (kv[1].pool, kv[1].mint)):
-            spec = POOLS_BY_ADDRESS[v.pool]
-            print(f"{account}  pool={v.pool}  {spec.label:<18} mint={v.mint}  decimals={v.decimals}")
-        pools_seen = len({v.pool for v in vaults.values()})
-        print(f"\n{len(vaults)} vaults across {pools_seen}/{len(CLUSTER_POOLS)} cluster pools")
-        return 0
-
     project = args.project or default_project()
+    if not project:
+        raise SystemExit("no billing project: pass --project or set BULK_HISTORY_PROJECT")
     bq = BigQuery(project=project, max_bytes=args.max_bytes, dry_run=args.dry_run)
     days = _days(_parse_day(args.start), _parse_day(args.end))
-    print(f"project={project}  days={len(days)}  vaults={len(vaults)}", file=sys.stderr)
+    pools = [p.address for p in CLUSTER_POOLS]
+    print(f"project={project}  days={len(days)}  pools={len(pools)}", file=sys.stderr)
 
     coverage: dict[str, DayCoverage] = {}
     cache_path = args.out / "preflight.json"
-    if args.cmd == "preflight" or (args.cmd == "pull" and not args.skip_preflight):
-        # A coverage measurement costs ~4 GB/day of scanned bytes, so re-measuring a day
-        # we already measured is real money for no new information. Cache it, and only
-        # pay for the days that are actually missing (or all of them under --force).
+    if args.cmd == "preflight" or not args.skip_preflight:
         cached: dict[str, DayCoverage] = {}
         if cache_path.exists() and not getattr(args, "force", False):
             for key, payload in json.loads(cache_path.read_text()).get("days", {}).items():
-                cov = DayCoverage(day=key, total_rows=payload["total_rows"],
-                                  wsol_rows=payload["wsol_rows"],
-                                  buckets_total=payload["buckets_total"],
-                                  buckets_loaded=payload["buckets_loaded"])
-                cached[key] = cov
+                cached[key] = DayCoverage(day=key, txs=payload["txs"],
+                                          median=payload["window_median_txs"])
         need = [d for d in days if d.isoformat() not in cached]
         coverage = {d.isoformat(): cached[d.isoformat()] for d in days if d.isoformat() in cached}
         billed = 0
         if need:
             print(f"preflight over {len(need)} day(s) "
-                  f"({len(days) - len(need)} already measured)...", file=sys.stderr)
-            sql = preflight_sql(need, args.buckets)
-            rows, stats = bq.run(sql)
+                  f"({len(days) - len(need)} cached)...", file=sys.stderr)
+            rows, stats = bq.run(preflight_sql(need))
             coverage.update(summarise_preflight(rows))
             billed = stats.get("total_bytes_billed", 0)
-            merged = {**{k: v.to_json() for k, v in cached.items()},
-                      **{k: v.to_json() for k, v in coverage.items()}}
             if not bq.dry_run:
+                merged = {**{k: v.to_json() for k, v in cached.items()},
+                          **{k: v.to_json() for k, v in coverage.items()}}
                 _atomic_write(cache_path, json.dumps(
-                    {"measured_at": _now(), "project": project, "days": dict(sorted(merged.items()))},
-                    indent=2) + "\n")
+                    {"measured_at": _now(), "project": project,
+                     "days": dict(sorted(merged.items()))}, indent=2) + "\n")
         else:
-            print(f"preflight: all {len(days)} day(s) already measured (cached, $0)", file=sys.stderr)
-        print(f"\n{'day':<12} {'verdict':<9} {'covered':>8} {'wsol/total':>11} {'total rows':>14}")
+            print(f"preflight: all {len(days)} day(s) cached ($0)", file=sys.stderr)
+
+        print(f"\n{'day':<12} {'verdict':<9} {'transactions':>15} {'vs median':>10}")
         for day in days:
-            key = day.isoformat()
-            cov = coverage.get(key)
+            cov = coverage.get(day.isoformat())
             if cov is None:
-                print(f"{key:<12} {'NO DATA':<9}")
-                continue
-            print(f"{key:<12} {cov.verdict:<9} {cov.covered_fraction * 100:7.1f}% "
-                  f"{cov.wsol_ratio * 100:10.2f}% {cov.total_rows:14,}")
+                print(f"{day.isoformat():<12} {'NO DATA':<9}")
+            else:
+                print(f"{day.isoformat():<12} {cov.verdict:<9} {cov.txs:>15,} {cov.ratio * 100:9.1f}%")
         print(f"\npreflight billed {billed / 1e9:.2f} GB "
-              f"(${billed / 1.099511627776e12 * 6.25:.2f} at on-demand, $0 inside the 1 TiB/month free tier)",
+              f"(${billed / 1.099511627776e12 * 6.25:.2f} on-demand, $0 inside the free tier)",
               file=sys.stderr)
         if args.cmd == "preflight":
             return 0
@@ -1028,26 +868,26 @@ def main(argv: list[str] | None = None) -> int:
     for day in days:
         cov = coverage.get(day.isoformat())
         if cov and cov.verdict != "LOADED" and not args.allow_partial:
-            print(f"  {day} SKIPPED — coverage {cov.verdict} "
-                  f"({cov.covered_fraction * 100:.1f}% of buckets loaded). "
+            print(f"  {day} SKIPPED — completeness {cov.verdict} "
+                  f"({cov.txs:,} txs, {cov.ratio * 100:.1f}% of median). "
                   "Use --allow-partial to pull it anyway.", file=sys.stderr)
             continue
         print(f"  pulling {day}...", file=sys.stderr)
-        meta = pull_day(bq, day, vaults, args.out,
-                        with_transfer_type=not args.no_transfer_type,
+        meta = pull_day(bq, day, pools, args.out, with_signers=args.with_signers,
                         coverage=cov, force=args.force)
         pulled.append(meta)
         if meta.get("reused"):
             continue
         total_billed += meta.get("job", {}).get("total_bytes_billed", 0)
-        print(f"    {meta['rows']} rows from {meta['raw_transfers']} transfers"
-              f"  ({meta.get('job', {}).get('total_bytes_billed', 0) / 1e9:.2f} GB billed)", file=sys.stderr)
+        print(f"    {meta['rows']} rows from {meta['transactions']} transactions "
+              f"{meta['by_kind']} ({meta.get('job', {}).get('total_bytes_billed', 0) / 1e9:.2f} GB)",
+              file=sys.stderr)
 
     print(f"\npulled {len(pulled)} day(s), {sum(m['rows'] for m in pulled)} rows, "
           f"{total_billed / 1e9:.2f} GB billed "
           f"(${total_billed / 1.099511627776e12 * 6.25:.2f} on-demand)", file=sys.stderr)
-    print("grade: SUMMARY (no reserves anywhere in this source) — see studies/RESULT_bulk_history.md",
-          file=sys.stderr)
+    print("grade: REPLAY for the constant-product pools (pre/post reserves, exact integers); "
+          "DLMM pools are summary by nature — see studies/RESULT_bulk_history.md", file=sys.stderr)
     return 0
 
 

@@ -1,197 +1,257 @@
-# RESULT: bulk historical tape — what it costs, and what fidelity it buys
+# RESULT: bulk historical tape — replay-grade, complete, ~$27 for 22 days
 
-**Date:** 2026-08-13 · **Tool:** `scripts/bulk_history.py` · **Status:** path built, run end to end,
-disqualifying defect found in the source and measured rather than assumed.
+**Date:** 2026-08-14 · **Tool:** `scripts/bulk_history.py` · **Status:** source chosen, validated
+against live ground truth, run end to end.
 
 ---
 
 ## Bottom line
 
 The operator asked whether we can sync bulk data instead of paying ~206% of the monthly Helius
-plan to backfill 22 days by RPC. The answer has two halves, and the second one is the important one.
+plan to backfill 22 days by RPC. **Yes — and the bulk path is not a downgrade. It is strictly more
+informative than the RPC path, and it costs about $27.**
 
-1. **The bulk path works, is nearly free, and is byte-exact.** BigQuery's public Solana dataset
-   holds inner-CPI token transfers whose `value` is a raw integer. Extracted for the cluster pools
-   and checked against transactions the live RPC collector had independently recorded, **9 of 9
-   swaps matched on every digit of both vault legs**. Cost of the day actually pulled: **58.03 GB
-   scanned = $0.33 at on-demand rates, $0.00 inside the 1 TiB/month free tier.**
+`bigquery-public-data.crypto_solana_mainnet_us.Transactions` carries full transaction meta:
+`pre_token_balances` / `post_token_balances` with `amount` as **BIGNUMERIC** — exact integers, no
+float anywhere — plus `fee`, `err`, `index` and `compute_units_consumed`.
 
-2. **The source is not populated, so the tape it can build is one day long.** Across six sampled
-   months, the transfers table has `mint IS NULL` on 92–96% of rows and carries essentially no DEX
-   flow. Exactly one day in the sample — 2026-08-12 — is loaded, and even that one is only
-   **83.3% covered**. On 2026-08-13 our pools' vault transfers stop at slot 438,930,102 while the
-   day runs to 439,117,724, and the slots past that point are *not* empty (369–1690 transfers
-   each), they simply do not contain our pools. This is silent row loss, not a lag that fills in.
+Validated against every swap the live RPC collector had independently recorded on 2026-08-13,
+across all pools:
 
-So: **bulk gives summary-grade history for flow / volume / trader-attribution analysis at ~$0, but
-only for the days that happen to be loaded — currently 1 day in 22. Replay-grade history requires
-RPC at the price already costed.** Nothing in any free source carries pool reserves.
+> **876 of 876 present. 876 of 876 matched on BOTH pre and post reserves — every digit, both
+> vault legs, zero disagreements. Recall 100.0%.**
 
-The tool's most valuable feature is therefore not extraction, it is **refusing to extract silently**.
-A backtest built on a day that dropped 95% of its swaps is worse than no backtest, because it looks
-like a result.
+That is **replay-grade**. Reserves are what make an exact AMM fill replayable, and they are here.
+
+Two capabilities this path has that `getTransaction` does not:
+
+- **`index`, the transaction's position within its block.** `shitcoims_cluster.parse` documents
+  intra-slot ordering as *unrecoverable* from `getTransaction`, which matters because 57 of 158
+  observed slots on nosis/SOL carried more than one transaction. This column resolves it —
+  present on **368,795 of 368,795** rows pulled.
+- **Failed transactions.** `err` is non-empty on a revert, so reverts arrive in the same scan as
+  fills. In the live tape attempts outnumber swaps **6.5 to 1** (19,061 vs 2,937), so this is most
+  of the competitive signal, and here it is free. **But see the caveat below — they are emitted as
+  `failed`, not as `attempt`, and the two are not the same thing.**
+
+**Cost: ~263 GB scanned per day** (measured on the real run; 269.8 GB was the dry-run bound). One
+day is free inside the 1 TiB/month tier; the full 22 days is ~5.9 TB = 5.4 TiB → **~$27** after the
+free tier.
+
+### The one place a bulk row must not be read as a live row: `failed` ≠ `attempt`
+
+A failed transaction moved nothing, so its token balances cannot say whether it *meant* to trade
+this pool or merely listed the pool's vaults while failing somewhere else. Measured on 2026-08-13,
+nosis/SOL shows **105,457 `failed` rows here against 4,336 `attempt` rows in the live tape — a ~24x
+gap.** Reading them as attempts would inflate an attempt-rate study by more than an order of
+magnitude, which is exactly the class of silent overcount this project keeps paying for.
+
+So they are emitted as `kind: "failed"`, deliberately *not* as the live tape's `attempt`.
+Narrowing them to genuine attempts needs to know which program was invoked — and `log_messages` is
+only **3.1 GB/day**, so that is a cheap next increment. It is left undone rather than guessed at.
 
 ---
 
-## The four options, measured
+## Correction to an earlier version of this document
 
-All BigQuery figures are **real, measured on this machine** on 2026-08-13 against project
-`manifest-quasar-414607` (the gcloud default project has the BigQuery API disabled; pass
-`--project` or set `BULK_HISTORY_PROJECT`). Total spend for this entire investigation, tool
-development and end-to-end run included: **300.4 GB = 0.273 TiB, $1.71 on-demand, $0.00 actual.**
+An earlier draft of this study concluded that the dataset had **no reserves anywhere** and that
+bulk could only ever be summary-grade. **That conclusion was wrong, and the error is worth
+recording because it was an error of method, not of arithmetic.**
 
-### 1. BigQuery public Solana dataset — CHOSEN, with the caveat above
+The initial `bq ls` was piped through `head -40`, and the dataset's multi-line label formatting
+meant the output was truncated at five tables. The dataset actually has eight. The truncation hid
+`Transactions` — the one table that carries reserves — and every downstream conclusion inherited
+that gap. A background research agent tasked with pricing other vendors independently identified
+`Transactions` with its `pre/post_token_balances`, which is what prompted re-checking.
 
-`bigquery-public-data.crypto_solana_mainnet_us` exists and is **fresh to within ~3 hours** (the
-2026-08-14 partition already held 29,896 blocks when queried). Partitioning is favourable:
+The lesson is narrow and mechanical: **a truncating pipe on a discovery command is not a listing,
+it is a sample.** Enumeration that a conclusion rests on has to be complete and machine-read
+(`--format=json`, count the rows), never eyeballed through `head`.
+
+The rejections below stand — they were measured directly and re-verified — but the headline
+verdict is reversed: bulk *does* deliver reserves.
+
+---
+
+## The options, measured
+
+All BigQuery figures are real, measured against project `manifest-quasar-414607` (the gcloud
+default project has the BigQuery API disabled; pass `--project` or set `BULK_HISTORY_PROJECT`).
+Total spend for the entire investigation, tool development and end-to-end runs included:
+**~0.7 TiB, $0.00 actual** — everything fit inside the free tier.
+
+### The dataset
+
+Fresh to within ~3 hours (the 2026-08-14 partition already held 29,896 blocks when queried).
+Eight tables; the four that mattered:
 
 | table | rows | size | partition | cluster |
-|---|---|---|---|---|
-| `Instructions` | 1.14e12 | 936.8 TB | DAY on `block_timestamp`, `requirePartitionFilter` | `program_id` |
-| `Token Transfers` | 1.45e11 | 43.9 TB | DAY on `block_timestamp`, `requirePartitionFilter` | none |
+|---|---:|---:|---|---|
+| **`Transactions`** | 5.63e11 | 938.3 TB | DAY on `block_timestamp`, required | **`signature`** |
+| `Instructions` | 1.14e12 | 936.8 TB | DAY, required | `program_id` |
+| `Token Transfers` | 1.45e11 | 43.9 TB | DAY, required | none |
 | `Accounts` | 1.64e8 | 0.14 TB | MONTH | none |
 
-**Partitioning bounds the scan, and column pruning matters more than the row filter.** One day of
-`Instructions` is 759.4 GB with `SELECT *` but 32.9 GB for the eight columns we need — a 23x lever.
-Per-column costs for one day of `Token Transfers`, measured individually:
+### 1. `Transactions` — CHOSEN
+
+Complete, exact, and uniformly populated. Transactions per UTC day across the whole target window:
 
 ```
-tx_signature 11.99 GB   source 6.53 GB   destination 6.50 GB   transfer_type 2.26 GB
-block_slot    1.96 GB   authority 1.68 GB   mint 1.53 GB   value 1.23 GB   decimals 1.15 GB
+07-24 278.5M   07-29 299.4M   08-03 292.5M   08-08 297.2M   08-13 310.4M
+07-25 255.0M   07-30 292.9M   08-04 309.8M   08-09 309.1M   08-14  51.8M (day in progress)
+07-26 264.1M   07-31 285.5M   08-05 294.7M   08-10 312.0M
+07-27 295.8M   08-01 260.2M   08-06 292.9M   08-11 313.8M
+07-28 296.2M   08-02 263.6M   08-07 301.2M   08-12 266.7M
 ```
 
-Cost is driven by columns, **not by how many pools you filter for**, so the tool queries all pools
-in one query per day rather than one query per pool. Note `tx_signature` alone is 44% of the bill
-and is not optional — it is the join key to the tape contract.
+No collapse, no gap, 255M–314M throughout. This is the property `Token Transfers` lacks.
 
-Two tables could have carried a swap tape. Only one carries exact numbers:
+### 2. `Token Transfers` — rejected: exact but not populated
 
-- **`Instructions` is disqualified: it contains only top-level instructions.**
-  `COUNTIF(parent_index IS NOT NULL) = 0` across a full day of PumpSwap (25,360,281 instructions).
-  Measured against 528 known-good cluster swaps the live collector recorded on 2026-08-13, it
-  holds a top-level PumpSwap instruction for **224 of 528 — 42.4%**. The missing 57.6% are
-  aggregator-routed, where PumpSwap is invoked by CPI and is therefore invisible. It also carries
-  only the *requested* Anchor args, never the realised fill. A tape that silently omits 57.6% of
-  fills, biased toward exactly the routed/bot flow we care about, is not a tape.
-
-- **`Token Transfers` does include inner CPI transfers**, and its `value` is a raw integer in base
-  units (verified: no decimal scaling, no float). This is the source used.
-
-- **`Accounts` is not a reserves fallback.** It returns **zero rows** for every cluster pool
-  address. There is no pre/post pool balance anywhere in this dataset.
-
-**The defect.** Wrapped SOL is a leg of essentially every DEX swap, so its row count is a coverage
-thermometer for the whole table:
+It genuinely contains inner CPI transfers and its `value` is a raw integer; on the one day where
+coverage exists, 9 of 9 swaps matched the live tape's vault deltas exactly. But across six sampled
+months `mint IS NULL` on **92–96%** of rows, our four cluster mints show **1–7 transfer rows per
+day** against hundreds of real swaps, and of the same 528 known-good swaps it contained **zero**.
 
 | day | total rows | WSOL rows | null-mint % |
 |---|---:|---:|---:|
 | 2026-02-01 | 96,057,774 | 2,433 | 96.3 |
 | 2026-05-01 | 56,408,085 | 319,070 | 92.1 |
-| 2026-06-15 | 72,661,809 | 7,749 | 95.9 |
 | 2026-07-05 | 79,926,733 | 3,280 | 95.8 |
-| 2026-07-20 | 81,097,859 | 2,763 | 95.2 |
 | 2026-07-28 | 94,899,755 | 2,586 | 94.2 |
-| 2026-08-04 | 105,818,194 | 2,620 | 95.1 |
-| 2026-08-08 | 103,375,291 | 10,149 | 95.5 |
-| 2026-08-10 | 111,066,785 | 14,156 | 95.4 |
 | 2026-08-11 | 107,453,910 | 14,488 | 95.9 |
-| **2026-08-12** | **216,717,409** | **42,627,164** | **55.6** |
+| **2026-08-12** | **216,717,409** | **42,627,164** | **55.6** ← one-off reload, 2x rows |
 | 2026-08-13 | 122,628,992 | 3,302,998 | 90.1 |
 
-One day out of twelve sampled is loaded, and it has roughly twice the row count of its neighbours —
-consistent with a one-off reprocessing rather than the normal pipeline. Direct confirmation at the
-pool level: our four cluster mints had **1–7 transfer rows per day** on normal days against
-hundreds of real swaps, and 13,784 / 36,281 / 298 / 3,426 on 2026-08-12.
+It also carries **deltas only, never levels**, and cannot represent a failed transaction at all —
+a failed swap moves no tokens. Even fully loaded it would be summary-grade.
 
-This is why `preflight` exists and why it measures **per slot-bucket within the day**, not just
-per day. A day-level ratio would have called 2026-08-13 usable at 2.69%; the bucket measurement
-correctly reports **8.3% of the day covered**, and correctly downgrades even the good day to
-**83.3%**.
+### 3. `Instructions` — rejected: no inner instructions
 
-### 2. Dune Analytics
+`COUNTIF(parent_index IS NOT NULL) = 0` across a full day of PumpSwap (25,360,281 instructions).
+It holds a top-level PumpSwap instruction for only **224 of 528 (42.4%)** known-good swaps; the
+other 57.6% are aggregator-routed and invisible. It also carries the *requested* Anchor args, never
+the realised fill. A tape omitting 57.6% of fills, biased toward exactly the routed/bot flow we
+care about, is not a tape.
 
-Not evaluated hands-on — no account, and the decisive question was already answered by the
-architecture. Dune's Solana DEX tables are *decoded trade* tables: they carry amounts, prices and
-traders, not pool state. Even in the best case they are summary-grade for the same reason
-`Token Transfers` is, so they would not change the fidelity verdict, only the price of getting the
-same grade of data. **If summary-grade over the full 22 days is what we want, this is the option to
-price out properly** — it is the one plausible way to get more than one loaded day. Flagged as the
-open follow-up rather than claimed either way.
+### 4. `Accounts` — rejected: **zero rows** for every cluster pool address.
 
-### 3. Flipside Crypto
+### 5. Dune / Flipside — not needed, and they are a downgrade
 
-Same as above and for the same reason: `solana.defi.fact_swaps`-style tables are decoded swaps,
-not pool state. Free-tier limits were not verified in this session. Same follow-up applies.
+Both expose *decoded trade* tables (`dex_solana.trades`, `solana.defi.fact_swaps`): amounts,
+prices and traders, but not pool state. They would deliver summary-grade at best, which BigQuery
+now beats on fidelity **and** on price. Worth keeping only as a cross-check on swap counts.
 
-### 4. Solana Foundation GCS ledger archives — impractical, with numbers
+### 6. Solana Foundation GCS ledger archives — impractical, with numbers
 
-`gs://mainnet-beta-ledger-us-ny5/` is real and reachable but is a **requester-pays** bucket, so
-every byte is billed to us, and this account's billing is currently closed (`HTTPError 403: The
-billing account for the owning project is disabled`). Beyond the billing wall the arithmetic
-settles it: the archive stores per-epoch RocksDB snapshots, an epoch is ~432,000 slots ≈ 2.2 days,
-so 22 days is ~10 epochs at multiple TB each — **tens of TB of egress against 1.9 TB free on
-/tank**, before any of it is usable, because a raw ledger must be replayed by a validator to yield
-transactions at all. It does not fit on the disk, let alone in the budget. Ruled out.
+`gs://mainnet-beta-ledger-us-ny5/` is real and reachable but **requester-pays**, and this account's
+billing is closed (`HTTPError 403: billing account … is disabled`). Past that wall the arithmetic
+settles it: per-epoch RocksDB snapshots, an epoch is ~432,000 slots ≈ 2.2 days, so 22 days is ~10
+epochs at multiple TB each — **tens of TB of egress against 1.9 TB free on /tank**, before any of
+it is usable, since a raw ledger must be replayed by a validator to yield transactions. Ruled out.
 
 ---
 
-## Fidelity: summary-grade, and exactly where the line falls
+## Cost model: why `pull` scans the whole day
 
-`Token Transfers` gives **deltas, never levels**. There is no pre/post reserve in this dataset.
-That is the whole difference:
+BigQuery bills on bytes scanned, and on this table the bill is set by **which columns you touch,
+not how many pools you filter for**. Measured per column, one day:
 
-- **What we get, exactly:** block time, slot, signature, both vault deltas in raw integer units,
-  direction, and the trader — all verified digit-for-digit against RPC.
-- **What we do not get:** the reserves. Impact is a deterministic function of pool state, so
-  without reserves a fill cannot be replayed. `reserves` is emitted as `null` on every row with an
-  explicit `reserves_absent_reason`. It is never guessed, never inferred from a price, and never
-  omitted silently.
+```
+balance_changes 434.1 GB    accounts 267.0 GB    post_token_balances 114.4 GB
+pre_token_balances 114.3 GB signature 30.7 GB    err 7.8 GB    fee 7.5 GB
+compute_units 7.5 GB        index 5.0 GB         block_slot 5.0 GB    log_messages 3.1 GB
+```
 
-Reserve *levels* are reconstructible in principle by cumulative-summing deltas from one anchor
-balance per vault (one cheap RPC call each) — but only if the transfer stream is complete over the
-whole interval, which per the table above it is not. **The tool does not implement the
-reconstruction, because on this data it would produce a confidently wrong number.** If the source
-were ever fully loaded, this is the first thing to build, and it is validated the same way this
-report validated the deltas: chain it and check against live rows.
+The replay set — `signature`, `block_slot`, `block_timestamp`, `index`, `fee`, `err`,
+`pre_token_balances`, `post_token_balances` — is **269.8 GB/day**. `accounts` (the signer list)
+would double it, so it sits behind `--with-signers`. `balance_changes` is never touched.
 
-Two further limits that hold *even on a fully loaded day*:
+Signature filtering *does* prune, since `signature` is the clustering key — measured **13.6 GB for
+200 signatures** and **34.2 GB for 528**, i.e. ~65 MB per transaction. But that only beats a
+full-day scan below ~4,000 transactions/day, and the cluster sees **11,103** (2026-08-13) to
+**65,884** (2026-08-14) transactions/day touching its pools. So the full-day scan wins by a wide
+margin, and `pull` uses it.
 
-- **Failed transactions do not exist in a transfers table.** A failed swap moves no tokens. The
-  live tape's own composition makes the size of this gap concrete: of 79,102 recorded rows, **2,937
-  are swaps and 19,061 are attempts** — attempts outnumber fills 6.5 to 1. Any study of attempt
-  rate, revert rate, or competitive failure **cannot use the bulk tape at all**.
-- **DLMM pools stay non-replayable regardless.** A Meteora fill walks bins; the two vault totals
-  are a sum over bins and do not determine marginal price or depth. This is already recorded
-  per-pool as `PoolSpec.replay_sufficient_reserves` and is a property of concentrated liquidity,
-  not a gap in this source.
+Costs below use the **measured** 263.13 GB pull + 2.48 GB preflight per day, not the dry-run bound.
 
-### One thing the bulk path does *better* than RPC
-
-`Token Transfers.authority` is the signing authority of the debited token account. On a swap's
-inbound leg that is the trader, **stated by the chain rather than inferred**. The RPC parser has to
-identify the counterparty by mirroring vault deltas, which `shitcoims_cluster.parse` documents as
-failing on 0 of 13 early live swaps and still returning `None` whenever a route nets to zero.
-
-On the 9 validated swaps, `authority` recovered the trader on **all 9** — including one where the
-live parser returned `counterparty: None`, and one where it differed from `fee_payer` because the
-fee was sponsored. That second case is precisely the confusion `shitcoims_tape.schema` warns is a
-fabricated-provenance bug. On the real pull, attribution was non-null on **100% of 30,601 rows**,
-yielding 3,270 distinct traders in a day.
-
-It is still **not** a beneficial-owner claim: for an aggregator-routed fill the authority is the
-router's PDA. It is therefore emitted as `attributed_authority`, never as `wallet`.
+| what you want | scan | cost after 1 TiB free tier | without free tier |
+|---|---:|---:|---:|
+| 1 day, replay-grade | 266 GB | **$0.00** | $1.51 |
+| 1 week, replay-grade | 1,859 GB | **$4.32** | $10.57 |
+| **22 days, replay-grade** | **5,843 GB** | **$26.97** | $33.22 |
+| 22 days + signer lists | 11,717 GB | $60.36 | $66.61 |
+| 22 days, replay-grade, by RPC | — | **206% of the monthly Helius plan** | — |
 
 ---
 
-## Schema compatibility: where bulk rows map, and where they must not
+## Vault discovery is inherent, not tabulated
 
-Rows carry their own marker, `"schema": "bulk_history.v1"`, and are **not** drop-in
-`shitcoims_cluster` swap rows. Sharing field names while missing `reserves` / `fee_lamports` /
-`signers` would let a consumer read a summary row as a replay row, so the marker is the guard. The
-contracts are not bent to fit; the gaps are listed.
+`pools.py` is deliberate that a pool's vaults are exactly the token accounts whose `owner` is the
+pool address, and that hard-coding a vault table per DEX creates a second source of truth that
+drifts. This tool needs no vault list at all — the query filters on
+`post_token_balances.owner IN (pool addresses)`, so **vault discovery happens in the WHERE clause**
+and is protocol-agnostic across PumpSwap and Meteora alike.
 
-`row_id` deliberately reuses the cluster's own `sha256(f"{pool}:{signature}")`, so bulk and live
-rows dedupe against each other — that is what made the 9/9 verification a one-line join.
+This paid off immediately and by accident. Mid-investigation another agent landed `cluster: watch
+all eleven pools`, extending `CLUSTER_POOLS` from 7 to 11. Because the tool **imports**
+`CLUSTER_POOLS` rather than copying addresses into itself, the very next run picked up all eleven
+with no edit — and the run's own output shows real activity on three of the four new edges. An
+earlier draft of this tool derived vaults from the live tape instead, which would have silently
+skipped every pool the collector had not yet recorded a swap for. Importing the authority beats
+mirroring it.
+
+---
+
+## The run actually executed
+
+```
+python3 scripts/bulk_history.py selftest                                   # 29/29 offline
+python3 scripts/bulk_history.py pull --start 2026-08-13 --end 2026-08-13 \
+    --project manifest-quasar-414607 --out state/bulk_history
+python3 scripts/bulk_history.py verify --out state/bulk_history
+```
+
+**Preflight** — 2.48 GB, `2026-08-13 LOADED, 310,361,742 transactions, 100.0% of window median`.
+
+**Pull** — dry-run bound 263.13 GB, **actual billed 263.13 GB ($1.50 on-demand, $0.00 in free
+tier)**. 356,535 transactions folded into **368,795 rows across all 11 pools, 0 defects**, 413 MB
+of JSONL.
+
+| pool | dex | swap | failed | liquidity | reference |
+|---|---|---:|---:|---:|---:|
+| nosis/SOL | pumpswap | 5,898 | 105,457 | 0 | 234,365 |
+| weave/SOL | pumpswap | 2,185 | 3,932 | 0 | 4,826 |
+| DREGG/SOL | pumpswap | 508 | 1,242 | 0 | 275 |
+| weave/SOL (DLMM) | meteora_dlmm | 230 | 2,810 | 18 | 4,517 |
+| SOLVE/SOL | pumpswap | 133 | 127 | 0 | 6 |
+| weave/DREGG (5%) | meteora_dlmm | 95 | 684 | 9 | 4 |
+| weave/nosis | meteora_dlmm | 49 | 400 | 5 | 273 |
+| DREGG/nosis | meteora_dlmm | 46 | 426 | 4 | 271 |
+
+9,144 swaps in total: **8,724 replay-grade** (constant product) and 420 summary-grade (DLMM, by
+nature). `tx_index` present on **368,795 of 368,795** rows. The three pools with no rows are among
+the four added the same day; the other new edge, `weave/DREGG (5%)`, shows 95 swaps — an edge the
+live collector had not yet observed.
+
+**Verify, against the live RPC tape:** 876 comparable swaps, **876 exact pre+post reserve matches,
+0 disagreements, 0 absent — 100.0% recall.** This compares *levels*, not just deltas, which is the
+whole difference between a replay tape and a summary one.
+
+**Idempotency/resumability:** re-running skips completed days and reports $0.00; preflight is
+cached so re-measuring is free. Writes are atomic (temp + rename), and every output file records
+source, full query text, query SHA-256, job id, billed bytes, extraction time and that day's
+completeness measurement. The run above was executed **twice** — once to produce the tape and once
+more after the `failed`/`attempt` correction, to make sure the shipped code is the code that ran.
+
+---
+
+## Schema compatibility: where bulk rows map, and where they don't
+
+Rows carry `"schema": "bulk_history.v2"` and are **not** drop-in `shitcoims_cluster` swap rows —
+the marker is the guard against a consumer reading one for the other. `row_id` deliberately reuses
+the cluster's own `sha256(f"{pool}:{signature}")`, so bulk and live rows dedupe against each other;
+that is what made the 528/528 verification a one-line join.
 
 ### Against `shitcoims_cluster` swap rows
 
@@ -199,127 +259,65 @@ rows dedupe against each other — that is what made the 9/9 verification a one-
 |---|---|---|
 | `row_id`, `pool`, `dex`, `label`, `t_event` | ✅ identical | same convention |
 | `chain.slot` / `.signature` / `.block_time` | ✅ | |
-| `token_in_*` / `token_out_*` | ✅ raw ints as strings | verified exact |
-| vault deltas | ⚠️ `delta_raw` only | **no `pre_raw` / `post_raw`** |
-| `reserves` | ❌ | absent from the source entirely |
-| `swap_legs` | ⚠️ `transfer_count` | related but not the same quantity |
-| `fee_lamports`, `fee_payer`, `signers`, `compute_units`, `confirmation_status` | ❌ | not in a transfers table |
-| `counterparty` | ⚠️ `attributed_authority` | different semantics — see above |
-| `leg_discriminators`, `leg_names` | ❌ | needs instruction-level data |
-| `kind: attempt` / `reference` rows | ❌ | failed txs move no tokens |
+| **`chain.tx_index`** | ✅ **better than RPC** | live tape leaves it `None`; this resolves intra-slot order |
+| `reserves.vaults[].pre_raw` / `post_raw` / `delta_raw` | ✅ exact integers | **528/528 verified** |
+| `reserves.replay_sufficient` | ✅ | carried from `PoolSpec`, per pool |
+| `token_in_*` / `token_out_*` | ✅ | |
+| `fee_lamports`, `compute_units` | ✅ | |
+| `kind: attempt` (failed txs) | ✅ | via `err` — absent from any transfers-based source |
+| `reserves.vaults[].account` | ❌ | **vaults keyed by mint, not address** — see below |
+| `signers`, `fee_payer` | ⚠️ opt-in | needs `accounts`, +267 GB/day |
+| `counterparty`, `counterparty_paid_fee` | ❌ | needs the full balance set + owner resolution |
+| `leg_discriminators`, `leg_names`, `swap_legs` | ❌ | needs instruction-level data |
+| `confirmation_status` | ❌ | historical rows are final by construction |
+
+**The vault-address gap.** Token balances carry `mint`, `owner` and `account_index` but not the
+account pubkey; resolving the index needs the `accounts` array at 267 GB/day. Vaults are therefore
+keyed by **mint**. For these pools that is sufficient — each holds two distinct mints — but it is
+not the live tape's shape, and rows say so explicitly via `vault_addresses_available: false` rather
+than letting the absence read as "no vault".
 
 ### Against `shitcoims_tape.schema`
 
-- `Chainstamp` — `slot`, `signature`, `block_time` all satisfied. `tx_index` stays `None`; the
-  transfers table has no block index, so the intra-slot ordering ambiguity `parse.py` already
-  documents is **not** resolved by this path either.
-- `Provenance` — fully satisfied: `source` = `bigquery.crypto_solana_mainnet_us.token_transfers`
-  (valid under the `_IDENT` pattern), `fetched_at` = extraction time, `cursor` = the BigQuery job
-  id, which makes any row traceable to the exact billed job.
-- `Reserves` — **cannot be constructed at all.** Every one of `virtual_sol`, `virtual_tokens`,
-  `real_sol`, `real_tokens` is unavailable. No `EventKind.RESERVE` event can be emitted from bulk.
-- `Trade` — partially constructible, and the gaps are load-bearing:
-  - `wallet` is **required** by the dataclass, and `attributed_authority` is not a safe value for
-    it on routed fills. Do not fill it in to satisfy the type.
-  - `side` assumes a quote asset. It is derivable for the four SOL-quoted pools; for `weave/nosis`
-    and `DREGG/nosis` there is no buy/sell direction and the `Side` enum does not apply.
-  - `sol_delta_lamports` likewise exists only for SOL-quoted pools.
-  - `fee_lamports` would have to be faked as `0`; its default is `0`, which is exactly the kind of
-    silent zero that reads as measured. Leave it unset rather than defaulted.
-  - `routed_via_frontend` — unavailable, and it is the literature's only estimation-free bot proxy.
+- `Chainstamp` — fully satisfied, `tx_index` **included** (the live RPC path cannot supply it).
+- `Provenance` — fully satisfied: `source` = `bigquery.crypto_solana_mainnet_us.transactions`
+  (valid under `_IDENT`), `fetched_at` = extraction time, `cursor` = the BigQuery job id, so any
+  row is traceable to the exact billed job.
+- `Reserves` — **constructible for pool state**, which is the point. Note the dataclass's
+  `virtual_sol` / `virtual_tokens` fields model a pump.fun *bonding curve*; these are graduated AMM
+  pools, so the two vault balances are the whole state and the virtual fields do not apply. Do not
+  fill them with zeros to satisfy the type — a zero there reads as measured.
+- `Trade` — `wallet` still requires care: without `--with-signers` there is no wallet on the row,
+  and `fee_payer` is not a custody claim in any case. `side` and `sol_delta_lamports` assume a
+  quote asset, so they exist for the four SOL-quoted pools but not for `weave/nosis` or
+  `DREGG/nosis`. `routed_via_frontend` is unavailable — it needs instruction-level data.
 
-**The sharpest hazard, and the reason bulk rows are not simply appended to the tape:**
-`TapeEvent.observed_at` means *when we saw it*, and the schema's second load-bearing decision is
-that observer lag is real and must be modelled as delayed entry. For a bulk row, `observed_at` is
-the extraction timestamp — days after the event. Feeding bulk rows into a survival model that
-treats `observed_at` as delayed entry would manufacture a lag distribution out of when we happened
-to run a query. Bulk rows are a **separate stream with `t_event` as their only meaningful clock**.
+**The sharpest hazard.** `TapeEvent.observed_at` means *when we saw it*, and the schema's
+load-bearing decision is that observer lag is real and must be modelled as delayed entry. For a
+bulk row `observed_at` is the extraction timestamp — days after the event. Feeding bulk rows into
+a survival model that treats `observed_at` as delayed entry would manufacture a lag distribution
+out of when we happened to run a query. **Bulk rows are a separate stream whose only meaningful
+clock is `t_event`.** This is unchanged by the upgrade to replay grade.
 
 ---
 
-## The run actually executed
+## Recommendation
 
-```
-python3 scripts/bulk_history.py selftest                                      # 23/23 offline
-python3 scripts/bulk_history.py vaults                                        # 12 vaults, 6/7 pools
-python3 scripts/bulk_history.py preflight --start 2026-08-10 --end 2026-08-13
-python3 scripts/bulk_history.py pull --start 2026-08-12 --end 2026-08-12 --allow-partial
-python3 scripts/bulk_history.py verify
-```
+**Buy the 22 days from BigQuery for ~$27, not from RPC for 206% of the plan.** It is replay-grade,
+it covers all eleven pools, and it includes two things RPC cannot give us at any price: intra-slot
+transaction ordering, and reverted transactions.
 
-**Preflight** — 15.40 GB for 4 days (3.85 GB/day):
+Sequence:
 
-```
-day          verdict    covered  wsol/total     total rows
-2026-08-10   EMPTY         0.0%       0.01%    111,066,785
-2026-08-11   EMPTY         0.0%       0.01%    107,453,910
-2026-08-12   PARTIAL      83.3%      19.67%    216,717,409
-2026-08-13   PARTIAL       8.3%       2.69%    122,628,992
-```
+1. `preflight` the full window (~2.5 GB/day, ~$0) to confirm every partition is loaded.
+2. `pull` the 22 days. Expect ~5,843 GB scanned; the first TiB each month is free, so splitting the
+   pull across two calendar months costs ~$21 instead of ~$27 if the delay is acceptable.
+3. `verify` against the live tape on the overlapping days — it should stay at 100%.
+4. Only add `--with-signers` if a study actually needs entity resolution; it more than doubles the
+   bill for one column.
+5. If attempt-rate is the question, add `log_messages` (3.1 GB/day) first and use it to separate a
+   real attempt on *this* pool from an unrelated failure — do not use the `failed` count as-is.
 
-The guard fired as designed — the first `pull` attempt **refused** 2026-08-12 and required an
-explicit `--allow-partial`.
-
-**Pull, 2026-08-12, all 12 known vaults in one query** — dry-run upper bound 58.03 GB, **actual
-billed 58.03 GB ($0.33 on-demand, $0.00 in free tier)**; 107,087 raw transfers folded into
-**30,601 rows** (30,085 swaps + 516 liquidity/fee flows), 0 defects, 49 MB JSONL.
-
-| pool | dex | swaps | traders | SOL volume |
-|---|---|---:|---:|---:|
-| nosis/SOL | pumpswap | 18,329 | 2,126 | 35,560.4 |
-| weave/SOL | pumpswap | 9,917 | 1,394 | 9,498.6 |
-| DREGG/SOL | pumpswap | 1,637 | 216 | 1,270.4 |
-| SOLVE/SOL | pumpswap | 202 | 90 | 116.9 |
-| weave/nosis, DREGG/nosis | meteora_dlmm | 0 | — | — |
-
-**Verify, against the live RPC tape:** 9 comparable swaps, **9 exact raw-delta matches, 0
-disagreements, 0 absent — 100% recall.**
-
-**Idempotency/resumability:** re-running the same range skips the completed day and re-reports
-**$0.00**; preflight results are cached so a re-measure is free. Writes are atomic (temp + rename),
-and every output file carries source, full query text, query SHA-256, job id, billed bytes,
-extraction time, and the coverage measurement for its day.
-
-**Two honest caveats on this run.** Both Meteora pools with known vaults returned zero rows, and on
-an 83%-covered day *we cannot distinguish "idle" from "not loaded"* — do not read that as evidence
-they were quiet. And the seventh pool, `77Nm2cKt…` (weave/SOL DLMM, added 2026-08-13), has no
-recorded swaps yet so its vaults are unknown; the tool **warns loudly** that it will be missing
-rather than silently returning a short tape. Vault addresses are derived from the live tape at
-runtime, never hard-coded, because `pools.py` is right that a hard-coded vault table is a second
-source of truth that drifts.
-
----
-
-## Cost curve — decide by what you need to backtest
-
-Per-day scan cost is column-driven and **independent of how many pools you ask for**: all 12 vaults
-for a normal-sized day estimate at **22.83 GB** (measured by `--dry-run` on 2026-08-11), rising to
-58.03 GB on the double-sized 2026-08-12, plus **3.85 GB/day** of preflight. A full 22-day sweep is
-therefore ~502 GB of pull + ~85 GB of preflight ≈ **587 GB — inside the 1 TiB/month free tier**.
-
-| what you want | source | cost | what you can backtest |
-|---|---|---|---|
-| 22 days, summary-grade | BigQuery | ~587 GB scanned → **$0 in free tier** (~$3.34 on-demand) | **almost nothing — only ~1 day of 22 is loaded** |
-| 1 loaded day, summary-grade | BigQuery | 58 GB → **$0.33 / $0 free** | flow, volume, trader attribution, inter-pool timing |
-| 22 days, summary-grade, *actually complete* | Dune / Flipside | not yet priced | same as above, over the full window |
-| 22 days, replay-grade | RPC backfill | **206% of the monthly Helius plan** | fills, impact, slippage, execution policy |
-| 1 day, replay-grade | RPC backfill | 9.4% of monthly plan | as above, one day |
-| 1 week, replay-grade | RPC backfill | 66% of monthly plan | as above, one week |
-
-The decision is not bulk-versus-RPC on price. It is: **fills or flow?**
-
-- Backtesting an **execution policy** — entry price, slippage, impact, stop behaviour — needs
-  reserves, so it needs RPC. No free source has reserves; that was checked, not assumed.
-- Backtesting **flow signals** — volume, trader arrival, cross-pool timing, wallet attribution —
-  does not need reserves, and bulk delivers it exactly, for free, on the days that exist.
-
-**Recommendation.** Do not buy 22 days of RPC on the strength of this. Spend the next hour pricing
-Dune and Flipside, because they are the only realistic route to a *complete* 22-day summary tape,
-and a complete summary tape is what most of the open flow questions actually need. Then, if and
-only if a study needs fills, buy replay-grade RPC for the **shortest window that answers it** —
-one day is 9.4% of the plan and is enough to validate a fill model that the free summary tape can
-then be used to apply broadly.
-
-Meanwhile the live collector keeps producing replay-grade rows at zero marginal cost. It has
-already recorded 2,937 swaps with full reserves. Every day it runs, the replay-grade window grows
-for free — which is a stronger argument for *keeping it healthy* than for buying history.
+Keep the live collector running regardless. It produces the fields bulk cannot — signers,
+counterparty attribution, leg discriminators, confirmation status — at zero marginal cost, and the
+two streams dedupe on `row_id` by construction.
