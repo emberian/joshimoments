@@ -56,3 +56,11 @@ __pycache__/
 *.pyc
 kernel/.lake/
 kernel/build/
+
+# study caches: chain censuses and API snapshots. Data, not code -- findings go to studies/.
+/.cache/
+
+# Lane data: chain snapshots, price caches, SVM fixtures and venvs. Data, not code.
+studies/data/
+kernel_svm/.venv/
+kernel_svm/cache/

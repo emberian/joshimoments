@@ -1,0 +1,19 @@
+# The venv holds a compiled solders wheel (~94 MB) and is rebuilt in one command:
+#   uv venv --python 3.13 .venv && VIRTUAL_ENV=$PWD/.venv uv pip install solders base58 pytest ruff
+.venv/
+
+# Program ELFs (~3.5 MB each) and the IDL, both refetchable from mainnet and both keyed by
+# content, so a stale copy can never be silently wrong -- snapshot.py raises if a digest it
+# needs is absent rather than substituting anything.
+cache/
+
+# Live pool captures. Snapshots are cheap to retake; fixtures are NOT -- each one pins a real
+# mainnet swap against the state it executed on, and that pairing cannot be reconstructed
+# after the fact because no RPC serves historical account state. Commit fixtures/ deliberately
+# if a corpus is worth keeping; it is left untracked here so a scratch run does not commit
+# hundreds of megabytes by accident.
+snapshots/
+fixtures/
+
+__pycache__/
+.pytest_cache/
