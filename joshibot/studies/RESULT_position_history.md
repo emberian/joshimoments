@@ -63,9 +63,10 @@ measurement, and it will go wrong again.
 | b1 | Meteora realized **+20.10 SOL** over 42 closed positions | **WRONG as stated** | **12.913149 SOL** is all the SOL Meteora ever paid, and every lamport of it was a fee claim. No withdrawal converted to SOL |
 | b2 | Meteora realized **+$1,449.46** | **UNRECONSTRUCTABLE** | needs a per-event price series this study does not have. The fee leg alone marks at **$1,829.66** today — *above* the claim — while the basket the positions are down is worth ~$3,500 and is not netted into it |
 | b3 | 42 closed positions | **VERIFIED, refined** | 48 opened, 44 closed, **4 open** (`getProgramAccounts` on the DLMM program, owner at offset 40; all four on `tha_funds`) |
-| c1 | **256 SOL** of lifetime creator fees | **WRONG by 2.96×** | **757.018737 SOL** claimed to `PmpDh2` over 266 claim transactions |
+| c1 | **256 SOL** of lifetime creator fees | **PARTLY RETRACTED — see §7.** My headline was over-attributed | 757.111 SOL of pump.fun fee claims arrived and is real, but only **467.209 SOL is DREGG-attributable**; 287.235 SOL comes from a social-fee PDA carrying no coin identity. The DREGG figure is 1.83× the UI, not 2.96× |
+| c1b | The USDC-legged inflows are not fee income | **REFUTED** | **zero USDC ever moved** in any of the 405 inflow transactions; the USDC leg is a second claim attempt logging "No fees available to claim" in 103 of 104 cases |
 | c2 | Some creator fees are still unclaimed | **VERIFIED — none are** | every claim is swept within the hour; the wallet ends at 0.044 SOL |
-| c3 | Realized creator take is 0.60% vs 0.81–1.19% of DREGG volume | **UNRECONSTRUCTABLE here** | this study measured fees, not volume. It does invert the check: 757 SOL implies $6.04M–$9.56M of lifetime DREGG volume |
+| c3 | Realized creator take is 0.60% vs 0.81–1.19% of DREGG volume | **UNRECONSTRUCTABLE here** | this study measured fees, not volume. It does invert the check: the corrected **467.209 SOL** of DREGG fees implies $3.73M–$5.90M of lifetime DREGG volume |
 | c4 | DREGG fees run **$213–313/day** | **VERIFIED for now, wrong as a lifetime rate** | August: 51.593 SOL / 14 days = **$279.38/day**, dead centre. June ran 221.9 SOL and July 483.6 SOL — the estimate was calibrated on the decayed regime |
 | d | DREGG unlocks to `Dev2Gm` — never accounted anywhere | **NOW SIZED** | Streamflow escrow, **62,626,849.3125 DREGG locked (6.2635% of supply)**, 3 tranches of 1,204,362.4868 released = **$1,184.12**; **$19,340.67 still locked** |
 | e | Net position and net PnL | **COMPUTED, identity closes to 1 lamport** | see §2 |
@@ -79,7 +80,7 @@ balance by construction, so an unclassified flow cannot hide.
 
 | bucket | shitcoims | tha funds | pumpfun main | Ember dev | og shitcoims | **TOTAL** |
 |---|---|---|---|---|---|---|
-| creator fees | — | — | +757.018737 | +1.128507 | — | **+758.147244** |
+| pump.fun fee claims | — | — | +757.018737 | +1.128507 | — | **+758.147244** |
 | LP fees | — | +12.347144 | +0.041000 | +0.525004 | — | **+12.913149** |
 | LP withdrawals | — | +61.489863 | — | +5.294176 | — | **+66.784039** |
 | LP deposits | — | −80.951987 | — | −5.917821 | — | **−86.869808** |
@@ -132,27 +133,60 @@ The identity closes. There is no unclassified flow.
 `external out` is 776.275485 SOL, and lumping it into "losses" or "distributions" would be wrong
 in both directions. It splits cleanly on chain into two populations with different shapes.
 
-### 3a. Treasury movement — 709.976 SOL (91.5%), four addresses
+### 3a. Coinbase — 486.630 SOL, operator-confirmed
 
-| address | SOL | transfers | balance now | lifetime sigs |
+`Cbx3NneV…3HP3Eh` is **the operator's Coinbase receiving address** (confirmed by the operator).
+The chain shape agrees, and the discriminating property is worth stating because it is what
+separates this address from the three below: **it receives essentially only from us.** A per-user
+exchange deposit address has exactly one depositor. It forwards everything immediately
+(balance 0.0011 SOL against 365 lifetime transactions) to `2AQdpHJ2`, `D89hHJT5`, `4NyK1AdJ`,
+`FpwQQhQQ` — and `FpwQQhQQ` (**35,087.5 SOL**) and `F7p3dFrj` (**8,291.9 SOL**) later *fund the
+trading wallet*, which closes the loop.
+
+| direction | SOL | transfers | USD at **time of transfer** |
+|---|---|---|---|
+| out to Coinbase, from `pumpfun_main` | 483.1017 | 135 | $36,657 |
+| out to Coinbase, all five wallets | 486.6299 | 137 | **$36,884** |
+| back in from Coinbase infrastructure | ~43.5 | — | ~$3,300 |
+| **net cashed out** | **~443 SOL** | | **~$33,600** |
+
+Valued at time-of-transfer per the operator's own frame: June $7,584, July $25,348, August
+$3,953. **SOL was flat at $71.81–$77.81 across the entire window** (CoinGecko daily), so today's
+price gives $36,891 — a 0.02% difference. The historical-price refinement changes nothing here,
+which is itself worth recording so nobody redoes it.
+
+**This reconciles with the operator's "I would notice $40k."** They did receive ~$36.9k — but
+across **137 separate transfers averaging $269 each**, spread over seven weeks, against ~$4,100/mo
+of obligations and a $40k IRS debt. A drip at that cadence never presents as a lump sum. The
+chain and the recollection are not in conflict; they are the same money seen at different
+resolutions.
+
+Neither direction belongs in PnL: outbound is cashing out, inbound is funding from off-chain.
+
+### 3b. Three unidentified destinations — 223.346 SOL — **first-draft classification RETRACTED**
+
+| address | SOL | transfers | distinct senders (30-tx sample) | last payment |
 |---|---|---|---|---|
-| `Cbx3NneV…3HP3Eh` | 486.6299 | 137 | 0.0011 | 365 |
-| `WYoLt8fH…uwYhB1` | 84.9968 | 25 | 0.1993 | 224 |
-| `Drg3Mo7K…P6D2Dbq` | 82.3278 | 30 | 0.0193 | 313 |
-| `6RTFsqEW…H5aXXn` | 56.0217 | 17 | 0.0168 | 1000+ |
+| `WYoLt8fH…uwYhB1` | 84.9968 | 25 | 4, **none ours** | 2026-07-23 |
+| `Drg3Mo7K…P6D2Dbq` | 82.3278 | 30 | 8, **none ours** | 2026-07-28 |
+| `6RTFsqEW…H5aXXn` | 56.0217 | 17 | 7, **none ours** | 2026-07-26 |
 
-All four have the same signature: a balance within a rounding error of zero, hundreds to
-thousands of lifetime transactions, and an immediate forward of everything received. Sampling
-`Cbx3NneV`'s recent history, it receives **essentially only from `pumpfun_main`** and forwards to
-`2AQdpHJ2`, `D89hHJT5`, `4NyK1AdJ`, `FpwQQhQQ`. Two of those — `FpwQQhQQ` (**35,087.5 SOL**,
-1,000+ sigs) and `F7p3dFrj` (**8,291.9 SOL**) — later *fund the trading wallet*.
+**My first draft called these "exchange-deposit-shaped" and grouped them with Coinbase. That was
+wrong and is withdrawn.** They fail the test that Coinbase passes: each receives from several
+distinct senders, none of them the operator's wallets. A per-user deposit address has one
+depositor. These are shared.
 
-That is the shape of an exchange deposit address and its matching hot wallet, and it closes a
-loop: **money leaves `pumpfun_main` → hub → custody, and comes back into the trading wallets from
-the hot wallets.** Ownership is not provable from chain and is not asserted here. What *is*
-provable is the part that matters for the books: this is a treasury movement, not a gift, and
-booking it as a discretionary distribution would overstate the giveaway by roughly 11×.
+Two facts about them that the tape does establish and that should go to the operator:
 
+- **The payments stop dead on 2026-07-28.** From 2026-07-29 onward, every lamport of claimed fee
+  goes to Coinbase — in August the daily claim and the daily Coinbase transfer agree to four
+  decimal places (2026-08-01: 6.6839 in, 6.6839 out; 2026-08-12: 4.6291/4.6291).
+- **They run in lockstep with the social-fee stream, not the DREGG one.** Payments span
+  2026-06-28 → 2026-07-28, the same window in which the social-fee PDA paid 284.3 of its 287.2
+  SOL, and total **77.8% of that stream**. That is a temporal coincidence, not a proven link, and
+  I am flagging it as a hypothesis for the operator to confirm rather than asserting it.
+
+**Consequence for `external in` (46.853894 SOL):** it is mostly the same money returning.
 **Consequence for `external in` (46.853894 SOL):** it is mostly the same money returning.
 `2AQdpHJ2` (17.446), `D89hHJT5` (9.769), `4NyK1AdJ` (9.027) are the very addresses `Cbx3NneV`
 forwards to. **Treating that 46.85 SOL as outside income would double-count it.** How much is
@@ -282,43 +316,69 @@ This is consistent with `RESULT_circuit_theory.md` §8.1 (the desk is up because
 not because LPing beat holding) and it sharpens it: **the fee numerator is real and denominated in
 tokens; the SOL-denominated summary is a re-quote, not a cash flow.**
 
-### (c) Creator fees — 757 SOL, not 256
+### (c) Creator fees — 757 SOL of claims, but only 467 SOL of them are DREGG
 
-**757.018737 SOL** arrived at `PmpDh2` from pump.fun creator-fee instructions, over **266 claim
-transactions** spanning 49 active days (2026-06-27 → 2026-08-14). A further 1.128507 SOL of
-creator fee reached `Ember dev`, so the household lifetime total is **758.147244 SOL ≈ $57,475**.
+**757.110643 SOL** of pump.fun fee claims arrived at `PmpDh2` over its whole life. That figure is
+not in doubt: it is a balance delta, it is reproduced independently by the coordinator's own
+measurement (757.111 gross in / 757.067 gross out / +0.044 net), and it is corroborated
+downstream by **$36,884 landing at the operator's confirmed Coinbase address**.
 
-Creator fees do **not** arrive as a system transfer — the program reassigns lamports on a PDA
-directly — so the parsed instruction stream shows nothing and only the balance delta records
-them. Attribution is therefore by the instruction name the program itself logged:
+**But my first draft called all of it "DREGG creator fees", and that was over-attribution.** The
+error was the test: I asked *"does the pump.fun fee program appear in this transaction?"*, which
+is true of every claim **attempt**, including the ones that pay nothing. The unfoolable test is
+*"whose lamports went down?"* — and it splits the aggregate in two:
 
-| instruction set | txs | SOL |
-|---|---|---|
-| `ClaimSocialFeePda` + `DistributeCreatorFees` + `TransferCreatorFeesToPump` | 162 | 473.0962 |
-| `ClaimSocialFeePdaV2` | 107 | 283.9625 |
-| `ClaimFee` (Meteora, not pump.fun) | 1 | 0.0410 |
+| paying account | what it is | txs | 2026-06 | 2026-07 | 2026-08 | **total** |
+|---|---|---|---|---|---|---|
+| `2dQa7pRL…UE4A` | WSOL token account; **DREGG mint present in 154/154** | 154 | 78.086 | 340.971 | 48.152 | **467.209** |
+| `8buZegTz…V7kF` | 179-byte pump.fun-fee-program account carrying ASCII id `704250`; **no coin mint at all** | 105 | 142.518 | 141.823 | 2.895 | **287.235** |
+| others | dust and one-off | 146 | 1.308 | 0.812 | 0.547 | 2.667 |
 
-By month: **June 221.911, July 483.554, August 51.593.** The DREGG mint appears in 155 of the
-claim transactions accounting for ~468.17 SOL; a second mint `5NFcUdd5…` accounts for ~3.95 SOL;
-the 107 V2 claims name no mint in their account list.
+Two mechanical points that took real work and are worth keeping:
 
-**The 256 SOL figure is wrong by 2.96×.** One observation, offered as a lead and not a finding:
-the running sum **from 2026-07-15 to now is 256.11 SOL**, which is what you would see if the UI
-were showing a trailing window rather than a lifetime. Resolving that needs the UI, not the chain.
+- **A creator fee is never a `system.transfer`.** `2dQa7pRL` is a *WSOL token account*, and
+  wrapped SOL lives in the token account's own lamports — so a fee payment shows up as a lamport
+  delta on a token account and appears nowhere in the parsed instruction stream. Summing parsed
+  transfers into `PmpDh2` gives **0.00078 SOL**, and all of it is poisoning dust.
+- **The USDC hypothesis is dead.** Across all 405 inflow transactions, the total USDC that moved
+  is **exactly zero**. The USDC leg is a *second* `ClaimSocialFeePdaV2` instruction in the same
+  transaction, claiming against a USDC-denominated vault, and **103 of the 104 log "No fees
+  available to claim"**. Splitting the 757 by "does USDC appear" splits it by claim-attempt
+  shape, not by income type.
 
-**Unclaimed: none, and chain agrees with the operator.** Every claim is swept within the hour and
+**So the corrected DREGG-attributable lifetime figure is 467.209 SOL, and the UI's 256 SOL is
+1.83× off rather than 2.96× off.** The gap narrowed by more than half and did not close.
+
+**What is now established about the residual, and what is not.** The operator created **two**
+coins on 2026-06-27 — DREGG (`XkeTXo11`, 16:31) and `HNAKdSP5…pump` (20:47) — and a
+`CreateFeeSharingConfig` / `CreateSocialFeePda` transaction at 20:55 is bound to **`HNAKdSP5`, not
+DREGG**, with a *different* social id (`2381523`). So the wallet demonstrably aggregates more than
+one coin's economics, and the social-fee stream carries no coin identity, which means **it would
+not appear on DREGG's coin page under any reading.** That is the honest resolution of the
+aggregation question: 287.235 SOL of the 757 is not DREGG revenue.
+
+**The trailing-window hypothesis I raised in the first draft is REFUTED** on the corrected series
+and I am withdrawing it. On the DREGG-only stream the cumulative crosses 256 SOL on 2026-07-16,
+and the nearest trailing-window sum is 254.25 SOL from 2026-07-08 — neither lands on a month
+boundary, a config change, or any other natural edge. Fitting a window to a target is curve-fitting,
+and the simpler explanation the coordinator asked me to prefer (per-coin split) does more of the
+work but does **not** finish the job.
+
+**What remains UNRECONSTRUCTABLE: why pump.fun's UI shows 256 SOL against 467.209 SOL of
+DREGG-linked claims.** The 211 SOL gap needs pump.fun's own definition of the number it displays —
+whether it is net of a fee-sharing split, restricted to the PumpSwap post-graduation component,
+or scoped to a period. No on-chain artifact settles it, and I would rather hand the operator a
+precise 211 SOL discrepancy than a story that closes it.
+
+**Unclaimed: none**, and chain agrees with the operator. Every claim is swept within the hour and
 `pumpfun_main` ends at 0.044 SOL.
 
-**On the rate.** This study measured fees, not DREGG volume, so the 0.60%-vs-0.81–1.19% question
-is **UNRECONSTRUCTABLE here**. It does invert usefully: 757 SOL of fees implies **126,170 SOL
-($9.56M)** of lifetime DREGG volume at a 0.60% take, or **79,686 SOL ($6.04M)** at 0.95%.
+**On the rate.** The corrected DREGG-only figure implies **77,868 SOL ($5.90M)** of lifetime DREGG
+volume at a 0.60% take, or **49,180 SOL ($3.73M)** at 0.95%.
 
-**And it rescues PROGRAM.md §0's income model rather than breaking it.** August ran 51.593 SOL
-over 14 days = 3.685 SOL/day = **$279.38/day**, sitting dead centre in the quoted $213–313/day.
-That estimate is *correct for the current regime*. It is simply not a lifetime rate: extrapolating
-it across 49 days gives ~$12k against an actual ~$57k, because June and July ran 4–9× hotter.
-**The business was much larger than the document says, and is now much smaller than the document's
-lifetime framing implies.** Both halves matter for planning.
+**PROGRAM.md §0's income model survives, and the correction sharpens it.** August ran 48.152 SOL
+of DREGG fees over 14 days = 3.439 SOL/day = **$260.72/day**, inside the quoted $213–313/day. That
+estimate is right for the current regime. It is not a lifetime rate: June and July ran 4–9× hotter.
 
 ### (d) The DREGG unlocks — sized for the first time
 
@@ -365,11 +425,14 @@ JUP 9.79 on `pumpfun_main`; `EKH3tGXvf5` 2,178,132.39, `xBB9QSpJLz` 1,584,290.99
 
 | | SOL | USD @ spot |
 |---|---|---|
-| creator fees earned | +758.147244 | +$57,474.98 |
+| pump.fun fee claims received | +758.147244 | +$57,474.98 |
+| — of which DREGG-attributable | +467.209 | +$35,420 |
+| — of which social-fee PDA (no coin) | +287.235 | +$21,773 |
 | LP fees earned | +12.913149 | +$978.94 (SOL leg only; token legs $850.72 more) |
 | trading, all five wallets | **−32.453340** | **−$2,460.28** |
 | LP principal (deposits − withdrawals) | −20.085769 | −$1,522.69 |
-| moved to treasury/custody | −709.976 | −$53,823.14 |
+| cashed out to Coinbase (confirmed) | −486.630 | −$36,884 *(at time of transfer)* |
+| to 3 unidentified destinations | −223.346 | −$16,932 |
 | returned from custody | +46.85 (mostly) | +$3,551.86 |
 | discretionary distributions | −66.2993 SOL + tokens | −$12,269.20 |
 | gas | −0.124098 | −$9.41 |
@@ -379,14 +442,15 @@ number, and saying so is the finding rather than a dodge. Two are defensible and
 different questions:
 
 1. **Operating result, chain-only** — what the desk *earned* minus what it *lost trading*:
-   `+758.147 (fees) + 12.913 (LP fees) − 32.453 (trading) − 20.086 (LP principal) − 0.124 (gas)`
+   `+758.147 (all fee claims) + 12.913 (LP fees) − 32.453 (trading) − 20.086 (LP principal) − 0.124 (gas)`
    = **+718.397 SOL ≈ +$54,471**, plus $19,341 of locked DREGG. The business is the fee stream, at
    a 23× ratio over everything else on the page — exactly as PROGRAM.md §8 argues, and by a wider
    margin than it claims.
-2. **Net worth change** is **not computable from chain**, because 709.976 SOL left for custody and
-   46.85 SOL came back, and no on-chain evidence establishes what happened in between. Whether the
-   $53,823 was spent, held as fiat, or lost off-chain is outside the tape. **Anyone quoting a net
-   worth figure for this desk is quoting an assumption about those four addresses.**
+2. **Net worth change** is **not computable from chain.** 486.630 SOL (**$36,884** at time of
+   transfer) went to the operator's Coinbase and ~43.5 SOL came back, netting **~443 SOL (~$33,600)
+   cashed out** — but what happened to it inside Coinbase is off-tape. A further **223.346 SOL
+   (~$16,932)** went to three destinations nobody has yet identified (§3b). **Anyone quoting a net
+   worth figure for this desk is quoting an assumption about those three addresses.**
 
 **Trading is a rounding error against the fee stream, and it is negative in four wallets of five:**
 shitcoims −7.441, tha funds −8.277, pumpfun main −12.269, og shitcoims −8.569, Ember dev +4.023.
@@ -449,8 +513,36 @@ Stated rather than estimated, per the brief:
    `scripts/bulk_history.py` over the DREGG/SOL pool.
 5. **Prices for 6 held mints** (`HNAKdSP5`, `EKH3tGXvf5`, `xBB9QSpJLz`, `8iB8GmY1X2`, `5pVQnF`,
    `8gJUTwn9`). Cheap; not fetched here.
-6. **Why the pump.fun UI shows 256 SOL against 757 SOL on chain.** The 2026-07-15 suffix-sum
-   coincidence is a lead, not an answer.
+6. **Why the pump.fun UI shows 256 SOL against 467.209 SOL of DREGG-linked claims** (§4c). Needs
+   pump.fun's definition of the displayed number. The trailing-window story is refuted.
+7. **What the three destinations in §3b are.** 223.346 SOL, ~$16,932, payments stopping dead on
+   2026-07-28. Identifiable from the operator's records, not from chain.
+
+---
+
+## 7. Retractions, and the method that produced them
+
+Three claims from the first version of this page are withdrawn. All three failed the same way,
+and it is the way §0 already warned about: **I classified by what a transaction *touched* rather
+than by what it *moved*.**
+
+| withdrawn claim | why it was wrong | what replaces it |
+|---|---|---|
+| "757.02 SOL of lifetime **creator** fees" | attributed by "the pump.fun fee program appears in `accountKeys`" — true of every claim *attempt*, including ones that pay nothing | 757.111 SOL of **fee claims**, of which **467.209 DREGG-attributable** and 287.235 from a coin-less social-fee PDA |
+| "four exchange-deposit-shaped hubs, 709.976 SOL of treasury movement" | inferred from balance/throughput shape alone; never tested *how many distinct senders* each has | **one** confirmed Coinbase address (486.630 SOL) + **three unidentified shared destinations** (223.346 SOL) |
+| "the 2026-07-15 trailing window explains 256 SOL" | fitted a window to a target | refuted on the corrected DREGG-only series; the 211 SOL gap is stated as unreconstructable |
+
+The general lesson, and the reason this is in the document rather than quietly fixed: **program
+presence is not a payment, and address shape is not an identity.** The tests that held up were the
+ones that asked the ledger a question only the ledger can answer — *whose lamports went down?* and
+*how many distinct addresses have ever paid this one?* Both are cheap. Neither was in the first
+draft.
+
+What did **not** change under audit is worth stating too, because a retraction is only meaningful
+against a baseline that held: the 2,012-transaction reconstruction still closes to the lamport on
+all five wallets; the −7.440821 SOL trading loss stands; the internal transfers still net to
+exactly zero; the Streamflow schedule is unmoved; and the 757.111 SOL gross figure was confirmed
+by an independent measurement rather than overturned. **The number survived; its label did not.**
 
 ---
 
@@ -460,6 +552,7 @@ Stated rather than estimated, per the brief:
 python3 studies/position_history.py fetch    # ~2,200 RPC calls, cached, idempotent
 python3 studies/position_history.py ledger   # per-transaction deltas + classification
 python3 studies/position_history.py report   # the books, the buckets, the split
+python3 studies/position_history.py fees     # fee streams by PAYING account, and where they went
 ```
 
 `fetch` runs a fixed-point closure over token accounts rather than enumerating the five owners,

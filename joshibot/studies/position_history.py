@@ -618,24 +618,48 @@ LP_REMOVE_IX: Final[frozenset[str]] = frozenset(
     {"RemoveLiquidity", "RemoveLiquidityByRange", "RemoveLiquidityByRange2", "ClosePositionIfEmpty"}
 )
 
-#: Counterparties resolved by *shape on chain*, not by label lookup, because no label source
-#: covers addresses this small.  Each of the four sweep hubs has the same signature: a balance
-#: within a rounding error of zero, hundreds to thousands of lifetime transactions, and an
-#: immediate forward of everything it receives.  ``Cbx3NneV`` receives essentially only from
-#: ``pumpfun_main``.  Two of the addresses that later fund the trading wallet -- ``FpwQQhQQ``
-#: at ~35,088 SOL and ``F7p3dFrj`` at ~8,292 SOL, both with 1,000+ signatures -- are the
-#: matching hot wallets.  That is the shape of an exchange deposit address and its hot wallet.
+#: The operator's Coinbase receiving address, **confirmed by the operator**. Chain shape agrees
+#: and is worth recording because it is what distinguishes this address from the three below:
+#: near-zero balance, immediate forward of everything received, and -- the discriminating
+#: property -- it receives *essentially only from us*. A per-user exchange deposit address has
+#: exactly one depositor. Flows here are the operator moving their own capital: outbound is
+#: cashing out, inbound is funding from off-chain, and **neither belongs in PnL**.
+COINBASE: Final[str] = "Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh"
+
+#: Three further high-throughput destinations that took 223.35 SOL between 2026-06-28 and
+#: 2026-07-28, after which payments to them **stop dead** and 100% of claimed fees go to
+#: Coinbase instead.
 #:
-#: **Ownership is NOT provable from chain and is deliberately not asserted.**  What matters for
-#: the books is narrower and is provable: value sent here left for custody or fiat, and is
-#: therefore a *treasury movement*, not a gift to a stranger.  Booking these 710 SOL as
-#: discretionary distributions would overstate the giveaway by an order of magnitude.
-SWEEP_HUBS: Final[dict[str, str]] = {
-    "Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh": "sweep hub A (fed only by pumpfun_main)",
-    "WYoLt8fH8NzZWwuU3JqiVNDWoa8mvFDHY3qB8uwYhB1": "sweep hub B",
-    "Drg3Mo7KksZLEJFUbcamAv46AqZZb9oCKodxQP6D2Dbq": "sweep hub C",
-    "6RTFsqEWgZsqWePk5F1aZVKK42DjCdZDGE6ZG4H5aXXn": "sweep hub D",
+#: The first draft of this study lumped them in with Coinbase as "exchange-deposit-shaped".
+#: **That was wrong and is retracted.** Sampling their recent history distinguishes them
+#: sharply from ``COINBASE``: each receives from 4-8 *distinct* senders, none of which are the
+#: operator's wallets. A per-user deposit address has one depositor; these are shared. What
+#: they are is **not resolvable from chain** and is deliberately not guessed at here -- they
+#: are simply not classifiable as treasury movement, which is the only claim the first draft
+#: made and the only one that had to be withdrawn.
+UNIDENTIFIED_HUBS: Final[dict[str, str]] = {
+    "WYoLt8fH8NzZWwuU3JqiVNDWoa8mvFDHY3qB8uwYhB1": "unidentified, 84.997 SOL, ends 2026-07-23",
+    "Drg3Mo7KksZLEJFUbcamAv46AqZZb9oCKodxQP6D2Dbq": "unidentified, 82.328 SOL, ends 2026-07-28",
+    "6RTFsqEWgZsqWePk5F1aZVKK42DjCdZDGE6ZG4H5aXXn": "unidentified, 56.022 SOL, ends 2026-07-26",
 }
+
+SWEEP_HUBS: Final[dict[str, str]] = {COINBASE: "Coinbase (operator-confirmed)", **UNIDENTIFIED_HUBS}
+
+#: The two accounts that actually PAY the creator fees. Identified by finding which account's
+#: lamports *decrease* in each inflow transaction -- the only test that cannot be fooled by a
+#: program merely appearing in ``accountKeys``.
+#:
+#: ``FEE_VAULT_DREGG`` is a **WSOL token account**; wrapped SOL keeps its value in the token
+#: account's own lamports, which is why a fee payment shows as a lamport delta on a token
+#: account and never as a parsed ``system.transfer``. The DREGG mint is present in **154 of
+#: 154** transactions it funds.
+#:
+#: ``FEE_VAULT_SOCIAL`` is a 179-byte account owned by the pump.fun fee program carrying the
+#: ASCII social-account id ``704250``. It funds 104 transactions and **carries no coin mint at
+#: all**, so its 287.235 SOL is not attributable to DREGG and would not appear on any single
+#: coin's page.
+FEE_VAULT_DREGG: Final[str] = "2dQa7pRL8czyJJsQfGyMBacqf9FSV96cwirov5KyUE4A"
+FEE_VAULT_SOCIAL: Final[str] = "8buZegTzEGrEPvHLyeJfP3ppcUFiuPHvTHGCArVcV7kF"
 
 #: The Streamflow vesting escrow holding the operator's own locked DREGG. A bare token transfer
 #: into it is a LOCK, not a distribution -- the tokens stay the operator's and vest back to
@@ -956,12 +980,100 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fees(args: argparse.Namespace) -> int:
+    """Split the creator-fee stream by the account that actually PAID it, and trace it out.
+
+    This exists because the first version of this study attributed fees by asking "does the
+    pump.fun fee program appear in this transaction?", which is a much weaker test than it
+    looks: the program appears in every claim *attempt*, including the ones that pay nothing.
+    Asking instead "whose lamports went down?" is unfoolable, and it splits one 757 SOL
+    aggregate into two streams with different coin identities.
+    """
+
+    pumpfun = next(k for k, v in WALLETS.items() if v == "pumpfun_main")
+    tx_dir = CACHE / "tx"
+    inflow: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    counts: dict[str, int] = defaultdict(int)
+    outflow: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    usdc_moved = 0
+    no_fee_logs = 0
+
+    for entry in build_ledger():
+        tx = json.loads((tx_dir / f"{entry.signature}.json").read_text())
+        meta = tx.get("meta") or {}
+        keys = full_account_keys(tx)
+        month = (iso(entry.block_time) or "?")[:7]
+        delta = entry.sol.get(pumpfun, 0)
+
+        if delta > 0:
+            balances = zip(
+                meta.get("preBalances") or [], meta.get("postBalances") or [], strict=False
+            )
+            payers = [
+                keys[i]
+                for i, (before, after) in enumerate(balances)
+                if after - before < -1_000_000 and keys[i] != pumpfun
+            ]
+            if FEE_VAULT_DREGG in payers:
+                stream = "DREGG coin vault"
+            elif FEE_VAULT_SOCIAL in payers:
+                stream = "social-fee PDA 704250"
+            else:
+                stream = "other"
+            inflow[stream][month] += delta
+            counts[stream] += 1
+            if "No fees available to claim" in "\n".join(meta.get("logMessages") or []):
+                no_fee_logs += 1
+            usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            pre = {b["accountIndex"]: int((b["uiTokenAmount"] or {}).get("amount") or 0)
+                   for b in meta.get("preTokenBalances") or [] if b.get("mint") == usdc}
+            post = {b["accountIndex"]: int((b["uiTokenAmount"] or {}).get("amount") or 0)
+                    for b in meta.get("postTokenBalances") or [] if b.get("mint") == usdc}
+            usdc_moved += sum(abs(post.get(i, 0) - pre.get(i, 0)) for i in set(pre) | set(post))
+
+        for ins in iter_instructions(tx):
+            parsed = ins.get("parsed")
+            if not isinstance(parsed, dict) or parsed.get("type") != "transfer":
+                continue
+            info = parsed.get("info") or {}
+            if info.get("source") != pumpfun:
+                continue
+            dest = info.get("destination")
+            label = (
+                "Coinbase" if dest == COINBASE
+                else "3 unidentified hubs" if dest in UNIDENTIFIED_HUBS
+                else "own wallets" if dest in WALLETS
+                else "everything else"
+            )
+            outflow[label][month] += int(info.get("lamports") or 0)
+
+    months = sorted({m for s in inflow.values() for m in s} | {m for s in outflow.values() for m in s})
+    print("CREATOR-FEE INFLOW to pumpfun_main, by the account that PAID it (SOL)")
+    print(f"{'stream':26s}" + "".join(f"{m:>12s}" for m in months) + f"{'TOTAL':>12s}{'txs':>6s}")
+    for stream in ("DREGG coin vault", "social-fee PDA 704250", "other"):
+        row = [inflow[stream][m] for m in months]
+        print(f"{stream:26s}" + "".join(f"{v/1e9:>12.4f}" for v in row)
+              + f"{sum(row)/1e9:>12.4f}{counts[stream]:>6d}")
+    grand = sum(sum(s.values()) for s in inflow.values())
+    print(f"{'TOTAL':26s}" + " " * (12 * len(months)) + f"{grand/1e9:>12.4f}")
+    print(f"\n  USDC that actually moved across every inflow transaction: {usdc_moved/1e6:.6f}")
+    print(f"  inflow transactions logging 'No fees available to claim': {no_fee_logs}")
+
+    print("\nOUTFLOW from pumpfun_main (SOL)")
+    print(f"{'destination':26s}" + "".join(f"{m:>12s}" for m in months) + f"{'TOTAL':>12s}")
+    for label in ("Coinbase", "3 unidentified hubs", "own wallets", "everything else"):
+        row = [outflow[label][m] for m in months]
+        print(f"{label:26s}" + "".join(f"{v/1e9:>12.4f}" for v in row) + f"{sum(row)/1e9:>12.4f}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("fetch").set_defaults(func=cmd_fetch)
     sub.add_parser("ledger").set_defaults(func=cmd_ledger)
     sub.add_parser("report").set_defaults(func=cmd_report)
+    sub.add_parser("fees").set_defaults(func=cmd_fees)
     args = parser.parse_args()
     return int(args.func(args))
 
