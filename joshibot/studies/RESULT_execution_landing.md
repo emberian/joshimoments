@@ -17,7 +17,7 @@ could be 2–10× what the shadow model says. That warning is directionally righ
 — the shadow marker genuinely has no failure branch — but the **number is wrong by an order of
 magnitude, and in our favour**.
 
-Decomposed properly, the landing rate for a transaction shaped like ours is **95.3%**, not 12%.
+Decomposed properly, the landing rate for a transaction shaped like ours is **95–97%**, not 12%.
 The 12% is a measurement of other people's arbitrage-bot spam.
 
 | reference class | est. swaps | est. failures | landing rate |
@@ -26,13 +26,32 @@ The 12% is a measurement of other people's arbitrage-bot spam.
 | Jupiter route | 489 | 340 | 59.0% |
 | third-party (private arb programs) | 1,469 | 18,673 | 7.3% |
 
-Population-reweighted from a stratified probe of 4,316 transactions; strata are (pool × row-kind)
+The path is not what is doing the work. Splitting each path at the compute-unit price where the
+dose-response turns over:
+
+| | est. swaps | est. failures | landing rate |
+|---|---|---|---|
+| direct-AMM, bid < 50k µL/CU | 348 | 19 | **94.8%** |
+| direct-AMM, bid ≥ 50k | 631 | 29 | **95.6%** |
+| Jupiter, bid < 50k | 139 | 330 | **29.6%** |
+| Jupiter, bid ≥ 50k | 350 | 10 | **97.2%** |
+| third-party, bid < 50k | 326 | 16,256 | 2.0% |
+| third-party, bid ≥ 50k | 1,143 | 2,417 | 32.1% |
+
+**Above the cliff both honest paths land alike — 95.6% and 97.2%.** The headline path gap is mostly
+a bid gap wearing a path costume. What the direct AMM call actually buys is *insurance against
+underbidding*: it holds 94.8% below the cliff, where Jupiter falls to 29.6%.
+
+All population-reweighted from a stratified probe of 4,316 transactions; strata are (pool × row-kind)
 and each sampled transaction carries its cell's `population/sample` weight.
 
-**The landing policy is at the bottom (§8).** Its one-line summary: call the AMM directly, set the
-compute-unit limit from a simulation rather than a constant, bid ~100k–300k microlamports/CU (which
-costs **$0.0016–$0.0040**, i.e. 1.8–4.5 bps of a $9 clip), sign once and rebroadcast the same bytes,
-and skip Jito for v1.
+Crossing that cliff costs **$0.001** — 1.1 bps of a $9 clip, 0.07 bps of a $150 one. Ambient traffic
+fails because it bids nothing, not because bidding is expensive.
+
+**The landing policy is at the bottom (§8).** Its one-line summary: bid 100k–300k microlamports/CU
+(costing $0.0016–$0.0040, i.e. 1.8–4.5 bps of a $9 clip), call the AMM directly, set the compute-unit
+limit from a simulation rather than a constant, sign once and rebroadcast the same bytes, and skip
+Jito for v1.
 
 ---
 
@@ -224,6 +243,18 @@ On the Jupiter path there is a **cliff between 10–50k and 50–100k**: 26.6% �
 third-party path the response is monotone across two orders of magnitude, 0.7% → 52.7%. The
 direct-AMM path is robust everywhere (≥86%) — its landing does not depend much on the bid, which is
 consistent with those transactions rarely being in a race at all.
+
+Collapsing to either side of the cliff makes the point sharply:
+
+| | est. swaps | est. failures | landing |
+|---|---|---|---|
+| direct-AMM, bid < 50k | 348 | 19 | 94.8% |
+| direct-AMM, bid ≥ 50k | 631 | 29 | 95.6% |
+| Jupiter, bid < 50k | 139 | 330 | **29.6%** |
+| Jupiter, bid ≥ 50k | 350 | 10 | **97.2%** |
+
+Jupiter's landing rate more than triples across a threshold that costs a tenth of a cent to clear.
+Direct-AMM barely moves. **The bid is the lever; the path is the fallback.**
 
 And 94% of sampled Jupiter failures are `Custom(6001)` = `SlippageToleranceExceeded`
 (<https://github.com/jup-ag/instruction-parser/blob/main/src/idl/jupiter.ts>). The sampled
@@ -442,11 +473,18 @@ transaction is not at index 0), and dual-route rather than sending Jito-only.
 For a $9–$150 clip on a 100–400 SOL PumpSwap pool.
 
 ### Execution path
-**Call the AMM directly.** Measured landing 95.3% vs 59.0% through Jupiter. If the aggregator is
-kept for quoting, restrict it to a single direct route — most of Jupiter's failure is `6001` on
-multi-hop routes whose quote went stale, and PROGRAM.md §1.4 already says we only ever want one
-pool. *Confound, stated:* those are other people's Jupiter transactions with other people's
-slippage settings; a Jupiter call with our own `minOut` would not necessarily fail at 41%.
+**Call the AMM directly.** Measured landing 95.3% vs 59.0% through Jupiter. 94% of sampled Jupiter
+failures are `6001` — a quote that went stale between build and execution. Failing Jupiter
+transactions also consume markedly more compute than landing ones (median 265,860 CU vs 142,371),
+which is what a wider route looks like; that is suggestive of route width as the mechanism, not
+proof of it. PROGRAM.md §1.4 already says we only ever want one pool, so if the aggregator is kept
+for quoting, restrict it to a single direct route.
+
+*Confound, stated:* these are other people's Jupiter transactions with other people's slippage
+settings and other people's bids. A Jupiter call with our own `minOut` and a 100k+ bid would not
+necessarily fail at 41% — the dose-response in §4 shows the Jupiter path itself landing 91–100%
+above 50k µL/CU. The honest reading is that **path and bid are not separately identified here**, and
+the direct-AMM recommendation is the one that is safe under either explanation.
 
 ### Compute-unit limit
 `simulateTransaction` (with `replaceRecentBlockhash: true`), then `limit = ceil(consumed × 1.15)`.
@@ -483,8 +521,9 @@ to **0.046–0.073 SOL** — a 3–5× reduction in optimal clip. That is a real
 for `shitcoims_scalper`, and it is not mine to change.
 
 ### Expected landing rate
-**95.3%**, from the direct-AMM population-reweighted prior (est. 980 vs 48 over a 431-transaction
-raw sample).
+**95–97%.** Direct-AMM above the cliff measures 95.6% (est. 631 vs 29, raw n=223); Jupiter above the
+cliff measures 97.2% (est. 350 vs 10, raw n=171). Take **95%** as the planning number: it is the
+lower of the two and it does not depend on which explanation of the path gap turns out to be right.
 
 **Falsification: if the instrumented landed-and-succeeded rate over the first 100 real sends is
 below 85%, the direct-AMM reference class is wrong and this policy is refuted.**

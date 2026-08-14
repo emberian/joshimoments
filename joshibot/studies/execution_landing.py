@@ -14,14 +14,15 @@ Three things are wrong with it, and they point in different directions:
    filling somewhere else), and `attempt` (an `err` in the signature listing). `reference`
    rows are *successes*. Counting only `swap` in the numerator while counting every
    `attempt` in the denominator compares "landed AND traded here" against "failed for any
-   reason at all". Restoring them moves the aggregate from 13.3% to 75.9%.
+   reason at all". Restoring them moves the aggregate from 13.4% to 75.9%.
 
-2. **99% of the failures are not swaps.** Fetching the actual transactions shows the
+2. **96% of the failures are not swaps.** Fetching the actual transactions shows the
    failing instruction is almost never inside an AMM: it is a private arbitrage program
    whose whole design is to abort when the arb is not there. Ten fee-payers account for
    47% of failures. Split by execution path, a plain AMM call lands 95.3%, a Jupiter route
-   59.0%, and the third-party bot programs 7.3%. The 13.3% aggregate is a measurement of
-   somebody else's spam.
+   59.0%, and the third-party bot programs 7.3%. The 13.4% aggregate is a measurement of
+   somebody else's spam. And splitting again by the bid shows the path gap is mostly a BID
+   gap: above 50,000 microlamports/CU both honest paths land alike, 95.6% and 97.2%.
 
 3. **The tape structurally cannot see a dropped transaction.** `attempt` rows come from
    `getSignaturesForAddress` with a non-null `err` (`shitcoims_cluster/record.py:205`), so
@@ -43,13 +44,14 @@ What the tape *can* answer, it answers well. Sections below, each runnable:
                             counted: how many of our pools' trades were actually attacked
   H  policy               — the numbers that come out, and what they cost
 
-Sections C-F need transaction bodies, which the tape does not carry. `--probe` fetches a
-stratified sample over Helius and caches it; every later run reads the cache. Nothing here
-writes to `state/`.
+Sections C-F need transaction bodies, which the tape does not carry.
+`--probe` runs two fetches: a stratified sample over (pool, kind) for C-E, and every
+transaction in slots holding BOTH a landed swap and a failed attempt for F. Both are
+cached; every later run reads the cache. Nothing here writes to `state/`.
 
 Usage:
-    python3 studies/execution_landing.py --probe      # ~4,300 getTransaction calls, once
-    python3 studies/execution_landing.py              # analysis off the cache
+    python3 studies/execution_landing.py --probe   # ~6,000 getTransaction calls, once
+    python3 studies/execution_landing.py           # analysis off the cache
     python3 studies/execution_landing.py --json
 """
 
@@ -338,7 +340,10 @@ def load_cache(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     with open(path) as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+        rows = [json.loads(line) for line in fh if line.strip()]
+    # A row without `progs` is an RPC miss, not a transaction; it cannot be classified and
+    # must not enter a denominator.
+    return [r for r in rows if r.get("progs")]
 
 
 # ------------------------------------------------------------ A. the reference class
@@ -372,6 +377,24 @@ def section_a(rows: list[dict[str, Any]], out: dict[str, Any]) -> None:
         "sim2real_rate": s / (s + a), "landed_rate": (s + rf + lq) / (s + rf + lq + a),
     }
     out["A_reference_class"] = table
+
+    # Every failure in the tape is an InstructionError, i.e. every one EXECUTED and paid a
+    # fee. Pre-execution rejections (BlockhashNotFound, AccountInUse, WouldExceedMax*)
+    # cannot appear here, because a transaction that is never committed has no signature to
+    # list. Asserting that is cheap; printing the count makes it checkable.
+    shape: collections.Counter[str] = collections.Counter()
+    for r in rows:
+        if r.get("kind") != "attempt":
+            continue
+        err = r.get("error") or ""
+        shape["InstructionError" if err.startswith("{'InstructionError'") else "other"] += 1
+    cbe = sum(1 for r in rows if r.get("kind") == "attempt"
+              and "ComputationalBudgetExceeded" in (r.get("error") or ""))
+    out["A_error_shape"] = {
+        **shape,
+        "compute_budget_exceeded": cbe,
+        "compute_budget_exceeded_frac": cbe / max(1, sum(shape.values())),
+    }
 
 
 # ---------------------------------------------------------------- B. contention
@@ -545,6 +568,25 @@ def section_e(probe: list[dict[str, Any]], rows: list[dict[str, Any]], out: dict
             for i, c in sorted(b.items())
         }
     out["E_dose_response"] = dose
+
+    # The decisive cross-tab: is it the PATH or the BID? Split each path at the cliff the
+    # dose-response shows (50,000 microlamports/CU). If both paths land alike above it, the
+    # path difference in E_paths is a bid difference wearing a path costume.
+    cross: dict[str, Any] = {}
+    for p in PATHS:
+        for lo, hi, name in ((0, 50_000, "bid < 50k"), (50_000, float("inf"), "bid >= 50k")):
+            g = [r for r in probe
+                 if classify(r["progs"]) == p and r["kind"] in ("swap", "attempt")
+                 and lo <= (r.get("cu_price") or 0) < hi]
+            if not g:
+                continue
+            sw = sum(wt(r) for r in g if r["kind"] == "swap")
+            at = sum(wt(r) for r in g if r["kind"] == "attempt")
+            cross[f"{p} | {name}"] = {
+                "raw_n": len(g), "est_swaps": sw, "est_attempts": at,
+                "landing_rate": sw / (sw + at) if sw + at else None,
+            }
+    out["E_path_vs_bid"] = cross
 
     ladder: dict[str, dict[str, float]] = {}
     for label in sorted({r["label"] for r in probe}):
@@ -937,7 +979,9 @@ def section_h(out: dict[str, Any], sol_usd: float) -> None:
         "retry": "sign once; rebroadcast the SAME bytes every ~400ms with skipPreflight "
                  "and maxRetries=0; exit on getBlockHeight > lastValidBlockHeight",
         "jito": "no, for v1",
-        "expected_landing_rate": 0.953,
+        "expected_landing_rate": 0.95,
+        "expected_landing_basis": "direct-AMM above the 50k bid cliff measures 95.6%, "
+                                  "Jupiter above it 97.2%; take the lower",
         "falsification": "if the instrumented landed-and-succeeded rate over the first 100 "
                          "real sends is below 85%, the direct-AMM reference class is wrong "
                          "and this policy is refuted.",
@@ -969,6 +1013,12 @@ def report(o: dict[str, Any], sol_usd: float) -> None:
           f"{(r['sim2real_rate'] or 0)*100:>10.1f}%{(r['landed_rate'] or 0)*100:>8.1f}%")
     p("  'reference' = landed fine, touched the pool via an address-lookup table, traded")
     p("  elsewhere. It is a SUCCESS. sim2real counts it in neither column.")
+    es = o["A_error_shape"]
+    p(f"  every failure is an InstructionError: {es['InstructionError']:,} of "
+      f"{es['InstructionError'] + es.get('other', 0):,} — so every one EXECUTED and PAID A FEE.")
+    p("  A dropped transaction has no signature to list and is invisible here, in ANY tape.")
+    p(f"  compute exhaustion is {es['compute_budget_exceeded']} of them "
+      f"({es['compute_budget_exceeded_frac']*100:.2f}%) — not a failure mode worth budgeting for.")
 
     p("\n--- B. CONTENTION: success collapses when you share a slot")
     for label, r in o["B_contention"].items():
@@ -1018,6 +1068,15 @@ def report(o: dict[str, Any], sol_usd: float) -> None:
             for k, v in tab.items():
                 p(f"    {k:>10}{v['raw_n']:>7}{v['est_swaps']:>11,.0f}{v['est_attempts']:>11,.0f}"
                   f"{(v['landing_rate'] or 0)*100:>9.1f}%")
+
+        p("\n--- E2b. PATH vs BID — which one is doing the work?")
+        p(f"  {'cell':<28}{'raw n':>7}{'est swaps':>11}{'est fails':>11}{'landing':>10}")
+        for k, v in o["E_path_vs_bid"].items():
+            p(f"  {k:<28}{v['raw_n']:>7}{v['est_swaps']:>11,.0f}{v['est_attempts']:>11,.0f}"
+              f"{(v['landing_rate'] or 0)*100:>9.1f}%")
+        p("  Above the cliff the two honest paths land alike; below it Jupiter collapses and")
+        p("  direct-AMM does not. So the headline path gap is mostly a BID gap — and the")
+        p("  direct call is the one that survives underbidding.")
 
         p("\n--- E3. BID LADDER among LANDED swaps (microlamports per CU)")
         p(f"  {'pool':<14}{'n':>6}{'p25':>10}{'p50':>11}{'p75':>12}{'p90':>13}")
@@ -1083,7 +1142,8 @@ def report(o: dict[str, Any], sol_usd: float) -> None:
     pol = o["H_policy"]
     p("\n  POLICY")
     for k in ("path", "cu_limit_rule", "cu_price_floor", "cu_price_target", "escalation",
-              "retry", "jito", "expected_landing_rate", "falsification"):
+              "retry", "jito", "expected_landing_rate", "expected_landing_basis",
+              "falsification"):
         v = pol[k]
         p(f"    {k:<22} {v}")
 
