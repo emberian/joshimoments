@@ -50,8 +50,9 @@ transaction in slots holding BOTH a landed swap and a failed attempt for F. Both
 cached; every later run reads the cache. Nothing here writes to `state/`.
 
 Usage:
-    python3 studies/execution_landing.py --probe   # ~6,000 getTransaction calls, once
-    python3 studies/execution_landing.py           # analysis off the cache
+    python3 studies/execution_landing.py --probe        # ~6,000 getTransaction calls, once
+    python3 studies/execution_landing.py                # analysis off the cache
+    python3 studies/execution_landing.py --fee-oracle   # + live getRecentPrioritizationFees
     python3 studies/execution_landing.py --json
 """
 
@@ -334,6 +335,39 @@ def run_probe(rows: list[dict[str, Any]], *, per_cell: int, seed: int) -> None:
         for r in got2:
             fh.write(json.dumps(r) + "\n")
     print(f"cached {len(got2)} -> {SLOT_CACHE}", file=sys.stderr)
+
+
+def fee_oracle(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """What does `getRecentPrioritizationFees` actually tell us about OUR pools?
+
+    This is the RPC everyone reaches for when sizing a bid, and it is the wrong tool. It
+    reports, per slot, the *minimum* prioritization fee among transactions that locked the
+    given accounts. Almost every block contains at least one transaction paying nothing, so
+    the minimum is almost always zero — an estimator that answers "bid 0" to every question.
+
+    Run it against our exact pools rather than arguing about it. Live call; needs the key.
+    """
+    rpc = Rpc()
+    pools: dict[str, str] = {}
+    for r in rows:
+        pools.setdefault(r["label"], r["pool"])
+    out: dict[str, Any] = {}
+    targets: list[tuple[str, list[str]]] = [("global (no accounts)", [])]
+    targets += [(k, [v]) for k, v in sorted(pools.items())]
+    for name, accounts in targets:
+        resp = rpc.post({"jsonrpc": "2.0", "id": 1,
+                         "method": "getRecentPrioritizationFees", "params": [accounts]})
+        fees = [r["prioritizationFee"] for r in (resp.get("result") or [])]
+        if not fees:
+            continue
+        out[name] = {
+            "slots": len(fees),
+            "frac_zero": sum(1 for f in fees if f == 0) / len(fees),
+            **{f"p{q}": pct([float(f) for f in fees], q) for q in (50, 75, 90, 99)},
+            "max": max(fees),
+        }
+        time.sleep(0.2)
+    return out
 
 
 def load_cache(path: Path) -> list[dict[str, Any]]:
@@ -1078,6 +1112,16 @@ def report(o: dict[str, Any], sol_usd: float) -> None:
         p("  direct-AMM does not. So the headline path gap is mostly a BID gap — and the")
         p("  direct call is the one that survives underbidding.")
 
+        if o.get("E_fee_oracle"):
+            p("\n--- E2c. getRecentPrioritizationFees, live, against our own pools")
+            p(f"  {'query':<26}{'slots':>7}{'zero':>8}{'p50':>8}{'p90':>8}{'p99':>8}{'max':>11}")
+            for k, v in o["E_fee_oracle"].items():
+                p(f"  {k:<26}{v['slots']:>7}{v['frac_zero']*100:>7.1f}%{v['p50']:>8,.0f}"
+                  f"{v['p90']:>8,.0f}{v['p99']:>8,.0f}{v['max']:>11,}")
+            p("  It reports the MINIMUM fee among transactions locking those accounts, per")
+            p("  slot. Nearly every block holds someone paying nothing, so it answers 'bid 0'")
+            p("  to every question. Use the percentiles of bids that actually LANDED (E3).")
+
         p("\n--- E3. BID LADDER among LANDED swaps (microlamports per CU)")
         p(f"  {'pool':<14}{'n':>6}{'p25':>10}{'p50':>11}{'p75':>12}{'p90':>13}")
         for k, v in o["E_bid_ladder"].items():
@@ -1155,6 +1199,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20260813)
     ap.add_argument("--sol-usd", type=float, default=75.75,
                     help="SOL spot. Default checked against Coinbase and Kraken 2026-08-14.")
+    ap.add_argument("--fee-oracle", action="store_true",
+                    help="live getRecentPrioritizationFees against our pools")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -1182,6 +1228,8 @@ def main() -> None:
         section_e(probe, rows, out)
     if slots:
         section_f(slots, out)
+    if args.fee_oracle:
+        out["E_fee_oracle"] = fee_oracle(rows)
     section_g(rows, out, args.sol_usd)
     section_i(rows, out, args.sol_usd)
     section_h(out, args.sol_usd)

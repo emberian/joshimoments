@@ -45,8 +45,9 @@ underbidding*: it holds 94.8% below the cliff, where Jupiter falls to 29.6%.
 All population-reweighted from a stratified probe of 4,316 transactions; strata are (pool × row-kind)
 and each sampled transaction carries its cell's `population/sample` weight.
 
-Crossing that cliff costs **$0.001** — 1.1 bps of a $9 clip, 0.07 bps of a $150 one. Ambient traffic
-fails because it bids nothing, not because bidding is expensive.
+A bid at the cliff costs **$0.001 in total fee** — 1.1 bps of a $9 clip, 0.07 bps of a $150 one; the
+*increment* from a losing 30k bid to a winning 50k one is 3,200 lamports, **$0.00024**. Ambient
+traffic fails because it bids nothing, not because bidding is expensive.
 
 **The landing policy is at the bottom (§8).** Its one-line summary: bid 100k–300k microlamports/CU
 (costing $0.0016–$0.0040, i.e. 1.8–4.5 bps of a $9 clip), call the AMM directly, set the compute-unit
@@ -253,14 +254,42 @@ Collapsing to either side of the cliff makes the point sharply:
 | Jupiter, bid < 50k | 139 | 330 | **29.6%** |
 | Jupiter, bid ≥ 50k | 350 | 10 | **97.2%** |
 
-Jupiter's landing rate more than triples across a threshold that costs a tenth of a cent to clear.
-Direct-AMM barely moves. **The bid is the lever; the path is the fallback.**
+Jupiter's landing rate more than triples across a threshold that costs a fortieth of a cent to
+clear. Direct-AMM barely moves. **The bid is the lever; the path is the fallback.**
+
+The mechanism is §2's duty cycle. A direct AMM call is typically the only transaction touching that
+pool in that slot — 82% of slots are empty even on the busiest pool, 98.5–99.9% on the others — so
+there is no race to lose and the bid does not matter. A Jupiter route's `minOut` is checked across
+the whole route against a quote built some slots earlier, so it is exposed to *any* pool on the
+route moving, and buying a better queue position is what protects it. Consistent, but not
+established: this is an interpretation of the tables, not a separate measurement.
 
 And 94% of sampled Jupiter failures are `Custom(6001)` = `SlippageToleranceExceeded`
 (<https://github.com/jup-ag/instruction-parser/blob/main/src/idl/jupiter.ts>). The sampled
 direct-AMM failures are PumpSwap `Custom(6004) = ExceededSlippage` and
 `Custom(6040) = BuySlippageBelowMinBaseAmountOut`. **Failure on this venue is a slippage revert,
 i.e. losing a race, and the bid is how you enter the race.**
+
+### `getRecentPrioritizationFees` is the wrong instrument, measured
+
+The RPC everyone reaches for when sizing a bid, called live against our own pools
+(`--fee-oracle`, 2026-08-14T04:00Z, 150-slot window):
+
+| query | slots | fraction returning **zero** | p99 | max |
+|---|---|---|---|---|
+| global (no accounts) | 150 | **100.0%** | 0 | 0 |
+| DREGG/SOL | 150 | **100.0%** | 0 | 0 |
+| SOLVE/SOL | 150 | **100.0%** | 0 | 0 |
+| weave/SOL | 150 | 99.3% | 0 | 38,985 |
+| nosis/SOL | 150 | 98.7% | 15,000 | 100,000 |
+
+It reports, per slot, the **minimum** prioritization fee among transactions that locked those
+accounts. Nearly every block contains someone paying nothing, so the minimum is nearly always zero.
+**Used as a bid estimator it answers "bid 0" to every question** — and §4's dose-response says a
+zero bid lands 57% on the Jupiter path and 3.8% on the bot path.
+
+The instrument that works is already in the tape: the percentiles of the bids that actually
+*landed*. That is what the ladder below reports, and what §8's rule reads from.
 
 ### The bid ladder among landed swaps (µL/CU)
 
@@ -554,8 +583,9 @@ The tape can never supply them; only our own sends can.
 
 ## Appendix: what is asserted vs measured
 
-**Measured on our data, reproducible by re-running the script:** every number in §1, §2, §3, §4,
-§5.1's grid and thresholds, §5.2, and §8's expected landing rate.
+**Measured on our data, reproducible by re-running the script:** every number in §1, §2, §3, §4
+(including the live `getRecentPrioritizationFees` table, `--fee-oracle`), §5.1's grid and
+thresholds, §5.2, and §8's expected landing rate.
 
 **Externally cited, not verified by us:** the Helius and Zheng et al. failure-rate decompositions,
 the Jito tip-floor snapshot, Agave/Anchor/IDL error tables, blockhash constants, SIMD-0096/0191/0525,
