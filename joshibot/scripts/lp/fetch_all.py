@@ -1,4 +1,8 @@
-import json, os, time, urllib.request
+import json
+import os
+import time
+import urllib.request
+
 KEY=open(os.path.expanduser("~/.helius-key")).read().strip()
 URL=f"https://mainnet.helius-rpc.com/?api-key={KEY}"
 sigs=json.load(open("wallet_sigs.json"))

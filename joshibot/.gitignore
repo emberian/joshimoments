@@ -64,3 +64,6 @@ kernel/build/
 studies/data/
 kernel_svm/.venv/
 kernel_svm/cache/
+
+# generated netmap snapshot — regenerate with `python -m shitcoims_netmap.render --json`
+/public/netmap.json

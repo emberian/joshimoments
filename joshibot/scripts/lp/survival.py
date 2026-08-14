@@ -1,4 +1,8 @@
-import json, collections, urllib.request, time
+import collections
+import json
+import time
+import urllib.request
+
 txs=json.load(open("wallet_txs.json"))
 mints=collections.Counter()
 for tx in txs.values():

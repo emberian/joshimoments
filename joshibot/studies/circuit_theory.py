@@ -37,8 +37,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 # --------------------------------------------------------------------------------------
 # universe -- inherited verbatim from studies/circuit_model.py (labels already corrected

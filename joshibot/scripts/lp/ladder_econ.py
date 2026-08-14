@@ -1,4 +1,6 @@
-import json, collections, datetime
+import collections
+import json
+
 rows=json.load(open("pnl_rows.json"))
 SYM={"XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump":"DREGG",
      "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump":"weave",

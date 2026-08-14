@@ -1,4 +1,8 @@
-import json, os, time, urllib.request
+import json
+import os
+import time
+import urllib.request
+
 KEY=open(os.path.expanduser("~/.helius-key")).read().strip()
 URL=f"https://mainnet.helius-rpc.com/?api-key={KEY}"
 FUND="Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ"
@@ -7,7 +11,7 @@ def post(p,tries=5):
         try:
             r=urllib.request.Request(URL,data=json.dumps(p).encode(),headers={"Content-Type":"application/json"})
             with urllib.request.urlopen(r,timeout=90) as f: return json.load(f)
-        except Exception as e:
+        except Exception:
             if a==tries-1: raise
             time.sleep(0.4*2**a)
 sigs=[]; before=None
@@ -20,6 +24,7 @@ while True:
     if len(got)<1000: break
 ok=[s for s in sigs if not s.get("err")]
 import datetime
+
 bt=[s["blockTime"] for s in sigs if s.get("blockTime")]
 print(f"total signatures : {len(sigs)}  (successful {len(ok)}, failed {len(sigs)-len(ok)})")
 if bt:
