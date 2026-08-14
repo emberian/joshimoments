@@ -136,11 +136,16 @@ underpowered. Everything below is a measured number, and each item is a requirem
   absence outside it is no information. Any analysis window overlapping a subscription gap is
   **excluded, never zero-filled** (measured: 5 disconnects in ~17 h, ~1 per 3.4 h, so a 60-minute
   window intersecting one is routine).
-- **Overdispersion is measured, so use it.** Hourly flow counts: mean 10.93, variance 182.99 →
-  **Fano 16.74**, negative-binomial `k ≈ 0.695`. A Poisson-assuming power calculation understates the
-  required n by ~17×. (The same numbers yield `n̂ = 1 − 1/√Fano = 0.756`, which is a *pipeline
-  diagnostic and not a branching ratio* — on a two-wallet tape a wallet's own trades are trivially
-  self-exciting. Do not quote it.)
+- **Overdispersion is measured — but do NOT apply it twice.** Hourly flow *counts* are genuinely
+  overdispersed (Fano ~11.5–16.7, negative-binomial `k ≈ 0.695`), and that inflates any power
+  calculation whose estimand is a **count**. It does **not** transfer to price estimands:
+  studies/RESULT_power_gate.md measured the *price* variance inflation against a compound-Poisson
+  baseline at **0.59–1.17×, not 17×**, because the bursts here are two-sided arbitrage round trips
+  that partly cancel. An earlier draft of this bullet said a Poisson-assuming calculation understates
+  n by ~17× *in general*; that is wrong for price-based estimands, where a σ measured from prices
+  already contains the burst structure. (The same counts yield `n̂ = 1 − 1/√Fano`, which is a
+  *pipeline diagnostic and not a branching ratio* — on a two-wallet tape a wallet's own trades are
+  trivially self-exciting. Do not quote it.)
 - **Callout supply is cheap; flow is the entire cost.** 134.7 distinct mint-resolved callouts/day
   measured, so n=400 is ~3 days — but collect **4 weeks** so temporal folds (§3 rules 1 and 6) contain
   regime variation. Helius: ~48% of the 10M plan at 5 controls per treated mint, ~29% at 3 controls.

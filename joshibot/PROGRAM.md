@@ -713,12 +713,18 @@ What this **changes**:
   volume, no durable price effect) reads in this frame as: *the operator can drive current through
   their own resistors.* Volume-linked income plus volume-driving capability is a feedback loop the
   desk owns end-to-end; the callout-latency machinery measures its gain.
-- **Identification we already own — but the experiment is NOT ready to run.** The scalper's ε-explored
-  entries are propensity-logged randomized current injections — the design the cross-impact literature
-  cannot run (Capponi–Cont's propagation-vs-common-flow confound dissolves under randomized injection).
-  But its **power gate is uncomputed**, and the study shows why that bites: cluster pools print 3–46
-  times a *day*, so informative observations run one to two orders of magnitude below sample counts.
-  Computing the gate first is mandatory — skipping it is precisely the §4.1 failure mode.
+- **Identification we own — gate now COMPUTED, and it says: not with the scalper, yes with the
+  envelope.** (studies/RESULT_power_gate.md.) ε-explored entries are propensity-logged randomized
+  current injections, which dissolves Capponi–Cont's propagation-vs-common-flow confound. At the
+  *scalper's* sizing (B\* = 0.22–0.43 SOL) the experiment is **infeasible and fails three separate
+  ways**: 6,691–561,789 injections (~58 days, ~$17,600); the explored entries land in **fresh mints at
+  ~22.7 SOL depth, not the cluster at all**; and decisively, B\* displaces price only **23–45 bps
+  against fee dead-zones of 186–342 bps**, so the circuit model predicts **exactly zero** — more
+  samples buy nothing when the signal is inside the diode's dead-zone.
+  **At the envelope's own 2% pool cap it works:** 1.96–7.56 SOL per injection → **87–1,892 injections,
+  ~1.2 days, ~34 SOL (~$2,594)**. And since 396 bps *straddles* the bands, the efficient design is a
+  **two-point size randomization testing for a kink** — which is exactly the discriminating test the
+  caveat below demands. The failed design pointed at the working one.
 - **Analysis landmine, recorded before anyone steps on it:** the naive excursion-relaxation test on
   curl (condition on |residual| > band, observe drift back) is **confounded by construction** — any
   stationary series shows negative drift after conditioning on an exceedance. The discriminating

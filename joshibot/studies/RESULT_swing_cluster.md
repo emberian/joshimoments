@@ -45,6 +45,36 @@ kills half the table and is the honest part:
 The debias is not pedantry: four of six "mean-reverting pairs" die under it. They may still revert —
 n=83 simply cannot show it. Re-run when weave/nosis have 3+ weeks of history.
 
+## VERDICT ON THIS STUDY'S LP CLAIM (2026-08-13, studies/RESULT_power_gate.md)
+
+The claim below — that token-token DLMM pools are plausibly this desk's best LP venue — **is correct,
+but for a reason this study got wrong, and the test it proposed was malformed.**
+
+- **Concentration is not the mechanism.** Measured `4/W` on the operator's real positions is **3.98×
+  (weave/nosis) and 5.91× (weave/SOL)** — *below* the 8.4× turnover deficit it was supposed to clear.
+  Worse, the test itself is ill-posed: `yield = turnover × fee × share` has no slot for a `4/W`
+  multiplier, because concentration is *already inside measured turnover*. The tape closes that
+  identity at **0.82×** (predicted 39.1%/day vs realized 32.1%/day), where a missing 4× would be
+  glaring.
+- **The mechanism is the FEE TIER.** Measured from chain vault deltas around fee claims, the
+  token-token pools charge **5.51–5.60%** against a **0.20%** PumpSwap leg — a **28×** advantage where
+  only 8.4–10.4× was needed. Independently corroborated by pool config (6.0% base, 10% protocol → 5.4%
+  to LP). Realized edge **15.2×** (32.1%/day vs 2.12%/day best token/SOL) on a 6.07-hour sample;
+  ~9 days settles it.
+- **The turnover deficit itself was mismeasured** — re-measured at **3.07×**, not 8.4×, and it moved
+  that much within hours. Carry it as 3–10×; 28× clears anything in that range.
+- **Monopoly confound quantified, and it is not a wash loop:** the operator is **0% of swaps**, with
+  16 distinct fee payers and 36% multi-hop routed. A rival at equal TVL and equal fee would leave
+  **0.68×** — but arbitrage traversal volume scales with depth, so half the edge is
+  competition-invariant. The real rent is the **5.55% tier against a ~2.2% substitute route**.
+- **It inverts on:** a rival pool priced under ~2.2%; range exit (observed live — out of range earning
+  **$0**, back in range earning 1.76%/day, within one hour); a trending rather than reverting ratio;
+  or a volatility collapse.
+
+So: keep the pools, and understand that **the edge is pricing power on a route people need, not
+clever bin placement.** That reframes the defence — it is defended by being the only low-friction path
+between two communities, and it is attacked by anyone who opens a cheaper one.
+
 ## The structural finding
 
 A mean-reverting ratio is **exactly the regime where DLMM token-token LP is +EV**: impermanent loss is
