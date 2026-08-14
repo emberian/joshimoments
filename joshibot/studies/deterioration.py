@@ -69,7 +69,6 @@ import argparse
 import calendar
 import json
 import math
-import os
 import random
 import statistics
 import sys
@@ -78,7 +77,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
@@ -124,7 +123,7 @@ MAJOR_MINTS = {
 #: this module re-reads that module rather than copying, so a correction propagates).
 try:  # pragma: no cover - import shape depends on how the module is invoked
     sys.path.insert(0, str(REPO))
-    from shitcoims_cluster.pools import DREGG, NOSIS, SOLVE, WEAVE  # noqa: E402
+    from shitcoims_cluster.pools import DREGG, NOSIS, SOLVE, WEAVE
 
     CLUSTER = {"weave": WEAVE, "nosis": NOSIS, "DREGG": DREGG, "SOLVE": SOLVE}
 except Exception:  # the study must still run if the package moves
@@ -312,7 +311,10 @@ def discover(fetcher: Fetcher, pages: int = 10) -> list[dict]:
                 break
             rows = [r for r in (_pool_row(i, f"{path}|{sort}") for i in items) if r and r["pool"]]
             added = commit(rows)
-            print(f"  {path} sort={sort or '-'} page={page}: {len(items)} items, +{added} new, {len(known)} total")
+            print(
+                f"  {path} sort={sort or '-'} page={page}: "
+                f"{len(items)} items, +{added} new, {len(known)} total"
+            )
     # The cluster is in the universe by construction, not by luck of a listing.
     for label, mint in CLUSTER.items():
         payload = fetcher.get(f"{GT}/networks/solana/tokens/{mint}/pools")
@@ -330,13 +332,33 @@ def _f(value: Any) -> float | None:
     return out if math.isfinite(out) else None
 
 
-def candidates(min_fdv: float = 20_000.0, max_fdv: float = 50_000_000.0) -> list[dict]:
+def pool_age_days(row: dict, now: float | None = None) -> float | None:
+    if not row.get("created_at"):
+        return None
+    try:
+        born = calendar.timegm(time.strptime(row["created_at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except Exception:
+        return None
+    return ((now or time.time()) - born) / 86400.0
+
+
+def candidates(
+    min_fdv: float = 20_000.0, max_fdv: float = 50_000_000.0, min_age_days: float = 2.0
+) -> list[dict]:
     """Discovery rows worth spending an OHLCV call on.
 
     This is a *cheap pre-filter on the current snapshot*, not the cohort definition. The
     cohort itself is dated retrospectively from each pool's own history in :func:`build_panel`
     — a pool that is small today may have been large three weeks ago, and those are exactly
     the deterioration trajectories the instrument needs to have seen.
+
+    **The age gate is the expensive lesson of this study, so it is enforced here rather than
+    downstream.** The first fetch pass ordered candidates by "small FDV, high volume", which
+    reads like the operator's scale band and is in fact the signature of a pump.fun launch four
+    hours old: 70 pools fetched, **median 4 hourly candles**, 69 of 70 with fewer than 72. The
+    small-and-busy corner of the cross-section *is* the 21,859-launches-per-day population this
+    study exists to exclude. Age separates them and costs nothing — the creation time is already
+    in the discovery row, so the gate is free and belongs before the call, not after it.
     """
 
     best: dict[str, dict] = {}
@@ -350,6 +372,9 @@ def candidates(min_fdv: float = 20_000.0, max_fdv: float = 50_000_000.0) -> list
             continue
         fdv = _f(row.get("fdv_usd"))
         if fdv is None or not (min_fdv <= fdv <= max_fdv):
+            continue
+        age = pool_age_days(row)
+        if age is None or age < min_age_days:
             continue
         prior = best.get(pool)
         if prior is None or (_f(row.get("vol_h24")) or 0) > (_f(prior.get("vol_h24")) or 0):
@@ -409,7 +434,10 @@ def pull_histories(fetcher: Fetcher, limit_pools: int = 400) -> None:
     rows.sort(key=lambda r: (0 if (_f(r.get("fdv_usd")) or 0) <= PRIORITY_FDV else 1, -(_f(r.get("vol_h24")) or 0.0)))
     todo = [r for r in rows[:limit_pools] if not ohlcv_path(r["pool"]).exists()]
     small = sum(1 for r in todo if (_f(r.get("fdv_usd")) or 0) <= PRIORITY_FDV)
-    print(f"ohlcv: {len(rows)} candidates, {len(todo)} to fetch ({small} at or below ${PRIORITY_FDV:,.0f} FDV)")
+    print(
+        f"ohlcv: {len(rows)} candidates, {len(todo)} to fetch "
+        f"({small} at or below ${PRIORITY_FDV:,.0f} FDV)"
+    )
     for i, row in enumerate(todo, 1):
         got = fetch_ohlcv(fetcher, row["pool"])
         n = len(got["ohlcv"]) if got else 0
@@ -887,8 +915,10 @@ class Library:
             return []
         q0 = qv[0]
         acc = [(v - q0) * (v - q0) for v in self.cols[0]]
-        for qf, col in zip(qv[1:], self.cols[1:]):
-            acc = [a + (v - qf) * (v - qf) for a, v in zip(acc, col)]
+        # strict=True on both: a length mismatch here would silently drop a feature
+        # dimension from every distance and the kNN would quietly match on nine of ten.
+        for qf, col in zip(qv[1:], self.cols[1:], strict=True):
+            acc = [a + (v - qf) * (v - qf) for a, v in zip(acc, col, strict=True)]
         if exclude_mint:
             idx = [i for i in range(n) if self.mints[i] != exclude_mint]
         else:
@@ -921,8 +951,15 @@ def neighbour_forecast(
     if not vals:
         return {"n": 0}
     vals_sorted = sorted(vals)
+    # How many DISTINCT coins supplied the analogues. A forecast whose 40 neighbours come from
+    # three coins is three observations, not forty, and its percentiles are correspondingly
+    # fictional. Same-mint exclusion stops a coin being its own analogue; it does not stop one
+    # other coin from monopolising the neighbourhood, which is what happens at the edges of the
+    # cohort where nothing else is nearby.
+    distinct = len({n.get("mint") for _, n in neighbours if key in n})
     return {
         "n": len(vals),
+        "distinct_mints": distinct,
         "median": vals_sorted[len(vals_sorted) // 2],
         "mean": sum(vals) / len(vals),
         "p10": vals_sorted[int(0.10 * (len(vals_sorted) - 1))],
@@ -958,13 +995,13 @@ def spearman(xs: Sequence[float], ys: Sequence[float]) -> float:
 
     rx, ry = rank(xs), rank(ys)
     mx, my = sum(rx) / n, sum(ry) / n
-    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry, strict=True))
     den = math.sqrt(sum((a - mx) ** 2 for a in rx) * sum((b - my) ** 2 for b in ry))
     return num / den if den > 0 else float("nan")
 
 
 def brier(probs: Sequence[float], labels: Sequence[int]) -> float:
-    return sum((p - y) ** 2 for p, y in zip(probs, labels)) / max(len(probs), 1)
+    return sum((p - y) ** 2 for p, y in zip(probs, labels, strict=True)) / max(len(probs), 1)
 
 
 def block_bootstrap_ci(
@@ -1042,7 +1079,7 @@ def thin(states: Sequence[dict], gap_hours: int) -> list[dict]:
     for s in states:
         by_mint[s["mint"]].append(s)
     out = []
-    for mint, rows in by_mint.items():
+    for rows in by_mint.values():
         rows.sort(key=lambda r: r["t"])
         last = -math.inf
         for r in rows:
@@ -1203,21 +1240,39 @@ def _print_metrics(res: dict) -> None:
         return
     thr = res["death_threshold_pct"]
     print(f"  horizon {res['horizon_h']}h  k={res['k']}  threshold: forward SOL return <= {thr:.0f}%")
-    print(f"  library {res['library_n']} states / {res['library_mints']} mints; test {res['n']} thinned states")
+    print(
+        f"  library {res['library_n']} states / {res['library_mints']} "
+        f"mints; test {res['n']} thinned states"
+    )
     print(f"  base rate  library {res['base_rate_library']:.3f}  test {res['base_rate_test']:.3f}")
-    print(f"  Brier   kNN {res['brier_knn']:.4f}   random-k {res['brier_random_k']:.4f}   climatology {res['brier_climatology']:.4f}")
+    print(
+        f"  Brier   kNN {res['brier_knn']:.4f}   random-k "
+        f"{res['brier_random_k']:.4f}   climatology {res['brier_climatology']:.4f}"
+    )
     lo, hi = res["ci_skill_vs_climatology"]
-    print(f"  skill vs climatology {res['skill_vs_climatology']:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}] (entity bootstrap)")
+    print(
+        f"  skill vs climatology {res['skill_vs_climatology']:+.4f} "
+        f" 95% CI [{lo:+.4f}, {hi:+.4f}] (entity bootstrap)"
+    )
     print(f"  skill vs random-k    {res['skill_vs_random_k']:+.4f}")
     lo, hi = res["ci_spearman"]
-    print(f"  Spearman(pred median, actual) {res['spearman_pred_vs_actual']:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]")
+    print(
+        f"  Spearman(pred median, actual) "
+        f"{res['spearman_pred_vs_actual']:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]"
+    )
     print(
         f"  top decile by P(down): death rate {res['top_decile_death_rate']:.3f} vs base {res['base_rate_test']:.3f}"
         f"  lift {res['top_decile_lift']:.2f}x  (n={res['top_decile_n']})"
     )
-    print(f"  mean forward return: top decile {res['top_decile_mean_fwd']:+.4f} vs all {res['all_mean_fwd']:+.4f}")
+    print(
+        f"  mean forward return: top decile "
+        f"{res['top_decile_mean_fwd']:+.4f} vs all {res['all_mean_fwd']:+.4f}"
+    )
     if res.get("operating_points"):
-        print(f"  {'exit if P(down) >=':<20} {'flagged':>8} {'prec':>7} {'recall':>7} {'fwd|flag':>10} {'fwd|hold':>10} {'edge':>8}")
+        print(
+            f"  {'exit if P(down) >=':<20} {'flagged':>8} {'prec':>7} "
+            f"{'recall':>7} {'fwd|flag':>10} {'fwd|hold':>10} {'edge':>8}"
+        )
         for op in res["operating_points"]:
             print(
                 f"  {op['threshold']:<20.2f} {op['n_flagged']:>8} {op['precision']:>7.3f} {op['recall']:>7.3f}"
@@ -1334,7 +1389,7 @@ def cohort_summary(states: Sequence[dict]) -> dict:
         by_mint[s["mint"]].append(s)
     peaks, ends, spans, fdvs = [], [], [], []
     collapsed_vol = collapsed_price = 0
-    for mint, rows in by_mint.items():
+    for rows in by_mint.values():
         rows.sort(key=lambda r: r["t"])
         vols = [r["vol24"] for r in rows]
         peak_v, last_v = max(vols), vols[-1]
@@ -1375,8 +1430,11 @@ def hypothesis_test(states: Sequence[dict], horizon: int = 72, adjusted: bool = 
 
     The claim: a coin whose price is flat while volume erodes underneath is being distributed
     into, and its forward return is worse than a coin whose price and volume move together.
-    The statistic is ``divergence = ret_24h - dvol_24`` — high when price holds up as support
-    falls away. If the claim is true, divergence is NEGATIVELY related to forward return.
+    The statistic is ``divergence = z(ret_24h) - z(dvol_24)`` with both scales fitted on the
+    library — high when price holds up as support falls away. **If the claim is true, the
+    Spearman correlation between divergence and forward return is NEGATIVE.** A positive or
+    zero correlation refutes it, and that is a result worth having: it is exactly the check
+    three prior studies in this repo skipped.
 
     Evaluated out of sample on the temporal split, never in sample, and reported per window
     because aggregate reporting hides regime collapse (PROGRAM.md 3 rule 6).
@@ -1588,7 +1646,10 @@ def read_coin(
     )
     dist = snap.get("holders_distribution") or {}
     if dist:
-        print(f"  holder concentration: top10 {dist.get('top_10')}%  11-20 {dist.get('11_20')}%  rest {dist.get('rest')}%")
+        print(
+            f"  holder concentration: top10 {dist.get('top_10')}%  "
+            f"11-20 {dist.get('11_20')}%  rest {dist.get('rest')}%"
+        )
 
     query = query_state(fetcher, snap)
     if query is None:
@@ -1614,24 +1675,146 @@ def read_coin(
             ref.append(sum(d for d, _ in pn) / len(pn))
     mean_d = sum(d for d, _ in nn) / len(nn) if nn else float("nan")
     typical = statistics.median(ref) if ref else float("nan")
-    print(f"  state: " + "  ".join(f"{f}={query[f]:+.2f}" for f in FEATURES))
-    print(f"  divergence (ret24h - dvol24) = {query['divergence']:+.3f}")
+    print("  state: " + "  ".join(f"{f}={query[f]:+.2f}" for f in FEATURES))
+    print(
+        f"  divergence z(ret_24h) - z(dvol_24) = {query['divergence']:+.3f} "
+        f" (positive = price holding up while volume erodes)"
+    )
     print(f"\n  --- {fc['n']} nearest historical analogues, {horizon}h forward (SOL-denominated) ---")
-    print(f"  median {fc['median']:+.1%}   mean {fc['mean']:+.1%}   p10 {fc['p10']:+.1%}   p90 {fc['p90']:+.1%}")
+    print(
+        f"  median {fc['median']:+.1%}   mean {fc['mean']:+.1%} "
+        f"  p10 {fc['p10']:+.1%}   p90 {fc['p90']:+.1%}"
+    )
+    print(f"  analogues drawn from {fc['distinct_mints']} distinct coins"
+          + ("   <-- TOO FEW, the percentiles above are not {} independent observations".format(fc["n"])
+             if fc["distinct_mints"] < 8 else ""))
     print(f"  P(<= -20%) = {fc['p_down']:.0%}   base rate in library = "
           f"{sum(1 for s in library if s[f'fwd_{horizon}'] <= DEATH_THRESHOLD) / len(library):.0%}")
     print(
         f"  match quality: mean neighbour distance {mean_d:.2f} vs {typical:.2f} typical "
         f"({mean_d / typical:.1f}x)" + ("  <-- EXTRAPOLATING, treat analogues as weak" if typical and mean_d > 2 * typical else "")
     )
-    print(f"\n  {'analogue':<26} {'when':<11} {'dist':>5} {'fdv':>10} {'vol24':>10} {'ret24h':>8} {'dvol':>7} {'-> fwd':>8}")
+    print(
+        f"\n  {'analogue':<26} {'when':<11} {'dist':>5} {'fdv':>10} "
+        f"{'vol24':>10} {'ret24h':>8} {'dvol':>7} {'-> fwd':>8}"
+    )
     for dist_val, n in nn[:show]:
         print(
             f"  {n['name'][:26]:<26} {time.strftime('%Y-%m-%d', time.gmtime(n['t'])):<11} {dist_val:5.2f}"
-            f" {n['fdv']:10,.0f} {n['vol24']:10,.0f} {n['ret24h']:+8.2%} {n['dvol_24']:+7.2f}"
+            f" {n['fdv']:10,.0f} {n['vol24']:10,.0f} {n['ret_24h']:+8.2%} {n['dvol_24']:+7.2f}"
             f" {n.get(f'fwd_{horizon}', float('nan')):+8.1%}"
         )
     return {"snapshot": snap, "state": query, "forecast": fc, "neighbours": nn}
+
+
+def dexscreener_by_pair(pairs: Sequence[str]) -> dict[str, dict]:
+    """Bulk current state by pool address, 30 at a time.
+
+    DexScreener's pair endpoint is the cheap half of the flow picture: transaction-level
+    buys/sells for dozens of peers costs a handful of calls against a 300/min budget, where the
+    wallet-level counts cost one contended GeckoTerminal call each.
+    """
+
+    out: dict[str, dict] = {}
+    for start in range(0, len(pairs), 30):
+        chunk = pairs[start : start + 30]
+        url = f"{DS}/latest/dex/pairs/solana/{','.join(chunk)}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "joshibot-deterioration-study/0.1"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = json.loads(resp.read())
+        except Exception as exc:
+            print(f"  dexscreener pairs failed: {exc}", file=sys.stderr)
+            continue
+        for pair in payload.get("pairs") or []:
+            if pair.get("pairAddress"):
+                out[pair["pairAddress"]] = pair
+        time.sleep(0.4)
+    return out
+
+
+def _sell_shares(pair: dict) -> tuple[float | None, int]:
+    txn = (pair.get("txns") or {}).get("h24") or {}
+    buys, sells = txn.get("buys", 0), txn.get("sells", 0)
+    total = buys + sells
+    return (sells / total if total else None), total
+
+
+def peer_flow(fetcher: Fetcher, mint: str, label: str, n_peers: int = 60, n_gt: int = 12) -> dict:
+    """Where this coin's sell pressure sits among *scale-matched peers today*.
+
+    The operator's observation is the motivation: on nosis, 73% of wallets were net sellers
+    while only 54% of transactions were sells — many small sellers against fewer larger buyers.
+    Those are genuinely different statistics and their gap is informative, but a raw 73% means
+    nothing without knowing what a normal coin of this size looks like on the same day. This
+    puts a percentile on it.
+
+    Transaction-level shares come from DexScreener in bulk (cheap). Wallet-level shares come
+    from GeckoTerminal one pool at a time (contended), so only ``n_gt`` peers get them.
+    """
+
+    snap = live_snapshot(fetcher, mint, label)
+    fdv = snap.get("fdv") or 0.0
+    if not fdv:
+        return {"error": "no FDV for query coin"}
+    rows = candidates()
+    band = [
+        r
+        for r in rows
+        if r["pool"] != snap.get("pool")
+        and 0.25 * fdv <= (_f(r.get("fdv_usd")) or 0) <= 4.0 * fdv
+        and (_f(r.get("vol_h24")) or 0) > 0
+    ]
+    band.sort(key=lambda r: abs(math.log(max(_f(r.get("fdv_usd")) or 1.0, 1.0) / fdv)))
+    band = band[:n_peers]
+    if len(band) < 8:
+        return {"error": f"only {len(band)} scale-matched peers in the discovery cache"}
+
+    live = dexscreener_by_pair([r["pool"] for r in band])
+    tx_shares: list[tuple[float, str]] = []
+    for pool, pair in live.items():
+        share, total = _sell_shares(pair)
+        if share is not None and total >= 30:  # threshold stated: >=30 txs in 24h
+            tx_shares.append((share, (pair.get("baseToken") or {}).get("symbol", pool[:6])))
+    q_share, _q_total = _sell_shares({"txns": snap.get("txns") or {}})
+
+    gtx = (snap.get("gt_transactions") or {}).get("h24") or {}
+    buyers, sellers = gtx.get("buyers", 0), gtx.get("sellers", 0)
+    q_wallet = sellers / (buyers + sellers) if (buyers + sellers) else None
+
+    wallet_rows: list[tuple[float, float, str]] = []
+    for row in band[:n_gt]:
+        payload = fetcher.get(f"{GT}/networks/solana/pools/{row['pool']}")
+        attrs = ((payload or {}).get("data") or {}).get("attributes") or {}
+        h24 = (attrs.get("transactions") or {}).get("h24") or {}
+        b, s = h24.get("buyers", 0), h24.get("sellers", 0)
+        tb, ts = h24.get("buys", 0), h24.get("sells", 0)
+        if (b + s) >= 20 and (tb + ts) >= 30:
+            wallet_rows.append((s / (b + s), ts / (tb + ts), attrs.get("name", row["pool"][:8])))
+
+    def pct(value: float, pool_vals: Sequence[float]) -> float:
+        if not pool_vals:
+            return float("nan")
+        return 100.0 * sum(1 for v in pool_vals if v <= value) / len(pool_vals)
+
+    return {
+        "label": label,
+        "fdv": fdv,
+        "n_peers_tx": len(tx_shares),
+        "n_peers_wallet": len(wallet_rows),
+        "tx_sell_share": q_share,
+        "tx_sell_share_pctile": pct(q_share, [s for s, _ in tx_shares]) if q_share is not None else float("nan"),
+        "peer_tx_sell_share_median": statistics.median([s for s, _ in tx_shares]) if tx_shares else float("nan"),
+        "wallet_sell_share": q_wallet,
+        "wallet_sell_share_pctile": pct(q_wallet, [w for w, _, _ in wallet_rows]) if q_wallet is not None else float("nan"),
+        "peer_wallet_sell_share_median": statistics.median([w for w, _, _ in wallet_rows]) if wallet_rows else float("nan"),
+        "divergence": (q_wallet - q_share) if (q_wallet is not None and q_share is not None) else None,
+        "peer_divergence_median": statistics.median([w - t for w, t, _ in wallet_rows]) if wallet_rows else float("nan"),
+        "divergence_pctile": pct(q_wallet - q_share, [w - t for w, t, _ in wallet_rows])
+        if (q_wallet is not None and q_share is not None and wallet_rows)
+        else float("nan"),
+        "peers_wallet_detail": [{"name": n, "wallet_sell": w, "tx_sell": t} for w, t, n in wallet_rows],
+    }
 
 
 def query_state(fetcher: Fetcher, snap: dict) -> dict | None:
@@ -1680,6 +1863,9 @@ def cmd_panel(args: argparse.Namespace) -> None:
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
+    global DEATH_THRESHOLD
+    if args.threshold_pct is not None:
+        DEATH_THRESHOLD = math.log(1 + args.threshold_pct / 100.0)
     states = load_panel()
     print(f"panel: {len(states)} states, {len({s['mint'] for s in states})} mints")
     for horizon in args.horizons:
@@ -1703,7 +1889,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
                     f"    {name:<9} null mean {b['mean']:+.4f} sd {b['sd']:.4f} max {b['max']:+.4f}"
                     f"   |  observed {real:+.4f}  -> {verdict}"
                 )
-        print(f"  [control: known-EFFECT world, outcome planted on dvol_24]")
+        print("  [control: known-EFFECT world, outcome planted on dvol_24]")
         eff = control_effect(states, horizon=horizon, k=args.k, adjusted=args.adjusted)
         if "error" not in eff:
             print(
@@ -1716,7 +1902,10 @@ def cmd_hypothesis(args: argparse.Namespace) -> None:
     states = load_panel()
     for horizon in args.horizons:
         res = hypothesis_test(states, horizon=horizon, adjusted=args.adjusted)
-        print(f"\n### lead/lag, horizon {horizon}h, {'market-adjusted' if args.adjusted else 'raw SOL'} forward returns")
+        print(
+            f"\n### lead/lag, horizon {horizon}h, "
+            f"{'market-adjusted' if args.adjusted else 'raw SOL'} forward returns"
+        )
         if "error" in res:
             print("  " + res["error"])
             continue
@@ -1726,7 +1915,10 @@ def cmd_hypothesis(args: argparse.Namespace) -> None:
             lo, hi = r["ci95"]
             sig = "" if (math.isnan(lo) or lo <= 0 <= hi) else "  *"
             print(f"    Spearman({name:<18}, fwd) = {r['spearman']:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]{sig}")
-        print(f"  divergence terciles (cuts from library: <{res['tercile_cuts']['low_below']:+.3f} / >{res['tercile_cuts']['high_above']:+.3f}):")
+        print(
+            f"  divergence terciles (cuts from library: <{res['tercile_cuts']['low_below']:+.3f} "
+            f"/ >{res['tercile_cuts']['high_above']:+.3f}):"
+        )
         for b in ("low", "mid", "high"):
             t = res["terciles"][b]
             print(
@@ -1734,7 +1926,10 @@ def cmd_hypothesis(args: argparse.Namespace) -> None:
                 f"  death rate (<= -20%) {t['death_rate']:.3f}"
             )
         for w in res["windows"]:
-            print(f"    window {w['from']}..{w['to']} n={w['n']:<4} Spearman(divergence) {w['spearman_divergence']:+.4f}  mean fwd {w['mean_fwd']:+.4f}")
+            print(
+                f"    window {w['from']}..{w['to']} n={w['n']:<4} Spearman(divergence) "
+                f"{w['spearman_divergence']:+.4f}  mean fwd {w['mean_fwd']:+.4f}"
+            )
 
 
 def cmd_cohort(args: argparse.Namespace) -> None:
@@ -1758,7 +1953,36 @@ def cmd_selftest(args: argparse.Namespace) -> None:
     print("    does not clear this band is not a finding. The band WIDENS as the cohort shrinks,")
     print("    so calibrate --mints to the cohort actually achieved before quoting it.")
     for name, b in null_band(synthetic_worlds(n_mints=args.mints, effect=0.0), horizon=72, k=args.k, seeds=args.seeds).items():
-        print(f"  {name:<9} mean {b['mean']:+.4f}  sd {b['sd']:.4f}  min {b['min']:+.4f}  max {b['max']:+.4f}")
+        print(
+            f"  {name:<9} mean {b['mean']:+.4f}  sd {b['sd']:.4f} "
+            f" min {b['min']:+.4f}  max {b['max']:+.4f}"
+        )
+
+
+def cmd_peers(args: argparse.Namespace) -> None:
+    fetcher = Fetcher(min_interval=args.interval)
+    targets = CLUSTER.items() if args.coin == "all" else [(args.coin, CLUSTER.get(args.coin, args.coin))]
+    for label, mint in targets:
+        res = peer_flow(fetcher, mint, label, n_peers=args.n, n_gt=args.gt)
+        print(f"\n=== {label}: sell pressure against scale-matched peers today ===")
+        if "error" in res:
+            print("  " + res["error"])
+            continue
+        print(f"  FDV ${res['fdv']:,.0f}; peers within 0.25x-4x FDV: {res['n_peers_tx']} (tx-level, >=30 txs/24h)"
+              f", {res['n_peers_wallet']} (wallet-level)")
+        print(
+            f"  TRANSACTION sell share {res['tx_sell_share']:.1%}  vs peer median "
+            f"{res['peer_tx_sell_share_median']:.1%}   -> {res['tx_sell_share_pctile']:.0f}th percentile"
+        )
+        if res["wallet_sell_share"] is not None:
+            print(
+                f"  WALLET      sell share {res['wallet_sell_share']:.1%}  vs peer median "
+                f"{res['peer_wallet_sell_share_median']:.1%}   -> {res['wallet_sell_share_pctile']:.0f}th percentile"
+            )
+            print(
+                f"  divergence (wallet - transaction) {res['divergence']:+.1%}  vs peer median "
+                f"{res['peer_divergence_median']:+.1%}   -> {res['divergence_pctile']:.0f}th percentile"
+            )
 
 
 def cmd_read(args: argparse.Namespace) -> None:
@@ -1798,6 +2022,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--k", type=int, default=40)
     p.add_argument("--seeds", type=int, default=8, help="zero-world control seeds (the null band)")
     p.add_argument(
+        "--threshold-pct",
+        type=float,
+        default=None,
+        help="define 'deteriorated' as a forward SOL return at or below this percent (default -20)",
+    )
+    p.add_argument(
         "--adjusted",
         action="store_true",
         help="score against MARKET-ADJUSTED forward returns (coin minus contemporaneous cohort "
@@ -1813,6 +2043,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     p = sub.add_parser("cohort")
     p.set_defaults(func=cmd_cohort)
+
+    p = sub.add_parser("peers")
+    p.add_argument("coin", nargs="?", default="all")
+    p.add_argument("--n", type=int, default=60, help="scale-matched peers for transaction-level flow")
+    p.add_argument("--gt", type=int, default=12, help="peers to also pull WALLET-level flow for (1 GT call each)")
+    p.set_defaults(func=cmd_peers)
 
     p = sub.add_parser("selftest")
     p.add_argument("--k", type=int, default=40)
