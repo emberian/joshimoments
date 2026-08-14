@@ -345,8 +345,8 @@ def untouched_pool_tx(signature: str = sig("untouched")) -> dict[str, Any]:
 WEAVE_SOL_DLMM = "77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu"
 
 
-def test_pool_table_matches_the_seven_addresses_and_their_verified_pairs() -> None:
-    assert len(CLUSTER_POOLS) == 7
+def test_pool_table_matches_the_eleven_addresses_and_their_verified_pairs() -> None:
+    assert len(CLUSTER_POOLS) == 11
     assert {p.address for p in CLUSTER_POOLS} == {
         WEAVE_SOL,
         NOSIS_SOL,
@@ -357,7 +357,19 @@ def test_pool_table_matches_the_seven_addresses_and_their_verified_pairs() -> No
         # Added after the network map resolved the LP wallet from the tape's own claim_fee
         # payer and found we provide liquidity to an edge the recorder was not watching.
         WEAVE_SOL_DLMM,
+        # Added after the edge-creation study found four more pools the desk opened or
+        # traded that this table did not contain. A8ga6XM3 and GxnCwxTi are the SAME pair
+        # at different fee tiers (0.20% and 5.00%) — the fee is part of the pool's identity
+        # here, not a property of the pair.
+        "5fJBZY6hCG3ykS2nNCJCXXrFtgcGSDByGccq4ucVea9i",
+        "9M1oU7cvRKiNo3e6iuCnApVe5RYehQ9RNv5dhtiKTrA7",
+        "A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG",
+        "GxnCwxTiK1uNQ1GiNutopyaRxH9X14JEvh6uaMwxuDRM",
     }
+    # Two pools, one pair, different tiers: neither the pair nor the venue is the identity.
+    assert pool_for("A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG").mints == pool_for(
+        "GxnCwxTiK1uNQ1GiNutopyaRxH9X14JEvh6uaMwxuDRM"
+    ).mints
     assert pool_for(WEAVE_SOL_DLMM).mints == frozenset({WEAVE, WSOL_MINT})
     assert pool_for(WEAVE_SOL_DLMM).dex == "meteora_dlmm"
     assert pool_for(WEAVE_SOL_DLMM).replay_sufficient_reserves is False

@@ -138,6 +138,16 @@ CLUSTER_POOLS: Final[tuple[PoolSpec, ...]] = (
     # "not watching", an unknown rather than a zero. An unwatched edge of ours is the worst
     # blind spot available: we earn the diode drop on it and could not see the current.
     _meteora("77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu", "weave/SOL (DLMM)", WEAVE, WSOL_MINT),
+    # Added 2026-08-14: the edge-creation study found four MORE pools the desk has opened or
+    # traded that this table did not contain — the same blind spot as the weave/SOL DLMM above,
+    # four times over. Pair and fee tier resolved from the Meteora pool API per address.
+    # A8ga6XM3 is the instructive one: weave/DREGG at 0.20%, eleven times CHEAPER than the
+    # two-hop route it was meant to undercut, and it captured zero direct trades and now shows
+    # no volume. Cheapness is not what makes a token-token pool earn.
+    _meteora("5fJBZY6hCG3ykS2nNCJCXXrFtgcGSDByGccq4ucVea9i", "nosis/weave (2nd)", NOSIS, WEAVE),
+    _meteora("9M1oU7cvRKiNo3e6iuCnApVe5RYehQ9RNv5dhtiKTrA7", "weave/SOLVE", WEAVE, SOLVE),
+    _meteora("A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG", "weave/DREGG (0.2%)", WEAVE, DREGG),
+    _meteora("GxnCwxTiK1uNQ1GiNutopyaRxH9X14JEvh6uaMwxuDRM", "weave/DREGG (5%)", WEAVE, DREGG),
 )
 
 POOLS_BY_ADDRESS: Final[dict[str, PoolSpec]] = {p.address: p for p in CLUSTER_POOLS}
