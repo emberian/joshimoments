@@ -40,7 +40,8 @@ def test_friction_is_u_shaped_with_minimum_at_b_star() -> None:
     b_star = optimal_size_lamports(
         y, priority_fee_lamports=PRIO, bankroll_cap_lamports=10 * SOL
     )
-    at = lambda b: round_trip_friction(b, y, swap_fee_bps=100, priority_fee_lamports=PRIO)
+    def at(b: int) -> object:
+        return round_trip_friction(b, y, swap_fee_bps=100, priority_fee_lamports=PRIO)
     assert at(b_star) < at(b_star // 4)
     assert at(b_star) < at(b_star * 4)
 

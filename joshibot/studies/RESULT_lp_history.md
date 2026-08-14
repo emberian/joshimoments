@@ -98,29 +98,70 @@ different cut with clearly-stated exclusions.
 
 ---
 
-## The survival filter: no failures yet
+## The survival filter — CORRECTED, and my first version was wrong
 
-The operator's claimed edge is not price prediction but *filtering for tokens that will not die* —
-which is the correct thing to filter for, because a short-gamma LP position is killed by a leg
-going to zero, not by ordinary volatility.
+**This section originally reported "of 12 tokens: 9 alive, 3 dying, ZERO dead" and called it a
+real signal. That was wrong on both the numerator and the denominator, in the flattering
+direction, because of a survivorship bias I introduced myself.** The control-arm lane caught it.
 
-Of 12 tokens this wallet has held or LP'd:
+**The denominator was a slice, not a criterion.** `scripts/lp/survival.py` did
+`mints.most_common(20)[:12]` — a rank by how many times the wallet touched a mint, truncated to
+twelve. Touch count correlates with how long the operator kept trading a token, which correlates
+with the token still being alive. So the "population" was selected on the outcome being
+measured. It is exactly the survivorship bias this project has spent two days finding in other
+people's work, committed in a survival analysis, by me.
 
-| status | count | tokens |
+**The numerator was wrong too.** There IS a dead token:
+`xNgLkoEHKxPhdo8Z3CANniWXsvcw6MuAeNyNg4aHoNn`, held 12.9 hours on 2026-07-24, with no DEX pair
+anywhere. And `Hqhumk…pump` (Greenland) is dead on the thresholds this document itself
+stated — $3,310 liquidity on **$44** of 24h volume.
+
+Corrected, over the 21 mints held ≥60 seconds: **18 survive, 3 dead.**
+
+| | original claim | corrected |
 |---|---|---|
-| alive | 9 | DREGG, weave, nosis, CASH, SOLVE, Nick.exe, SPCX, Jimothy, SalaryCa |
-| dying | 3 | MATH ($4.7k liq), Greenlan ($3.3k liq, $62/24h vol), a second "nosis" ($1.4k liq) |
-| dead / delisted | **0** | — |
+| tokens touched | 12 | **24** (21 held ≥60s) |
+| dead | 0 | **3** |
+| selection | `most_common(20)[:12]` | all mints, no outcome-correlated ranking |
 
-**Nothing rugged.** Three are dying but none went to zero, and the operator had already *exited*
-MATH (three sell legs, 1.87M tokens for 3.586 SOL, no buys in the window) before it decayed to a
-$4,981 FDV.
+### And the filter does not survive a control arm
 
-Against a population base rate where ~60% of these tokens live under a day, 12 for 12 on survival
-is a real signal — with the honest caveat that 12 is a small sample and 27 days is a short window,
-so this is consistent with a working filter but does not yet distinguish skill from a benign month.
+The control lane built the counterfactual: all 43,249 pump.fun graduations over the window, a
+complete on-chain census. Against a properly age-matched null the arm scores 13 of 14 where
+8.93 were expected, one-sided exact **p = 0.0020** — which clears its pre-registered threshold.
 
----
+But it does not hold anywhere else. Move "dead" from <$1k to <$5k liquidity and **p = 0.2299**.
+Count "dying" as failure and **p = 0.2300**. Leave out the single best pick and **p = 0.0131**,
+above the Bonferroni bar. Effective n is 10, not 14.
+
+**And the decisive finding: a screen with no social information at all reproduces the record.**
+Because the operator does not buy fresh graduates — median token age at entry is **5.0 days** —
+the relevant null is conditional survival from that age. A rule reading "only buy graduates
+already ≥14 days old" expects **12.64 survivors of 14**. The operator got 13.
+
+The size confound cannot be doing the work (96.2% of graduations deposit an identical
+206,900,000 tokens, so size is matched by construction, and time-on-curve does not separate:
+33 min versus 6 min, permutation p = 0.74). But age at entry does all of it. **Verdict:
+INDISTINGUISHABLE** — the filter is not refuted, it is unmeasured, and "the team is real" has
+not been shown to beat "the token is a fortnight old."
+
+The most useful number the lane produced is the power curve, because it says what to change:
+
+| entry age | P(survive) | picks needed for significance |
+|---|---|---|
+| at graduation | 0.046 | 1 |
+| ≥3 days | 0.272 | 3 |
+| ≥7 days | 0.430 | 4 |
+| ≥14 days | 0.878 | 24 |
+| ≥30 days | 1.000 | never |
+
+**Buying where the population is still dying is what makes the record informative.** The same
+number of picks is worth 3 positions of evidence at a 3-day entry age and 24 at a 14-day one.
+
+### Also corrected
+
+The ladder table above had its symbols swapped: `XkeTXo1125vz…pump` is **DREGG**, not weave.
+weave is `8PecVc…pump`. The flow figures are unaffected; the labels were wrong.
 
 ## Incidental finding worth a look
 

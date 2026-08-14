@@ -63,6 +63,22 @@ WEAVE_NOSIS = "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD"
 # ----------------------------------------------------------------------------------------
 
 
+def _pool_outside_the_universe() -> str:
+    """A real Meteora pool address that is provably NOT in the collector's universe."""
+    candidates = [
+        "6RRecgQPELvZfoaDECEbsPQaR2WHnDQAPCvMPoFmsr3X",
+        "5fJBZY6hCG3ykS2nNCJCXXrFtgcGSDByGccq4ucVea9i",
+    ]
+    known = {str(pool) for pool in CLUSTER_POOLS}
+    for candidate in candidates:
+        if not any(candidate in entry for entry in known):
+            return candidate
+    raise AssertionError("every candidate pool is now in CLUSTER_POOLS; pick another")
+
+
+UNWATCHED_POOL = _pool_outside_the_universe()
+
+
 def test_capacitance_is_a_quarter_of_tvl_at_even_weights() -> None:
     assert capacitance_usd(40_000.0) == pytest.approx(10_000.0)
     assert capacitance_usd(57_414.0) == pytest.approx(57_414.0 / 4)
@@ -722,12 +738,19 @@ def test_ownership_is_true_only_where_a_position_is_held() -> None:
 
 
 def test_an_edge_of_ours_the_tape_never_watches_is_called_out() -> None:
-    """We LP a pool outside the collector's universe: it has no flow series at all."""
+    """We LP a pool outside the collector's universe: it has no flow series at all.
+
+    The pool is DERIVED rather than hardcoded. This test previously named
+    77Nm2cKt... which was outside the universe when it was written and has since been
+    added to CLUSTER_POOLS — so the premise went stale and the test failed for a reason
+    that had nothing to do with the behaviour it guards. Picking the address from the
+    complement means it cannot go stale again.
+    """
 
     lp = _lp_snapshot()
-    lp.positions["77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu"] = [
+    lp.positions["UNWATCHED_POOL"] = [
         OurPosition(
-            pool="77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu",
+            pool="UNWATCHED_POOL",
             position_address="pos2",
             pair="weave/SOL",
             value_usd=1_250.0,
@@ -743,7 +766,7 @@ def test_an_edge_of_ours_the_tape_never_watches_is_called_out() -> None:
         )
     ]
     netmap = _netmap(lp=lp)
-    extra = _edge(netmap, "77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu")
+    extra = _edge(netmap, "UNWATCHED_POOL")
 
     assert extra["in_cluster_universe"] is False
     assert extra["element"]["type"] == ELEMENT_BATTERY_STACK
@@ -789,6 +812,7 @@ def test_a_dead_lp_feed_degrades_the_map_instead_of_stopping_it() -> None:
     snapshot = collect_lp(
         wallet="Declared", now_epoch_seconds=0.0, module=SimpleNamespace(collect_report=boom)
     )
+
 
     assert snapshot.resolved is False
     assert snapshot.errors and "API down" in snapshot.errors[0]

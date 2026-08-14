@@ -58,6 +58,8 @@ class EventKind(StrEnum):
     RESERVE = "reserve"
     CALLOUT = "callout"
     MIGRATION = "migration"
+    BIN_SWAP = "bin_swap"
+    LIQUIDITY = "liquidity"
     WATCH = "watch"
 
 
@@ -461,7 +463,118 @@ class Callout:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class BinSwap:
+    """One swap through a bin-based AMM (Meteora DLMM), with the fee state that priced it.
+
+    Two fields here exist for reasons that are not obvious and are worth stating, because a
+    recorder that drops them makes whole questions unanswerable after the fact.
+
+    **``active_id_before``/``active_id_after`` give the bins crossed.** In a bin AMM the
+    adverse-selection cost is not a smooth variance drip — it is an atom at each bin crossing,
+    and the crossing count is the thing that scales it. Storing a price instead of the active
+    bin loses this: prices inside one bin are all the same trade, and prices across ten bins
+    are ten separate fills.
+
+    **``volatility_accumulator`` and ``volatility_reference`` are the fee's state machine.**
+    Meteora's variable fee is proportional to ``(accumulator x bin_step)**2``, and the
+    reference DECAYS between ``filter_period`` and ``decay_period`` and RESETS to zero beyond
+    it. That creates a specific, testable failure mode: a slow monotonic drift crosses many
+    bins while spaced out enough that the accumulator keeps resetting, so the position earns
+    near-base fees while incurring full adverse selection — which is exactly the one-directional
+    decay that hurts a memecoin LP most. Recording the accumulator at each swap is the only way
+    to check whether that happened; reconstructing it later from prices is not possible, because
+    the reset depends on inter-arrival times the price series does not carry.
+    """
+
+    pool: str
+    active_id_before: int
+    active_id_after: int
+    bin_step: int
+    amount_in_raw: int
+    amount_out_raw: int
+    swap_for_y: bool
+    fee_raw: int = 0
+    protocol_fee_raw: int = 0
+    volatility_accumulator: int | None = None
+    volatility_reference: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pool", _mint(self.pool, field="pool"))
+        _require(self.bin_step > 0, "bin_step must be positive")
+        for field_name in ("amount_in_raw", "amount_out_raw", "fee_raw", "protocol_fee_raw"):
+            object.__setattr__(
+                self, field_name, _raw(getattr(self, field_name), field=field_name)
+            )
+
+    @property
+    def bins_crossed(self) -> int:
+        """How many bin boundaries this swap traversed. The adverse-selection scale."""
+        return abs(self.active_id_after - self.active_id_before)
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "pool": self.pool,
+            "active_id_before": self.active_id_before,
+            "active_id_after": self.active_id_after,
+            "bin_step": self.bin_step,
+            "amount_in_raw": str(self.amount_in_raw),
+            "amount_out_raw": str(self.amount_out_raw),
+            "swap_for_y": self.swap_for_y,
+            "fee_raw": str(self.fee_raw),
+            "protocol_fee_raw": str(self.protocol_fee_raw),
+        }
+        # Omitted rather than zeroed when unobserved: a zero accumulator is a MEANINGFUL
+        # value (it is what a reset produces), so defaulting to it would fabricate exactly
+        # the observation the reset study is trying to detect.
+        if self.volatility_accumulator is not None:
+            out["volatility_accumulator"] = self.volatility_accumulator
+        if self.volatility_reference is not None:
+            out["volatility_reference"] = self.volatility_reference
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class LiquidityChange:
+    """Liquidity added to or removed from a position's bin range.
+
+    Signed: positive is added, negative is removed. This is the holdings time series that the
+    loss-versus-rebalancing identity needs — ``LP PnL - rebalancing PnL = fees - LVR`` requires
+    only the LP's risky-asset holdings over time and a reference price, and this is the first half.
+    """
+
+    pool: str
+    position: str
+    lower_bin_id: int
+    upper_bin_id: int
+    delta_x_raw: int
+    delta_y_raw: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pool", _mint(self.pool, field="pool"))
+        object.__setattr__(self, "position", _mint(self.position, field="position"))
+        _require(self.lower_bin_id <= self.upper_bin_id, "lower_bin_id exceeds upper_bin_id")
+        for field_name in ("delta_x_raw", "delta_y_raw"):
+            object.__setattr__(
+                self,
+                field_name,
+                _raw(getattr(self, field_name), field=field_name, allow_negative=True),
+            )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "pool": self.pool,
+            "position": self.position,
+            "lower_bin_id": self.lower_bin_id,
+            "upper_bin_id": self.upper_bin_id,
+            "delta_x_raw": str(self.delta_x_raw),
+            "delta_y_raw": str(self.delta_y_raw),
+        }
+
+
 _BODY_TYPES: Final[dict[EventKind, type]] = {
+    EventKind.BIN_SWAP: BinSwap,
+    EventKind.LIQUIDITY: LiquidityChange,
     EventKind.LAUNCH: Launch,
     EventKind.TRADE: Trade,
     EventKind.RESERVE: Reserves,
@@ -491,7 +604,8 @@ class TapeEvent:
         )
         # A trade or reserve reading without a chainstamp cannot be ordered against other
         # events, and unordered events silently corrupt every downstream rolling statistic.
-        if self.kind in {EventKind.TRADE, EventKind.RESERVE, EventKind.MIGRATION}:
+        if self.kind in {EventKind.TRADE, EventKind.RESERVE, EventKind.MIGRATION,
+                         EventKind.BIN_SWAP, EventKind.LIQUIDITY}:
             _require(self.chain is not None, f"{self.kind} requires a chainstamp")
 
     @property
@@ -751,6 +865,29 @@ def _body_from_json(kind: EventKind, raw: Mapping[str, Any]) -> Any:
             posted_at=raw.get("posted_at"),
             author_followers=parse_amount(raw.get("author_followers", 0), field="author_followers"),
             engagement=parse_amount(raw.get("engagement", 0), field="engagement"),
+        )
+    if kind is EventKind.BIN_SWAP:
+        return BinSwap(
+            pool=str(raw["pool"]),
+            active_id_before=int(raw["active_id_before"]),
+            active_id_after=int(raw["active_id_after"]),
+            bin_step=int(raw["bin_step"]),
+            amount_in_raw=parse_amount(raw["amount_in_raw"], field="amount_in_raw"),
+            amount_out_raw=parse_amount(raw["amount_out_raw"], field="amount_out_raw"),
+            swap_for_y=bool(raw["swap_for_y"]),
+            fee_raw=parse_amount(raw.get("fee_raw", 0), field="fee_raw"),
+            protocol_fee_raw=parse_amount(raw.get("protocol_fee_raw", 0), field="protocol_fee_raw"),
+            volatility_accumulator=raw.get("volatility_accumulator"),
+            volatility_reference=raw.get("volatility_reference"),
+        )
+    if kind is EventKind.LIQUIDITY:
+        return LiquidityChange(
+            pool=str(raw["pool"]),
+            position=str(raw["position"]),
+            lower_bin_id=int(raw["lower_bin_id"]),
+            upper_bin_id=int(raw["upper_bin_id"]),
+            delta_x_raw=parse_amount(raw["delta_x_raw"], field="delta_x_raw"),
+            delta_y_raw=parse_amount(raw["delta_y_raw"], field="delta_y_raw"),
         )
     if kind is EventKind.WATCH:
         reason = raw.get("close_reason")
