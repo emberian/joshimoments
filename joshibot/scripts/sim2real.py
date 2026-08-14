@@ -178,15 +178,23 @@ def main() -> None:
         print(f"  median is {ratio:.2f}x the shadow assumption"
               f"  ({'shadow OVERSTATES' if ratio < 1 else 'shadow UNDERSTATES'} fee drag)")
 
-    print("\n--- 3. LANDING RATE  (shadow has NO failure model: assumes every send lands) ---")
-    print(f"  {'pool':<14}{'landed':>8}{'failed':>8}{'rate':>8}   friction multiplier if we fail alike")
+    print("\n--- 3. LANDING RATE  ***RETRACTED — DO NOT USE THESE NUMBERS*** ---")
+    print("  Two independent studies found this statistic broken, in two separate ways:")
+    print("   (a) the DENOMINATOR drops every `reference` row, but those are SUCCESSES —")
+    print("       routers carrying the pool in a lookup table and filling elsewhere;")
+    print("   (b) the NUMERATOR overcounts, because a failed transaction moved nothing, so")
+    print("       balances cannot distinguish 'tried to trade THIS pool' from 'was in the")
+    print("       account list of something that failed elsewhere'. Measured ~24x overcount.")
+    print("  Also: 96.1% of the 'failures' are private arb programs designed to abort when the")
+    print("  arb evaporates, which is a successful no-op for them, not a failed trade.")
+    print("  Corrected estimate for a transaction shaped like OURS: 95-97% landing.")
+    print("  Separating these needs log_messages (~3.1 GB/day via BigQuery); until then the")
+    print("  honest report is the raw counts, unnormalised, with no rate derived from them:")
+    print(f"  {'pool':<14}{'landed':>8}{'err-rows':>10}   (ratio deliberately NOT shown)")
     for label, d in out["landing"].items():
         if d["landed_rate"] is None:
             continue
-        mult = 1 / d["landed_rate"] if d["landed_rate"] else float("inf")
-        print(f"  {label:<14}{d['swap']:>8}{d['attempt']:>8}{d['landed_rate']*100:>7.0f}%   {mult:>5.2f}x")
-    print("  NOTE: these are OTHER people's landing rates, including routers quoting pools they")
-    print("  never intended to hit. Ours would differ. It is a prior, not our number.")
+        print(f"  {label:<14}{d['swap']:>8}{d['attempt']:>10}")
 
     if cus:
         c = out["compute_units"]
