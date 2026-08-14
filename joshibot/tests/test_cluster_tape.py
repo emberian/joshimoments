@@ -342,8 +342,11 @@ def untouched_pool_tx(signature: str = sig("untouched")) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------
 
 
-def test_pool_table_matches_the_six_addresses_and_their_verified_pairs() -> None:
-    assert len(CLUSTER_POOLS) == 6
+WEAVE_SOL_DLMM = "77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu"
+
+
+def test_pool_table_matches_the_seven_addresses_and_their_verified_pairs() -> None:
+    assert len(CLUSTER_POOLS) == 7
     assert {p.address for p in CLUSTER_POOLS} == {
         WEAVE_SOL,
         NOSIS_SOL,
@@ -351,7 +354,17 @@ def test_pool_table_matches_the_six_addresses_and_their_verified_pairs() -> None
         "BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr",
         WEAVE_NOSIS,
         DREGG_NOSIS,
+        # Added after the network map resolved the LP wallet from the tape's own claim_fee
+        # payer and found we provide liquidity to an edge the recorder was not watching.
+        WEAVE_SOL_DLMM,
     }
+    assert pool_for(WEAVE_SOL_DLMM).mints == frozenset({WEAVE, WSOL_MINT})
+    assert pool_for(WEAVE_SOL_DLMM).dex == "meteora_dlmm"
+    assert pool_for(WEAVE_SOL_DLMM).replay_sufficient_reserves is False
+    # Same pair as the pumpswap weave/SOL pool, different venue: the address is the identity,
+    # never the pair, or the two would collide in POOLS_BY_ADDRESS.
+    assert pool_for(WEAVE_SOL_DLMM).mints == pool_for(WEAVE_SOL).mints
+    assert pool_for(WEAVE_SOL_DLMM).address != pool_for(WEAVE_SOL).address
     # The scratchpad behind RESULT_swing_cluster.md has weave and SOLVE transposed; this
     # pairing is the on-chain one, read from each pool's own vault mints.
     assert pool_for(WEAVE_SOL).mints == frozenset({WEAVE, WSOL_MINT})

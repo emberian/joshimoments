@@ -132,6 +132,12 @@ CLUSTER_POOLS: Final[tuple[PoolSpec, ...]] = (
     _pumpswap("BQHANwBnoo3tUKCQT8PjjhgJyxnVbgXL3AQuCPSYpnzr", "SOLVE/SOL", SOLVE),
     _meteora("QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD", "weave/nosis", WEAVE, NOSIS),
     _meteora("FNxnyS3hkVJDUvQmP9LYGLUg9icvc7n4ZwTTQ3R1vtJD", "DREGG/nosis", DREGG, NOSIS),
+    # Added 2026-08-13: the network map found this one by resolving the LP wallet from the
+    # tape's own claim_fee payer and asking the Meteora API what else it holds. It is an edge
+    # WE PROVIDE LIQUIDITY TO that the recorder was not watching — so its flow rendered as
+    # "not watching", an unknown rather than a zero. An unwatched edge of ours is the worst
+    # blind spot available: we earn the diode drop on it and could not see the current.
+    _meteora("77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu", "weave/SOL (DLMM)", WEAVE, WSOL_MINT),
 )
 
 POOLS_BY_ADDRESS: Final[dict[str, PoolSpec]] = {p.address: p for p in CLUSTER_POOLS}
