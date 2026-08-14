@@ -349,7 +349,7 @@ relationship in the panel. It is also modest — a Spearman of 0.105 is a hint, 
 worth stating plainly since the first two are the components of the refuted divergence
 statistic.
 
-### 5.3 The kNN instrument: real skill on tail risk, none on expected return
+### 5.3 The kNN instrument: real skill on tail risk, not on expected return
 
 | | 24h horizon | 72h horizon |
 |---|---|---|
