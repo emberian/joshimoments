@@ -292,12 +292,14 @@ source of truth that drifts.
 
 ## Cost curve — decide by what you need to backtest
 
-Per-day scan cost is column-driven and independent of pool count: **~27 GB/day** on a normal-sized
-day (measured 26.98 GB), ~58 GB on a double-sized one, plus ~3.9 GB/day of preflight.
+Per-day scan cost is column-driven and **independent of how many pools you ask for**: all 12 vaults
+for a normal-sized day estimate at **22.83 GB** (measured by `--dry-run` on 2026-08-11), rising to
+58.03 GB on the double-sized 2026-08-12, plus **3.85 GB/day** of preflight. A full 22-day sweep is
+therefore ~502 GB of pull + ~85 GB of preflight ≈ **587 GB — inside the 1 TiB/month free tier**.
 
 | what you want | source | cost | what you can backtest |
 |---|---|---|---|
-| 22 days, summary-grade | BigQuery | ~680 GB scanned → **$0 in free tier** (~$3.87 on-demand) | **almost nothing — only ~1 day of 22 is loaded** |
+| 22 days, summary-grade | BigQuery | ~587 GB scanned → **$0 in free tier** (~$3.34 on-demand) | **almost nothing — only ~1 day of 22 is loaded** |
 | 1 loaded day, summary-grade | BigQuery | 58 GB → **$0.33 / $0 free** | flow, volume, trader attribution, inter-pool timing |
 | 22 days, summary-grade, *actually complete* | Dune / Flipside | not yet priced | same as above, over the full window |
 | 22 days, replay-grade | RPC backfill | **206% of the monthly Helius plan** | fills, impact, slippage, execution policy |
