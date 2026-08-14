@@ -301,6 +301,27 @@ The instrument that works is already in the tape: the percentiles of the bids th
 | weave/SOL | 296 | 25,000 | 151,813 | 729,071 | 2,500,374 |
 | **ALL** | 1,320 | 30,000 | 158,832 | 734,651 | 3,023,760 |
 
+### Local fee markets, visible in our own bid ladder
+
+The Solana-specific fact is that congestion is priced **per writable account**, not globally: a
+transaction competes for a block-level compute budget *and* for a per-account cap, so a hot pool
+develops its own fee market while the rest of the network is quiet. Our four pools are traded in
+the same blocks by the same population, so the ladder above is a controlled comparison:
+
+| pool | active in | landed-bid p50 | p75 |
+|---|---|---|---|
+| nosis/SOL | **17.9%** of slots | **229,249** | 1,056,415 |
+| weave/SOL | 1.5% | 151,813 | 729,071 |
+| DREGG/SOL | 0.2% | 157,159 | 500,000 |
+| SOLVE/SOL | 0.1% | **53,805** | 263,157 |
+
+**The busiest pool clears at 4.3× the quietest, at the same instants on the same chain.** That is
+why a single global fee number — whatever its source — is the wrong shape for this decision, and why
+§8's rule reads the p75 *per pool*.
+
+*Caveat:* activity and bid are jointly determined by whatever makes a pool interesting, so this is a
+correlation across four pools, not an identified effect of contention on the clearing price.
+
 ### What it costs (at a 160,000 CU limit, SOL=$75.75)
 
 | cu_price | fee lamports | fee $ | bps of $9 | bps of $50 | bps of $150 |
@@ -544,10 +565,24 @@ and someone will take it; below it, no setting matters.
 
 ### Sizing interaction
 `B* = sqrt(priority × Y)` (`shitcoims_scalper/policy.py:97`) is sensitive to the priority-fee
-constant, which the shadow model sets to 500,000 lamports. Our measured median network fee is
-**55,000** and the policy above budgets 21,000–53,000. At Y = 100 SOL that moves B* from 0.22 SOL
-to **0.046–0.073 SOL** — a 3–5× reduction in optimal clip. That is a real consequence of this study
-for `shitcoims_scalper`, and it is not mine to change.
+constant, which the shadow model sets to **500,000 lamports**. The tape's measured median network
+fee is **55,000**, and the policy above budgets **21,000–53,000**. At Y = 100 SOL that moves B*
+from 0.224 SOL (**$16.94**) to **0.046–0.073 SOL ($3.47–$5.51)** — a 3–5× reduction.
+
+Two things follow, and both are for `shitcoims_scalper`, not this study:
+
+1. The friction optimum at an honest priority fee is **below the $9 floor** the clip range assumes.
+   Either the floor is doing work the friction model does not know about (operational overhead,
+   minimum meaningful position) — in which case say so — or the sizing constant is simply stale.
+2. `B*` and the sandwich threshold `φ·Y` diverge as `Y` grows: `B*` scales as `√Y`, the attack
+   floor as `Y`. They cross at `Y = priority/φ²`, which for a 21,000-lamport fee at φ = 25 bps is
+   **3.4 SOL** — below any pool worth trading. So on every pool we would touch, **sizing at the
+   friction optimum already puts us under the sandwich threshold**, and the two constraints never
+   have to be traded off. At Y = 100 SOL: B* = 0.046 SOL against a 0.253 SOL attack floor; at
+   Y = 382: 0.090 against 0.956. The sandwich exposure in §5.1 appears only at the *stated* $9–$150
+   clip range, which at Y = 100 SOL sits **2.6× to 43× above B\***. Whether that range or the
+   friction optimum is the right target is a `shitcoims_scalper` question; this study only notes
+   that the sandwich risk lives entirely in the gap between them.
 
 ### Expected landing rate
 **95–97%.** Direct-AMM above the cliff measures 95.6% (est. 631 vs 29, raw n=223); Jupiter above the
