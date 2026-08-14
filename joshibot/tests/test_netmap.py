@@ -721,6 +721,36 @@ def test_ownership_is_true_only_where_a_position_is_held() -> None:
     assert "other wallets are not searched" in _edge(netmap, WEAVE_SOL)["ours"]["basis"]
 
 
+def test_an_edge_of_ours_the_tape_never_watches_is_called_out() -> None:
+    """We LP a pool outside the collector's universe: it has no flow series at all."""
+
+    lp = _lp_snapshot()
+    lp.positions["77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu"] = [
+        OurPosition(
+            pool="77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu",
+            position_address="pos2",
+            pair="weave/SOL",
+            value_usd=1_250.0,
+            unclaimed_fees_usd=0.0,
+            claimed_fees_usd=0.0,
+            lifetime_fees_usd=0.0,
+            in_range=False,
+            age_days=1.0,
+            fee_rate_per_day=0.0,
+            rate_is_thin=False,
+            token_amounts={WEAVE: 9_000_000.0, WSOL_MINT: 0.5},
+            token_usd={WEAVE: 1_200.0, WSOL_MINT: 38.0},
+        )
+    ]
+    netmap = _netmap(lp=lp)
+    extra = _edge(netmap, "77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu")
+
+    assert extra["in_cluster_universe"] is False
+    assert extra["element"]["type"] == ELEMENT_BATTERY_STACK
+    assert extra["flow"]["evidence"] == EVIDENCE_NOT_WATCHING
+    assert any("does not watch at all" in warning for warning in netmap["warnings"])
+
+
 def test_inventory_is_reported_as_a_lower_bound_from_lp_positions() -> None:
     netmap = _netmap(lp=_lp_snapshot())
     weave = next(node for node in netmap["nodes"] if node["mint"] == WEAVE)

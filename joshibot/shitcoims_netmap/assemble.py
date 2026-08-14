@@ -811,6 +811,18 @@ def _warnings(
                 f"(chosen {_money(edge.tvl_usd)} from {edge.tvl_source}) — capacitance is only as "
                 "good as this number"
             )
+    unwatched_ours = [
+        e.label
+        for e in edges
+        if e.tape is None and e.ownership is not None and e.ownership.get("is_ours")
+    ]
+    if unwatched_ours:
+        notes.append(
+            "we hold LP on edge(s) the cluster tape does not watch at all: "
+            + ", ".join(unwatched_ours)
+            + " — no flow, no attempt rate and no reserve path exists for them until the "
+            "collector's pool set includes them"
+        )
     for error in prices.errors:
         notes.append(f"price feed: {error}")
     if lp is None or not lp.resolved:
