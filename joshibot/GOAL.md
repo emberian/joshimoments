@@ -199,9 +199,15 @@ audit found **25 of 60 mutations surviving**. Fixed so far:
 - **Kernel F7** — an oracle `err` from a LIVE binary became a `pytest.skip`. `OracleRejected`
   is now a distinct exception that must never be skipped.
 
+**Harness backlog CLOSED (2026-08-14):** C-3 (empty train sets), C-4 (constant DR model),
+C-13/C-14 (unasserted ledger totals, tautological unorderable-event test), C-16 (silent
+degenerate folds) and C-17 (unpinned ordering/embargo/label boundaries) are fixed, 27/27
+mutations killed. `assert_no_leakage` now refuses an empty train or test set structurally, and
+`walk_forward` raises `DegenerateFoldError` rather than returning a fold that certifies
+nothing. Closing them surfaced a method-level defect: **mutation testing lies by default**
+unless `__pycache__` is cleared between steps — see SWARM.md.
+
 **Still open, recorded not fixed:** Lean F5 (N is verified arithmetic, not a cardinality
 theorem; the type is infinite), F6 (no fee in the fill model; `afterSell` dead), F8/F9/F10;
-harness C-3 (three split tests run on fixtures where every fold's train set is EMPTY), C-4
-(the DR test's model is constant — the one shape that cannot catch its bug), C-5, C-7..C-20;
 tape audit's 20 findings including the tri-state destroyed on the READ path, cross-source
 dedupe not working, and signal #1's "null deletes 100%" not being what the code measures.
