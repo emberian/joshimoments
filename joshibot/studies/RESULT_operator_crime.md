@@ -1,6 +1,7 @@
 # RESULT: operator crime — the blind zone was never about the unit of analysis
 
-*Study code: `studies/operator_crime.py`. Controls: `tests/test_operator_crime.py`.
+*Study code: `studies/operator_crime.py`, `studies/operator_crime_discriminators.py`,
+`studies/operator_crime_benford_strat.py`. Controls: `tests/test_operator_crime.py`.
 Artifacts: `studies/data/operator_crime/` (gitignored). Corpus: `state/bulk_pump/raw/`,
 2026-08-05 .. 2026-08-14. Run 2026-08-15. **Spend: $0.00** — no BigQuery, no vendor API, no
 Helius calls; every number below comes from parquet already on disk.*
@@ -18,6 +19,11 @@ uv run --group research python -m studies.operator_crime graph  --n-null 100 --m
 uv run --group research python -m studies.operator_crime predict
 uv run --group research python -m studies.operator_crime risks
 uv run --group research python -m studies.operator_crime screen
+uv run --group research python -m studies.operator_crime tape      # for the discriminators
+uv run --group research python studies/operator_crime_discriminators.py \
+    --tape studies/data/operator_crime/tape.parquet \
+    --cohort studies/data/operator_crime/cohort.parquet \
+    --out studies/data/operator_crime/discriminators --tag final10d
 ```
 
 ---
@@ -63,6 +69,15 @@ full pump.fun flow says:
    "This deployer has never dumped before" is a **RISK** factor, not a safety factor: those
    coins collapse at **1.71×** the base rate. A clean record is mostly indistinguishable from
    no record, and no record means a first-timer.
+
+7. **Three of the four cheap discriminators are nulls, and two of them are nulls for a reason
+   worth keeping.** NCD does cluster same-deployer coins — but 63% of the effect survives
+   shuffling each tape's order, so it is a **size-histogram fingerprint, not a sequence one**.
+   Lomb–Scargle finds no scheduler and *cannot*: `block_time` is 1-second resolution and 63.3%
+   of consecutive trades share a timestamp, so the event rate sits above the sampling Nyquist
+   and every flagged peak piles up at a band edge. The size-vs-impact exponent separates arms
+   and the separation is **61% volatility** — the `vol-control` lesson arriving in a new place.
+   Benford's serial-arm effect dies once trade-size repetition is held fixed (§7.2).
 
 **What this does not do: it does not give an exit signal, and it does not predict which
 coins go up.** Everything here is birth-time triage.
@@ -511,6 +526,160 @@ Three things a reader should take from the gate table rather than from the botto
 
 ---
 
+## 7.2 The four cheap discriminators
+
+*Code: `studies/operator_crime_discriminators.py` (+ `studies/operator_crime_benford_strat.py`).
+Artifacts: `studies/data/operator_crime/discriminators/`. Seed 20260815. Run on the ten-day
+tape — 8,655,040 bonding-curve transactions over 17,234 coins; the three-day tape reproduces
+every sign and every verdict.*
+
+Each was budgeted as an afternoon with a null attached, on the understanding that a null is a
+result. **Three of the four are nulls, and two of the three are nulls for an instructive
+reason rather than for want of signal.**
+
+### 7.2.0 Three data pathologies, and one of them invalidates a natural mistake
+
+* **A ledger row is a LEG, not a trade.** 5.05% of curve transactions carry 2–20 rows sharing
+  one `curve_bal_after`. Checking the chain identity `curve_bal_after[i] + Σq[i] ==
+  curve_bal_after[i−1]`: per row it fails **20.2%** of the time, per transaction **3.9%**.
+  Trade size must be `sum(delta_raw)` over `(mint, block_slot, tx_index)`. **Any future test
+  on this tape that uses a row as a trade misstates ~5% of its sizes.**
+* **1-second quantization is severe.** 63.3% of consecutive curve transactions share a
+  `block_time` (Δt = 0 s); median gap 0 s, p90 3 s. The event rate sits *far above* the
+  timestamp Nyquist of 0.5 Hz.
+* **Round numbers live in SOL, not in tokens.** The implied-SOL first-digit law is badly
+  non-Benford (MAD 0.0212; digit 9 at 11.7% against 4.6% expected; 6.7% of trades round to
+  0.01 SOL), because users specify SOL. Token deltas are curve-determined and near-continuous,
+  so the ambient *token* law is nearly Benford (MAD 0.0078). Test (b) runs on tokens and is
+  clean of the artifact — which also means "deviates from Benford" carries no forensic content
+  here.
+
+### (a) Normalized compression distance — **SURVIVES, but not as claimed**
+
+Serialization, stated: three ASCII bytes per trade in chain order — `B`/`S`; `chr(65 + min(63,
+⌊log₂|q|⌋))`; `chr(97 + min(25, ⌊log₂(1+Δt_s)⌋))`. No address, no absolute time, no mint.
+Truncated to the first N; coins shorter than N are **excluded, not padded**, so every string is
+exactly 3N bytes. `C = len(zlib.compress(s, level=9))`; zlib's 32 KiB window exceeds 2×3N so
+the concatenation is fully cross-referenceable.
+
+| N | NCD same-deployer | different | Cohen's d | p (1,999 label perms) |
+|---|---:|---:|---:|---:|
+| 256 (4,034 coins, 169,293 same-pairs) | 0.85634 | 0.86441 | **−0.371** | 0.0005 |
+| 256, **shuffled tapes** | 0.85094 | 0.85577 | −0.232 | 0.0005 |
+| 512 (2,222 coins) | 0.91131 | 0.91630 | −0.280 | 0.0005 |
+| 512, **shuffled tapes** | 0.89959 | 0.90289 | −0.182 | 0.0005 |
+
+**The second null is the whole story.** Shuffling each coin's trade order — same
+(direction, size, gap) multiset, sequence destroyed — retains **62.6%** of the effect at N=256
+and 65.1% at N=512. So same-deployer coins do compress together, and two thirds of that is a
+**size-histogram fingerprint**, not a sequence one. The absolute gap is also small: 0.008 of
+NCD on a base of 0.86, about 0.9%. Unmistakable in aggregate, useless on a single coin.
+
+### (b) Benford — **NULL for the serial arm; the rest is trade-size diversity**
+
+Per-coin MAD from the first 50 trades against a **finite-sample floor of 0.0337** (20,000
+simulations of 50 draws from the ambient law; p95 0.0496). Observed per-coin mean 0.052,
+median 0.0449 — most of a coin's MAD is sampling noise.
+
+| contrast | Cliff's δ | p | **δ stratified by repetition** |
+|---|---:|---:|---:|
+| serial vs solo | −0.076 | 6.5e−18 | **+0.007** |
+| high vs low snipers | −0.219 | 6.5e−137 | **−0.161** |
+| dumped vs not | −0.269 | 2.5e−136 | **−0.112** |
+
+All three point the **same** way, and it is the *opposite* of the classic fabrication
+direction: crime-adjacent coins sit **closer** to Benford. That inversion is what exposed the
+confound. MAD is inflated by repetitive early tapes (Spearman ρ = −0.192 between distinct |q|
+in the first 50 trades and MAD); distinct-size means run 37.5 for not-dumped vs 44.7 for
+dumped. Stratifying on distinct-size count **annihilates the serial-vs-solo effect** and halves
+the other two. What survives is a trade-size-diversity signal wearing a forensics costume.
+
+### (c) Lomb–Scargle — **NULL, and the naive version is an artifact detector**
+
+400 log-spaced frequencies, astropy-standard normalization, 19 realizations of each null per
+coin. Two nulls: **rotation** (rotate the value sequence, hold x fixed so the quantization comb
+is identical) and **Poisson-matched** (same n, same T, rounded to whole seconds exactly as
+`block_time` is).
+
+**The nulls are the finding.** Against a 5% expectation, the detrended statistic beats the
+Poisson null on **69.7%** of coins — which says only that arrivals are bursty — and the
+rotation null, which holds the marginal gap distribution and the sampling geometry fixed, on
+**15.3%**.
+
+The peak-period histogram of the 2,344 flagged coins settles it: **651 sit in 255–339 s and
+370 in 192–255 s, at the top of the accessible band (P_max = 300 s)**, and 113 sit at exactly
+**2.0 s, the Nyquist edge**. Both piles are band-edge artifacts. **There is no mode at any
+bot-plausible period — nothing at 5, 10, 15, 30 or 60 s.**
+
+The honest form of this verdict is not "there are no clocked bots". It is: **at 1-second
+timestamps with 63% zero gaps there is no band left in which to see one.** A scheduler with a
+period under a few seconds is invisible *by construction*. The prior study's inter-arrival CV
+was not missing anything this instrument could have caught.
+
+### (d) Size-vs-impact exponent — **the control passes exactly; the wash reading fails**
+
+The h = 0 control confirms the price identity to four decimals: with relative size
+`x = log(|q| / v_tok_before)` the within-coin exponent is **1.0003** in every arm. Immediate
+impact is mechanical and carries zero information, exactly as expected on a CFMM.
+
+| h (trades ahead) | γ ALL | serial | solo | dumped | not dumped |
+|---|---:|---:|---:|---:|---:|
+| 0 | 1.0003 | 1.0001 | 1.0004 | 1.0000 | 1.0008 |
+| 10 | 0.279 | 0.127 | 0.413 | 0.159 | 0.573 |
+| 25 | 0.215 | 0.065 | 0.347 | 0.091 | 0.516 |
+
+Bootstrap B = 2,000 **clustered by coin**. Two estimator corrections were needed and both
+matter: pooled OLS gave serial 0.172 vs solo 0.823, and coin-fixed-effects gives 0.127 vs
+0.413 — **roughly half the pooled gap was Simpson's paradox**; and raw `log|q|` instead of
+relative size gives 0.973 within / 0.926 pooled, the difference being curve depth.
+
+**γ does not mean what the brief hoped, and three diagnostics say so:**
+
+1. **Order-flow autocorrelation is positive and equal across arms** (lag-1 ACF of signed
+   relative size: serial 0.357, solo 0.352, dumped 0.348). Wash trading — a buy immediately
+   undone by a matching sell — requires a *negative* ACF. It is not there.
+2. **Signed follow-through is positive and equal** (serial 0.0268, solo 0.0276).
+3. **The noise scale differs, and that is what γ reads.** Median |R| at h = 10 is 0.110 for
+   serial vs 0.0736 for solo — 1.5× more volatile per ten trades — while the regressor spread
+   is identical (sd 1.860 vs 1.859). A log–log exponent attenuates toward zero exactly when
+   noise in the response is large relative to own impact.
+
+The decisive check is the attenuation-free signed coefficient β from `R = β·f`, which recovers
+β = 1.81 ≈ 2 at h = 0 as the identity requires. At h = 10 the serial−solo difference is
+**+0.235 [−0.209, 0.673], p = 0.348**; snipers p = 0.805; dumped p = 0.382. Volatility-
+stratified γ shrinks the serial−solo gap from −0.286 to −0.111, i.e. **~61% of it is
+volatility** — the same `vol-control` lesson from `RESULT_crime_signatures.md` §5.5, arriving
+in a new place.
+
+And a fourth point that corrects the brief's own premise: **the square-root law is the wrong
+prior on a bonding curve.** Mechanical impact here is *linear* in relative size (γ = 1.0003 at
+h = 0, by construction), so there is no organic γ ≈ 0.5 regime anywhere in this data to
+compare a manipulated one against. The square-root law is an empirical regularity of
+order-driven markets with hidden liquidity; a CFMM has no hidden liquidity.
+
+**VERDICT: γ survives statistically and is uninformative as a crime discriminator.** Impact
+*amplifies* with horizon in every arm (β(10)/β(0) = 1.7–2.2, β(25)/β(0) = 2.0–3.0) — momentum,
+the opposite of the reversion a wash trade would leave. Stated in the honest direction: this
+is "no difference detected", not "shown equal" — the β confidence intervals are wide.
+
+### 7.2.1 Multiplicity
+
+16 pre-registered confirmatory cells: (a) 2 lengths × {real, shuffled}; (b) 3 contrasts;
+(c) 3 contrasts on the detrended primary; (d) 3 contrasts × 2 horizons. Everything else — h=0
+controls, pooled/absolute variants, the naive LS variant, signed β, volatility stratification,
+repetition stratification — is declared descriptive and excluded.
+
+**Benjamini–Yekutieli at q = 0.10, c(16) = 3.3807: 14 of 16 survive.** Both failures are in
+(c). The three-day tape gives the same 14/16 with the same two failures.
+
+**BY survival is not the verdict, and this is the section's most reusable line.** Three of the
+fourteen survivors are demoted by their own post-hoc controls: `b.serial_vs_solo` dies under
+repetition stratification, `c.high_vs_low_snipers` rests on a band-edge artifact, and all six
+`d` cells are volatility restatements. **A multiplicity correction protects against luck; it
+does not protect against measuring the wrong thing fourteen times.**
+
+---
+
 ## 8. Trials counted
 
 | family | cells |
@@ -521,7 +690,14 @@ Three things a reader should take from the gate table rather than from the botto
 | rotation nulls (arms with history features) | 3 |
 | sniper-reuse: 1 statistic × 1 null | 1 |
 | screen gates × 2 outcomes | 12 |
-| **substantive configurations** | **~24** |
+| four cheap discriminators, pre-registered confirmatory cells (§7.2) | 16 |
+| **substantive configurations** | **~40** |
+
+The 16 discriminator cells carry their own **BY-FDR at q = 0.10** (14 of 16 survive, §7.2.1).
+The rest of this document is not FDR-corrected as a family, because it is not a family of
+comparable tests: it is one label ladder, one predictive comparison with two nulls, and one
+screen. Where a claim rests on a p-value it is a permutation p against a structure-preserving
+null, and those are reported individually with their effect sizes.
 
 PROGRAM.md §3.9's rule — past ~7 configurations an in-sample Sharpe of 1 is an out-of-sample
 zero — argues for the nulls, and the nulls are the load-bearing part of §5 and §6.2. The two
@@ -631,6 +807,14 @@ instrument is a constant and every headline built on it is meaningless.
    thing that settles it.
 7. **31% of coins are priced approximately** (§2.2).
 8. **This is not an exit signal and not an entry edge** (§0).
+9. **The discriminators ran on the serial/solo cohort, not the whole corpus.** §7.2's tape is
+   17,234 coins with ≥100 curve trades, selected as top-60-deployer coins plus a matched
+   single-launch sample. It is the right sample for a labelled same-vs-different-operator test
+   and the wrong one for a population statement.
+10. **"No scheduler detected" is bounded by the clock, not by the chain.** §7.2(c) can only
+    speak about periods above a few seconds. A sub-second bot is invisible in this corpus at
+    any sample size; catching one needs the transaction's own timestamp resolution, which
+    means a different pull.
 
 ---
 
