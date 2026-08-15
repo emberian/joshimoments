@@ -415,8 +415,18 @@ def append_zap(zap: Zap, *, path: Path | None = None) -> Path:
 
 
 def read_zaps(path: Path | None = None) -> list[Zap]:
-    """Every exit gesture, oldest first. The ``(state, exit)`` corpus in one call."""
-    return read_tape(path)[2]
+    """Every LIVE exit gesture, oldest first. The ``(state, exit)`` corpus in one call.
+
+    Retractions apply here exactly as they do to hunches, and they matter more: a zap that
+    was not the operator's is a fabricated training pair, and the reactive-exit search
+    would fit to it as readily as to a real one. ``read_tape`` is the auditor's view and
+    still returns everything.
+    """
+    _, retractions, zaps = read_tape(path)
+    if not retractions:
+        return zaps
+    taken_back = {r.retracts for r in retractions}
+    return [z for z in zaps if z.zap_id not in taken_back]
 
 
 def append_retraction(

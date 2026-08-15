@@ -67,7 +67,6 @@ from shitcoims_paperdesk.readout import (
     board_path_for,
     held_candidates,
     is_mint,
-    parse_iso,
     readout,
     resolve,
 )
@@ -848,67 +847,70 @@ def build_app(index: CoinIndex | None = None) -> Any:
     def positions() -> dict[str, Any]:
         """Every open OPERATOR position, ready to be zapped. Polled by the zap rail.
 
-        Read straight out of the desk's persisted state rather than recomputed, because the
-        desk is the only thing that knows what it is holding, and a second opinion assembled
-        from the ledger would disagree with it exactly when a position was mid-flight.
+        Reads ``state/paperdesk/operator-live.json`` -- the small sidecar the desk rewrites
+        every cycle -- rather than ``desk-state.json``, which is 2 MB of seen-sets and is
+        written once a minute. That minute is the right durability trade for resuming a
+        book and the wrong latency for a zap rail: a position opened twenty seconds ago
+        would not be on screen yet, and "pull out whenever i feel like it" does not survive
+        a minute of lag on the thing being pulled out of.
+
+        The desk is still the only thing that knows what it is holding; this is its own
+        answer, published faster, not a second opinion assembled from the ledger.
         """
         now = time.time()
         coins.refresh(now)
         try:
-            with (STATE / "paperdesk" / "desk-state.json").open() as fh:
-                state = json.load(fh)
+            with (STATE / "paperdesk" / "operator-live.json").open() as fh:
+                live = json.load(fh)
         except (OSError, json.JSONDecodeError):
             return {
                 "generated_at": iso(now),
                 "items": [],
-                "absent": {"positions": "the desk has not written its state yet"},
+                "absent": {
+                    "positions": (
+                        "state/paperdesk/operator-live.json is missing -- the desk writes it"
+                        " every cycle, so its absence means the desk is not running"
+                    )
+                },
             }
-        book = (state.get("operator") or {}) if isinstance(state, dict) else {}
-        saved_at = parse_iso(state.get("saved_at")) if isinstance(state, dict) else None
+        saved_at = float(live.get("saved_at_unix") or 0.0) if isinstance(live, dict) else 0.0
+        drift = max(0.0, now - saved_at) if saved_at else 0.0
         items: list[dict[str, Any]] = []
-        for position in (book.get("positions") or {}).values():
+        for position in (live.get("positions") or []) if isinstance(live, dict) else []:
             if not isinstance(position, dict):
                 continue
             mint = str(position.get("mint"))
-            entry = float(position.get("entry_price") or 0.0)
-            last = float(position.get("last_price") or 0.0)
-            peak = float(position.get("peak_price") or 0.0)
             tracked = coins.coins.get(mint)
-            # The FRESHEST price we have, which may be newer than the desk's last save.
-            live = tracked.obs.price if tracked else None
-            mark = live if live else (last or None)
             items.append(
                 {
-                    "position_id": position.get("position_id"),
-                    "decision_id": position.get("decision_id"),
-                    "mint": mint,
+                    **position,
                     "symbol": tracked.obs.symbol if tracked else None,
-                    "label": position.get("label"),
-                    "spend_lamports": position.get("spend_lamports"),
-                    "entry_price": entry or None,
-                    "last_price": last or None,
-                    "mark_price": mark,
-                    "peak_price": peak or None,
-                    "unrealised_return": (mark / entry - 1.0) if (mark and entry > 0) else None,
-                    "drawdown_from_peak": (1.0 - last / peak) if (peak > 0 and last) else None,
-                    "held_s": now - float(position.get("entry_unix") or now),
-                    "seconds_since_observed": now - float(position.get("last_obs_unix") or now),
-                    "observations": position.get("observations"),
-                    "backstop_in_s": float(position.get("deadline_unix") or now) - now,
-                    "take_profit": position.get("take_profit"),
-                    "stop_loss": position.get("stop_loss"),
-                    "armed": position.get("armed_reason"),
-                    "card": coins.card(mint, now=now, hunched=None, held=False) if tracked else None,
+                    # Re-based on THIS instant rather than on the instant the desk wrote the
+                    # file, so a clock on screen counts forward instead of stepping.
+                    "held_s": float(position.get("held_s") or 0.0) + drift,
+                    "backstop_in_s": float(position.get("backstop_in_s") or 0.0) - drift,
+                    "seconds_since_observed": float(position.get("seconds_since_observed") or 0.0)
+                    + drift,
+                    "card": coins.card(mint, now=now, hunched=None, held=True) if tracked else None,
                 }
             )
-        items.sort(key=lambda p: -p["held_s"])
+        absent: dict[str, str] = {}
+        if saved_at and drift > 30.0:
+            # The desk writes this every cycle (~3 s). Half a minute of silence means the
+            # daemon is gone, and a zap rail rendering a dead desk's last book as current is
+            # the worst failure available on this surface.
+            absent["positions"] = (
+                f"the desk last wrote this {drift:.0f} s ago and writes every cycle, so these"
+                " positions may no longer be what it holds"
+            )
         return {
             "generated_at": iso(now),
-            # The desk saves once a minute, so this view is up to that stale by construction
-            # and says so rather than implying it is live.
             "state_saved_at": iso(saved_at) if saved_at else None,
-            "state_age_s": (now - saved_at) if saved_at else None,
+            "state_age_s": drift if saved_at else None,
+            "awaiting": (live.get("awaiting") or []) if isinstance(live, dict) else [],
+            "expectations": (live.get("expectations") or []) if isinstance(live, dict) else [],
             "items": items,
+            "absent": absent,
         }
 
     @app.post("/hunch/zap")

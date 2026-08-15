@@ -1077,3 +1077,16 @@ def test_a_family_with_one_live_member_is_not_a_duel(tmp_path: Path) -> None:
     assert all(f["live_members"] >= 2 for f in strict["items"])
     loose = client.get("/hunch/families?live_only=false&limit=200").json()
     assert loose["n_families"] >= strict["n_families"]
+
+
+def test_a_retracted_zap_leaves_the_exit_corpus(tmp_path: Path) -> None:
+    """A zap that was not the operator's is a fabricated training pair. It must not fit."""
+    from shitcoims_paperdesk.hunch import append_retraction, append_zap, read_tape, read_zaps
+
+    path = tmp_path / "hunches.jsonl"
+    append_zap(_zap(at=T0, zap_id="zp-real", state={"card": {}}), path=path)
+    append_zap(_zap(at=T0 + 1, zap_id="zp-fake", state={"card": {}}), path=path)
+    append_retraction("zp-fake", "not an operator gesture", path=path, now=T0 + 2)
+    assert [z.zap_id for z in read_zaps(path)] == ["zp-real"]
+    # ... and it is still on disk, for the auditor.
+    assert len(read_tape(path)[2]) == 2

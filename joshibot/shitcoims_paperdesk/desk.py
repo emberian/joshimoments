@@ -308,6 +308,27 @@ class Desk:
         self.wiggle.restore(state.get("wiggle") or {})
         self.operator.restore(state.get("operator") or {})
 
+    def save_live(self, now: float) -> None:
+        """The zap rail's view, refreshed every cycle. Cheap enough to mean it.
+
+        No fsync here on purpose: this file is a CACHE of state the big one owns, and
+        losing the last three seconds of it costs a redraw rather than a position.
+        """
+        self.ledger.save_live(
+            {
+                "saved_at": iso(now),
+                "saved_at_unix": now,
+                "run_id": self.ledger.run_id,
+                "positions": self.operator.position_states(now),
+                "awaiting": [
+                    {"mint": mint, **{k: v for k, v in w.items() if k != "utterance"},
+                     "utterance": w.get("utterance", "")}
+                    for mint, w in self.operator.waiting.items()
+                ],
+                "expectations": [w.to_json() for w in self.operator.watches.values()],
+            }
+        )
+
     def save(self) -> None:
         self.ledger.save_state(
             {
@@ -533,6 +554,9 @@ class Desk:
             if now - last_save >= 60.0:
                 last_save = now
                 self.save()
+            # Every cycle: a few kB, so the zap rail is never showing a position the
+            # operator opened a minute ago as absent.
+            self.save_live(now)
             time.sleep(max(0.0, self.config.poll_seconds - (time.time() - now)))
 
         end = time.time()

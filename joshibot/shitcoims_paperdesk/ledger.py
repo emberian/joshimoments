@@ -363,6 +363,36 @@ class Ledger:
     def state_path(self) -> Path:
         return self.root / "desk-state.json"
 
+    @property
+    def live_path(self) -> Path:
+        """A SMALL sidecar for state that must be current, not merely durable.
+
+        ``desk-state.json`` is 2 MB (it carries every book's seen-set, tens of thousands of
+        mints) and is written once a minute, which is the right trade for resuming a book
+        after a crash. It is the wrong trade for the zap rail: a position opened twenty
+        seconds ago would not be on screen yet, and "pull out whenever i feel like it" is
+        not compatible with a minute of latency on the thing you are pulling out of.
+
+        So the open OPERATOR positions get their own file -- a few kB, rewritten atomically
+        every desk cycle. Two files rather than one save interval, because the two have
+        genuinely different requirements and collapsing them would mean either a stale rail
+        or 24 MB/minute of write amplification to keep a seen-set fresh that nobody reads.
+        """
+        return self.root / "operator-live.json"
+
+    def save_live(self, state: dict[str, Any]) -> None:
+        """Atomic replace of the small sidecar. Same discipline, cheaper object."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(self.root), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(state, fh, separators=(",", ":"), sort_keys=True, default=str)
+                fh.flush()
+            os.replace(tmp, self.live_path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
     def load_state(self) -> dict[str, Any]:
         """Resume open positions across restarts.
 
