@@ -56,16 +56,38 @@ Vendor time is ``t_event`` (GeckoTerminal candle open, pump.fun timestamps); our
 ``t_ingest``. Alerts carry both. A window that we were not watching is a ``gap``, not a
 zero — the firehose's discipline (``shitcoims_scalper/firehose.py``) applied to a study.
 
+The answer, so nobody reads the code hoping for one
+---------------------------------------------------
+**The composite score does not work as an exit signal, and it fails in the informative
+direction.** Across 12 pre-registered cells (2 splits × 2 labels × 3 horizons), 4 window
+lengths and 18 post-hoc cells, it never beats its own rotation or mint-swap null. Precision at
+every operating threshold is exactly zero. Against the cliff label it is *inverted* — AUC
+0.259–0.489 — so a coin in the last day before an irreversible collapse looks *less* like a
+manufactured climb than the ambient coin-hour does. ``studies/RESULT_crime_signatures.md`` has
+the numbers and the six things that were established instead.
+
+Two structural facts explain most of it, and both are worth more than the detector:
+**16 of 23 mechanical cliffs happen in the pool's first 0–45 hours**, inside any usable feature
+window; and **the rip itself is a frenzy of thousands of wallets**, not one seller, so whatever
+is coordinated happened during accumulation and is not visible at the collapse.
+
 Commands
 --------
-``cohort``   build the candidate list (boards tape + GT discovery) → ``state/crime/cohort.jsonl``
-``resolve``  mints → top pool + supply via GT ``tokens/multi`` → ``state/crime/tokens.jsonl``
-``fetch``    hourly OHLCV for cohort pools (shared cache with the deterioration study)
-``label``    mechanical terminal-event labels → ``state/crime/labels.jsonl``
-``score``    in-flight crime score over every cohort series → ``state/crime/scores.jsonl``
-``eval``     cohort performance, lead times, nulls, FDR
-``held``     score the operator's four held coins
-``cluster``  S3 choreography on the eleven pools that have signers
+``cohort``          build the candidate list (boards tape + GT discovery) → ``cohort.jsonl``
+``resolve``         mints → top pool + supply via GT ``tokens/multi`` → ``tokens.jsonl``
+``fetch``           hourly OHLCV for cohort pools (cache shared with the deterioration study)
+``label``           mechanical terminal-event labels → ``labels.jsonl``
+``distributions``   where every threshold in the study came from
+``eval``            cohort performance, lead times, nulls, BY-FDR — the pre-registered grid
+``windows``         does a shorter window reach the fast cliffs? (it reaches them; it still fails)
+``vol-control``     is a drawdown result just volatility scaling? **run this on any new one**
+``breakdown``       POST-HOC: does the linear crawl break before it rips? (no)
+``taxonomy``        manipulator strategy archetypes for the coins that cliffed
+``held``            score the operator's four coins
+``cluster``         S3 choreography on the eleven pools that have signers
+``bq-pools``        choose the pool list for a BigQuery day
+``bq-signers``      swap-level identity for cohort pools, aggregated in SQL (~$2.84/day)
+``bq-choreography`` S3 on the cohort: ripping vs control vs the operator's own pools
 """
 
 from __future__ import annotations
@@ -810,6 +832,79 @@ def add_breakdown(coins: Sequence[Coin], lag_h: int = BREAKDOWN_LAG_H) -> None:
                 continue
             f["r2_breakdown"] = past["r2_linear"] * max(0.0, past["r2_linear"] - f["r2_linear"])
             f["r2_breakdown_log"] = past["r2_log"] * max(0.0, past["r2_log"] - f["r2_log"])
+
+
+# ---------------------------------------------------------------------------------------
+# The control that decides whether a drawdown result is real
+# ---------------------------------------------------------------------------------------
+#
+# This is the most reusable thing in the module and it should be run against ANY future
+# result on this panel that predicts a fixed-percentage drawdown.
+#
+# `rv_hourly` scores AUC 0.926 against "price is at least 50% lower in 72 hours", surviving a
+# BY-FDR correction over 22 tests. That number is worthless, and the reason is arithmetic: a
+# high-volatility coin is mechanically more likely to move 50% **in either direction**, and a
+# one-sided fixed threshold counts only one of them. The feature is being rewarded for
+# magnitude while the claim being made is about direction.
+#
+# The discriminating test is to ask the directional question instead: standardise the
+# threshold by the coin's own volatility, so the label means "moved down further than this
+# coin's own noise explains" rather than "moved down 50%". Measured: **0.893 → 0.302**, and
+# the sign flips. Conditional on its own volatility, a high-`rv` coin is *less* likely than
+# average to make a large downward excursion.
+
+
+def cmd_vol_control(args: argparse.Namespace) -> None:
+    """Re-measure a drawdown result against a volatility-standardised label."""
+
+    coins = build_coins(win=args.win, min_peak_mcap=args.min_mcap, stride=args.stride)
+    print(f"cohort: {len(coins)} coins, horizon {args.horizon}h\n")
+    print(f"  {'label':22s} {'positives':>10s} {'base':>8s} "
+          + "".join(f"{k[:12]:>14s}" for k in args.features))
+    rows = []
+    for standardise, k in [(False, args.drop)] + [(True, kk) for kk in args.k]:
+        n_pos = 0
+        n_tot = 0
+        cols: dict[str, list[tuple[float, int]]] = {f: [] for f in args.features}
+        for c in coins:
+            cl = c.series.close
+            n = len(cl)
+            for f in c.feats:
+                i = f["i"]
+                j = i + args.horizon
+                if j >= n or cl[i] <= 0 or cl[j] <= 0:
+                    continue
+                r = math.log(cl[j] / cl[i])
+                if standardise:
+                    rv = f.get("rv_hourly") or 0.0
+                    if rv <= 0:
+                        continue
+                    thr = -k * rv * math.sqrt(args.horizon)
+                else:
+                    thr = math.log(1.0 - k)
+                y = 1 if r <= thr else 0
+                n_pos += y
+                n_tot += 1
+                for key in args.features:
+                    v = f.get(key)
+                    if isinstance(v, (int, float)) and math.isfinite(v):
+                        cols[key].append((float(v), y))
+        aucs = {}
+        for key in args.features:
+            pairs = cols[key]
+            aucs[key] = auc([p[0] for p in pairs], [p[1] for p in pairs]) if pairs else None
+        tag = f"standardised k={k}" if standardise else f"fixed -{k:.0%}"
+        rows.append({"label": tag, "standardised": standardise, "k": k,
+                     "positives": n_pos, "n": n_tot,
+                     "base_rate": n_pos / max(1, n_tot), "auc": aucs})
+        print(f"  {tag:22s} {n_pos:10d} {n_pos / max(1, n_tot):8.4f} "
+              + "".join(f"{aucs[key]:14.3f}" if aucs[key] is not None else f"{'-':>14s}"
+                        for key in args.features))
+    out = STATE / "vol_control.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"t_ingest": _now(), "horizon_h": args.horizon,
+                               "win": args.win, "rows": rows}, indent=1, default=str))
+    print(f"\nwrote {out}")
 
 
 def cmd_breakdown(args: argparse.Namespace) -> None:
@@ -2489,6 +2584,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--lag", type=int, default=BREAKDOWN_LAG_H)
     p.add_argument("--min-mcap", type=float, default=BAND_LO, dest="min_mcap")
     p.set_defaults(func=cmd_breakdown)
+
+    p = sub.add_parser("vol-control", help="is a drawdown result just volatility scaling?")
+    p.add_argument("--win", type=int, default=48)
+    p.add_argument("--horizon", type=int, default=72)
+    p.add_argument("--stride", type=int, default=2)
+    p.add_argument("--drop", type=float, default=0.50, help="fixed drawdown threshold")
+    p.add_argument("--k", type=float, nargs="+", default=[1.0, 1.5, 2.0],
+                   help="standardised thresholds in units of the coin's own sigma")
+    p.add_argument("--features", nargs="+",
+                   default=["rv_hourly", "turnover", "fano_vol", "disp_per_turnover"])
+    p.add_argument("--min-mcap", type=float, default=BAND_LO, dest="min_mcap")
+    p.set_defaults(func=cmd_vol_control)
 
     p = sub.add_parser("windows", help="does a shorter window reach the fast cliffs?")
     p.add_argument("--min-mcap", type=float, default=BAND_LO, dest="min_mcap")

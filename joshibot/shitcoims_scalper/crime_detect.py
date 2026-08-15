@@ -11,6 +11,30 @@ score, the mechanical rip label, the alert row — and nothing that needs a netw
 or a research dependency. ``studies/crime_signatures.py`` imports from here rather than
 reimplementing, so the thing that was measured and the thing that runs are the same code.
 
+What this scores, and what it was measured to be worth
+-------------------------------------------------------
+**Read this before wiring it to anything.** ``studies/RESULT_crime_signatures.md`` evaluated
+the composite score below against 23 mechanically-labelled irreversible collapses and it
+**does not predict them**. It clears no rotation or mint-swap null in any of 12 pre-registered
+cells, 4 window lengths or 18 post-hoc cells; precision at every operating threshold is exactly
+zero; and against the cliff label it is *inverted* (AUC 0.259–0.489).
+
+So the supported uses are:
+
+* **an avoid-filter and a lens** — a high score is a reason to look, and the ``evidence`` block
+  on every alert exists so a human can look;
+* **a stream to accumulate labelled cliffs forward**, which is the only thing that changes the
+  answer (23 cliffs is what forced every "no").
+
+The unsupported use is **an automatic exit**. It would have fired on DREGG — a coin the
+operator holds, which did not rug — for twelve hours in July 2026. A straight-line path on thin
+flow is also what a small honest community looks like, and this desk is one.
+
+The part of this module that *did* survive is the mechanical rip label (:func:`find_rip`) and
+the ``dead_hour_frac`` / ``turnover`` pair: a coin with no flow has no capacitance, and its
+quoted market cap is not a price anybody can get. That is a statement about the present, not a
+prediction, which is why it holds.
+
 The direction of the signal is fixed and non-negotiable
 -------------------------------------------------------
 Every alert this module emits carries ``action: "reduce"``. A high crime score is a reason
