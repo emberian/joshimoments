@@ -18,6 +18,27 @@ dev = [
   "ruff>=0.12,<1",
   "mypy>=1.11,<2",
 ]
+# Research/statistics tooling. DELIBERATELY a separate group: the sentinel runs live
+# money and its runtime dependency set stays small and auditable — nothing here is
+# importable from shitcoims_sentinel.
+#
+# Added 2026-08-15 after discovering that ~22,000 lines of studies had been written
+# against NO statistical library at all: Aalen-Johansen, clustered standard errors,
+# bootstraps, variance ratios and permutation tests were all hand-rolled in stdlib.
+# The cost was not speed, it was a class of error. A survival library makes you
+# DECLARE censoring as part of the model specification — you cannot fit a Cox model
+# without saying which observations are censored — whereas the hand-rolled version let
+# an analyst forget, which is precisely how RESULT_board_entry.md shipped a +21.77%
+# finding that reverses to -12.24% once the censored 96% are priced instead of dropped.
+research = [
+  "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
+  "pandas>=2.2,<3",
+  "statsmodels>=0.14,<1",   # clustered/robust SEs, time series, event studies
+  "lifelines>=0.30,<1",     # survival + competing risks, censoring-explicit by construction
+  "scikit-learn>=1.5,<2",
+  "pyarrow>=17,<22",        # parquet, for the BigQuery bulk-history path
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"
