@@ -133,7 +133,11 @@ def repack(root: Path, *, force: bool = False) -> int:
         shards = sorted(day_dir.glob("*.parquet"))
         if not shards:
             continue
-        dataset = ds.dataset(day_dir, format="parquet")
+        # The EXPLICIT file list, not the directory. An interrupted `gcloud storage` transfer
+        # leaves zero-byte `*.parquet_.gstmp` scratch files behind, and handing the directory
+        # to a dataset makes the reader try to open them and die on the first one. Naming the
+        # shards also means a half-downloaded sibling can never be silently folded in.
+        dataset = ds.dataset([str(p) for p in shards], format="parquet")
         # STREAMED, not `to_table()`. A day is ~10.8M rows and ~3 GB compressed; materialising
         # one as a single Arrow table costs on the order of 20 GB of RAM and takes the laptop
         # down. Row groups go out as they come in, so peak memory is one batch.
