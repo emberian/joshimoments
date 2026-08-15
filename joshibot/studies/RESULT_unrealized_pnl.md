@@ -330,6 +330,51 @@ used 20 permutations against α = 0.02. The permutation p-value has a hard floor
 1/(n+1) = 0.048, so nothing could ever be rejected and the run returned **zero** crew pairs —
 which reads exactly like "the crews failed the null". The module now refuses α below the floor.
 
+### 4.4 The confound does not exist — measured, not assumed
+
+`q2` reports the share of sells inside a tolerance band of a round level, and **that number is
+uninterpretable on its own**: nineteen levels at a ±2% relative band cover roughly half this
+distribution's support by chance, so the measured 27.9% is *below* the chance rate. The test that
+means something is **excess over a smooth baseline** — a ±0.2-wide moving median, which a
+one-bin spike cannot drag upward. Bin width 0.002, 19,240,639 sells:
+
+| level | observed | smooth baseline | excess |
+|---|---|---|---|
+| −75% | 14,879 | 14,879 | 1.000 |
+| −50% | 26,228 | 25,532 | 1.027 |
+| −40% | 30,016 | 30,014 | 1.000 |
+| −30% | 37,809 | 37,667 | 1.004 |
+| −25% | 41,573 | 41,456 | 1.003 |
+| −20% | 47,830 | 47,989 | 0.997 |
+| −15% | 55,593 | 55,545 | 1.001 |
+| −10% | 64,944 | 65,190 | 0.996 |
+| **0% (break-even)** | **374,623** | **76,634** | **4.888** |
+| +25% | 45,020 | 45,020 | 1.000 |
+| +50% | 18,932 | 18,842 | 1.005 |
+| +75% | 11,280 | 10,716 | 1.053 |
+| +100% | 7,280 | 7,278 | 1.000 |
+| +150% | 3,257 | 3,192 | 1.020 |
+| +200% | 1,941 | 1,956 | 0.992 |
+| +300% | 772 | 847 | 0.911 |
+| +400% | 466 | 440 | 1.059 |
+| +500% | 285 | 272 | 1.048 |
+| +900% | 85 | 82 | 1.037 |
+
+**Not one classic take-profit or stop-loss level is a spike.** Eighteen of nineteen sit between
+0.91 and 1.06 of their own baseline — noise. Exactly one level is real, and it is **break-even,
+at 4.89×**.
+
+This is a result about the limits of an assumption, and it is worth stating plainly: the
+"thousands of users on identical bot defaults" confound that this entire question was designed
+to survive is **not present in this corpus**. Either the presets are not clustered on round
+numbers, or slippage and impact smear an exactly-typed −25% into a continuum before it reaches
+the chain. Both readings kill the confound as a *distinguishable* artifact.
+
+**What the break-even spike is instead.** Partly mechanical: at-break-even sells are 55.9%
+same-slot-as-open against 48.0% for all other sells, so instant round trips are over-represented
+there — but only mildly, since the base rate is already 48%. The rest is behaviour, and §7
+measures it against a proper denominator rather than inferring it from a histogram.
+
 ---
 
 ## 5. Q3 — the basis-shape feature, for the `pvp_vamps` lane
@@ -367,6 +412,37 @@ measured over the whole observed life of the coin, so they are *not* causal at a
 decision point as written. Making them live means recomputing at the decision time, which the
 `basis` stage supports directly (every row carries `block_time`), but that is your lane's call
 and your lane's null.
+
+### 5.1 The feature has real spread, and the deep one has the most
+
+39,702 coins with ≥30 priced sells, split on graduation only to show the columns are not flat.
+**This is a descriptive contrast, not a classifier and not a claim about PvP.**
+
+| | non-graduated (n=35,205) | graduated (n=4,497) |
+|---|---|---|
+| median `frac_sells_deep_red` | 0.224 | 0.200 |
+| median `med_loss_taken` | 0.251 | 0.324 |
+| median `med_gain_taken` | 0.196 | 0.242 |
+| median `supply_underwater` | **1.000** | **1.000** |
+| median **`supply_held_through_50pct_red`** | **0.327** | **0.795** |
+| median **`supply_held_through_80pct_red`** | **0.000** | **0.451** |
+
+Two things to take from this.
+
+**`supply_underwater` is dead on arrival and that is worth knowing.** At the end of a collapsed
+coin's life essentially 100% of live supply is red, on *every* coin — the obvious feature
+discriminates nothing. It is reported so nobody builds on it.
+
+**`supply_held_through_50pct_red` separates 2.4×, and the 80% version separates a median of zero
+from a median of 0.45.** In the median non-graduated coin, no surviving supply has sat through an
+80% drawdown since its own entry; in the median graduated coin, nearly half has. That is the
+folk claim — *mercenaries stop out instantly, communities hold red* — appearing as a measured
+quantity for the first time, and it is a holder-state quantity that no flow feature can see.
+
+It is also **not** the PvP question, and this lane does not answer that. Graduation is a poor
+proxy for community-versus-mercenary and the contrast above is confounded by coin size, age and
+volume, all of which the `pvp_vamps` lane already controls for and this one deliberately does
+not. The deliverable is the column, not the conclusion.
 
 ---
 
@@ -407,6 +483,67 @@ overhang. And `err` in `state/bulk_history` is **NULL on success**, the exact op
 `bulk_pump` corpus where it is an empty string and never NULL; testing one convention against
 the other silently returns zero rows, which is what the first run of `bounds` did.
 
+### 6.1 The cohort baseline — cheap supply is rare
+
+17,799 coins with ≥20 observed live holders:
+
+| | median | p90 | p95 | p99 |
+|---|---|---|---|---|
+| `rugfuel_paid_010` (bought below 10% of spot) | 0.000 | **0.000** | 0.000 | 0.075 |
+| `rugfuel_paid_050` (bought below 50% of spot) | 0.000 | 0.000 | — | 0.519 |
+| `zero_basis_share` (arrived free) | 0.000 | 0.511 | — | 0.997 |
+
+**Only 2.39% of coins have *any* supply bought below a tenth of spot.** After a collapse nobody is
+sitting on a 10×, which is the whole reason the gauge is informative when it is not zero.
+
+### 6.2 The operator's four coins, scored today
+
+Snapshot at the corpus edge, 2026-08-14. Percentiles are against the 17,799-coin cohort above.
+
+| coin | observed holders | **bought <10% of spot** | pct | bought <50% of spot | pct | arrived free | pct | max multiple, any holder (10 d) |
+|---|---|---|---|---|---|---|---|---|
+| **weave** | 590 | **17.9%** | **99.2** | **49.1%** | 98.9 | 6.2% | 83.1 | 21.7× |
+| **nosis** | 2,616 | 1.4% | 98.6 | 21.0% | 98.1 | 20.3% | 85.6 | 8.0× |
+| **SOLVE** | 116 | 0.0% | — | 3.3% | 96.7 | 12.0% | 84.5 | 1.6× |
+| **DREGG** | 204 | 0.0% | — | 1.5% | 96.3 | **30.9%** | 87.1 | **1.1×** |
+
+Long-window bound from `state/bulk_history`, which covers these exact pools for longer than the
+corpus does. This bounds *any* in-pool acquirer, observed or censored:
+
+| coin | days covered | swaps | max multiple (1st pct) | max multiple (true min) |
+|---|---|---|---|---|
+| DREGG | 47.4 | 84,558 | 16.0× | 47.9× |
+| SOLVE | 24.0 | 11,271 | 2.4× | 3.4× |
+| weave | 10.1 | 14,288 | 33.6× | 54.4× |
+| nosis | 4.7 | 71,169 | 10.3× | 18.8× |
+
+**Read it like this.**
+
+* **weave is the one to look at, and it is not close.** 17.9% of its observed live supply was
+  bought below a tenth of today's price, in a cohort where 97.6% of coins have exactly zero —
+  the 99.2nd percentile. Half its observed supply (49.1%) is below half of spot. The mechanism is
+  simply that weave ran 21.7× inside the window and a large cohort of early buyers has not sold.
+  This is a **structural** statement about who holds the coin, not a prediction and not an
+  accusation; it says the coin currently carries an unusually large body of holders for whom
+  selling at almost any price is a large gain.
+* **nosis is second, and mostly through the 50% threshold** (21.0%, 98.1st pct) rather than the
+  10% one. It also carries 20.3% free supply.
+* **SOLVE and DREGG carry essentially no bought-cheap supply.** DREGG's ten-day bound is **1.12×**
+  — inside the observed window no holder at all, observed or censored, can be up more than 12%.
+  The 48-day bound is 16×, so that statement is about the window, not about DREGG's whole life.
+* **DREGG's exposure is 30.9% free supply, and it is a known structure, not a discovery.**
+  `wallet_labels.yaml` documents holder airdrops of exactly 744.046875 DREGG to 886 recipients
+  and 22,778.0 to 77 more, median value ~$0.24. That is what `zero_basis_share` is made of.
+
+**On the operator's escrow, precisely.** The brief notes the operator's own escrow holds 6.26% of
+DREGG at low basis, attested and scheduled. **It is not in these numbers.** The five attested
+wallets in `wallet_labels.yaml` hold **0.0%** of observed DREGG supply at the window edge, and a
+Streamflow escrow is a program account that is not one of them; supply that never traded in the
+window has no basis row and does not enter the gauge at all. So the 30.9% is *other people's*
+airdropped supply, and the escrow sits in the censored stratum where the only thing that binds it
+is the price-path bound. Attested own supply is never counted as threat here, and in this case it
+was never counted at all.
+
 ---
 
 ## 7. Beyond the brief — is unrealized PnL a live state variable at all?
@@ -425,6 +562,63 @@ the red is disproportionately holding a coin that is moving violently, and a vio
 more selling of every kind. The hazard is reported raw and stratified by the coin's own trailing
 realized volatility, so "red wallets sell more" cannot be read off a difference that is really
 "volatile coins trade more".
+
+### 7.1 The answer: yes, and the state that matters is *proximity to break-even*
+
+1,500 coins, 618,783 wallet-episodes, 15.0M risk-set ticks.
+
+| unrealized PnL | ticks | P(sell within 60 s) | wallets |
+|---|---|---|---|
+| < −80% | 1,800,906 | 0.331% | 24,538 |
+| −80 .. −50% | 1,761,061 | 0.486% | 41,830 |
+| −50 .. −25% | 1,395,095 | 0.706% | 54,608 |
+| −25 .. −5% | 1,242,553 | 1.378% | 70,770 |
+| **−5 .. +5%** | 1,325,353 | **2.234%** | 93,917 |
+| +5 .. +25% | 1,488,866 | 1.458% | 89,113 |
+| +25 .. +100% | 1,440,206 | 1.336% | 74,342 |
+| +100 .. +400% | 706,814 | 1.176% | 32,051 |
+| > +400% | 1,860,712 | 0.479% | 28,324 |
+
+**An inverted U with its peak at break-even.** The hazard is **6.7× higher** at break-even than
+in the deep-red bucket and **4.7× higher** than in the deep-green bucket. It is monotone in
+|PnL| on both sides.
+
+That is the mechanism behind the +4.89× break-even spike in the realization distribution
+(§4.4). The spike is *not* just "price passes through break-even so sells happen there" — the
+conditional probability of selling is genuinely highest there, against a proper denominator.
+
+### 7.2 It survives the volatility control, in the stratum where the control is meaningful
+
+| PnL bucket | low-vol tercile | **mid-vol tercile** | high-vol tercile |
+|---|---|---|---|
+| < −80% | 3.51% *(n=56k)* | 0.248% | 0.208% |
+| −80 .. −50% | 0.692% | 0.555% | 0.384% |
+| −50 .. −25% | 0.690% | 0.941% | 0.472% |
+| −25 .. −5% | 2.997% | 1.712% | 0.759% |
+| **−5 .. +5%** | 2.854% | **2.227%** | 1.150% |
+| +5 .. +25% | 0.908% | **2.925%** | 1.333% |
+| +25 .. +100% | 0.933% | 2.472% | 0.818% |
+| +100 .. +400% | 0.892% | 2.009% | 0.636% |
+| > +400% | 0.383% | 2.275% | 0.664% |
+
+**Read the middle column and distrust the outer two**, and the reason is composition, not noise.
+The low-vol tercile has 1.62M ticks above +400% and 56k below −80%; the high-vol tercile is the
+mirror. Calm coins are the ones that ran up and stayed up, so the extreme buckets in the outer
+terciles are nearly empty of the wallets that would populate them — the 3.51% in the low-vol
+deep-red cell rests on 56k ticks from a handful of coins. In the middle tercile, where every
+bucket carries 69k–874k ticks, the shape is intact: **0.25% → 2.23% at break-even → 2.93% just
+above it, then falling**. The peak shifts one bucket right of break-even, which is if anything
+the more sensible reading — a wallet takes the first green it sees.
+
+**What this is worth, stated conservatively.** It is a population hazard, not an edge. It says
+the cost-basis distribution of a coin's holders is a *live* predictor of near-term sell pressure:
+supply sitting near break-even is the supply most likely to hit the bid in the next minute, and
+supply far red or far green is comparatively inert. That is a usable state variable for a
+reactive exit — approaching a price level where a large mass of basis sits is approaching a
+region of elevated sell hazard — and it is the *only* thing in this study that survived its
+controls in that direction. But §3 shows that the same idea framed as "reversal levels align
+with basis-density modes" does **not** survive, so the honest version of the claim is the narrow
+one: elevated hazard, measured; price prediction, not established.
 
 ---
 
