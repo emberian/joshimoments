@@ -8,7 +8,10 @@ Data: the pump.fun fee program's own `FeeConfig` account (read-only `getAccountI
 cluster mints' supplies (`getTokenSupply`), 1,058 decoded PumpSwap swap events from
 `state/cluster_tape/`, 96,414 DREGG/SOL swaps with exact integer vault reserves from
 `state/bulk_history/` (48 days), and the operator's complete claim ledger in
-`.cache/position_history/`. Nothing signed, nothing sent, no transaction constructed. $0 spent.
+`.cache/position_history/`. **Nothing signed, nothing sent, no transaction constructed** — the
+only network use is read-only Helius RPC (`getAccountInfo`, `getProgramAccounts`, `getTokenSupply`,
+`getTransaction`, `getSignaturesForAddress`), which spends credits and not money. Results cached to
+`studies/data/dregg_boundary/`, so a re-run is offline.
 
 **The brief's four questions, answered in one line each.** (1) The tier is **spot, per swap, from
 live pool reserves, denominated in SOL** — 25 rungs 5 bps apart, no TWAP, no hysteresis, no
