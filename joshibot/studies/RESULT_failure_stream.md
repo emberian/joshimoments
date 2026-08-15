@@ -616,17 +616,24 @@ replacement *before it was run*. This is that test, executed exactly as register
 
 The ten machines, with the `beaten` rate that the registered prediction keys on:
 
-| # | cell | purity | wallet | beaten |
-|---|---|---|---|---|
-| 0 | `i3:0x1770 \| cu17.5 \| f13.0` | 100% | (see §3.2) | 12% |
-| 2 | `i3:0x3 \| cu10.5 \| f13.0` | 100% | `Bu79TNqn…` | 36% |
-| 3 | `i4:0x1780 \| cu14.5 \| f12.5` | 100% | `FUJKrQhx…` | 15% |
-| 4 | `i4:0x1780 \| cu15.0 \| f12.5` | 100% | `FUJKrQhx…` | 21% |
-| 5 | `i3:0x1770 \| cu17.5 \| f12.5` | 96% | `XUrKb2aK…` | 8% |
-| 6 | `i3:0x1770 \| cu18.0 \| f12.5` | 76% | `4NHYHfeM…` | 22% |
-| **7** | `i3:0x1798 \| cu16.5 \| f13.0` | 66% | `9DnwXX7k…` | **54%** |
-| 8 | `i5:0x3c \| cu17.0 \| f12.5` | 62% | `DSUwBG99…` | 21% |
-| 9 | `i3:0x3c \| cu16.5 \| f12.5` | 56% | `6Q8Qv5CS…` | 28% |
+| # | cell | purity | sampled | wallet | beaten |
+|---|---|---|---|---|---|
+| 0 | `i3:0x1770 \| cu17.5 \| f13.0` | 100% | 65 | `XUrKb2aK…` | 14% |
+| 1 | `i2:0x1772 \| cu15.0 \| f12.5` | 100% | 61 | `8TPWakvW…` | 23% |
+| 2 | `i3:0x3 \| cu10.5 \| f13.0` | 100% | 58 | `Bu79TNqn…` | 36% |
+| 3 | `i4:0x1780 \| cu14.5 \| f12.5` | 100% | 55 | `FUJKrQhx…` | 15% |
+| 4 | `i4:0x1780 \| cu15.0 \| f12.5` | 100% | 52 | `FUJKrQhx…` | 21% |
+| 5 | `i3:0x1770 \| cu17.5 \| f12.5` | 96% | 50 | `XUrKb2aK…` | 8% |
+| 6 | `i3:0x1770 \| cu18.0 \| f12.5` | 76% | 54 | `4NHYHfeM…` | 22% |
+| **7** | `i3:0x1798 \| cu16.5 \| f13.0` | 66% | 50 | `9DnwXX7k…` | **54%** |
+| 8 | `i5:0x3c \| cu17.0 \| f12.5` | 62% | 53 | `DSUwBG99…` | 21% |
+| 9 | `i3:0x3c \| cu16.5 \| f12.5` | 56% | 64 | `6Q8Qv5CS…` | 28% |
+
+**Ten cells, seven wallets.** Machines 0 and 5 are the same wallet in two adjacent fee
+buckets, and so are 3 and 4. The fingerprint is finer-grained than the operator behind it —
+which is a limitation of the cut (a bot that varies its bid appears twice) and a second reason
+the family needs BY rather than BH: these 30 tests are *not* independent, and BY is the
+procedure that holds under arbitrary dependence.
 
 ### 8.1 The result
 
