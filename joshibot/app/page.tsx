@@ -6,6 +6,7 @@ import {
   History as HistoryIcon,
   Radar,
   Shield,
+  Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
@@ -16,6 +17,7 @@ import { gateLamps, protectionTone, snapshotOf, useDesk } from "@/lib/desk";
 import { cn, relativeAge, shortAddress } from "@/lib/format";
 import type { ViewId } from "@/lib/types";
 import { Circuit } from "@/views/circuit";
+import { Explorer } from "@/views/explorer";
 import { History } from "@/views/history";
 import { Intelligence } from "@/views/intelligence";
 import { Markets } from "@/views/markets";
@@ -31,6 +33,11 @@ const NAV: { id: ViewId; label: string; hint: string; icon: typeof Gauge }[] = [
   { id: "tape", label: "Tape", hint: "5", icon: HistoryIcon },
   { id: "ledger", label: "Ledger", hint: "6", icon: Activity },
   { id: "wire", label: "Wire", hint: "7", icon: Radar },
+  // Talks only to the paper desk on 8788. It is deliberately last in this list and
+  // deliberately independent of `useDesk()`: the sentinel is usually down, and the one
+  // surface whose whole job is to be there when the operator is looking must not
+  // inherit that availability.
+  { id: "hunch", label: "Hunch", hint: "8", icon: Zap },
 ];
 
 const VIEW_IDS = new Set<ViewId>(NAV.map((item) => item.id));
@@ -224,11 +231,13 @@ export default function Home() {
             <Performance performance={desk.performance} trades={desk.trades} now={desk.now} />
           )}
           {view === "wire" && <Intelligence intel={desk.intel} now={desk.now} />}
+          {/* No snapshot prop, on purpose: this view reads /hunch/* and nothing else. */}
+          {view === "hunch" && <Explorer />}
         </main>
 
         <footer className="border-t border-border px-4 py-1.5">
           <p className="font-mono text-[10px] text-muted-foreground">
-            1–7 switch view · R refresh · hover any figure for its source, both clocks, sample size
+            1–8 switch view · R refresh · hover any figure for its source, both clocks, sample size
             and caveats
           </p>
         </footer>

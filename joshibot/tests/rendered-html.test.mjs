@@ -59,23 +59,78 @@ test("no key material or signing anywhere in browser code", async () => {
   assert.doesNotMatch(page, /\/execute|\/panic"/);
 });
 
-test("writes are confined to the policy endpoint", async () => {
+/**
+ * The write allowlist. Two entries, and the second was added deliberately on 2026-08-15
+ * when the coin explorer landed — a guard that gets edited to make a build pass is worth
+ * nothing, so the reasoning is written down here rather than in a commit message.
+ *
+ * `/api/policies` — reaches the SENTINEL, the process that holds the signing key. A policy
+ *   write is a rule into config.yaml; the sentinel reads it on its own cycle and decides
+ *   for itself. It is the only thing the browser may put into that process.
+ *
+ * `/hunch` and `/hunch/zap` — reach the PAPER DESK on a different port (8790), which by
+ *   construction holds no key, has no RPC client and no broadcast path, and answers
+ *   `can_execute: false` on every health response. They append one row each to
+ *   state/hunches.jsonl and state/zaps.jsonl. They are write paths into a process that
+ *   CANNOT EXECUTE — which is the whole reason `shitcoims_paperdesk` is not part of the
+ *   sentinel. `/hunch/zap` is a paper exit: it records an intention the desk acts on in
+ *   its own book, and it signs nothing.
+ *
+ * The property being defended is unchanged: no write verb may reach a route that a signing
+ * process consumes. Widening this list again requires the same argument.
+ */
+const ALLOWED_WRITE_TARGETS = [
+  /\/api\/policies/,
+  /HUNCH_PATH|["'`]\/hunch["'`]/,
+  /ZAP_PATH|["'`]\/hunch\/zap["'`]/,
+];
+
+test("writes are confined to the policy endpoint and the keyless hunch tape", async () => {
   const page = await appSource();
-  // NOT "no writes" — editing a policy is a legitimate operator action, and the sentinel
-  // validates it server-side then decides on its own cycle. The property that matters is
-  // that the console can write POLICY and nothing else: no execution trigger, no panic,
-  // no queue that a signing process consumes. So every write verb must sit in a fetch
-  // whose URL is /api/policies.
+  // NOT "no writes" — editing a policy is a legitimate operator action, and so is recording
+  // a hunch. The property that matters is that neither can become an execution trigger, a
+  // panic, or a queue that a signing process consumes. So every write verb must sit in a
+  // fetch whose URL is on the allowlist above.
   const writes = [...page.matchAll(/fetch\(([\s\S]{0,400}?)method:\s*["'](POST|PUT|PATCH|DELETE)["']/g)];
   assert.ok(writes.length > 0, "expected at least the policy editor to write");
   for (const [, between, verb] of writes) {
-    assert.match(
-      between,
-      /\/api\/policies/,
-      `a ${verb} targets something other than /api/policies — that is a new write path into the process holding the signer`,
+    assert.ok(
+      ALLOWED_WRITE_TARGETS.some((allowed) => allowed.test(between)),
+      `a ${verb} targets something that is neither /api/policies nor /hunch — that is a new write path out of the browser: ${JSON.stringify(between.slice(0, 120))}`,
     );
   }
   assert.doesNotMatch(page, /fetch\([^)]*\/(panic|execute)/);
+});
+
+test("the hunch write path is the literal it claims to be", async () => {
+  // The allowlist above accepts the CONSTANT `HUNCH_PATH` because that is how the client
+  // spells its own route. That indirection is only safe while the constant is the route it
+  // names, so pin it: a HUNCH_PATH quietly repointed at the sentinel would otherwise walk
+  // straight through the guard.
+  const client = await readFile(new URL("../app/lib/hunch.ts", import.meta.url), "utf8");
+  assert.match(client, /export const HUNCH_PATH = "\/hunch";/);
+  assert.match(client, /export const ZAP_PATH = "\/hunch\/zap";/);
+  assert.doesNotMatch(client, /8787|\/api\//);
+});
+
+test("the zap has no confirmation gate", async () => {
+  // Doctrine, and the operator asked for it by name: arming is ceremony, stopping is
+  // instant. A confirm dialog on the exit path would measure the dialog instead of the
+  // operator, and a decorative undo would lie about a row that is already fsynced. This
+  // guard fails if either ever appears near the zap.
+  const view = await readFile(new URL("../app/views/explorer.tsx", import.meta.url), "utf8");
+  assert.match(view, /postZap/);
+  assert.doesNotMatch(view, /window\.confirm|confirmZap|"Are you sure"|undoZap/i);
+});
+
+test("the two processes keep two ports", async () => {
+  // 8787 holds the key. 8790 (paperdesk glass) cannot sign anything. The dev proxy is the
+  // one place those two could be collapsed into one origin by a one-line edit, so both are
+  // asserted — and /hunch is asserted NOT to point at 8787 under any spelling.
+  const config = await readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+  assert.match(config, /"\/api":\s*"http:\/\/127\.0\.0\.1:8787"/);
+  assert.match(config, /"\/hunch":\s*"http:\/\/127\.0\.0\.1:8790"/);
+  assert.doesNotMatch(config, /"\/hunch":\s*"[^"]*:8787"/);
 });
 
 test("no raw HTML injection", async () => {
@@ -85,7 +140,17 @@ test("no raw HTML injection", async () => {
 
 test("reads the endpoints it claims to read", async () => {
   const page = await appSource();
-  for (const route of ["/api/snapshot", "/api/events", "/api/trades", "/api/performance"]) {
+  for (const route of [
+    "/api/snapshot",
+    "/api/events",
+    "/api/trades",
+    "/api/performance",
+    "/hunch/coins",
+    "/hunch/health",
+    "/hunch/resolve",
+    "/hunch/readout",
+    "/hunch/tape",
+  ]) {
     assert.match(page, new RegExp(route.replace(/\//g, "\\/")));
   }
 });

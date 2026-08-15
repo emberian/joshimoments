@@ -343,4 +343,9 @@ export type ViewId =
   | "circuit"
   | "tape"
   | "ledger"
-  | "wire";
+  | "wire"
+  /**
+   * The coin explorer. Reads only `/hunch/*` on the paper desk's own port, so it works
+   * when the sentinel is down — which is its normal state.
+   */
+  | "hunch";
