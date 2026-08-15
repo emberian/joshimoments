@@ -514,6 +514,64 @@ async def test_inspect_position_prices_pnl_off_the_observed_buy_not_the_exit_quo
 
 
 @pytest.mark.asyncio
+async def test_an_operator_rule_with_no_basis_still_gets_one_off_chain(
+    tmp_path: Path,
+) -> None:
+    """A basis-free operator policy is not a bag we refuse to price.
+
+    The Telegram desk used to fill the basis in from the current exit quote, which made
+    PnL start at 0% whatever was paid. Now it sends none — and a policy with no basis is
+    exactly the case where reading the chain overwrites nothing, so it must be read.
+    Without this the desk's "Protect now" produced a permanently rug-only bag.
+    """
+
+    mint = str(Keypair().pubkey())
+    account = "token-account"
+    engine = build_engine(tmp_path, [default_policy(mint)])
+    assert engine.config.positions[0].cost_basis_sol is None
+    assert engine.config.positions[0].buy_price_sol is None
+    engine.rpc = chain_with_single_buy(
+        engine.wallet_address, account, mint, tokens=1_000 * UNIT, lamports=100_000_000
+    )
+    engine.jupiter = FakeJupiter(150_000_000)
+    write_lot(engine, mint, origin=ORIGIN_OPERATOR)
+
+    row, _execution = await engine._inspect_position(
+        holding_of(mint, 1_000 * UNIT, account), engine.config.positions[0], None
+    )
+    await engine.close()
+
+    # Paid 0.1 SOL, worth 0.15: +50%, priced off the chain rather than off the quote.
+    assert row["basis_source"] == "observed"
+    assert Decimal(row["pnl_pct"]) == Decimal("50")
+
+
+@pytest.mark.asyncio
+async def test_an_operator_typed_basis_is_never_overwritten_by_the_chain(
+    tmp_path: Path,
+) -> None:
+    """The other direction of the same rule, so the fix above cannot creep."""
+
+    mint = str(Keypair().pubkey())
+    account = "token-account"
+    engine = build_engine(tmp_path, [default_policy(mint, cost_basis_sol=0.2)])
+    engine.rpc = chain_with_single_buy(
+        engine.wallet_address, account, mint, tokens=1_000 * UNIT, lamports=100_000_000
+    )
+    engine.jupiter = FakeJupiter(200_000_000)
+    write_lot(engine, mint, origin=ORIGIN_OPERATOR)
+
+    row, _execution = await engine._inspect_position(
+        holding_of(mint, 1_000 * UNIT, account), engine.config.positions[0], None
+    )
+    await engine.close()
+
+    # The operator said 0.2 SOL; the chain says 0.1. The operator's number stands.
+    assert row["basis_source"] == "operator"
+    assert Decimal(row["pnl_pct"]) == Decimal("0")
+
+
+@pytest.mark.asyncio
 async def test_inspect_position_falls_back_to_rug_only_when_basis_cannot_be_read(
     tmp_path: Path,
 ) -> None:

@@ -324,13 +324,22 @@ def _basis_needs_observation(lot: Any, policy: Any) -> bool:
     """Is this lot's PnL reference still missing an on-chain origin?
 
     ``needs_basis`` is the lot lifecycle declaring the previous lot's cash basis
-    dead. The second clause is the migration: every basis the sentinel wrote for
+    dead. The third clause is the migration: every basis the sentinel wrote for
     itself before this fix was a Jupiter exit quote stamped as ``cost_basis_sol``,
     so a default-origin policy is trusted only once it carries an observed
     ``buy_price_sol``. Operator-typed numbers are never overwritten.
+
+    The second clause reads the chain for ANY policy that carries no basis at all,
+    whatever its origin. There is nothing to overwrite in that case, so the rule
+    "operator numbers are never overwritten" is not weakened — and without it, an
+    operator-origin policy created with no basis (the Telegram desk now sends none,
+    because the number it used to send was the current exit quote) would have stayed
+    rug-only forever instead of getting the real basis off chain.
     """
 
     if lot.needs_basis:
+        return True
+    if policy.buy_price_sol is None and policy.cost_basis_sol is None:
         return True
     return lot.origin == ORIGIN_DEFAULT and policy.buy_price_sol is None
 

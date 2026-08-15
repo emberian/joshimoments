@@ -62,8 +62,13 @@ def test_desk_render_lists_observe_and_protected() -> None:
     assert "take_profit_pct" not in body
     assert "runner_tightness" not in body
     assert "exit_style" not in body
-    assert body["cost_basis_sol"] == 0.1
     assert body.get("execution") is None
+    # And NO cost basis. `exit_sol` is the current exit quote: stamping it as basis makes
+    # PnL start at 0% whatever was actually paid, which is the mechanism that turned every
+    # stop into a realized loss. The desk sent it on every button press.
+    assert "cost_basis_sol" not in body
+    assert "buy_price_sol" not in body
+    assert 0.1 not in body.values()
 
     # A bag that already has a rule round-trips its own numbers, not the desk's.
     omg = next(bag for bag in bags if bag.name == "OMG")

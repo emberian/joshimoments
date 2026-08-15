@@ -135,13 +135,14 @@ def default_policy_body(bag: BagView) -> dict[str, Any]:
         body["runner_tightness"] = bag.runner_tightness
     if bag.rug_exit is not None:
         body["rug_exit"] = bag.rug_exit
-    if bag.exit_sol:
-        try:
-            basis = float(bag.exit_sol)
-        except ValueError:
-            basis = None
-        if basis is not None and basis > 0:
-            body["cost_basis_sol"] = basis
+    # NO COST BASIS. `exit_sol` is what the bag would fetch RIGHT NOW, and stamping it as
+    # cost basis is the fabrication that made PnL start at 0% regardless of what was paid,
+    # so every stop fired below an already-fallen price: -7.47 SOL in one live window. The
+    # sentinel refuses this in `policies_for_unmonitored` and the browser refuses it too;
+    # this desk was still doing it on every "Protect now" AND on every threshold button,
+    # because each press rebuilt the body and re-stamped a fresh quote. The sentinel
+    # reconstructs the real basis from observed on-chain buys, and until it can, the bag is
+    # rug-only, which is the honest state.
     return body
 
 
