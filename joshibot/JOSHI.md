@@ -447,6 +447,20 @@ here, first** — purely additive, no money path, and every week not recording t
 beliefs is data lost forever (the same argument that made the tape recorder do-first).
 *Exit criterion:* operator stops opening the v1 dashboard for a week without noticing.
 
+> **Shipped early, in v1 form, 2026-08-15 — because "every week not recording the operator's
+> beliefs is data lost forever" argued for its own schedule.** `state/hunches.jsonl` is an
+> append-only, fsynced tape of Expectation-shaped rows (scope, claim, horizon, confidence,
+> utterance kept VERBATIM, evidence, two clocks where the event clock is the gesture), with
+> `hunch.retraction.v1` rows in place of edits. Capture is a click on a coin card in the v1
+> glass (`app/views/explorer.tsx` → `shitcoims_paperdesk.glass`, loopback :8790); a
+> `wiggle` claim opens a real paper position in the desk's fifth book under the wiggle
+> book's execution, and `down`/`up`/`watch` compile to a scored claim with a falsifier
+> level and a Brier at horizon. What is NOT here is the part that needs the platform: the
+> compiler that turns a belief into a reviewable diff of command proposals, and the
+> approval step. When joshid exists, this tape is the import source — the row shape is the
+> `Expectation` record's, deliberately, so the migration is a read rather than a
+> reconstruction.
+
 **M2 — commands orchestrate the v1 organs.**
 Order tickets and LP actions initiated from the glass flow through the command pipeline,
 which **shells out to the existing v1 executors** (lpexec CLI, sentinel's exit machinery for
