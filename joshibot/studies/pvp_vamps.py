@@ -57,14 +57,20 @@ COMMANDS
 Run in order. Each stage writes parquet/json under ``studies/data/pvp_vamps/`` and later
 stages read earlier ones, so only ``flow`` is expensive.
 
-``flow``       per-(mint, wallet, tx) trade tape with exact SOL, for the cohort   (~10 min)
-``rotation``   the rotation cohort: wallets active on >=k of the last N hot coins
-``panel``      coin x 30-minute buckets, PvP features (causal) and forward outcomes
+``flow``       per-(mint, wallet, tx) trade tape with exact SOL, for the cohort    (~65 s)
+``rotation``   the rotation cohort: wallets active on >=k of the last N hot coins  (~30 s)
+``panel``      coin x 30-minute buckets, PvP features (causal) and forward outcomes (~35 s)
 ``classify``   PvP-state vs the ``recycled_30m`` baseline; temporal split, nulls, FDR
 ``arena``      eta components conditional on PvP state; the LP window and how it ends
 ``transition`` PvP-transition lead time before the price break; the operator's four coins
-``vamp``       directed host->clone drain vs BOTH nulls; drain-onset vs swarm-onset
-``report``     everything, in the order RESULT_pvp_vamps.md reports it
+``vamp``       directed host->clone drain vs BOTH nulls; drain vs host deterioration
+``regimes``    five OTHER readings of "PvP" -- market-wide, lifecycle, onset, the wiggle
+               flip, and the pack's own balance. Two of them change the conclusions.
+``burst``      the latency-decay curve of a flow-burst entry, over the whole corpus,
+               against a naive control AND an active-minute control
+``opnow``      score the operator's four coins on TODAY's live flow, not the corpus edge
+``duel-fetch`` page a same-name family's wallet-level trade tapes from pump.fun
+``duel``       reconstruct one duel's cascade at 1 s resolution and price its latencies
 
 Invocation is always ``uv run --group research python -m studies.pvp_vamps <cmd>``.
 Nothing here touches the network, signs anything, or reads the live sentinel's state.
