@@ -834,6 +834,45 @@ than left compounding in the bank.
 
 ---
 
+## 9. The model ladder (2026-08-16, operator's design)
+
+The operator's program-synthesis instinct, sequenced by their own tooling principle: *"develop the
+tools on easier models before scaling the complexity of the model, otherwise the unreliability of
+the tools may mask unreliability (or reliability!) of the models."* Every rung validates the
+evaluator the next rung depends on.
+
+**Rung 0 — model-health exits.** Any fitted model emits one-step-ahead residuals; a sequential test
+(e-CUSUM, validated against planted shifts) on that stream exits positions on MODEL DEATH, not
+price. Start on the easiest models: the wiggle book's oscillation model (its 5-minute clock is the
+degenerate case), OU on cluster ratios. This subsumes the clock, the deterioration stack, and the
+"it'll come back" safety rail in one construct, and it is the operator's sentence made mechanical:
+*"exiting once the model is no longer predictive."*
+
+**Rung 1 — circuit classification.** The finite taxonomy — capacitor-relaxation, EMF-burst,
+metered current source, ghost town (C→0), diode-dominated, self-loop — fit per coin-episode with
+MDL scores. The components have exact semantics (§8: C=TVL/4, R=τ/C identified, energy ledger
+closing 94–98%), so classification is estimation, not vibes. The crime study's signatures were the
+hand-rolled prototype.
+
+**Rung 2 — abductive synthesis.** Search over a typed circuit grammar (authored in Lean, per the
+house rule) for the minimal circuit explaining an observed signal. HARD REQUIREMENT from our own
+scar tissue: passive traces frequently cannot distinguish circuits (Capponi–Cont), so the output is
+an EQUIVALENCE CLASS plus, where it matters, the DISTINGUISHING EXPERIMENT — whose template already
+exists (the two-point-size injection design with its computed power gate). Abduce, find the
+ambiguity, inject to resolve. A hypothesis that binds to no observable must be inexpressible in the
+grammar.
+
+**Rung 3 — evolutionary sizing/ensemble search.** Evolution is a fine optimizer and a catastrophic
+multiple-tester: a 1,458-cell grid manufactured a +6% winner from noise half the time (p=0.455 on
+permuted worlds), and a population is that grid breeding. The evaluator therefore comes first and
+must be evolution-proof by construction: deflated fitness (MDL / deflated-Sharpe), temporal-OOS
+always, and the permuted-worlds harness as a hard gate — a lineage that wins on permuted worlds is
+discarded regardless of backtest. Sizing evolves around a fractional-Kelly spine (edge, uncertainty,
+arrival rate, depth, bankroll), not from scratch. Consumes the paperdesk propensity tapes and the
+corpus.
+
+---
+
 ## The bar
 
 The results in this field that survived — `γ = α−1`, `β = (1−γ)/2`, `δ = ½`, Marchenko-Pastur — are
