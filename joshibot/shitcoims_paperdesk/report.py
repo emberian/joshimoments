@@ -609,7 +609,11 @@ def _operator(rows: Rows) -> list[str]:
     elif not closes:
         out.append("  (no operator position has closed yet — nothing to compare)")
     ghosts = sum(
-        1 for d in rows.decisions if str(d.get("book")) == "operator" and d.get("ghost_town")
+        1
+        for d in rows.decisions
+        if str(d.get("book")) == "operator"
+        and d.get("ghost_town")
+        and str(d.get("decision_id")) not in rows.retracted_decisions
     )
     if ghosts:
         out.append(f"  {ghosts} entered against a failing depth gate — warned, tagged, never vetoed.")
