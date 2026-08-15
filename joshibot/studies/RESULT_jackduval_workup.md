@@ -166,22 +166,31 @@ read as causation here.
 Unpacking his token-balance legs from the same corpus — **2,817 legs across 494 distinct
 mints** — gives the shape of the operation:
 
-| span between his first and last balance change on a mint | |
+One of the 494 is **USDC** (`EPjFWdd5…TDt1v`, 180 legs) — a cash balance, not a traded
+position, and it is excluded below. Every one of the remaining **493 ends in `pump`**: he
+trades pump.fun coins and nothing else.
+
+| span between his first and last balance change on a coin | 493 coins |
 |---|---|
 | p10 | 0 s |
 | **median** | **45 s** |
-| p90 | 2,994 s (50 min) |
-| max | 827,019 s (9.6 days) |
-| **under 120 s** | **309 / 494 = 62.6%** |
-| under 600 s | 390 / 494 = 78.9% |
+| p90 | 2,968 s (49 min) |
+| max | 230,388 s (2.7 d) |
+| under 60 s | 264 / 493 = **53.5%** |
+| **under 120 s** | **309 / 493 = 62.7%** |
+| under 600 s | 390 / 493 = 79.1% |
+| under 1 h | 448 / 493 = **90.9%** |
 
-**He is a systematic sub-minute scalper across ~50 coins a day.** The 58-second round trip in
-§4 is not an anecdote — 45 s is the *median*, and the live capture landed almost exactly on it.
+**He is a systematic sub-minute scalper across ~50 coins a day** — 46, 49, 40, 50, 45, 55, 48,
+21, 118, 50 distinct coins on the ten days. **70.0% of his coins reach a zero balance**, i.e. he
+fully exits most of what he touches. The 58-second round trip in §4 is not an anecdote: 45 s is
+the *median*, and the live capture landed almost exactly on it.
 
-*Measurement note:* this span is first-to-last balance change per mint, which is a proxy for
-hold time and not a settled position lifetime. `p10 = 0` is mints touched in a single
-transaction. The tail is real too — a 9.6-day position exists — so "scalper" describes the mass
-of the distribution, not every trade.
+*Measurement note:* this span is first-to-last balance change per coin, a proxy for hold time
+and not a settled position lifetime. `p10 = 0` is coins touched in a single transaction. The
+tail is real — the longest position runs 2.7 days — so "scalper" describes the mass of the
+distribution, not every trade. An earlier pass of this section quoted a 9.6-day maximum; that
+was the USDC balance, and excluding it is the correction.
 
 ### 3.2 He has never touched the operator's coins
 
