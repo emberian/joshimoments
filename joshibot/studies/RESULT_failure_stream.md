@@ -468,8 +468,9 @@ The live cluster tape covers 2026-08-09 → 08-15; the bulk export stops 2026-08
 | `i0:0x8` | 3.2% | 0.5% | 29 |
 | `i3:0x51` | **2.8%** | 12.5% | **1** |
 
-**Total-variation overlap between the two error-code distributions: 56.0%.** (55.9% on a
-re-run two hours later — the live tape keeps growing, so this figure drifts by design.) The *catalogue*
+**Total-variation overlap between the two error-code distributions: 56.0%.** (55.9–56.7%
+across three runs over four hours — the live tape keeps growing, so this figure drifts by
+design; the stability of the drift is itself mild evidence the 56% is real.) The *catalogue*
 is stable — nine of the held-out top twelve are top-30 in training — but the *mix* moves a
 lot in two days. `i3:0x51`, 12.5% of all training failures and rank 1, collapses to 2.8%.
 
