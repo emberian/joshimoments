@@ -126,3 +126,62 @@ No launch verdict is offered for weave, SOLVE or DREGG. That is a data boundary,
 and it is not worked around.
 
 ---
+
+## 4. The fleet caught firing, live, four minutes after it was subscribed
+
+`RESULT_jackduval_workup.md` §5.7 found the coordinated set retrospectively and could not say
+whether the wallets lead, follow, or fire together — a ten-day corpus has slots, but same-slot
+`tx_index` is not a clock. So the three were added to the live `accountTrade` subscription at
+**18:36:59Z**. **Four minutes later the whole fleet fired**, on a coin none of them had touched
+before.
+
+`JDKBdwTqveZKqY9A8UVLySjvhfhvPt4r3DUfsyeEpump`, offsets relative to the first frame:
+
+| t | wallet | side | SOL | balance after |
+|---|---|---|---|---|
+| +0.000 s | shadow_B | buy | 1.012852 | 18,538,072 |
+| +0.001 s | **jackduval** | buy | 1.037355 | 18,091,373 |
+| +0.068 s | shadow_C | buy | 1.164884 | 19,313,441 |
+| +0.069 s | shadow_A | buy | 1.184909 | 18,638,267 |
+| +5.130 s | shadow_C | buy | 0.264004 | 21,712,300 |
+| +5.131 s | shadow_A | buy | 0.244013 | 20,836,671 |
+| +5.263 s | **jackduval** | buy | 0.227438 | 20,124,379 |
+| +5.263 s | shadow_B | buy | 0.242324 | 20,687,283 |
+| **+39.580 s** | shadow_B | **sell** | 2.845926 | **0** |
+| **+39.580 s** | **jackduval** | **sell** | 2.548800 | **0** |
+| **+39.620 s** | shadow_A | **sell** | 2.437017 | **0** |
+| **+39.620 s** | shadow_C | **sell** | 2.345393 | **0** |
+
+**5.3778 SOL in, 10.1771 SOL out — +4.7994 SOL (+89.2%) in 39.6 seconds**, across four wallets
+acting as one.
+
+Five things this settles that the corpus could not:
+
+1. **It is a genuine multi-wallet operation, not a copy bot.** All four enter inside **69
+   milliseconds** and exit inside **40 milliseconds**, each to a **zero** balance. A copier
+   watching a leader cannot exit 40 ms after him on a coordinated schedule; it would lag by a
+   network round trip and would not know to go flat.
+2. **jackduval is not the leader.** shadow_B's buy precedes his by **1 ms**, and on the second
+   tranche two shadows precede him by 133 ms. He is a peer in a four-wallet fleet, not a caller
+   the others follow. **Watching "his wallet" is watching one quarter of an entity** — which
+   materially reframes the operator's original request.
+3. **Sizes are choreographed but deliberately jittered** — 1.0129 / 1.0374 / 1.1649 / 1.1849, then
+   0.2440 / 0.2423 / 0.2274 / 0.2640. Near-equal, never equal. That is what evading a
+   naive exact-size matcher looks like, and it is why §2 ranks size choreography as a *moderate*
+   channel: the CV is tight but no two clips match.
+4. **The exit is the tell.** Four wallets going flat within 40 ms is the single least deniable
+   event in this file. Independent traders do not simultaneously zero.
+5. **Two tranches, five seconds apart** — a first block of ~1.1 SOL each and a top-up of ~0.24
+   SOL each. That is a size ladder, executed in parallel across the fleet.
+
+A second coin in the same window, `HewQyEvrnAiGUEVHSSdh4A8Ws3PuWySTPjuzERvXpump`, shows the same
+four wallets buying twice in near-lockstep (all four inside 87 ms, then all four again inside
+35 ms). Every leg reports `newTokenBalance: 0`, which is anomalous for a buy and is **not
+interpreted here** — it may be a failed or immediately-reverted position, and one unexplained
+field is not worth a story.
+
+**n = 2 coins, one 4-minute window.** The choreography is unambiguous; its *frequency* is not
+estimated. What this window establishes is the mechanism, and that the live subscription is the
+right instrument for it — the retrospective corpus produced a 99% breadth statistic and an open
+question, and forty seconds of forward tape closed the question the corpus could not.
+
