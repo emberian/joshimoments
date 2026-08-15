@@ -1,0 +1,53 @@
+# shitcoims_lpexec -- LP-only Meteora DLMM execution for "tha funds".
+#
+# Copy to `lpexec.yaml` (gitignored) and edit. A MISSING file is not an error: absence means
+# every gate is closed and every command runs dry, which is exactly what a review machine
+# should do. A file that EXISTS but does not parse is an error, because somebody wrote
+# something they believed was in effect.
+#
+# This is deliberately NOT a section of `config.yaml`. The sentinel's config file holds a
+# different wallet's live-money policy, and one package's broken edit must not be able to
+# misconfigure another package that is holding money. (At the time of writing `config.yaml`
+# itself did not parse; a shared file would have taken this package down with it.)
+
+wallet:
+  # Fixed. The package refuses to load a config, or a key, naming any other wallet.
+  address: "Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ"
+  # Base58 64-byte keypair, mode 0600 or stricter. May not exist: that is one open gate,
+  # reported in `status`, not an exception.
+  secret_key_file: "~/.thafunds-wallet"
+
+rpc:
+  helius_api_key_file: "~/.helius-key"
+
+state_dir: "./state"          # ledger lands in ./state/lpexec/lpexec-YYYYMMDD.jsonl
+rpc_timeout_seconds: 60
+
+execution:
+  # GATE 1 of 3. The other two are `--live` on the command line and the arm file below.
+  # All three are required; any one absent is a dry run.
+  enabled: false
+
+  # GATE 3 of 3. Written by `python -m shitcoims_lpexec arm` at mode 0600, containing
+  # exactly `lpexec:<wallet address>`. Package-scoped on purpose: the sentinel's arm file
+  # says `shitcoims:<...>` and will not satisfy this one.
+  arm_file: "./state/LPEXEC_ARMED"
+
+  # Landing bid ceiling. RESULT_execution_landing.md sec.8 clamps the bid to
+  # [100_000, 3_000_000] microlamports/CU; at a ~90,000 CU limit that is 9,000-270,000
+  # lamports, so 1,000,000 leaves headroom without permitting an absurd fee.
+  max_priority_fee_lamports: 1000000
+
+  # CAPS. All four are checked before anything is built, and the per-day figures are read
+  # back from the ledger (submitted rows only) so a restart cannot reset them.
+  #
+  # Sizing note: one new position plus two virgin bin arrays is 0.057 + 2 x 0.071 = 0.200
+  # SOL, so 0.3 SOL per transaction is "one position, some rent, and no more".
+  per_tx_max_sol_lamports: 300000000       # 0.30 SOL
+  per_day_max_sol_lamports: 900000000      # 0.90 SOL
+  per_tx_max_token_usd: 400                # the whole nosis leg is ~$390
+  per_day_max_token_usd: 1200              # the whole book is ~$1,215
+
+  # Rate limit. A desk that needs more than forty LP transactions in a day has a bug.
+  min_seconds_between_transactions: 5
+  max_transactions_per_day: 40

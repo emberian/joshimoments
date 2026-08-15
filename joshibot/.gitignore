@@ -44,6 +44,10 @@ yarn-error.log*
 
 # shitcoims sentinel: local secrets, policy, and runtime artifacts
 /config.yaml
+# lpexec: its own config, kept out of the sentinel's file so one broken edit cannot
+# misconfigure the other package. See lpexec.example.yaml.
+/lpexec.yaml
+/shitcoims_lpexec/node/node_modules/
 /state/
 /intelligence.yaml
 /intelligence_state/

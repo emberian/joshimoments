@@ -74,6 +74,9 @@ files = [
   "shitcoims_tape",
   "shitcoims_kernel",
   "shitcoims_replay",
+  # Gated from birth rather than added to the debt pile: this package signs transactions
+  # for a second wallet, and its refusals are the product.
+  "shitcoims_lpexec",
 ]
 warn_unused_configs = true
 warn_redundant_casts = true
