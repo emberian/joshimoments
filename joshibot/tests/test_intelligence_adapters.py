@@ -439,9 +439,18 @@ def test_tweet_to_observations_indexes_mints_and_cashtags_separately() -> None:
     assert kinds["x_mint_mention"].subject_id == mint
     assert kinds["x_cashtag"].subject_type == "cashtag"
     assert kinds["x_cashtag"].subject_id == "BONK"
+    # A thread query returns replies by strangers under the watched handle, so
+    # a tweet the KOL did not write must not be filed as that KOL's post.
     watched = {item.kind: item for item in tweet_to_observations(tweet, watched_handle="blknoiz06")}
-    assert watched["x_kol_post"].subject_type == "kol"
-    assert watched["x_kol_post"].subject_id == "blknoiz06"
+    assert "x_kol_post" not in watched
+    assert watched["x_kol_thread"].subject_type == "kol"
+    assert watched["x_kol_thread"].subject_id == "blknoiz06"
+    assert watched["x_kol_thread"].payload["authored_by_kol"] is False
+    assert watched["x_kol_thread"].payload["author_username"] == "alpha"
+    authored = {item.kind: item for item in tweet_to_observations(tweet, watched_handle="Alpha")}
+    assert authored["x_kol_post"].subject_type == "kol"
+    assert authored["x_kol_post"].subject_id == "Alpha"
+    assert authored["x_kol_post"].payload["authored_by_kol"] is True
     assert all(item.can_execute is False for item in records if hasattr(item, "can_execute"))
     assert all(item.finality.value == "unverified" for item in records)
 

@@ -11,7 +11,12 @@ import pytest
 
 from shitcoims_intelligence.adapters.x_apify import ENDPOINT as X_APIFY_ENDPOINT
 from shitcoims_intelligence.config import load_intelligence_config
-from shitcoims_intelligence.runtime import X_KOL_WATCHLIST_ID, X_WATCHLIST_ID, CollectorRuntime
+from shitcoims_intelligence.runtime import (
+    STUCK_CYCLE_SECONDS,
+    X_KOL_WATCHLIST_ID,
+    X_WATCHLIST_ID,
+    CollectorRuntime,
+)
 from shitcoims_intelligence.service import build_service
 from shitcoims_intelligence.storage import IntelligenceStore, SingleWriter
 
@@ -404,7 +409,9 @@ def test_health_honest_during_first_cycle(tmp_path: Path) -> None:
         assert in_progress["cycle_started_at"] is not None
         assert in_progress["last_cycle_at"] is None
 
-        runtime._cycle_started_at = datetime.now(UTC) - timedelta(seconds=200)
+        runtime._cycle_started_at = datetime.now(UTC) - timedelta(
+            seconds=STUCK_CYCLE_SECONDS + 20
+        )
         stuck = runtime.health()
         assert stuck["healthy"] is True
         assert stuck["last_error"] == "collection cycle appears stuck"

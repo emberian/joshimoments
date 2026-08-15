@@ -53,6 +53,44 @@ _MINT_URLS = (
     re.compile(rf"https?://(?:www\.)?birdeye\.so/token/({_BASE58})(?:[/?#\s]|$)", re.I),
     re.compile(rf"https?://(?:www\.)?axiom\.trade/(?:t/|meme/)?({_BASE58})(?:[/?#\s]|$)", re.I),
 )
+# A callout usually pastes the contract address as bare text, not as a link, so a
+# URL-only extractor misses the canonical form. Two admissible bare shapes, both
+# of which identify a *mint* rather than merely looking like base58:
+#   1. a launchpad vanity suffix (pump.fun mints end "pump", letsbonk "bonk"),
+#   2. an explicit CA/contract/mint marker immediately before the address.
+# A bare 32-44 char base58 string with neither is left alone: it is as likely to
+# be a wallet or a signature fragment, and the live scalper reads these.
+_BARE_MINT_SUFFIXED = re.compile(
+    rf"(?<![1-9A-HJ-NP-Za-km-z])({_BASE58[:-1]}}}(?:pump|bonk|moon|boop))(?![1-9A-HJ-NP-Za-km-z])"
+)
+# The marker is case-insensitive; the ADDRESS must not be. `re.I` over a base58
+# character class silently re-admits `l`, `I` and `O` through their opposite-case
+# counterparts, which is how a lowercased, unusable address got through.
+_BARE_MINT_MARKED = re.compile(
+    r"(?i:\bca\b|\bcontract\b|\bmint\b|\baddress\b|\btoken\b)\s*[:=\-–]?\s*"
+    rf"({_BASE58})(?![1-9A-HJ-NP-Za-km-z])"
+)
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_B58_INDEX = {c: i for i, c in enumerate(_B58_ALPHABET)}
+
+
+def is_solana_mint(text: str) -> bool:
+    """True when `text` decodes to a 32-byte base58 value — a real Solana address.
+
+    A length-and-forbidden-character test admits strings that are not addresses
+    at all. Decoding is exact and costs nothing at this volume.
+    """
+
+    if not 32 <= len(text) <= 44:
+        return False
+    value = 0
+    for char in text:
+        index = _B58_INDEX.get(char)
+        if index is None:
+            return False
+        value = value * 58 + index
+    leading_zeros = len(text) - len(text.lstrip("1"))
+    return leading_zeros + (value.bit_length() + 7) // 8 == 32
 _TWITTER_TIME = "%a %b %d %H:%M:%S %z %Y"
 
 
@@ -84,8 +122,19 @@ class XTweet:
     mint_candidates: tuple[str, ...]
     conversation_id: str | None
     provenance: SourceProvenance
+    #: Mints typed into the body rather than linked. Same address space, weaker
+    #: provenance, so it travels in its own field instead of being merged.
+    bare_mint_candidates: tuple[str, ...] = ()
     policy_effect: str = "observe"
     can_execute: bool = False
+
+    @property
+    def all_mints(self) -> tuple[str, ...]:
+        """Union, URL-derived first, for consumers that want maximum recall."""
+
+        merged = list(self.mint_candidates)
+        merged.extend(m for m in self.bare_mint_candidates if m not in merged)
+        return tuple(merged)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +235,8 @@ def _extract_handles(text: str, *, author: str) -> tuple[str, ...]:
 
 
 def _extract_mint_candidates(*texts: str) -> tuple[str, ...]:
+    """URL-derived mints only. The live scalper has always consumed exactly this."""
+
     seen: list[str] = []
     for text in texts:
         if not text:
@@ -197,6 +248,27 @@ def _extract_mint_candidates(*texts: str) -> tuple[str, ...]:
                     seen.append(mint)
                 if len(seen) >= 8:
                     return tuple(seen)
+    return tuple(seen)
+
+
+def _extract_bare_mints(body: str) -> tuple[str, ...]:
+    """Mints pasted as text rather than linked — the canonical callout shape.
+
+    Kept separate from the URL extractor so downstream consumers can tell a
+    linked mint from a typed one; the two have different false-positive
+    profiles and the live path should be free to trust only the first.
+    """
+
+    seen: list[str] = []
+    if not body:
+        return ()
+    for pattern in (_BARE_MINT_SUFFIXED, _BARE_MINT_MARKED):
+        for match in pattern.finditer(body):
+            mint = match.group(1)
+            if mint not in seen and is_solana_mint(mint):
+                seen.append(mint)
+            if len(seen) >= 8:
+                return tuple(seen)
     return tuple(seen)
 
 
@@ -257,6 +329,7 @@ def tweet_to_observations(
         "cashtags": list(tweet.cashtags),
         "mentioned_handles": list(tweet.mentioned_handles),
         "mint_candidates": list(tweet.mint_candidates),
+        "bare_mint_candidates": list(tweet.bare_mint_candidates),
         "like_count": tweet.like_count,
         "retweet_count": tweet.retweet_count,
         "reply_count": tweet.reply_count,
@@ -281,7 +354,9 @@ def tweet_to_observations(
             provenance=(tweet.url,),
         )
     ]
-    for mint in tweet.mint_candidates:
+    linked = set(tweet.mint_candidates)
+    for mint in tweet.all_mints:
+        from_url = mint in linked
         records.append(
             Observation(
                 source_id=SOURCE_ID,
@@ -291,8 +366,13 @@ def tweet_to_observations(
                 subject_id=mint,
                 observed_at=observed,
                 emitted_at=emitted,
-                payload={**payload, "title": f"@{author} mentioned a mint", "mint": mint},
-                confidence=0.45,
+                payload={
+                    **payload,
+                    "title": f"@{author} mentioned a mint",
+                    "mint": mint,
+                    "mint_source": "url" if from_url else "text",
+                },
+                confidence=0.45 if from_url else 0.40,
                 finality=Finality.UNVERIFIED,
                 parser_version=ADAPTER_VERSION,
                 provenance=(tweet.url,),
@@ -317,20 +397,30 @@ def tweet_to_observations(
         )
     if watched_handle:
         handle = watched_handle.strip().lstrip("@")
+        # A thread query (`conversation_id:…`) returns replies by strangers, and
+        # the KOL rotation itself is a `from:` search whose results can include
+        # quoted material. Only the tweets the KOL actually wrote may be filed
+        # as that KOL's post; the rest stay attributable to their real author.
+        authored = author.lower() == handle.lower()
         records.append(
             Observation(
                 source_id=SOURCE_ID,
                 source_native_id=f"{tweet.tweet_id}:kol:{handle}",
-                kind="x_kol_post",
+                kind="x_kol_post" if authored else "x_kol_thread",
                 subject_type="kol",
                 subject_id=handle,
                 observed_at=observed,
                 emitted_at=emitted,
                 payload={
                     **payload,
-                    "title": f"KOL @{handle}: {tweet.text[:80]}" if tweet.text else f"KOL @{handle}",
+                    "title": (
+                        (f"KOL @{handle}: {tweet.text[:80]}" if tweet.text else f"KOL @{handle}")
+                        if authored
+                        else f"in @{handle} thread — @{author}: {tweet.text[:60]}"
+                    ),
+                    "authored_by_kol": authored,
                 },
-                confidence=0.55,
+                confidence=0.55 if authored else 0.30,
                 finality=Finality.UNVERIFIED,
                 parser_version=ADAPTER_VERSION,
                 provenance=(tweet.url,),
@@ -395,7 +485,11 @@ class XApifyAdapter:
         for item in body:
             parsed = self._parse_item(item, provenance)
             if isinstance(parsed, XTweet):
-                if len(results) < limit:
+                # The actor bills per result and routinely returns more than
+                # `maxItems` (20 for a requested 3). Discarding the overshoot
+                # threw away already-purchased evidence; keep it, bounded by
+                # the same hard ceiling that guards the response size.
+                if len(results) < HARD_MAX_ITEMS:
                     results.append(parsed)
             elif parsed is not None:
                 quarantined.append(parsed)
@@ -443,6 +537,19 @@ class XApifyAdapter:
                 source_event_id=tweet_id,
             )
         extra_urls = _item_urls(item)
+        # A callout is frequently a quote-tweet or retweet of the launch post,
+        # so the mint lives in the nested object, not in `text`.
+        nested = []
+        for key in ("quoted_tweet", "retweeted_tweet"):
+            child = item.get(key)
+            if isinstance(child, dict):
+                child_text = bounded_text(
+                    child.get("text") or child.get("fullText") or child.get("full_text"),
+                    limit=2_000,
+                    allow_empty=True,
+                )
+                if child_text:
+                    nested.append(child_text)
         return XTweet(
             tweet_id=tweet_id,
             url=url,
@@ -457,9 +564,10 @@ class XApifyAdapter:
             reply_count=_nonneg_int(item.get("replyCount") or item.get("reply_count")),
             quote_count=_nonneg_int(item.get("quoteCount") or item.get("quote_count")),
             view_count=_nonneg_int(item.get("viewCount") or item.get("view_count")),
-            cashtags=_extract_cashtags(text),
+            cashtags=_extract_cashtags(" ".join((text, *nested))),
             mentioned_handles=_extract_handles(text, author=username),
-            mint_candidates=_extract_mint_candidates(text, *extra_urls),
+            mint_candidates=_extract_mint_candidates(text, *nested, *extra_urls),
+            bare_mint_candidates=_extract_bare_mints(" ".join((text, *nested))),
             conversation_id=_digits(item.get("conversationId") or item.get("conversation_id")),
             provenance=provenance,
         )

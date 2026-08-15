@@ -77,10 +77,23 @@ adapters:
     enabled: false
     token_file: ~/.apify-token
     actor_id: kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest
-    max_items_per_query: 8
-    poll_interval_seconds: 1200
-    max_items_per_day: 200
+    # The pinned actor bills per RETURNED tweet ($0.00025 each) and returns ~20
+    # regardless of a smaller maxItems, so asking for fewer pays for 20 and
+    # discards the rest. Ask for what you are charged for.
+    max_items_per_query: 20
+    poll_interval_seconds: 600
+    # Spent evenly across the day by the runtime's per-cycle allowance, not in
+    # one burst at midnight: a hard daily wall makes every callout after the
+    # wall invisible, which biases the tape rather than merely shortening it.
+    # 2400/day is about $0.60/day.
+    max_items_per_day: 2400
     kol_thread_limit: 3
+    # These run every cycle; the KOL list rotates behind them. Ordered by
+    # measured distinct mints per purchased tweet (2026-08-15): dexscreener
+    # 0.95, axiom 0.70, "CA" pump 0.65, url:pump.fun 0.45, bare pump.fun 0.35.
+    # See studies/RESULT_callout_edge.md §1.1.
     queries:
+      - "url:dexscreener.com/solana"
       - "url:pump.fun"
+      - '"CA" pump'
     kols: []

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.boards</string>
+  <!-- The board tape is the return machinery every event study here depends on.
+       It was a `--minutes N` one-shot with no supervisor, so it simply ended and
+       nobody noticed until a study found the tape stopped mid-afternoon. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_scalper.boards</string>
+    <string>--minutes</string>
+    <string>0</string>
+    <string>--poll-seconds</string>
+    <string>30</string>
+    <string>--limit</string>
+    <string>50</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/boards.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/boards.err.log</string>
+</dict>
+</plist>

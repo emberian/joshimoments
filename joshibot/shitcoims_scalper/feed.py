@@ -164,7 +164,19 @@ class Callout:
 
 
 def _b58_mintish(text: str) -> bool:
-    return 32 <= len(text) <= 44 and not set(text) & set("0OIl")
+    """A real Solana address, not merely a string shaped like one.
+
+    The previous test was length plus a forbidden-character set, which admits
+    any 32-44 character string over the base58 alphabet — including transaction
+    signature fragments and truncated addresses. Decoding to exactly 32 bytes is
+    the actual definition and costs nothing at this volume. Measured on the live
+    store, the old test also silently dropped a lowercased address instead of
+    defecting it, so a bad string and a bad *parse* were indistinguishable.
+    """
+
+    from shitcoims_intelligence.adapters.x_apify import is_solana_mint
+
+    return is_solana_mint(text)
 
 
 def poll_callouts(*, max_age_s: float = 900.0, limit: int = 200) -> list[Callout]:

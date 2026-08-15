@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.firehose</string>
+  <!-- Omitting --minutes runs until SIGTERM. The recorder writes its own gap
+       rows across restarts, so a supervised restart stays honest about what it
+       did not see rather than papering over the hole. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_scalper.firehose</string>
+    <string>--subscribe</string>
+    <string>newToken,migration</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/firehose.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/firehose.err.log</string>
+</dict>
+</plist>

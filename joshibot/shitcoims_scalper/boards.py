@@ -168,24 +168,48 @@ def main() -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description="Record pump.fun board membership over time")
-    ap.add_argument("--minutes", type=float, default=60.0)
+    ap.add_argument(
+        "--minutes",
+        type=float,
+        default=60.0,
+        help="wall-clock duration; <= 0 runs until killed (the daemon mode)",
+    )
     ap.add_argument("--poll-seconds", type=float, default=30.0)
     ap.add_argument("--limit", type=int, default=50)
+    ap.add_argument(
+        "--heartbeat-polls",
+        type=int,
+        default=120,
+        help="emit a progress line every N polls so a dead recorder is visible in the log",
+    )
     args = ap.parse_args()
 
     watcher = BoardWatcher(limit=args.limit)
-    day = time.strftime("%Y%m%d", time.gmtime())
-    path = STATE_DIR / f"boards-{day}.jsonl"
-    end = time.time() + args.minutes * 60
+    # The UTC day is recomputed every poll. Stamping it once at start makes the
+    # tape spill past midnight into the previous day's file, which silently
+    # breaks any per-day cohort built from the filename.
+    end = time.time() + args.minutes * 60 if args.minutes > 0 else None
     counts = {"board_entry": 0, "board_exit": 0, "board_snapshot": 0}
+    polls = 0
 
-    while time.time() < end:
+    while end is None or time.time() < end:
         start = time.time()
-        records = watcher.poll()
-        append_jsonl(path, records)
+        path = STATE_DIR / f"boards-{time.strftime('%Y%m%d', time.gmtime())}.jsonl"
+        try:
+            records = watcher.poll()
+            append_jsonl(path, records)
+        except Exception as exc:  # a transient network/disk fault must not end the tape
+            print(f"poll failed: {type(exc).__name__}: {exc}", flush=True)
+            records = []
         for r in records:
             if r["kind"] in counts:
                 counts[r["kind"]] += 1
+        polls += 1
+        if args.heartbeat_polls > 0 and polls % args.heartbeat_polls == 0:
+            print(
+                json.dumps({"t": time.time(), "polls": polls, "file": path.name, **counts}),
+                flush=True,
+            )
         time.sleep(max(0.0, args.poll_seconds - (time.time() - start)))
 
     print(json.dumps(counts, indent=1))

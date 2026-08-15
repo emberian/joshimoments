@@ -7,7 +7,7 @@ import contextlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -60,9 +60,15 @@ X_KOL_WATCHLIST_ID = "x-kols"
 WRITE_TIMEOUT_SECONDS = 20
 # Wall budget for the X query slice only. Catalog, ClaudeKOL, and Helius always
 # run after X stops; they are local/bounded and must not be starved.
-CYCLE_BUDGET_SECONDS = 90
-QUERY_TIMEOUT_SECONDS = 20
-STUCK_CYCLE_SECONDS = 180
+#
+# Measured 2026-08-14: a `run-sync-get-dataset-items` call against the pinned
+# actor takes ~15 s. The old 20 s query timeout therefore tripped on ordinary
+# tail latency and burned the whole slice on nothing — every observed
+# `x_query_timeout` in source_health traces here. The old 90 s slice could not
+# finish a 15-item rotation at any latency, so the rotation took hours.
+CYCLE_BUDGET_SECONDS = 300
+QUERY_TIMEOUT_SECONDS = 45
+STUCK_CYCLE_SECONDS = 600
 # Mint-tape slice: never starve the rest of the cycle. Hard cap, not a ledger.
 MINT_TAPE_MAX_MINTS = 6
 MINT_TAPE_WALL_SECONDS = 15.0
@@ -379,6 +385,29 @@ class CollectorRuntime(BackgroundRuntime):
         work.extend(("kol", kol) for kol in cfg.kols)
         return work
 
+    def _x_cycle_allowance(self) -> int:
+        """Items this cycle may spend, shaped so the day's budget lasts the day.
+
+        A hard daily wall spends the whole allowance in the first hours and then
+        collects nothing for twenty-odd hours, which is a sampling bias in the
+        tape, not merely a throughput problem: every callout after the wall is
+        invisible and the surviving hours are not a random sample of the day.
+        Dividing what is left by the cycles left keeps coverage uniform.
+        """
+
+        cfg = self.config.adapters.x_apify
+        remaining = cfg.max_items_per_day - self._x_items_today
+        if remaining <= 0:
+            return 0
+        interval = max(float(cfg.poll_interval_seconds), 1.0)
+        now = utc_now()
+        midnight = datetime.combine(now.date(), datetime.min.time(), tzinfo=UTC) + timedelta(days=1)
+        cycles_left = max(1, int((midnight - now).total_seconds() // interval))
+        share = -(-remaining // cycles_left)  # ceil
+        # Never below one query's worth: a sub-query allowance buys nothing at
+        # all, and the rotation would stall instead of advancing.
+        return int(min(remaining, max(share, cfg.max_items_per_query)))
+
     def _x_over_budget(self, slice_started: datetime) -> bool:
         return (utc_now() - slice_started).total_seconds() >= self._cycle_budget_seconds
 
@@ -430,58 +459,70 @@ class CollectorRuntime(BackgroundRuntime):
         seen = 0
         quarantined = 0
         started = utc_now()
-        work = self._x_primary_work()
-        completed_rotation = True
+        # Discovery queries run every cycle; the KOL list rotates. Discovery is
+        # where mint-resolved callouts actually come from (measured 0.45-0.95
+        # distinct mints per purchased tweet, against ~0 for a KOL timeline),
+        # so putting it on the same round-robin as fourteen KOL handles starved
+        # the only channel that produces a joinable event.
+        queries = [q for q in cfg.queries]
+        kols = list(cfg.kols)
+        allowance = self._x_cycle_allowance()
+        spent_start = self._x_items_today
         try:
-            if work:
-                n = len(work)
-                idx = self._x_resume_index % n
-                start = idx
-                while True:
-                    if self._x_over_budget(started):
-                        self._x_hit_budget = True
-                        completed_rotation = False
-                        break
-                    self._roll_x_budget()
-                    remaining = cfg.max_items_per_day - self._x_items_today
-                    if remaining <= 0:
-                        completed_rotation = False
-                        break
-                    kind, payload = work[idx]
-                    if kind == "query":
-                        take = min(cfg.max_items_per_query, remaining)
-                        batch = await self._search_x(adapter, payload, max_items=take)
-                        if batch is not None:
-                            more_seen, more_q, more_ins = await self._ingest_x_batch(batch)
-                            seen += more_seen
-                            quarantined += more_q
-                            inserted += more_ins
-                    else:
-                        kol = payload
-                        take = min(kol.max_items, cfg.max_items_per_query, remaining)
-                        batch = await self._search_x(
-                            adapter, f"from:{kol.handle}", max_items=take
+            work: list[tuple[str, Any]] = [("query", q) for q in queries]
+            if kols:
+                idx0 = self._x_resume_index % len(kols)
+                work.extend(("kol", kols[(idx0 + i) % len(kols)]) for i in range(len(kols)))
+            for position, (kind, item) in enumerate(work):
+                if self._x_over_budget(started):
+                    self._x_hit_budget = True
+                    break
+                self._roll_x_budget()
+                spent = self._x_items_today - spent_start
+                remaining_today = cfg.max_items_per_day - self._x_items_today
+                if remaining_today <= 0 or spent >= allowance:
+                    # Allowance spent for this cycle; the rotation resumes next
+                    # cycle from `_x_resume_index`. Not a health event.
+                    break
+                if kind == "query":
+                    take = min(cfg.max_items_per_query, remaining_today)
+                    batch = await self._search_x(adapter, item, max_items=take)
+                    if batch is not None:
+                        more_seen, more_q, more_ins = await self._ingest_x_batch(batch)
+                        seen += more_seen
+                        quarantined += more_q
+                        inserted += more_ins
+                else:
+                    kol = item
+                    take = min(kol.max_items, cfg.max_items_per_query, remaining_today)
+                    batch = await self._search_x(
+                        adapter, f"from:{kol.handle}", max_items=take
+                    )
+                    # Advance past this KOL whether or not the query answered,
+                    # so one persistently slow handle cannot pin the rotation.
+                    if kols:
+                        self._x_resume_index = (position - len(queries) + 1) % len(kols)
+                    if batch is not None:
+                        more_seen, more_q, more_ins = await self._ingest_x_batch(
+                            batch, watched_handle=kol.handle
                         )
-                        if batch is not None:
-                            more_seen, more_q, more_ins = await self._ingest_x_batch(
-                                batch, watched_handle=kol.handle
+                        seen += more_seen
+                        quarantined += more_q
+                        inserted += more_ins
+                        if kol.follow_replies and cfg.kol_thread_limit > 0:
+                            extra = await self._collect_x_threads(
+                                adapter, kol, batch, started
                             )
-                            seen += more_seen
-                            quarantined += more_q
-                            inserted += more_ins
-                            if kol.follow_replies and cfg.kol_thread_limit > 0:
-                                extra = await self._collect_x_threads(
-                                    adapter, kol, batch, started
-                                )
-                                seen += extra[0]
-                                quarantined += extra[1]
-                                inserted += extra[2]
-                    idx = (idx + 1) % n
-                    self._x_resume_index = idx
-                    if idx == start:
-                        break
+                            seen += extra[0]
+                            quarantined += extra[1]
+                            inserted += extra[2]
             latency_ms = (utc_now() - started).total_seconds() * 1_000
-            if self._x_query_timeouts or self._x_hit_budget or not completed_rotation:
+            # Stopping on the per-cycle allowance is the design, not a fault:
+            # the rotation resumes next cycle and the day's coverage is even.
+            # Only a wall-clock overrun, a query timeout, or a genuinely spent
+            # day is a health signal.
+            exhausted_today = cfg.max_items_per_day - self._x_items_today <= 0
+            if self._x_query_timeouts or self._x_hit_budget or exhausted_today:
                 error_code = (
                     "x_query_timeout"
                     if self._x_query_timeouts
