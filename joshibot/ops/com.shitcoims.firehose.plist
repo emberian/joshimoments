@@ -15,11 +15,27 @@
     <string>-m</string>
     <string>shitcoims_scalper.firehose</string>
     <string>--subscribe</string>
-    <string>newToken,migration,tokenTrade</string>
+    <string>newToken,migration,tokenTrade,accountTrade</string>
+    <!-- Keys are PER METHOD and must stay that way. tokenTrade keys are MINTS,
+         accountTrade keys are WALLETS; a single shared list offers each feed the
+         other's addresses, which the vendor accepts and then answers with silence
+         forever. That is indistinguishable on the tape from a coin nobody traded,
+         so the recorder now refuses a bare list when both trade feeds are on. -->
     <string>--keys</string>
-    <!-- the four cluster coins; hunched/held coins get dynamic subscription when the
-         hunch glass lands. The funded ~/.pumpportal-key gates these streams. -->
-    <string>FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump,8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump,XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump,GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump</string>
+    <!-- the four cluster coins: nosis, weave, DREGG, SOLVE. Hunched/held coins get
+         dynamic subscription when the hunch glass lands. -->
+    <string>tokenTrade=FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump,8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump,XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump,GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump</string>
+    <string>--keys</string>
+    <!-- BAr5csYt = jackduvalcalls, the caller the operator asked to have watched.
+         This is his pump.fun PROFILE wallet, which is very often not the wallet a
+         caller trades from (RESULT_caller_wallets.md §1: the profile-to-trading link
+         resolves for 5 of 146 handles). So an empty stream here is a MEASUREMENT --
+         "his profile wallet does not trade" -- and not a broken subscription, which
+         is why the watch_open manifest now records the keys next to the window.
+         9T8QKsR2 = the capital-I homoglyph impersonating him. Watched deliberately:
+         the open question is whether it snipes or dumps into the real caller's flow,
+         and that can only be answered with forward tape. Never act on it. -->
+    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOUR_USERNAME/dev/joshibot</string>

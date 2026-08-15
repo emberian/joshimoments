@@ -155,9 +155,31 @@ Implement it when PumpPortal actually proves unreliable — the ledger and stale
 are what will show that, with dates and durations attached. It did not misbehave once in
 testing, so paying the decode-plus-credits cost today would buy nothing measurable.
 
+Subscription keys are per method, and that distinction is load-bearing
+----------------------------------------------------------------------
+``subscribeTokenTrade`` takes **mints** ("tell me about these coins"), and
+``subscribeAccountTrade`` takes **wallets** ("tell me about these traders"). Until
+2026-08-15 this module held a single ``keys`` list and sent it to both, so subscribing to
+both feeds at once offered each one the other's addresses. Nothing fails when you do that:
+a wallet is a well-formed base58 address, there is simply no coin by that name, and the
+vendor answers by saying nothing at all — forever, and indistinguishably from a coin nobody
+traded. The recorder existed to abolish exactly that ambiguity and had reintroduced it in
+the subscription itself.
+
+Keys are therefore a mapping, ``{Feed: keys}``, both in :class:`FirehoseClient` and on the
+CLI, and :func:`parse_keys` **refuses** a bare list when more than one keyed feed is
+subscribed rather than guessing. Every key must decode to 32 bytes (:func:`_validated_keys`)
+so a typo fails at startup instead of masquerading as a quiet market. The
+``watch_open`` row carries the full manifest, because "were we listening?" is only half the
+question once a subscription has keys — the other half is "to what?", and a study reading
+this tape needs both.
+
 CLI
 ---
 ``uv run python -m shitcoims_scalper.firehose --minutes 3 --subscribe newToken,migration``
+
+``--subscribe newToken,tokenTrade,accountTrade --keys tokenTrade=<mint>,<mint>
+--keys accountTrade=<wallet>``
 """
 
 from __future__ import annotations
@@ -268,16 +290,41 @@ class Feed(StrEnum):
         }[self]
 
     @property
+    def key_kind(self) -> str | None:
+        """What one of this feed's ``keys`` actually NAMES, or ``None`` if it takes none.
+
+        This property exists because the distinction it makes was, until 2026-08-15,
+        silently erased. ``subscribeTokenTrade`` keys are **mints**: watch these coins,
+        report whoever trades them. ``subscribeAccountTrade`` keys are **wallets**: watch
+        these traders, report whatever they touch. They are different sets of a different
+        kind, and the recorder held exactly one list and sent it to both.
+
+        Nothing complains when you get this wrong. The vendor accepts a wallet in a
+        ``subscribeTokenTrade`` frame — it is a well-formed base58 address, and there is
+        simply no coin by that name — and then sends nothing about it, forever. Which is
+        indistinguishable, on the tape, from a coin nobody traded. That is precisely the
+        failure this module was written to abolish, reintroduced one layer up in the
+        subscription itself rather than in the recording of it.
+        """
+
+        return {Feed.TOKEN_TRADE: "mint", Feed.ACCOUNT_TRADE: "wallet"}.get(self)
+
+    @property
     def needs_keys(self) -> bool:
         """Whether the subscribe frame must carry a ``keys`` list of mints/wallets."""
 
-        return self in (Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE)
+        return self.key_kind is not None
 
     @property
     def needs_funded_key(self) -> bool:
         """Observed 2026-08-14: the trade feeds require an API key funded with >= 0.02 SOL."""
 
         return self in (Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE)
+
+
+#: Feeds that take a ``keys`` list, in CLI-spelling order. Derived from :attr:`Feed.key_kind`
+#: so it can never drift from the property that defines the distinction.
+KEYED_FEEDS: Final[tuple[Feed, ...]] = tuple(f for f in Feed if f.needs_keys)
 
 
 def parse_feeds(spec: str) -> tuple[Feed, ...]:
@@ -298,6 +345,108 @@ def parse_feeds(spec: str) -> tuple[Feed, ...]:
     if not out:
         raise ValueError("no subscriptions requested")
     return tuple(out)
+
+
+def _validated_keys(feed: Feed, raw: Iterable[str]) -> tuple[str, ...]:
+    """Every subscription key must DECODE to a 32-byte Solana address.
+
+    A character-class test is not enough and this repo has the scar: ``feed.py``'s
+    ``_b58_mintish`` was a length-plus-forbidden-character check that admitted any
+    base58-shaped string, and a lowercased address passes it while naming a different
+    account or none at all. ``is_solana_mint`` decodes, which is the same check the tape
+    schema and the live scalper both settled on.
+
+    Refusing here rather than at connect time is deliberate: a malformed key is accepted
+    by the vendor and then produces silence, so a typo in a launchd plist would look
+    exactly like a quiet market until somebody went looking months later.
+    """
+
+    from shitcoims_intelligence.adapters.x_apify import is_solana_mint
+
+    out: list[str] = []
+    for item in raw:
+        key = item.strip()
+        if not key:
+            continue
+        if not is_solana_mint(key):
+            raise ValueError(
+                f"{feed.value} key {key!r} is not a 32-byte base58 Solana address "
+                f"(this feed's keys are {feed.key_kind}s)"
+            )
+        if key not in out:
+            out.append(key)
+    return tuple(out)
+
+
+def parse_keys(spec: str | Iterable[str], feeds: Sequence[Feed]) -> dict[Feed, tuple[str, ...]]:
+    """Parse ``--keys`` into a **per-feed** mapping. Ambiguity is refused, never guessed.
+
+    Two accepted forms:
+
+    * qualified — ``"accountTrade=BAr5csYt…"`` — which feed the keys belong to, said out
+      loud. Repeatable, once per feed.
+    * bare — ``"MintOne,MintTwo"`` — accepted **only** when exactly one keyed feed is
+      subscribed, because then there is precisely one thing it can mean.
+
+    A bare list with both trade feeds subscribed raises. It is tempting to "helpfully" send
+    it to both, and that is exactly what the recorder used to do: one flat list, both
+    frames, wallets offered as coins. The whole point of this function is that the
+    ambiguous input now fails loudly at startup instead of producing a plausible-looking
+    tape with a permanently empty stream in it.
+    """
+
+    parts = [spec] if isinstance(spec, str) else list(spec)
+    subscribed_keyed = [f for f in feeds if f.needs_keys]
+    out: dict[Feed, tuple[str, ...]] = {}
+    bare: list[str] = []
+
+    for part in parts:
+        text = str(part).strip()
+        if not text:
+            continue
+        name, sep, rest = text.partition("=")
+        if not sep:
+            bare.extend(text.split(","))
+            continue
+        name = name.strip()
+        try:
+            feed = Feed(name)
+        except ValueError as exc:
+            allowed = ", ".join(f.value for f in KEYED_FEEDS)
+            raise ValueError(
+                f"unknown feed {name!r} in --keys; expected one of: {allowed}"
+            ) from exc
+        if not feed.needs_keys:
+            raise ValueError(f"{feed.value} takes no keys; it is not a per-key subscription")
+        if feed in out:
+            raise ValueError(f"--keys given twice for {feed.value}; combine them into one list")
+        out[feed] = _validated_keys(feed, rest.split(","))
+
+    if bare:
+        candidates = [f for f in subscribed_keyed if f not in out]
+        if len(candidates) != 1:
+            qualified = " ".join(f"--keys {f.value}=…" for f in (candidates or KEYED_FEEDS))
+            raise ValueError(
+                "--keys was given a bare list, but "
+                + (
+                    f"{len(candidates)} keyed feeds are subscribed "
+                    f"({', '.join(f.value for f in candidates)}) "
+                    if candidates
+                    else "no keyed feed is subscribed "
+                )
+                + "so there is no single feed it can belong to. tokenTrade keys are mints "
+                "and accountTrade keys are wallets; sending one list to both subscribes each "
+                f"to the other's addresses and silently receives nothing. Qualify it: {qualified}"
+            )
+        out[candidates[0]] = _validated_keys(candidates[0], bare)
+
+    for feed, keys in out.items():
+        if feed not in feeds:
+            raise ValueError(
+                f"--keys names {feed.value} but it is not in --subscribe; "
+                f"add it or drop the keys ({len(keys)} given)"
+            )
+    return out
 
 
 #: ``txType`` -> row kind. An unmapped ``txType`` is kept as ``event_unclassified`` rather than
@@ -622,6 +771,9 @@ class FeedWatch:
     url: str
     feeds: tuple[str, ...]
     opened_at: datetime
+    #: Per-feed subscription detail, so the tape records what was watched, not just that
+    #: something was. See :meth:`FirehoseClient.subscription_manifest`.
+    subscriptions: tuple[dict[str, Any], ...] = ()
     closed_at: datetime | None = None
     close_reason: WatchClose | None = None
     close_detail: str | None = None
@@ -636,6 +788,8 @@ class FeedWatch:
             "feeds": list(self.feeds),
             "opened_at": iso(self.opened_at),
         }
+        if self.subscriptions:
+            out["subscriptions"] = [dict(s) for s in self.subscriptions]
         if self.closed_at is not None:
             out["closed_at"] = iso(self.closed_at)
             out["close_reason"] = str(self.close_reason)
@@ -682,6 +836,7 @@ class WatchLedger:
 
     url: str
     feeds: tuple[str, ...]
+    subscriptions: tuple[dict[str, Any], ...] = ()
     run_id: str = field(default_factory=lambda: uuid4().hex[:12])
     windows: int = 0
     current: FeedWatch | None = None
@@ -703,6 +858,7 @@ class WatchLedger:
             window_id=f"{self.run_id}-{self.windows:04d}",
             url=self.url,
             feeds=self.feeds,
+            subscriptions=self.subscriptions,
             opened_at=now,
         )
         self.current = watch
@@ -934,7 +1090,7 @@ class FirehoseClient:
         *,
         sink: Sink,
         feeds: Sequence[Feed] = (Feed.NEW_TOKEN, Feed.MIGRATION),
-        keys: Sequence[str] = (),
+        keys_by_feed: Mapping[Feed, Sequence[str]] | None = None,
         url: str = PUMPPORTAL_URL,
         connect: Connector | None = None,
         clock: Callable[[], datetime] = utc_now,
@@ -957,7 +1113,13 @@ class FirehoseClient:
             raise ValueError("poll_seconds must be positive")
         self.sink = sink
         self.feeds = tuple(feeds)
-        self.keys = tuple(keys)
+        #: Per-feed subscription keys. Never one shared list: see :attr:`Feed.key_kind`.
+        self.keys_by_feed: dict[Feed, tuple[str, ...]] = {
+            feed: tuple(keys) for feed, keys in (keys_by_feed or {}).items()
+        }
+        unsubscribed = [f.value for f in self.keys_by_feed if f not in self.feeds]
+        if unsubscribed:
+            raise ValueError(f"keys given for unsubscribed feeds: {', '.join(unsubscribed)}")
         self.url = url
         self._connect = connect or _default_connector
         self._clock = clock
@@ -972,7 +1134,11 @@ class FirehoseClient:
             stale_after_seconds=stale_after_seconds,
             busy_hours=frozenset(busy_hours) if busy_hours is not None else frozenset(range(24)),
         )
-        self.ledger = WatchLedger(url=url, feeds=tuple(f.value for f in self.feeds))
+        self.ledger = WatchLedger(
+            url=url,
+            feeds=tuple(f.value for f in self.feeds),
+            subscriptions=tuple(self.subscription_manifest()),
+        )
         if resume_from is not None:
             self.ledger.seed_from_disk(resume_from.closed_at, resume_from.reason)
         self.events_by_kind: dict[str, int] = {}
@@ -996,12 +1162,14 @@ class FirehoseClient:
         for feed in self.feeds:
             body: dict[str, Any] = {"method": feed.method}
             if feed.needs_keys:
-                if not self.keys:
+                keys = self.keys_by_feed.get(feed, ())
+                if not keys:
                     LOGGER.warning(
-                        "%s requested with no keys; the vendor will accept it and send nothing",
+                        "%s requested with no %s keys; the vendor will accept it and send nothing",
                         feed.value,
+                        feed.key_kind,
                     )
-                body["keys"] = list(self.keys)
+                body["keys"] = list(keys)
             if feed.needs_funded_key:
                 LOGGER.warning(
                     "%s requires a PumpPortal API key funded with >= 0.02 SOL; "
@@ -1010,6 +1178,26 @@ class FirehoseClient:
                 )
             frames.append(json.dumps(body))
         return frames
+
+    def subscription_manifest(self) -> list[dict[str, Any]]:
+        """What this run is watching, for the watch ledger.
+
+        The ledger already answers "were we listening?". Without this it cannot answer
+        "listening to *what*?" — and for the keyed feeds that is the whole question. A tape
+        showing no trades on a wallet means nothing unless the tape also says that wallet
+        was in the subscription, so the manifest goes in the ``watch_open`` row where a
+        reader will find it next to the window it applies to.
+        """
+
+        return [
+            {
+                "feed": feed.value,
+                "method": feed.method,
+                "key_kind": feed.key_kind,
+                "keys": list(self.keys_by_feed.get(feed, ())) if feed.needs_keys else None,
+            }
+            for feed in self.feeds
+        ]
 
     async def run(self, deadline: datetime | None = None) -> FirehoseStats:
         """Connect, pump, reconnect, until ``deadline`` or :meth:`stop`."""
@@ -1218,8 +1406,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keys",
-        default="",
-        help="comma-separated mints/wallets for tokenTrade/accountTrade (needs a funded key)",
+        action="append",
+        default=[],
+        metavar="FEED=A,B",
+        help=(
+            "subscription keys, PER FEED: 'tokenTrade=<mints>' / 'accountTrade=<wallets>'. "
+            "Repeatable, once per feed. A bare comma-separated list is accepted only when "
+            "exactly one keyed feed is subscribed. Needs a funded API key."
+        ),
     )
     parser.add_argument("--url", default=PUMPPORTAL_URL, help="websocket endpoint")
     parser.add_argument(
@@ -1240,7 +1434,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def _run_cli(args: argparse.Namespace) -> FirehoseStats:
     feeds = parse_feeds(args.subscribe)
-    keys = tuple(k.strip() for k in args.keys.split(",") if k.strip())
+    keys_by_feed = parse_keys(args.keys, feeds)
     busy_hours = (
         tuple(int(h) for h in args.busy_hours.split(",") if h.strip())
         if args.busy_hours
@@ -1260,7 +1454,7 @@ async def _run_cli(args: argparse.Namespace) -> FirehoseStats:
     client = FirehoseClient(
         sink=sink,
         feeds=feeds,
-        keys=keys,
+        keys_by_feed=keys_by_feed,
         url=args.url,
         heartbeat_seconds=args.heartbeat_seconds,
         stale_after_seconds=args.stale_seconds,
@@ -1281,7 +1475,10 @@ async def _run_cli(args: argparse.Namespace) -> FirehoseStats:
     )
     LOGGER.info(
         "firehose starting: feeds=%s url=%s out=%s deadline=%s",
-        ",".join(f.value for f in feeds),
+        ",".join(
+            f.value + (f"[{len(keys_by_feed.get(f, ()))} {f.key_kind}s]" if f.needs_keys else "")
+            for f in feeds
+        ),
         args.url,
         root,
         iso(deadline) if deadline else "none",
@@ -1295,11 +1492,19 @@ async def _run_cli(args: argparse.Namespace) -> FirehoseStats:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # A bad --subscribe or --keys is operator error, not a crash. These messages name the
+    # fix, and a traceback buries them under a stack the operator did not cause; launchd
+    # would then restart the process every 30s to print it again.
+    try:
+        parse_keys(args.keys, parse_feeds(args.subscribe))
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         stats = asyncio.run(_run_cli(args))
     except KeyboardInterrupt:  # pragma: no cover - the signal handler normally wins first

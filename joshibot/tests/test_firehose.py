@@ -36,6 +36,7 @@ from shitcoims_scalper.firehose import (
     event_clock,
     last_close_on_disk,
     parse_feeds,
+    parse_keys,
     partition_of,
 )
 from shitcoims_tape.schema import WatchClose
@@ -811,7 +812,23 @@ async def test_trade_feed_rejection_is_recorded_as_a_control_row() -> None:
     assert stats.events_by_kind == {}
 
 
-async def test_trade_feeds_send_their_keys() -> None:
+# Real addresses, because the whole subject of this block is that an address's KIND matters
+# and a made-up string has no kind. The mints are two of the operator's cluster coins; the
+# wallet is the caller the operator asked to have watched.
+MINT_NOSIS = "FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump"
+MINT_DREGG = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+WALLET_CALLER = "BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh"
+
+
+async def test_each_trade_feed_gets_only_its_own_keys() -> None:
+    """The regression this whole block exists for.
+
+    This test previously asserted the BUG: one flat list, sent to both methods, so
+    ``subscribeTokenTrade`` was handed a wallet and ``subscribeAccountTrade`` a pair of
+    mints. Both frames are well-formed and the vendor accepts both, then reports nothing
+    about either — a permanently empty stream that reads on the tape as a quiet market.
+    """
+
     clock = FakeClock()
     sink = ListSink()
     box: list[object] = []
@@ -823,7 +840,10 @@ async def test_trade_feeds_send_their_keys() -> None:
     client = FirehoseClient(
         sink=sink,
         feeds=(Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE),
-        keys=("MintOne", "WalletTwo"),
+        keys_by_feed={
+            Feed.TOKEN_TRADE: (MINT_NOSIS, MINT_DREGG),
+            Feed.ACCOUNT_TRADE: (WALLET_CALLER,),
+        },
         connect=connect,
         clock=clock,
         sleep=sleep,
@@ -833,9 +853,119 @@ async def test_trade_feeds_send_their_keys() -> None:
     await client.run()
     sent = [json.loads(frame) for frame in connect.opened[0].sent]  # type: ignore[attr-defined]
     assert sent == [
-        {"method": "subscribeTokenTrade", "keys": ["MintOne", "WalletTwo"]},
-        {"method": "subscribeAccountTrade", "keys": ["MintOne", "WalletTwo"]},
+        {"method": "subscribeTokenTrade", "keys": [MINT_NOSIS, MINT_DREGG]},
+        {"method": "subscribeAccountTrade", "keys": [WALLET_CALLER]},
     ]
+    # The wallet never appears in the coin subscription, nor a mint in the account one.
+    assert WALLET_CALLER not in sent[0]["keys"]
+    assert MINT_NOSIS not in sent[1]["keys"]
+
+
+async def test_watch_open_records_what_was_subscribed_to() -> None:
+    """"Were we listening?" is only half the question once a subscription has keys."""
+
+    clock = FakeClock()
+    sink = ListSink()
+    box: list[object] = []
+    connect = make_connector([[StopRun()]], clock, box)
+
+    async def sleep(seconds: float) -> None:
+        clock.advance(seconds)
+
+    client = FirehoseClient(
+        sink=sink,
+        feeds=(Feed.NEW_TOKEN, Feed.ACCOUNT_TRADE),
+        keys_by_feed={Feed.ACCOUNT_TRADE: (WALLET_CALLER,)},
+        connect=connect,
+        clock=clock,
+        sleep=sleep,
+        max_attempts=1,
+    )
+    box.append(client)
+    await client.run()
+    opened = sink.of_kind("watch_open")
+    assert len(opened) == 1
+    manifest = {s["feed"]: s for s in opened[0]["window"]["subscriptions"]}
+    assert manifest["newToken"]["key_kind"] is None
+    assert manifest["newToken"]["keys"] is None
+    assert manifest["accountTrade"]["key_kind"] == "wallet"
+    assert manifest["accountTrade"]["keys"] == [WALLET_CALLER]
+
+
+def test_client_refuses_keys_for_a_feed_it_did_not_subscribe() -> None:
+    with pytest.raises(ValueError, match="unsubscribed"):
+        FirehoseClient(
+            sink=ListSink(),
+            feeds=(Feed.NEW_TOKEN,),
+            keys_by_feed={Feed.ACCOUNT_TRADE: (WALLET_CALLER,)},
+        )
+
+
+def test_parse_keys_qualified_form_splits_by_feed() -> None:
+    parsed = parse_keys(
+        [f"tokenTrade={MINT_NOSIS},{MINT_DREGG}", f"accountTrade={WALLET_CALLER}"],
+        (Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE),
+    )
+    assert parsed == {
+        Feed.TOKEN_TRADE: (MINT_NOSIS, MINT_DREGG),
+        Feed.ACCOUNT_TRADE: (WALLET_CALLER,),
+    }
+
+
+def test_parse_keys_bare_list_is_allowed_only_when_unambiguous() -> None:
+    assert parse_keys(f"{MINT_NOSIS},{MINT_DREGG}", (Feed.NEW_TOKEN, Feed.TOKEN_TRADE)) == {
+        Feed.TOKEN_TRADE: (MINT_NOSIS, MINT_DREGG)
+    }
+    assert parse_keys([WALLET_CALLER], (Feed.ACCOUNT_TRADE,)) == {
+        Feed.ACCOUNT_TRADE: (WALLET_CALLER,)
+    }
+
+
+def test_parse_keys_refuses_a_bare_list_when_both_trade_feeds_are_subscribed() -> None:
+    """The exact input that used to be silently sent to both methods."""
+
+    with pytest.raises(ValueError, match="bare list"):
+        parse_keys(f"{MINT_NOSIS},{WALLET_CALLER}", (Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE))
+
+
+def test_parse_keys_bare_list_fills_only_the_feed_left_unqualified() -> None:
+    parsed = parse_keys(
+        [f"tokenTrade={MINT_NOSIS}", WALLET_CALLER],
+        (Feed.TOKEN_TRADE, Feed.ACCOUNT_TRADE),
+    )
+    assert parsed == {Feed.TOKEN_TRADE: (MINT_NOSIS,), Feed.ACCOUNT_TRADE: (WALLET_CALLER,)}
+
+
+def test_parse_keys_refuses_a_malformed_address() -> None:
+    """A typo'd key is accepted by the vendor and then produces silence, so it fails here."""
+
+    with pytest.raises(ValueError, match="not a 32-byte base58"):
+        parse_keys("tokenTrade=notanaddress", (Feed.TOKEN_TRADE,))
+    with pytest.raises(ValueError, match="not a 32-byte base58"):
+        parse_keys(f"tokenTrade={MINT_NOSIS.lower()}", (Feed.TOKEN_TRADE,))
+
+
+def test_parse_keys_refuses_keys_for_keyless_or_unsubscribed_feeds() -> None:
+    with pytest.raises(ValueError, match="takes no keys"):
+        parse_keys(f"newToken={MINT_NOSIS}", (Feed.NEW_TOKEN,))
+    with pytest.raises(ValueError, match="not in --subscribe"):
+        parse_keys(f"accountTrade={WALLET_CALLER}", (Feed.NEW_TOKEN,))
+    with pytest.raises(ValueError, match="unknown feed"):
+        parse_keys(f"nope={MINT_NOSIS}", (Feed.TOKEN_TRADE,))
+
+
+def test_parse_keys_refuses_the_same_feed_twice() -> None:
+    with pytest.raises(ValueError, match="twice"):
+        parse_keys(
+            [f"tokenTrade={MINT_NOSIS}", f"tokenTrade={MINT_DREGG}"], (Feed.TOKEN_TRADE,)
+        )
+
+
+def test_parse_keys_dedupes_and_ignores_blanks() -> None:
+    assert parse_keys(f"tokenTrade={MINT_NOSIS}, ,{MINT_NOSIS}", (Feed.TOKEN_TRADE,)) == {
+        Feed.TOKEN_TRADE: (MINT_NOSIS,)
+    }
+    assert parse_keys("", (Feed.NEW_TOKEN,)) == {}
 
 
 def test_feed_metadata_matches_the_wire() -> None:
@@ -846,6 +976,16 @@ def test_feed_metadata_matches_the_wire() -> None:
     assert Feed.TOKEN_TRADE.needs_funded_key is True
     assert Feed.ACCOUNT_TRADE.needs_funded_key is True
     assert Feed.NEW_TOKEN.needs_funded_key is False
+
+
+def test_key_kind_distinguishes_the_two_trade_feeds() -> None:
+    """The property the conflation bug erased: these are different kinds of address."""
+
+    assert Feed.TOKEN_TRADE.key_kind == "mint"
+    assert Feed.ACCOUNT_TRADE.key_kind == "wallet"
+    assert Feed.NEW_TOKEN.key_kind is None
+    assert Feed.MIGRATION.key_kind is None
+    assert Feed.TOKEN_TRADE.key_kind != Feed.ACCOUNT_TRADE.key_kind
 
 
 # --- partitioning and the sink ------------------------------------------------------------
