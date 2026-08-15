@@ -213,6 +213,7 @@ class PositionState:
     dispose_trigger_slot: int | None = None
     below_floor_streak: int = 0
     below_stop_streak: int = 0
+    above_take_profit_streak: int = 0
     scale_rungs_fired: tuple[str, ...] = ()
     original_amount: int | None = None
     runner_floor_multiple: Decimal | None = None
@@ -398,28 +399,51 @@ def evaluate_position(
 
     take_profit = policy.take_profit_pct
     if take_profit is not None and pnl is not None and pnl >= take_profit:
+        # Confirmation is SYMMETRIC. The stop required N consecutive quotes while the take
+        # profit fired on one, so a single upward wick sold the runner and a single downward
+        # wick did not sell anything. Given that the whole point of this rule set is to
+        # prefer holding, one bad print must not be able to end a position in EITHER
+        # direction — and `floor_confirm_quotes` is the one wick-grace knob.
+        needed = max(1, int(policy.floor_confirm_quotes))
+        streak = disposal_state.above_take_profit_streak + 1
+        confirmed = dataclasses.replace(disposal_state, above_take_profit_streak=streak)
+        if streak < needed:
+            return Decision(
+                DecisionKind.HOLD,
+                (
+                    f"take profit {take_profit:.2f}% waiting confirm "
+                    f"({streak}/{needed}; PnL {pnl:.2f}%)"
+                ),
+                pnl,
+                unit_price,
+                confirmed,
+            )
         if not policy.runs:
             # No runner configured: the take-profit IS the exit. This is the literal
             # "hold unless it doubles" bag.
             return Decision(
                 DecisionKind.EXIT_TAKE_PROFIT,
-                f"PnL {pnl:.2f}% >= take profit {take_profit:.2f}% and no runner is configured",
+                (
+                    f"PnL {pnl:.2f}% >= take profit {take_profit:.2f}% for {streak} quote(s) "
+                    "and no runner is configured"
+                ),
                 pnl,
                 unit_price,
-                disposal_state,
+                confirmed,
             )
         armed = dataclasses.replace(
-            disposal_state,
+            confirmed,
             trailing_active=True,
             trailing_peak_unit_price_sol=unit_price,
             below_floor_streak=0,
-            original_amount=disposal_state.original_amount or holding.amount,
+            above_take_profit_streak=0,
+            original_amount=confirmed.original_amount or holding.amount,
             runner_floor_multiple=None,
         )
         return Decision(
             DecisionKind.ACTIVATE_TRAIL,
             (
-                f"runner armed at {pnl:.2f}% "
+                f"runner armed at {pnl:.2f}% after {streak} quote(s) "
                 f"(lock-in floors, not a {policy.runner_tightness:.0f}% peak leash)"
             ),
             pnl,
@@ -432,7 +456,7 @@ def evaluate_position(
         "thresholds clear",
         pnl,
         unit_price,
-        disposal_state,
+        dataclasses.replace(disposal_state, above_take_profit_streak=0),
     )
 
 

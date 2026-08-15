@@ -183,11 +183,19 @@ def test_take_profit_without_a_runner_is_itself_the_exit() -> None:
     )
     assert still_holding.kind is DecisionKind.HOLD
 
-    doubled = evaluate_position(
+    first = evaluate_position(
         policy=hold_unless_it_doubles,
         holding=holding(),
         quote=quote("2.01"),
         state=PositionState(),
+        rug=RugSignal(False),
+    )
+    assert first.kind is DecisionKind.HOLD  # confirmation is symmetric
+    doubled = evaluate_position(
+        policy=hold_unless_it_doubles,
+        holding=holding(),
+        quote=quote("2.01"),
+        state=first.next_state,
         rug=RugSignal(False),
     )
     assert doubled.kind is DecisionKind.EXIT_TAKE_PROFIT
@@ -197,9 +205,119 @@ def test_take_profit_without_a_runner_is_itself_the_exit() -> None:
     assert doubled.next_state.trailing_peak_unit_price_sol is None
 
 
+def test_one_wick_cannot_end_a_position_in_either_direction() -> None:
+    """The asymmetry this removes: N quotes to sell on a fall, ONE quote to sell on a rise.
+
+    A single up-tick armed the runner (and the 2x rung banks 30% on the next quote) while a
+    single down-tick did nothing. Both sides now answer to `floor_confirm_quotes`, which is
+    the only wick-grace knob there is.
+    """
+
+    two = policy(stop_loss_pct=Decimal("-30"), floor_confirm_quotes=2)
+
+    up_wick = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("2.5"),
+        state=PositionState(),
+        rug=RugSignal(False),
+        pump_complete=True,
+    )
+    down_wick = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("0.5"),
+        state=PositionState(),
+        rug=RugSignal(False),
+    )
+    assert up_wick.kind is DecisionKind.HOLD
+    assert down_wick.kind is DecisionKind.HOLD
+    assert up_wick.next_state.above_take_profit_streak == 1
+    assert down_wick.next_state.below_stop_streak == 1
+
+    # And a wick that reverts costs nothing on either side.
+    reverted_up = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("1.2"),
+        state=up_wick.next_state,
+        rug=RugSignal(False),
+        pump_complete=True,
+    )
+    reverted_down = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("1.2"),
+        state=down_wick.next_state,
+        rug=RugSignal(False),
+    )
+    assert reverted_up.next_state.above_take_profit_streak == 0
+    assert reverted_down.next_state.below_stop_streak == 0
+
+    # A second consecutive quote past the threshold does act, on both sides.
+    confirmed_up = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("2.5"),
+        state=up_wick.next_state,
+        rug=RugSignal(False),
+        pump_complete=True,
+    )
+    confirmed_down = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("0.5"),
+        state=down_wick.next_state,
+        rug=RugSignal(False),
+    )
+    assert confirmed_up.kind is DecisionKind.ACTIVATE_TRAIL
+    assert confirmed_down.kind is DecisionKind.EXIT_STOP
+
+
+def test_confirmation_is_the_same_count_on_both_sides_for_every_setting() -> None:
+    """Whatever the knob is set to, the two sides take the same number of quotes."""
+
+    for needed in (1, 2, 3, 6):
+        rule = policy(stop_loss_pct=Decimal("-30"), floor_confirm_quotes=needed)
+
+        up_state = PositionState()
+        up_quotes = 0
+        while True:
+            decision = evaluate_position(
+                policy=rule,
+                holding=holding(),
+                quote=quote("2.5"),
+                state=up_state,
+                rug=RugSignal(False),
+                pump_complete=True,
+            )
+            up_quotes += 1
+            up_state = decision.next_state
+            if decision.kind is not DecisionKind.HOLD:
+                break
+
+        down_state = PositionState()
+        down_quotes = 0
+        while True:
+            decision = evaluate_position(
+                policy=rule,
+                holding=holding(),
+                quote=quote("0.5"),
+                state=down_state,
+                rug=RugSignal(False),
+            )
+            down_quotes += 1
+            down_state = decision.next_state
+            if decision.exits:
+                break
+
+        assert up_quotes == down_quotes == needed
+
+
 def test_take_profit_arms_the_runner_and_the_peak_tracks_upward() -> None:
+    armed_policy = policy(floor_confirm_quotes=1)
     activated = evaluate_position(
-        policy=policy(),
+        policy=armed_policy,
         holding=holding(),
         quote=quote("2.1"),
         state=PositionState(),
@@ -209,7 +327,7 @@ def test_take_profit_arms_the_runner_and_the_peak_tracks_upward() -> None:
     assert activated.kind is DecisionKind.ACTIVATE_TRAIL
     assert activated.exits is False
     banked = evaluate_position(
-        policy=policy(),
+        policy=armed_policy,
         holding=holding(),
         quote=quote("2.4"),
         state=activated.next_state,
@@ -367,7 +485,7 @@ def runner_policy(**overrides: object) -> PositionPolicy:
 
 def test_runner_arms_on_take_profit_without_selling() -> None:
     decision = evaluate_position(
-        policy=runner_policy(),
+        policy=runner_policy(floor_confirm_quotes=1),
         holding=holding(),
         quote=quote("1.9"),
         state=PositionState(),

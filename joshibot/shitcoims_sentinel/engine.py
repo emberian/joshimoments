@@ -928,6 +928,7 @@ class SentinelEngine:
         original = raw.get("original_amount")
         streak = raw.get("below_floor_streak", 0)
         stop_streak = raw.get("below_stop_streak", 0)
+        take_streak = raw.get("above_take_profit_streak", 0)
         try:
             streak_int = int(streak)
         except (TypeError, ValueError):
@@ -936,6 +937,12 @@ class SentinelEngine:
             stop_streak_int = int(stop_streak)
         except (TypeError, ValueError):
             stop_streak_int = 0
+        try:
+            # Absent in state written before symmetric confirmation. Zero is the honest
+            # reading: no confirming quote has been seen for this bag yet.
+            take_streak_int = int(take_streak)
+        except (TypeError, ValueError):
+            take_streak_int = 0
         try:
             original_int = int(original) if original is not None else None
         except (TypeError, ValueError):
@@ -947,6 +954,7 @@ class SentinelEngine:
             dispose_trigger_slot=(int(trigger_slot) if trigger_slot is not None else None),
             below_floor_streak=max(streak_int, 0),
             below_stop_streak=max(stop_streak_int, 0),
+            above_take_profit_streak=max(take_streak_int, 0),
             scale_rungs_fired=tuple(str(item) for item in fired if str(item)),
             original_amount=original_int if original_int is not None and original_int > 0 else None,
             runner_floor_multiple=(Decimal(str(floor)) if floor is not None else None),
@@ -975,6 +983,7 @@ class SentinelEngine:
                 "dispose_trigger_slot": state.dispose_trigger_slot,
                 "below_floor_streak": state.below_floor_streak,
                 "below_stop_streak": state.below_stop_streak,
+                "above_take_profit_streak": state.above_take_profit_streak,
                 "scale_rungs_fired": list(state.scale_rungs_fired),
                 "original_amount": state.original_amount,
                 "runner_floor_multiple": (
@@ -1342,6 +1351,7 @@ class SentinelEngine:
                 ),
                 "below_floor_streak": decision.next_state.below_floor_streak,
                 "below_stop_streak": decision.next_state.below_stop_streak,
+                "above_take_profit_streak": decision.next_state.above_take_profit_streak,
                 "scale_rungs_fired": list(decision.next_state.scale_rungs_fired),
                 "original_amount": decision.next_state.original_amount,
                 "sell_amount": decision.sell_amount,
