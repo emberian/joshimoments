@@ -77,6 +77,17 @@ ROW_KINDS: Final[frozenset[str]] = frozenset(
         "accrual",       # LP fees accrued from observed flow crossing a paper range
         "rebalance",     # a one-sided redeploy
         "defect",        # something the desk could not price and refused to guess at
+        # The operator's own gestures, mirrored out of state/hunches.jsonl so that the
+        # ledger alone tells the whole story of a position -- who asked for it, in what
+        # words, and which entry gates disagreed. The hunch tape remains the durable
+        # original (it is fsynced by the CLI before the desk has heard of it); this row is
+        # the desk's acknowledgement, carrying its own ingest clock against the gesture's.
+        "hunch",
+        # A claim with a horizon and no capital behind it: the down / up / watch kinds,
+        # recorded, falsified early if the market says so, and SCORED at the horizon.
+        # Separate from `close` because a close row must have a spend to divide by and an
+        # expectation has none -- exactly the -151% partial-row failure, refused up front.
+        "expectation",
     }
 )
 

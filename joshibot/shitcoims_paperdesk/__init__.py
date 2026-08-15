@@ -10,7 +10,7 @@ So the operator's actual question -- *is the short horizon, the medium horizon, 
 toll (LP) position the better use of the same SOL?* -- has never been asked, because the
 three have never once been measured against each other under identical rules.
 
-This package is that comparison, made standing. Four books:
+This package is that comparison, made standing. Five books:
 
 * **SHORT** (minutes-hours) -- boards / firehose / callout candidates, bracket exits.
 * **MEDIUM** (hours-days) -- the held cluster plus boards survivors, deterioration exits.
@@ -19,9 +19,28 @@ This package is that comparison, made standing. Four books:
 * **WIGGLE** (minutes, and *only* minutes) -- post-collapse bottom scalps on a HARD CLOCK.
   The operator's own measured pattern, and the one book whose exit rule is a discipline
   rather than a forecast; see :mod:`shitcoims_paperdesk.wiggle` for why it refuses to hold.
+* **OPERATOR** (the same minutes, the same clock) -- the wiggle book's execution with the
+  operator's own gesture in place of its entry rule. See below.
 
 They share ONE bankroll size, ONE friction model, ONE ledger and ONE clock discipline, so
 the cross-book table is a comparison rather than three incomparable numbers side by side.
+
+THE FIFTH BOOK IS AN EXPERIMENT ABOUT SELECTION, AND IT IS THE ONLY ONE WITH A PRIOR
+------------------------------------------------------------------------------------
+Every entry-selection study in this tree returned null. The one repeatedly-positive signal
+is the operator's own choosing: over the same pattern and the same clock, the rule-chosen
+wiggle book's first closes ran **-14.08%** while the operator's hand-picked equivalents
+measured **+3.14%**. The difference between those two numbers is not a threshold. It is
+whatever the operator is doing when they look at a chart and say *"this one is gonna wiggle
+for a bit"*, and until now nothing in this repo recorded it.
+
+The OPERATOR book records it. Execution, friction, sizing, marking, censoring and the hard
+240-420 s clock are the WIGGLE book's, inherited rather than reimplemented, because the
+comparison is only about selection if literally everything downstream of the choice is the
+same code. What differs is one thing: the entry gates are computed and LOGGED but gate
+nothing -- the gesture IS the entry signal. Propensity is 1.0 and the source is
+``operator``, because the operator's policy is exogenous to this desk; we are not
+estimating it, we are measuring what it selects. See :mod:`shitcoims_paperdesk.operator`.
 
 WHAT MAKES IT AN EXPERIMENT RATHER THAN A DIARY
 -----------------------------------------------
@@ -62,19 +81,24 @@ from enum import StrEnum
 
 
 class Book(StrEnum):
-    """The four horizons. Identical capital, identical friction, one ledger.
+    """The horizons. Identical capital, identical friction, one ledger.
 
     WIGGLE is not a fourth horizon so much as a fourth *discipline*, and the distinction is
     the point: SHORT, MEDIUM and TOLL all decide when to leave by asking what the position
     is doing, and WIGGLE decides by asking what time it is. The operator's own trades say
     those are two populations wanting two rules, and a desk that ran one rule over both
     would answer neither question.
+
+    OPERATOR is not a fifth discipline at all -- it is WIGGLE's discipline with a different
+    ENTRY, and that is the whole design. Holding the exit fixed is what turns the pair into
+    a controlled comparison of selection rather than two strategies with two of everything.
     """
 
     SHORT = "short"
     MEDIUM = "medium"
     TOLL = "toll"
     WIGGLE = "wiggle"
+    OPERATOR = "operator"
 
 
-BOOKS: tuple[Book, ...] = (Book.SHORT, Book.MEDIUM, Book.TOLL, Book.WIGGLE)
+BOOKS: tuple[Book, ...] = (Book.SHORT, Book.MEDIUM, Book.TOLL, Book.WIGGLE, Book.OPERATOR)

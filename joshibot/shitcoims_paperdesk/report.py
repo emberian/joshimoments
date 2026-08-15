@@ -1,8 +1,13 @@
 """The table the operator has never once been able to look at.
 
-Four books, identical capital, identical friction, one accounting, side by side --
+Five books, identical capital, identical friction, one accounting, side by side --
 with the censoring priced rather than dropped, and with the size of that pricing shown
 explicitly so nobody has to take it on faith.
+
+The fifth column is not a fifth strategy. ``operator`` is the WIGGLE book's execution with
+the operator's own gesture in place of its entry rule, so the pair is a controlled
+comparison of selection and the number to read is the DIFFERENCE between those two rows.
+``_operator`` says so in place, and ``hunch_report`` does it properly.
 
 WHY EVERY RETURN APPEARS TWICE
 ------------------------------
@@ -74,8 +79,21 @@ class Rows:
     watch_closes: list[dict[str, Any]] = field(default_factory=list)
     defects: list[dict[str, Any]] = field(default_factory=list)
     fills: list[dict[str, Any]] = field(default_factory=list)
+    #: The operator's gestures as the desk acknowledged them, and the non-positional claims
+    #: it is scoring. Bucketed here rather than re-scanned by ``hunch_report`` so that one
+    #: pass over the ledger serves every report -- the file is 54 MB a day.
+    hunch_rows: list[dict[str, Any]] = field(default_factory=list)
+    expectations: list[dict[str, Any]] = field(default_factory=list)
     run_ids: set[str] = field(default_factory=set)
     total: int = 0
+    #: Decision ids belonging to a hunch the operator took back. Populated by
+    #: :func:`read_ledger` from the retraction rows on the hunch tape, and EXCLUDED from
+    #: every operator-arm figure in this module and in ``hunch_report``.
+    #:
+    #: Filtering here rather than at write time is the whole point: the ledger keeps the
+    #: fill, the close and the retraction, and the exclusion is a decision made at analysis
+    #: time on visible data. Every section that drops rows because of this prints how many.
+    retracted_decisions: set[str] = field(default_factory=set)
 
     def add(self, row: dict[str, Any]) -> None:
         self.total += 1
@@ -93,6 +111,8 @@ class Rows:
             "watch_close": self.watch_closes,
             "defect": self.defects,
             "fill": self.fills,
+            "hunch": self.hunch_rows,
+            "expectation": self.expectations,
         }.get(str(row.get("row")))
         if bucket is not None:
             bucket.append(row)
@@ -120,7 +140,41 @@ def read_ledger(root: Path | None = None, *, days: int | None = None) -> Rows:
                         rows.add(payload)
         except OSError:
             continue
+    rows.retracted_decisions = _retracted_decisions(rows)
     return rows
+
+
+def _retracted_decisions(rows: Rows) -> set[str]:
+    """Which logged decisions belong to a gesture the operator took back.
+
+    The hunch tape is append-only, so a retraction is a row rather than an edit; this is
+    where that row becomes an exclusion. Reads the tape (a few kB) rather than the ledger,
+    because the retraction is a fact about the OPERATOR's record, not about the desk's.
+    """
+    try:
+        from shitcoims_paperdesk.hunch import read_tape
+
+        _, retractions = read_tape()
+    except Exception:
+        return set()
+    if not retractions:
+        return set()
+    taken_back = {r.retracts for r in retractions}
+    return {
+        str(d.get("decision_id"))
+        for d in rows.decisions
+        if str(d.get("hunch_id")) in taken_back and d.get("decision_id")
+    }
+
+
+def live_closes(rows: Rows, book: str | None = None) -> list[dict[str, Any]]:
+    """Closes with the retracted ones removed. The only set any figure is computed on."""
+    out = [
+        c
+        for c in rows.closes
+        if str(c.get("decision_id")) not in rows.retracted_decisions
+    ]
+    return [c for c in out if book is None or str(c.get("book")) == book]
 
 
 # ---------------------------------------------------------------------- helpers
@@ -520,6 +574,54 @@ def _wiggle(rows: Rows) -> list[str]:
     return out
 
 
+def _operator(rows: Rows) -> list[str]:
+    """The fifth book, and the one question it exists to answer, in four lines.
+
+    The full treatment -- clustered intervals, the gate-veto table, the expectation
+    scorecard -- is ``uv run python -m shitcoims_paperdesk hunch``. This section is the
+    pointer at it, because the cross-book table below now carries an ``operator`` row and a
+    reader who does not know that row means "a person chose these" will read it as a fifth
+    strategy rather than as a control experiment about the other four.
+    """
+    out = [
+        "",
+        "OPERATOR — the fifth book is the wiggle book with a person on the entry",
+    ]
+    closes = live_closes(rows, "operator")
+    wiggle = live_closes(rows, "wiggle")
+    gestures = len({str(h.get("hunch_id")) for h in rows.hunch_rows if h.get("hunch_id")})
+    expectations = len({str(e.get("hunch_id")) for e in rows.expectations if e.get("hunch_id")})
+    out.append(
+        f"  {gestures} gesture(s) acknowledged, {expectations} standing expectation(s),"
+        f" {len(closes)} closed position(s)"
+    )
+    if closes and wiggle:
+        op = _weighted_return(closes, "pnl_lamports")
+        wg = _weighted_return(wiggle, "pnl_lamports")
+        mints = len({str(c.get("key")) for c in closes})
+        out.append(
+            f"  operator {op * 100:+.2f}%  vs  wiggle {wg * 100:+.2f}%"
+            f"   =  {(op - wg) * 100:+.2f} pp  (n={len(closes)} closes over {mints} coins)"
+        )
+        out.append(
+            "  Identical execution on both arms, so the difference is selection or it is noise."
+        )
+    elif not closes:
+        out.append("  (no operator position has closed yet — nothing to compare)")
+    ghosts = sum(
+        1 for d in rows.decisions if str(d.get("book")) == "operator" and d.get("ghost_town")
+    )
+    if ghosts:
+        out.append(f"  {ghosts} entered against a failing depth gate — warned, tagged, never vetoed.")
+    if rows.retracted_decisions:
+        out.append(
+            f"  {len(rows.retracted_decisions)} close(s) excluded: the operator retracted the"
+            " gesture behind them. Still on the ledger, out of every figure above."
+        )
+    out.append("  Full treatment: uv run python -m shitcoims_paperdesk hunch")
+    return out
+
+
 def _cross_book(rows: Rows) -> list[str]:
     """The comparison. Same capital, same friction, three horizons."""
     out = [
@@ -531,7 +633,7 @@ def _cross_book(rows: Rows) -> list[str]:
         f"{'pess%':>9}{'%/SOL-day':>12}{'cens%':>8}{'median hold':>13}",
     ]
     by_book: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for close in rows.closes:
+    for close in live_closes(rows):
         by_book[str(close.get("book"))].append(close)
     for book in (str(b) for b in BOOKS):
         closes = by_book.get(book) or []
@@ -595,6 +697,7 @@ def render(rows: Rows) -> str:
         _propensity(rows),
         _toll_gate(rows),
         _wiggle(rows),
+        _operator(rows),
         _defects(rows),
         _cross_book(rows),
     ]

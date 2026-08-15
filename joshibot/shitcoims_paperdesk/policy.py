@@ -44,7 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Mapping
 
 from shitcoims_paperdesk import Book
@@ -54,6 +54,7 @@ __all__ = [
     "DeskDecision",
     "DeskPolicy",
     "MediumPolicy",
+    "OperatorPolicy",
     "ShortPolicy",
     "TollPolicy",
     "WigglePolicy",
@@ -88,6 +89,12 @@ class DeskDecision:
     features_sha256: str
     size_lamports: int
     deadline_unix: float
+    #: Per-leg entry-gate verdicts, when the policy computed them. Empty for the four books
+    #: whose gates ARE the verdict -- there the pass/fail is already in ``verdict_pass`` and
+    #: naming the legs again would be two records of one fact. It is populated only by the
+    #: OPERATOR book, where the gates are computed and deliberately do not gate, so which
+    #: leg disagreed with the operator is the entire measurement.
+    gates: dict[str, bool] = field(default_factory=dict)
 
     @property
     def acted(self) -> bool:
@@ -111,7 +118,7 @@ class DeskDecision:
         )
 
     def ledger_fields(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "verdict_pass": self.verdict_pass,
             "explored": self.explored,
             "thresholds": self.thresholds,
@@ -119,6 +126,12 @@ class DeskDecision:
             "size_lamports": self.size_lamports,
             "deadline_unix": self.deadline_unix,
         }
+        if self.gates:
+            out["gates"] = self.gates
+            # Named separately from the map so the report can count vetoes without
+            # re-deriving which polarity means "would have refused".
+            out["gates_would_veto"] = sorted(k for k, ok in self.gates.items() if not ok)
+        return out
 
 
 class DeskPolicy:
@@ -435,33 +448,127 @@ class WigglePolicy(DeskPolicy):
         "callout_relief": (0.05, 0.30),
     }
 
-    def rule(self, f: Mapping[str, float], t: Mapping[str, float]) -> bool:
+    def legs(self, f: Mapping[str, float], t: Mapping[str, float]) -> dict[str, bool]:
+        """Each entry condition, evaluated SEPARATELY and named. ``rule`` is their AND.
+
+        Split out of :meth:`rule` because the OPERATOR book needs the per-leg verdicts as
+        DATA -- it enters on the operator's gesture whatever the gates say, and logs which
+        gates would have vetoed, so "which of our rules disagrees with their taste, and is
+        it right to?" becomes a question the ledger can settle. A second copy of these legs
+        written for that purpose would answer a question about the copy; this is the same
+        object both books read.
+
+        A leg that is UNMEASURED is ABSENT from the mapping rather than ``True``. The
+        two-sidedness and cadence legs are only defined once the desk has seen the coin
+        three times, and recording an unevaluated condition as a pass would put a guess in
+        the same dict as a measurement -- the same refusal ``drawdown_known`` exists for.
+        """
         from shitcoims_paperdesk.wiggle import CALLOUT_ARM
 
-        if f.get("drawdown_known", 0.0) <= 0.5:
-            return False
-        if f.get("drawdown_from_ath", -1.0) < t["dd_min"]:
-            return False
-        if f.get("sol_in_curve", 0.0) < t["ghost_min_pool_sol"]:
-            return False
-        if f.get("trade_recency_s", 1e9) > t["max_trade_recency_s"]:
-            return False
-        if f.get("own_exit_impact", 1.0) > t["take_profit"] / t["impact_margin"]:
-            return False
+        out: dict[str, bool] = {
+            "drawdown_known": f.get("drawdown_known", 0.0) > 0.5,
+            "collapsed": f.get("drawdown_from_ath", -1.0) >= t["dd_min"],
+            "depth": f.get("sol_in_curve", 0.0) >= t["ghost_min_pool_sol"],
+            "recently_traded": f.get("trade_recency_s", 1e9) <= t["max_trade_recency_s"],
+            "own_exit_impact": (
+                f.get("own_exit_impact", 1.0) <= t["take_profit"] / t["impact_margin"]
+            ),
+        }
         callouts = f.get("callout_n_60m", 0.0)
-        if CALLOUT_ARM == "required" and callouts < 1.0:
-            return False
+        if CALLOUT_ARM == "required":
+            out["callout"] = callouts >= 1.0
         bar = t["min_two_sided"]
         if CALLOUT_ARM == "preferred" and callouts >= 1.0:
             bar = max(0.0, bar - t["callout_relief"])
         if f.get("wiggle_observations", 0.0) >= 3.0:
-            if f.get("wiggle_obs_per_min", 0.0) < t["min_obs_per_min"]:
-                return False
-            return f.get("wiggle_two_sided_frac", 0.0) >= bar
+            out["markable_cadence"] = f.get("wiggle_obs_per_min", 0.0) >= t["min_obs_per_min"]
+            out["two_sided"] = f.get("wiggle_two_sided_frac", 0.0) >= bar
         # Fewer than three observations: two-sidedness is UNMEASURED, not zero. Depth and
-        # recency already passed, so the candidate is admitted and the ledger records the
+        # recency stand on their own, the candidate is admitted, and the ledger records the
         # branch through ``wiggle_observations`` in the hashed feature vector.
-        return True
+        return out
+
+    def rule(self, f: Mapping[str, float], t: Mapping[str, float]) -> bool:
+        return all(self.legs(f, t).values())
+
+
+class OperatorPolicy(WigglePolicy):
+    """The operator's gesture, logged as the policy it is: exogenous, and always ``enter``.
+
+    THE JITTER BOX IS INHERITED, NOT RESTATED. Every threshold this policy draws is
+    :class:`WigglePolicy`'s -- the same clock in [240, 420] s, the same bracket, the same
+    ghost-town cutoffs. Two consequences, both deliberate:
+
+    * the EXIT the operator's pick gets is drawn from the same distribution the rule-chosen
+      pick gets, which is what makes the two books' returns differ by selection alone;
+    * the GATES are evaluated against the same drawn thresholds the wiggle book would have
+      used on that candidate, so "this hunch would have been vetoed" is a statement about
+      the actual rule and not about a nearby one.
+
+    WHY THE PROPENSITY IS 1.0 AND THERE IS NO EPSILON ARM. The other four policies randomise
+    themselves so that off-policy evaluation can ask what a nearby threshold would have
+    earned. There is no nearby threshold here: the logging policy is a person, it is not
+    parameterised by anything the desk holds, and flipping one in twenty of their calls
+    would corrupt the measurement rather than enrich it -- the whole point is to observe
+    THEIR selection, undisturbed. So the action is ``enter`` with probability 1, which is
+    exactly what the propensity field then says. Note what that costs, plainly: this book's
+    own rows carry no overlap and are therefore NOT reweightable to a counterfactual entry
+    policy. They are a treatment arm, compared against the wiggle book's arm under identical
+    execution, and that comparison is the design -- not an OPE estimate.
+    """
+
+    book = Book.OPERATOR
+    policy_id = "paperdesk-operator-v1"
+
+    def __init__(self, *, explore_eps: float = DEFAULT_EPS, seed: int | None = None) -> None:
+        # Accepted and ignored: ``policy_for`` hands every book the same eps, and refusing
+        # the argument here would make the OPERATOR book the one that cannot be built the
+        # same way as the others. Recorded as 0.0 because that is the truth of it.
+        super().__init__(explore_eps=explore_eps, seed=seed)
+        self.explore_eps = 0.0
+
+    def decide(
+        self,
+        *,
+        key: str,
+        features: Mapping[str, float],
+        now_unix: float,
+        decided_at: str,
+        size_lamports: int,
+        actionable: bool = True,
+        thresholds: Mapping[str, float] | None = None,
+    ) -> DeskDecision:
+        """Always ``enter``, at propensity 1.0, with the gate verdict carried alongside.
+
+        ``actionable`` -- the friction check that folds into every other book's verdict --
+        is computed and reported through :meth:`legs` like any other gate, and does not
+        stop the entry. The operator outranks the gate; the gate still gets to speak, and
+        an unaffordable round trip is one of the things this book exists to find out about.
+        """
+        drawn = dict(thresholds) if thresholds is not None else self.draw()
+        gates = self.legs(features, drawn)
+        gates["affordable"] = bool(actionable)
+        feat = {k: float(v) for k, v in sorted(features.items())}
+        digest = hashlib.sha256(
+            json.dumps(feat, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return DeskDecision(
+            decision_id=f"{self.book}-{key[:10]}-{int(now_unix * 1000)}",
+            decided_at=decided_at,
+            policy_id=self.policy_id,
+            book=str(self.book),
+            key=key,
+            action="enter",
+            verdict_pass=all(gates.values()),
+            explored=False,
+            propensity=1.0,
+            thresholds=drawn,
+            features=feat,
+            features_sha256=digest,
+            size_lamports=size_lamports,
+            deadline_unix=now_unix + drawn.get("hold_seconds", 300.0),
+            gates=gates,
+        )
 
 
 _POLICIES: Final[dict[Book, type[DeskPolicy]]] = {
@@ -469,6 +576,7 @@ _POLICIES: Final[dict[Book, type[DeskPolicy]]] = {
     Book.MEDIUM: MediumPolicy,
     Book.TOLL: TollPolicy,
     Book.WIGGLE: WigglePolicy,
+    Book.OPERATOR: OperatorPolicy,
 }
 
 

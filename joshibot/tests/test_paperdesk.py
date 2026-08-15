@@ -956,7 +956,11 @@ def test_desk_heartbeat_reports_source_staleness_per_source(tmp_path: Path) -> N
     assert set(beat["sources"]) == {"boards", "firehose", "callouts", "mint_refresh", "cluster_tape"}
     for state in beat["sources"].values():
         assert "silent_seconds" in state and "stale" in state
-    assert set(beat["books"]) == {str(b) for b in BOOKS} == {"short", "medium", "toll", "wiggle"}
+    assert (
+        set(beat["books"])
+        == {str(b) for b in BOOKS}
+        == {"short", "medium", "toll", "wiggle", "operator"}
+    )
 
 
 def test_a_source_going_quiet_closes_its_window_as_observer_lost(tmp_path: Path) -> None:
@@ -1253,16 +1257,17 @@ def test_callout_activity_logs_but_does_not_gate() -> None:
     assert not policy.rule(shallow, thresholds)
 
 
-def test_the_desk_runs_four_books_and_the_report_audits_the_clock(tmp_path: Path) -> None:
-    """End to end: four books in the heartbeat, and a wiggle section in the report."""
+def test_the_desk_runs_five_books_and_the_report_audits_the_clock(tmp_path: Path) -> None:
+    """End to end: five books in the heartbeat, and a wiggle section in the report."""
     from shitcoims_paperdesk.desk import Desk, DeskConfig
 
     desk = Desk(DeskConfig(minutes=0.0, seed=3), ledger=Ledger(tmp_path, run_id="test-desk"))
     desk.heartbeat(T0)
     beat = rows_of(tmp_path, "heartbeat")[-1]
-    assert set(beat["books"]) == {"short", "medium", "toll", "wiggle"}
+    assert set(beat["books"]) == {"short", "medium", "toll", "wiggle", "operator"}
     assert "mints_watched" in beat["books"]["wiggle"]
-    assert [str(b) for b in BOOKS] == ["short", "medium", "toll", "wiggle"]
+    assert "awaiting_first_observation" in beat["books"]["operator"]
+    assert [str(b) for b in BOOKS] == ["short", "medium", "toll", "wiggle", "operator"]
 
     # A closed wiggle position must show up in the clock audit with its holding time.
     book = desk.wiggle

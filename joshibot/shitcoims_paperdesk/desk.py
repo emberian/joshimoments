@@ -1,4 +1,4 @@
-"""The desk daemon: one loop, four books, one ledger, two clocks, heartbeats.
+"""The desk daemon: one loop, five books, one ledger, two clocks, heartbeats.
 
 RUNNING IT
 ----------
@@ -50,7 +50,9 @@ from shitcoims_paperdesk.feeds import (
     swap_as_mint_observation,
 )
 from shitcoims_paperdesk.friction import LAMPORTS_PER_SOL, Friction
+from shitcoims_paperdesk.hunch import HunchSource, Retraction
 from shitcoims_paperdesk.ledger import Ledger, iso
+from shitcoims_paperdesk.operator import OperatorBook
 from shitcoims_paperdesk.policy import policy_for
 from shitcoims_paperdesk.toll import TollBook
 from shitcoims_paperdesk.wiggle import CalloutActivity, WiggleBook
@@ -116,7 +118,14 @@ WIGGLE_CLIP_LAMPORTS: Final[int] = 100_000_000
 
 
 class Desk:
-    """Four books over five sources, sharing one ledger and one wall clock."""
+    """Five books over six sources, sharing one ledger and one wall clock.
+
+    The sixth source is the operator. :class:`~shitcoims_paperdesk.hunch.HunchSource` tails
+    ``state/hunches.jsonl`` exactly as the other sources tail their collectors' output, with
+    two deliberate differences documented on that class: it reads from the START of the file
+    rather than from EOF, and its silence is never a staleness verdict, because a quiet
+    hunch tape means the operator is asleep rather than that a collector died.
+    """
 
     def __init__(self, config: DeskConfig, *, ledger: Ledger | None = None) -> None:
         self.config = config
@@ -176,6 +185,22 @@ class Desk:
             # and a half-hour cooldown would let the desk watch every one of them go by.
             decision_cooldown_s=120.0,
         )
+        self.operator = OperatorBook(
+            Book.OPERATOR,
+            policy=policy_for(
+                Book.OPERATOR,
+                explore_eps=config.explore_eps,
+                seed=None if seed is None else seed + 4,
+            ),
+            friction=self.friction,
+            ledger=self.ledger,
+            # IDENTICAL to the wiggle book, every one of them, and that is the design: the
+            # only thing that may differ between these two books is who chose the coin.
+            bankroll_lamports=config.bankroll_lamports,
+            max_positions=config.max_positions,
+            clip_lamports=WIGGLE_CLIP_LAMPORTS,
+            decision_cooldown_s=120.0,
+        )
 
         self.boards = BoardsSource()
         self.firehose = FirehoseSource()
@@ -191,6 +216,12 @@ class Desk:
             self.refresh,
             self.tape,
         )
+        #: The operator's own feed. NOT in ``self.sources`` on purpose: everything that
+        #: tuple drives -- watch windows, staleness bounds, ``OBSERVER_LOST`` censoring --
+        #: is machinery for deciding whether a market observer has died, and applying it
+        #: here would report a sleeping operator as a broken collector every night. It is
+        #: reported in the heartbeat as a count and an age, with no verdict attached.
+        self.hunches = HunchSource()
         #: Callout counts per mint over the last hour. Logged on every wiggle decision and
         #: gating none of them -- see ``wiggle.CALLOUT_ARM`` for the study verdict behind
         #: that, and ``wiggle.CalloutActivity`` for why an unused column is still worth
@@ -275,6 +306,7 @@ class Desk:
         self.medium.restore(state.get("medium") or {})
         self.toll.restore(state.get("toll") or {})
         self.wiggle.restore(state.get("wiggle") or {})
+        self.operator.restore(state.get("operator") or {})
 
     def save(self) -> None:
         self.ledger.save_state(
@@ -285,6 +317,7 @@ class Desk:
                 "medium": self.medium.state(),
                 "toll": self.toll.state(),
                 "wiggle": self.wiggle.state(),
+                "operator": self.operator.state(),
             }
         )
 
@@ -293,6 +326,17 @@ class Desk:
     def step(self, now: float) -> None:
         boards_stale = self.stale(self.boards, now)
         tape_stale = self.stale(self.tape, now)
+
+        # 0. The operator, FIRST, before any market observation is routed. A hunch recorded
+        #    two seconds ago must be armed by THIS cycle's observations rather than the
+        #    next one: the whole book is a five-minute clock, and a poll interval of
+        #    avoidable latency between the gesture and the decision is latency that shows up
+        #    as a worse entry price and gets attributed to the operator's judgement.
+        for event in self.hunches.poll(now):
+            if isinstance(event, Retraction):
+                self.operator.retract(event, now)
+            else:
+                self.operator.accept(event, now)
 
         # 1. Boards: the marking feed for the mint books, the survivorship record the
         #    medium book's entry rule is built on, and the wiggle book's ONLY source of a
@@ -307,6 +351,8 @@ class Desk:
             self.medium.consider(obs)
             self.wiggle.observe(obs, source_stale=boards_stale)
             self.wiggle.consider(obs, extra_features=self.callout_activity.features(obs.mint, now))
+            self.operator.observe(obs, source_stale=boards_stale)
+            self.operator.arm_waiting(obs)
 
         # 2. Firehose: short-book candidates only. A mint two seconds old is not a
         #    medium-horizon position, and it is not a wiggle candidate either -- it has no
@@ -327,6 +373,8 @@ class Desk:
             self.short.consider(obs)
             self.wiggle.observe(obs, source_stale=boards_stale)
             self.wiggle.consider(obs, extra_features=self.callout_activity.features(obs.mint, now))
+            self.operator.observe(obs, source_stale=boards_stale)
+            self.operator.arm_waiting(obs)
 
         # 3. Cluster tape: the toll book's flow, and the medium book's held-cluster arm.
         #    EVERY swap feeds the flow window -- that is a measurement over a past window
@@ -350,18 +398,31 @@ class Desk:
         #    armed at -16.5% filled at -64.7% because the next observation of that coin was
         #    43 seconds later and it had gapped through. The desk cannot trade the tick that
         #    told it to trade, so the only lever is how soon the NEXT tick arrives.
+        #    The OPERATOR book's positions, pendings and un-armed hunches are priority for
+        #    the same reason the wiggle book's are -- they run the same five-minute clock --
+        #    and its WATCHES are not: a claim with an hour-long horizon is not misjudged by
+        #    a twenty-second-old mark, and letting it displace a scalp whose exit is
+        #    imminent would be the exact fairness-shaped hole the priority split closed.
+        operator_hot = (
+            {p.mint for p in self.operator.positions.values()}
+            | set(self.operator.pending)
+            | set(self.operator.waiting)
+        )
         wiggle_held = {p.mint for p in self.wiggle.positions.values()} | set(self.wiggle.pending)
         held = sorted(
             wiggle_held
+            | self.operator.mints_of_interest
             | {p.mint for p in self.short.positions.values()}
             | {p.mint for p in self.medium.positions.values()}
             | set(self.short.pending)
             | set(self.medium.pending)
         )
-        for obs in self.refresh.refresh(held, now, priority=wiggle_held):
+        for obs in self.refresh.refresh(held, now, priority=wiggle_held | operator_hot):
             self.short.observe(obs, source_stale=False)
             self.medium.observe(obs, source_stale=False)
             self.wiggle.observe(obs, source_stale=False)
+            self.operator.observe(obs, source_stale=False)
+            self.operator.arm_waiting(obs)
 
         # 5. Gates, sweeps, windows.
         self.toll.gate(now)
@@ -369,6 +430,7 @@ class Desk:
         self.medium.sweep(now, source_stale=boards_stale and tape_stale)
         self.toll.sweep(now, source_stale=tape_stale)
         self.wiggle.sweep(now, source_stale=boards_stale)
+        self.operator.sweep(now, source_stale=boards_stale)
         self.callout_activity.expire(now)
         self.check_windows(now)
 
@@ -398,6 +460,17 @@ class Desk:
                     **self._book_state(self.wiggle, now),
                     "mints_watched": len(self.wiggle.watch),
                 },
+                "operator": {
+                    **self._book_state(self.operator, now),
+                    "awaiting_first_observation": len(self.operator.waiting),
+                    "open_expectations": len(self.operator.watches),
+                },
+            },
+            # Reported as a count and an age with NO staleness verdict; see ``self.hunches``.
+            hunches={
+                "events": self.hunches.events,
+                "seconds_since_last": self.hunches.seconds_since_event(now),
+                "bad_lines": self.hunches.bad_lines,
             },
             firehose_duplicates_dropped=self.firehose.duplicates_dropped,
             refresh_failures=self.refresh.failures,
@@ -463,6 +536,7 @@ class Desk:
             self.medium.drain(end)
             self.toll.drain(end)
             self.wiggle.drain(end)
+            self.operator.drain(end)
         self.heartbeat(end)
         self.save()
         self.ledger.close()
@@ -474,6 +548,7 @@ class Desk:
             "medium": self.medium.counters,
             "toll": self.toll.counters,
             "wiggle": self.wiggle.counters,
+            "operator": self.operator.counters,
         }
 
 

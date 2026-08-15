@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.hunch</string>
+  <!-- The capture surface's API: the loopback server the glass's coin explorer talks to.
+
+       WHY IT IS A LAUNCHD JOB RATHER THAN A THING YOU START WHEN YOU WANT IT. The entire
+       design premise is that the operator points at a coin and the desk records it in the
+       same second. A capture surface that has to be started first is a capture surface that
+       is down at exactly the moment worth capturing - the interesting coins arrive while
+       nobody is thinking about infrastructure. So it stays up, KeepAlive, and its cost when
+       idle is one process holding a bounded coin index.
+
+       PORT 8790, and the two it deliberately is not: 8787 is the sentinel (which holds keys)
+       and 8788/8799 are intel.py. A capture surface silently answering from the wrong daemon
+       is worse than one that is down, because it looks like it is working.
+
+       This process holds no key, has no RPC client and no broadcast path. Its only write is
+       an append to state/hunches.jsonl. --warm builds the coin index at boot so the first
+       card list the operator sees is instant rather than a cold read of the boards tail. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_paperdesk</string>
+    <string>glass</string>
+    <string>--warm</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/hunch-api.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/hunch-api.err.log</string>
+</dict>
+</plist>

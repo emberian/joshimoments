@@ -4,7 +4,7 @@
 <dict>
   <key>Label</key>
   <string>com.shitcoims.paperdesk</string>
-  <!-- The standing four-book paper desk (short / medium / toll / wiggle). It was
+  <!-- The standing five-book paper desk (short / medium / toll / wiggle / operator). It was
        launched as an agent's background
        process with no supervisor, then bounced twice for code fixes on the assumption
        "the watchdog will revive it" - which it could not, because report-only. This
