@@ -1420,7 +1420,7 @@ def cmd_risks(horizons=(3600, 6 * 3600, 24 * 3600, 72 * 3600)) -> int:
         print(f"  {name:<49}" + "".join(f"{v:>10.3%} " for v in vals))
     (OUT / "risks.json").write_text(json.dumps(
         {"horizons_s": list(horizons), "cumulative_incidence_rip": out,
-         "n": int(len(df)), "n_rip": int((cause == 1).sum()),
+         "n": len(df), "n_rip": int((cause == 1).sum()),
          "n_grad": int((cause == 2).sum())}, indent=2))
     print(f"\n  -> {OUT / 'risks.json'}")
     return 0
