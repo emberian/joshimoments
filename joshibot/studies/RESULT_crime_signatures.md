@@ -679,6 +679,10 @@ Emitters live in `shitcoims_scalper/crime_detect.py` (`alert_row`, `defect_row`,
 `kind` is a **closed set** — a consumer may switch on it exhaustively:
 `crime_alert`, `crime_clear`, `defect`, `watch_open`, `watch_close`, `heartbeat`.
 
+The row below is an **illustrative shape with invented values**, chosen to show a `high`
+severity row; the real rows written by this run are all `watch` (DREGG's latest is 0.265 —
+§6.1) and live in `state/crime/alerts.jsonl`.
+
 ```json
 {
   "schema": "crime.alert.v1",
