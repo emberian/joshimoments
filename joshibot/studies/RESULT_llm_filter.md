@@ -298,7 +298,8 @@ from having no judgement. Two elicitations that impose less, both batched at 50,
 **Pick a subset.** "Which of these 50 would you actually buy? As many or as few as you genuinely
 mean — three, ten, one, none." Saying nothing about a coin *is* the decision, so there is no
 missingness and the selection rate is the model's own choice. Given that freedom, with the full
-name/description/image/socials in front of it, grok picked **1 coin out of 100**, and on one
+name/description/image/socials in front of it, grok picked **1 coin out of 100** (the run was interrupted at 100 of 189; one batch of
+50 failed to emit a parseable marker and is recorded as an error, not imputed), and on one
 batch returned `PICKS: none` with the assessment *"this board is a graveyard sitting on top of a
 printer farm."* The refusal is not a prompt artifact — it survives removing the bearish priming,
 removing the schema, raising the effort, and letting the model choose its own rate.
@@ -443,26 +444,57 @@ Listed in order of how much they threaten the conclusion.
 1. **Callout coverage.** Fix the 3% join rate before anything else. The one qualitative channel
    we have direct evidence the operator used is the one we could not test, and it is a collector
    problem, not a modelling problem.
-2. **The image.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
+2. **Pixels, by the cheapest route first.** A vision LLM handed the *rendered* image and chart,
+   scored on this same cohort with these same nulls, is a ~$5 experiment. It decides whether the
+   visual channel carries anything at all, and it should be run before anything more ambitious,
+   because if pixels move the number that is the finding and it is cheap.
+3. **A pre-verbal representation — TRIBE v2.** Every arm here asked grok to *say* something: a
+   probability, a 0–100 score, a subset, a colour. If the human glance is a pattern-match that
+   does not decompose onto language, verbalisation is exactly the lossy step, and no amount of
+   prompt work reaches past it. Meta's **TRIBE v2** (`facebook/tribev2`, `facebookresearch/tribev2`)
+   is the obvious instrument: a tri-modal encoder — LLaMA 3.2 text, V-JEPA2 video, Wav2Vec-BERT
+   audio — that predicts fMRI response on the fsaverage5 mesh, `(n_timesteps, ~20k vertices)`.
+   Point it at a screen capture of the coin's pump.fun page and it yields a simulated cortical
+   response to the *stimulus* rather than a verdict about it. It is **0.71 GB** and runs locally
+   on this box, which also removes the 13.6 calls/min ceiling and the per-call cost entirely.
+
+   Three things would have to be handled honestly, and they are the reason this is item 3 and not
+   item 1:
+   - **~20k features against n=189 is §3.3 territory.** SMOTE-before-split manufactured AUC 0.95
+     from uniform noise in eleven published studies; 20,000 vertices on 189 entities will do the
+     same thing more elegantly. Any dimensionality reduction must be fixed *a priori* — an atlas
+     parcellation or a fixed ROI set chosen before seeing an outcome — never selected by fit.
+     Even then, 189 entities supports a handful of features, not a mesh. This needs the 606-mint
+     1 h cohort at minimum and really needs more tape.
+   - **A pump.fun page is out of distribution.** TRIBE v2 is trained on people watching films and
+     listening to speech. Predicted responses to a UI screenshot are unvalidated extrapolation,
+     and the model itself only claims the "average subject".
+   - **CC-BY-NC-4.0.** Non-commercial. Fine for a study, not for a live trading system.
+
+   And the framing caveat that outranks all three: a faithful simulation of the glance reproduces
+   the *operator's own judgement*, and this study is what happens when we test that judgement
+   against a number. The drawdown rule beat every verbalised version of it. Simulating the glance
+   better optimises toward a target we have not yet shown is worth hitting.
+4. **The image as passed here was a filename.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
    a single picture. "Glancing at the coin and the vibe" is substantially a *visual* act and this
    study did not test it — it tested whether an LLM can read a filename. This is the largest
    thing left undone, it is the one that could genuinely overturn the conclusion, and it is not
    cheap: image tokens on top of 40 s/call.
-3. **Entry-time screening on the live feed.** The 1 h replication weakened the cohort objection
+5. **Entry-time screening on the live feed.** The 1 h replication weakened the cohort objection
    but did not remove it: any horizon that requires an observed forward return still conditions
    on survival-in-view. Only screening at the moment of arrival, with the outcome collected
    afterwards, removes age from the selection entirely. That is a collector change, not a study.
-4. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for the
+6. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for the
    LLM, and `RESULT_board_entry.md` already flags it.
-5. **Power.** n=189 is what the 8 h horizon leaves after entity dedup — a property of the data,
+7. **Power.** n=189 is what the 8 h horizon leaves after entity dedup — a property of the data,
    not the budget. The null band on the p(up) gap is ±14 pp. A weak-but-real edge of 5 pp is
    undetectable here and this study cannot rule one out. What it *can* rule out is an edge large
    enough to be worth 40 s and half a cent.
-6. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two framings
+8. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two framings
    were tried and the second was a reaction to the first. But the paired arm test argues the
    ceiling is *below zero*, not merely low — the content channel measurably degraded the ranking
    (p=0.0008), so prompt work on the content is polishing a channel that is subtracting.
-7. **A different model.** Only `grok-4.6` at `--reasoning-effort low` was tested. `grok-4.5` and
+9. **A different model.** Only `grok-4.6` at `--reasoning-effort low` was tested. `grok-4.5` and
    the Claude path are both one flag / one class away and neither was tried; the finding is about
    this model, on this cohort, at this effort setting.
 
