@@ -215,7 +215,27 @@ Two facts worth reading off this table before any model:
   Insiders dumping a ≥5%-of-supply position on a ≥100 SOL coin usually does *not* kill it.
   "Insider sold" and "coin died" are much less coupled than the folk model assumes.
 
-### 4.1 The perpetrators, and their recidivism
+### 4.1 There is no LP-pull population to label, and that is measured
+
+The brief asked for **LP-pull** labels alongside insider-dump labels. On pump.fun the
+migration hands the pool its reserves and the LP position is not the deployer's to withdraw,
+so the classic "pull the liquidity" rug should be structurally unavailable — which is folklore
+until it is counted. A withdrawal is mechanically distinct from a trade: **a trade moves the
+pool's two legs in opposite directions; a withdrawal moves both out.** One predicate over every
+post-migration pool transaction:
+
+| | |
+|---|---:|
+| post-migration pools observed | 6,549 |
+| pool transactions | 51,512,871 |
+| **coins with ANY dual-leg outflow** | **12 (0.18%)** |
+| such transactions | 30 |
+
+**Confirmed: LP pulls essentially do not happen on pump.fun.** The entire rug surface here is
+supply disposal, which is why §4's ladder is built on holdings and not on liquidity. A study
+importing an Ethereum-shaped rug taxonomy would have spent its time on a population of twelve.
+
+### 4.2 The perpetrators, and their recidivism
 
 | | |
 |---|---:|
@@ -591,6 +611,13 @@ instrument is a constant and every headline built on it is meaningless.
    deployer-keyed analysis.
 3. **No entity resolution succeeded.** §6.3 is a negative. Nothing downstream clusters wallets,
    and the §5 test is at deployer-wallet level with that stated as a limitation, not solved.
+   **Spectral co-clustering / SVD over the wallet × coin incidence was not run**, and the
+   reason is §6.3 rather than time: the only linkage relation this corpus offers already
+   collapses 45% of wallets into one component through an infrastructure hub, so a spectral
+   method would have been fitted on a graph known to be over-merged. `RESULT_svn_cotrading.md`
+   is explicit that the null, not the clustering algorithm, is where this work lives or dies —
+   the honest move was to report the linkage failure rather than to layer a nicer algorithm on
+   top of it.
 4. **Ten days is ten days**, and coins born on day 9 are heavily right-censored. The temporal
    split mitigates the comparison but not the base rates: a coin born on the last day has
    hours, not days, in which to rip.

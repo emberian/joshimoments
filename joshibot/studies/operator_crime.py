@@ -737,6 +737,43 @@ WHERE l.block_time >= ev.t_ins_peak AND l.block_time <= ev.t_dump AND l.delta_ra
 GROUP BY l.mint, l.owner
 """
 
+# THE LP-PULL QUESTION, answered rather than assumed. The brief asked for LP-pull labels
+# alongside insider-dump labels. On pump.fun the migration hands the pool its reserves and the
+# LP position is not the deployer's to withdraw, so the classic "pull the liquidity" rug should
+# be unavailable -- but that is folklore until it is counted. A withdrawal is mechanically
+# distinct from a trade: a trade moves the two legs in OPPOSITE directions, a withdrawal moves
+# BOTH out. So the test is one predicate over every post-migration pool transaction.
+LPPULL_SQL = """
+WITH grad AS (
+  SELECT mint, curve_owner FROM read_parquet('{coins}') WHERE graduated
+),
+mig AS (
+  SELECT l.mint, l.block_slot, l.tx_index
+  FROM read_parquet('{ledger}') l JOIN grad g ON l.mint = g.mint AND l.owner = g.curve_owner
+  WHERE l.delta_raw < 0
+  QUALIFY row_number() OVER (PARTITION BY l.mint
+                             ORDER BY l.block_slot DESC, l.tx_index DESC) = 1
+),
+pool AS (
+  SELECT l.mint, arg_max(l.owner, l.delta_raw) AS pool_owner
+  FROM read_parquet('{ledger}') l JOIN mig m
+    ON l.mint = m.mint AND l.block_slot = m.block_slot AND l.tx_index = m.tx_index
+  WHERE l.delta_raw > 0 GROUP BY l.mint
+),
+legs AS (
+  SELECT l.block_slot, l.tx_index, p.mint,
+         sum(CASE WHEN l.mint = p.mint THEN l.delta_raw ELSE 0 END) AS d_tok,
+         sum(CASE WHEN l.mint = '{wsol}' THEN l.delta_raw ELSE 0 END) AS d_sol
+  FROM read_parquet('{ledger}') l JOIN pool p ON l.owner = p.pool_owner
+  GROUP BY l.block_slot, l.tx_index, p.mint
+)
+SELECT count(DISTINCT mint) AS pools,
+       count(*) AS pool_txs,
+       count(DISTINCT mint) FILTER (WHERE d_tok < 0 AND d_sol < 0) AS coins_dual_outflow,
+       count(*) FILTER (WHERE d_tok < 0 AND d_sol < 0) AS dual_outflow_txs
+FROM legs
+"""
+
 RIP_PRED = (
     "t_dump IS NOT NULL "
     f"AND ins_peak_share >= {RIP_INS_SHARE} "
@@ -802,6 +839,19 @@ def cmd_labels() -> int:
     print("perpetrator recidivism (coins ripped per wallet, top of the distribution):")
     for k, c in reuse:
         print(f"    {k:>4} coins   {c:>7,} wallets")
+
+    lp = con.execute(
+        LPPULL_SQL.format(coins=coins, ledger=ledger_glob(), wsol=WSOL)
+    ).fetchone()
+    print("\nLP pulls -- the other half of the brief's label request:")
+    print(f"  post-migration pools observed          : {lp[0]:,}")
+    print(f"  pool transactions                      : {lp[1]:,}")
+    print(f"  coins with ANY dual-leg outflow        : {lp[2]:,} ({lp[2] / max(lp[0], 1):.2%})")
+    print(f"  such transactions                      : {lp[3]:,}")
+    print("  A trade moves the pool's two legs in OPPOSITE directions; a withdrawal moves")
+    print("  BOTH out. On pump.fun the migration hands the pool its reserves and the LP is")
+    print("  not the deployer's to withdraw, so the classic liquidity-pull rug should be")
+    print("  structurally unavailable -- and it is. There is no LP-pull population to label.")
     return 0
 
 
