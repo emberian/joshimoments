@@ -13,6 +13,45 @@
 #
 # confidence: attested = operator said it outright; probable = operator said
 # "pretty sure"; inferred = derived by an instrument, never overrides attested.
+#
+# ---------------------------------------------------------------------------------
+# RESOLUTION RULE (2026-08-15). Read this before adding or changing any address.
+# ---------------------------------------------------------------------------------
+# An active ADDRESS-POISONING campaign dusts these wallets with lookalikes that match
+# BOTH the leading and trailing characters of a real counterparty, within seconds of
+# the real payment (measured latencies: 16s, 22s, 31s). Matching a prefix against all
+# of chain history therefore resolves to the ATTACKER by construction. The rule used
+# here, and the one to keep using:
+#
+#   Candidate set = counterparties of the five own_wallets ONLY, derived from the
+#   on-disk cache .cache/position_history/tx/*.json (2012 transactions,
+#   2026-06-27T13:14Z .. 2026-08-14T05:25Z — the wallets' full lifetimes bar the last
+#   day) by walking every parsed transfer|transferChecked|transferWithSeed leg and
+#   resolving SPL token accounts to owners via that transaction's OWN
+#   pre/postTokenBalances. Prefix comparison is CASE-SENSITIVE base58.
+#
+#   A candidate is the label's referent only if it is SUBSTANTIVE:
+#     (a) SOL: >= 0.1 SOL (1e8 lamports) cumulative OUTBOUND from an own wallet, via a
+#         bare system transfer in a transaction invoking no swap/LP/fee-claim program; or
+#     (b) tokens: an outbound token amount whose exact raw value is NOT shared by more
+#         than 10 other recipients (i.e. not a batch airdrop).
+#
+#   Everything else is an artifact:
+#     - inbound-only, <= 0.0001 SOL, or a 0.000001-SOL / zero-value token transfer
+#       -> ADDRESS-POISONING DUST;
+#     - a token receipt whose exact raw amount recurs across hundreds of recipients
+#       (744.046875 DREGG x886, 22778.0 DREGG x77) -> HOLDER AIRDROP, median ~$0.24
+#       (studies/RESULT_position_history.md:217).
+#
+#   The two floors are separated by ~1000x: every confirmed lookalike delivered
+#   <= 0.0001 SOL inbound and 0 outbound, while the smallest genuine discretionary
+#   payment in the whole book is 0.1 SOL outbound. DIRECTION IS THE DISCRIMINATOR:
+#   real payees RECEIVE from us; poisoners SEND dust to us.
+#
+# Bound on all six prefix questions: the complete set of non-hub SOL payees >= 0.1 SOL
+# across all five wallets over the entire history is 16 addresses totalling 66.2959 SOL,
+# which reconciles with RESULT_position_history.md:437 ("discretionary distributions
+# -66.2993 SOL"). Exactly ONE of those 16 matches any of the six prefixes.
 
 own_wallets:
   - {address: Sh1WNJ8g68rXJGyDjVPcfxWN1WbMrLsgdXmSb6cccuE, label: shitcoims,      note: live trading wallet}
@@ -24,17 +63,101 @@ own_wallets:
 external:
   - {address: Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh, label: coinbase_receiving, kind: exchange, confidence: attested,
      note: "operator's Coinbase Solana receiving address; Coinbase also SENDS to the own-wallets from rotating addresses — inbound from Coinbase is a transfer, not income"}
-  - {address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6, label: payroll, kind: payee, confidence: attested}
-  - {address: null, prefix: "9gy",  label: payroll,               kind: payee,   confidence: attested}
-  - {address: null, prefix: "7tvm", label: payroll,               kind: payee,   confidence: attested,
-     note: "operator initially recalled as KOL, then corrected: 'was actually payroll i realized'"}
-  - {address: null, prefix: "3CP",  label: payroll,               kind: payee,   confidence: probable}
-  - {address: null, prefix: "C7",   label: payroll,               kind: payee,   confidence: probable}
-  - {address: null, prefix: "EBF",  label: marketing_kol,         kind: payee,   confidence: attested}
-  - {address: null, prefix: "Fu5RB", label: scammer,              kind: adversary, confidence: attested,
-     note: "funds sent here are a loss, not payroll and not marketing"}
+
+  # CORRECTED 2026-08-15. This entry previously read
+  #   address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6
+  # which does not exist. It appears in ZERO of the 2012 cached transactions, nowhere
+  # else on disk, and — decisively — it is OFF the ed25519 curve, so no keypair can
+  # exist for it and no human can be paid at it. The real payee shares its first
+  # TWENTY characters and then diverges completely; a 20-char base58 collision is
+  # ~58^20 ~ 1e35 work, so this is not poisoning and not coincidence. It is a
+  # truncated display ("PayDyNeCPqJBp34JMWWj...") completed with a fabricated tail.
+  # The address below is the one that actually received the money.
+  - {address: PayDyNeCPqJBp34JMWWjP7DbDbneF2mHHFjPNrEbuv6, label: payroll, kind: payee, confidence: attested,
+     note: "1,063,079.526895 DREGG over 4 transfers, 2026-07-25T04:52:33Z..2026-08-08T16:39:27Z; the largest non-batch DREGG payee that is not a hub or the Streamflow escrow. Has its own poisoning lookalike Pay1mF5quHykSwHowLCvJLcVzD2D5zo3dCL8BRBcbuv6 which dusted 16s after the first real transfer"}
+
+  # RESOLVED 2026-08-15 from the prefix "3CP". Sole 3CP-prefixed key in the entire
+  # 5274-key universe of the ledger, and no lookalike shares its suffix.
+  - {address: 3CP5QbshPtZ7YDENR9kb8eKLhd17c5xL5gkxvNYm1rAs, label: payroll, kind: payee, confidence: probable,
+     resolved_from_prefix: "3CP",
+     note: "1.000000000 SOL outbound from tha_funds, 2026-07-24T02:22:25Z, bare 3-key system transfer, no swap/LP program, no memo. Also received the 744.046875 DREGG batch airdrop, which is NOT what identifies it"}
+
+  # UNRESOLVED. Left null on purpose: the ledger contains no substantive counterparty
+  # matching these, so filling them in would be guessing, and guessing here resolves to
+  # the poisoning campaign. `resolution` records what was actually searched so the next
+  # pass does not redo it.
+  - {address: null, prefix: "9gy",  label: payroll, kind: payee, confidence: attested,
+     resolution: not_found,
+     note: "zero case-sensitive matches in the counterparty set AND in the full 5274-key
+       universe. Case-insensitively 9GY47nLj... appears in 1 tx but is never a transfer
+       counterparty, and 9giZjBp1... is airdrop-dust. No payee matching this exists in the
+       ledger at all"}
+  - {address: null, prefix: "7tvm", label: payroll, kind: payee, confidence: attested,
+     resolution: not_found_airdrop_only,
+     note: "operator initially recalled as KOL, then corrected: 'was actually payroll i
+       realized'. Exactly one prefix match, 7tvm4XqjBSajv7YuyNMMfPPxSB4MxDikHYt4Wdia1KDr,
+       which received 0 SOL and exactly 744.046875 DREGG — the mass-airdrop tier that went
+       to 886 distinct recipients at ~$0.24 each. A holder airdrop is not a payroll payment,
+       so this does NOT satisfy the attestation"}
+  - {address: null, prefix: "3CP",  label: payroll, kind: payee, confidence: probable,
+     resolution: superseded,
+     note: "RESOLVED — see the 3CP5Qbsh... entry above. Kept as a tombstone so the prefix
+       is not re-resolved from scratch"}
+  - {address: null, prefix: "C7",   label: payroll, kind: payee, confidence: probable,
+     resolution: not_found_airdrop_only,
+     note: "two characters, so weak by construction — but the answer is stronger than
+       'ambiguous': NO C7-prefixed address ever received SOL from any of the five wallets.
+       7 exist in the universe; the only 2 that are transfer counterparties are
+       C7H9bmqFKTFC6wwVDHxVBLVJNbwzQEa8x7BcYF8At5oa (23,522.046875 DREGG = the 77-recipient
+       batch plus the 886-recipient batch; 7 recipients got exactly this pair) and
+       C7n7DgLqWpdmPYD98CSkCZxvWSwcEi7dgZyt6n11ckc2 (744.046875 DREGG, the 886-batch).
+       Both airdrop-only. If the rule were relaxed to 'received any token', this would be
+       AMBIGUOUS between those two. Do not upgrade `probable` here"}
+  - {address: null, prefix: "EBF",  label: marketing_kol, kind: payee, confidence: attested,
+     resolution: not_found,
+     note: "zero matches, case-sensitive or not, in the counterparty set or the universe.
+       NEAR-MISS FOR THE OPERATOR TO ADJUDICATE, deliberately NOT resolved here:
+       EBP74nGCUTB8ME7xGtRPntQa3WZsamoFDm2pEwbSTTSP received 14.143888 SOL in a single
+       transfer from pumpfun_main on 2026-06-30T03:23:11Z — the largest non-hub
+       discretionary payment in the whole book, which is marketing-KOL-shaped. But EBP != EBF
+       in the third character. The only other EB... counterparty is airdrop-dust. This is
+       one character from an attested label and needs a human, not an instrument"}
+  - {address: null, prefix: "Fu5RB", label: scammer, kind: adversary, confidence: attested,
+     resolution: not_found,
+     note: "funds sent here are a loss, not payroll and not marketing. Strongest negative of
+       the six: NO address beginning 'Fu5' exists anywhere in the 5274-key universe, and the
+       literal string 'Fu5RB' appears nowhere on disk except this file. NEAR-MISS, again NOT
+       resolved: FU21ojvNwQYTUCQetgj2f26TDFNqfZ81GofHiytK1DG2 took a single 7.700000 SOL
+       send from ember_dev on 2026-07-28T23:12:31Z that never recurs, which is loss-shaped —
+       but the case pattern differs (FU2 vs Fu5). Its own lookalike FU21WXEB...K2zG2 dusted
+       31 seconds later"}
+
   - {address: AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c, label: fomo_family_relayer, kind: infrastructure, confidence: inferred,
-     note: "gas-sponsors 22.5% of distinct traders on cluster pools; identified three ways in RESULT_copytrading.md; verify full address against that study before use"}
+     note: "gas-sponsors 22.5% of distinct traders on cluster pools; identified three ways in
+       RESULT_copytrading.md. NOT independently confirmed here: it does not appear in the
+       five wallets' counterparty set, which is expected for an infrastructure label derived
+       from the pool tape rather than from our own transfers, but means this address has
+       still never been checked against a second source. Verify before use"}
+
+# The poisoning campaign itself, recorded so it is never re-derived. Every entry is
+# inbound-only dust (<= 0.0001 SOL, or 100-1000 raw USDC) at an address matching both the
+# prefix AND suffix of a real counterparty, sent within seconds of the real payment.
+address_poisoning:
+  confirmed_pairs: 17
+  targets_include_our_own_wallets: true
+  examples:
+    - {real: Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh, note: "coinbase, 486.63 SOL",
+       lookalikes: [Cbx3naVY...JJRP3Eh, Cbx3SmW9...nDRP3Eh, Cbx3gMty...Rn3P3Eh]}
+    - {real: 9sZEoWp5...nijWoV, note: "1.5 SOL payee, paid 02:20:13",
+       lookalikes: ["9sZEr9cr...VV7iWoV dusted 02:20:35 (+22s)", "9sZE2CDx...AwYWoV at 02:20:55"]}
+    - {real: FU21ojvNwQYTUCQetgj2f26TDFNqfZ81GofHiytK1DG2, note: "7.7 SOL at 23:12:31",
+       lookalikes: ["FU21WXEB...K2zG2 dusted 0.000001 SOL at 23:13:02 (+31s)"]}
+  our_wallets_targeted:
+    - {real: Funv3Qdb...PoRaMQ, lookalike: Fun1hUJX...eYWaMQ}
+    - {real: Sh1WNJ8g...6cccuE, lookalike: Sh1WyxAi...DwycuE}
+    - {real: PmpDh2BQ...TdkqYE, lookalike: Pmp1xuHh...y8hYE}
+    - {real: Dev2GmPW...Jk3CHc, lookalike: Dev3ysEW...AGHCHc}
+    - {real: PrvpTgcu...KCzagf, lookalike: Prv1CVzq...qZ1agf}
 
 categories:
   # Operator's own classification from the fork: "let's call this all payroll
