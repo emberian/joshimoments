@@ -515,6 +515,7 @@ class Readout:
 
     observations: int | None = None
     obs_per_min: float | None = None
+    price_moves: int | None = None
     two_sided_frac: float | None = None
     wiggle_n: int | None = None
     wiggle_amp: float | None = None
@@ -751,9 +752,17 @@ def readout(
             watch.observe(obs.price, obs.t_ingest_unix, basis=obs.pool_label)
         out.observations = watch.observations
         out.obs_per_min = watch.observations_per_minute()
-        out.two_sided_frac = watch.two_sided_frac() if watch.observations >= 3 else None
-        if out.two_sided_frac is None:
+        out.price_moves = watch.moves()
+        if watch.observations < 3:
             out.absent["two_sided_frac"] = f"{watch.observations} sightings; needs 3"
+        elif out.price_moves == 0:
+            out.two_sided_frac = 0.0  # measured flat: the price has not moved at all
+        elif out.price_moves < 2:
+            out.absent["two_sided_frac"] = (
+                f"one price move in {watch.observations} sightings; needs two"
+            )
+        else:
+            out.two_sided_frac = watch.two_sided_frac()
         # The zigzag threshold is the coin's OWN round-trip cost, so the reference has to
         # be an observation with real reserves -- the freshest one on the tape.
         features = watch.features(friction=friction, obs=path[-1], clip_lamports=clip_lamports)
@@ -856,6 +865,7 @@ def render_readout(out: Readout, resolution: Resolution | None = None) -> str:
         f"      round trip {_n(out.round_trip_cost, '.2%')}",
         f"  flow       {_n(out.trade_marks_per_hour, '.0f')} trade marks/h"
         f"      two-sided {_n(out.two_sided_frac, '.0%')}"
+        f" ({out.price_moves if out.price_moves is not None else '—'} price moves)"
         f"      seen {out.observations if out.observations is not None else '—'}x"
         f" ({_n(out.obs_per_min, '.1f')}/min)",
         f"  wiggle     {out.wiggle_n if out.wiggle_n is not None else '—'} swings"

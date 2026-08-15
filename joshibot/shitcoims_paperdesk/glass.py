@@ -327,9 +327,21 @@ class CoinIndex:
         drawdown = obs.drawdown_from_ath if obs.drawdown_known else None
         if drawdown is None:
             absent["drawdown_from_ath"] = "the vendor served no all-time high for this coin"
-        two_sided = watch.two_sided_frac() if watch.observations >= 3 else None
-        if two_sided is None:
+        moves = watch.moves()
+        two_sided: float | None = None
+        if watch.observations < 3:
             absent["two_sided_frac"] = f"seen {watch.observations}x; two-sidedness needs 3"
+        elif moves == 0:
+            # A REAL measured zero, and a loud one: the price has not moved once across the
+            # whole window. Nothing to scalp, however good the depth looks.
+            two_sided = 0.0
+        elif moves < 2:
+            absent["two_sided_frac"] = (
+                f"one price move in {watch.observations} sightings; two-sidedness needs two"
+                " moves to compare a direction against"
+            )
+        else:
+            two_sided = watch.two_sided_frac()
         features = watch.features(friction=self.friction, obs=obs, clip_lamports=self.clip_lamports)
 
         policy = WigglePolicy(seed=0)
@@ -368,6 +380,9 @@ class CoinIndex:
             "sol_in_curve": obs.sol_in_curve,
             "complete": obs.complete,
             "sightings": watch.observations,
+            # The n behind two_sided_frac, and the thing that separates "flat" from
+            # "unmeasured" on the card.
+            "price_moves": moves,
             "obs_per_min": watch.observations_per_minute(),
             "two_sided_frac": two_sided,
             "wiggle_n": int(features["wiggle_n"]),

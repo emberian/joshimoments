@@ -272,6 +272,25 @@ class WiggleWatch:
     def observations(self) -> int:
         return len(self.prices)
 
+    def moves(self) -> int:
+        """How many times the price actually CHANGED across the stored path.
+
+        Split out because :meth:`two_sided_frac` returns ``0.0`` for two states that a
+        DISPLAY must not merge: a coin whose price moved several times and never reversed
+        (a measured zero -- a one-way slide, which is exactly what the wiggle rule wants to
+        refuse), and a coin whose price has not moved at all or moved once (unmeasured --
+        there is no second move to compare a direction against).
+
+        The RULE is right to treat both as failing, and does: ``>= bar`` with ``bar > 0``
+        rejects either. A CARD is not, because "this thing is dead flat" and "we have not
+        seen enough of it yet" are different things to put in front of somebody about to
+        commit 0.1 SOL. Measured on the live boards: a coin can sit on five boards for 80
+        sightings with ONE distinct price, and the card was rendering that as 0% two-sided
+        beside a sample size of 48, which reads as a measurement and is not one.
+        """
+        signs = [(1 if b > a else -1 if b < a else 0) for a, b in pairwise(self.prices)]
+        return sum(1 for s in signs if s != 0)
+
     def two_sided_frac(self) -> float:
         if len(self.prices) < 3:
             return 0.0

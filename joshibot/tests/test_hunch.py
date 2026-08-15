@@ -1167,3 +1167,72 @@ def test_a_zap_cancels_a_hunch_still_waiting_for_its_first_observation(tmp_path:
     book.observe(first, source_stale=False)
     book.arm_waiting(first)
     assert not book.pending and not book.positions
+
+
+def test_a_flat_price_and_an_unmeasured_one_are_different_states(tmp_path: Path) -> None:
+    """Both make two_sided_frac 0.0. Only one of them is a measurement.
+
+    The RULE is right to refuse both (`>= bar` with bar > 0). A CARD is not: "this thing
+    is dead flat" and "we have not seen enough of it yet" are different things to put in
+    front of somebody about to commit 0.1 SOL.
+    """
+    from shitcoims_paperdesk.wiggle import WiggleWatch
+
+    flat = WiggleWatch()
+    for i in range(10):
+        flat.observe(1.0, T0 + i)
+    assert flat.moves() == 0
+    assert flat.two_sided_frac() == 0.0
+
+    one_move = WiggleWatch()
+    for i, price in enumerate([1.0, 1.0, 1.1, 1.1]):
+        one_move.observe(price, T0 + i)
+    assert one_move.moves() == 1
+    assert one_move.two_sided_frac() == 0.0  # same number, different fact
+
+    one_way = WiggleWatch()
+    for i, price in enumerate([1.0, 1.1, 1.2, 1.3]):
+        one_way.observe(price, T0 + i)
+    assert one_way.moves() == 3
+    assert one_way.two_sided_frac() == 0.0  # a MEASURED zero: it only ever went up
+
+    zigzag = WiggleWatch()
+    for i, price in enumerate([1.0, 1.1, 1.0, 1.1]):
+        zigzag.observe(price, T0 + i)
+    assert zigzag.two_sided_frac() == 1.0
+
+
+def test_the_card_marks_an_unmeasurable_two_sidedness_absent_not_zero(tmp_path: Path) -> None:
+    from shitcoims_paperdesk.glass import CoinIndex
+
+    index = CoinIndex()
+
+    def feed(mint: str, prices: list[float]) -> None:
+        for i, price in enumerate(prices):
+            index._record_board(
+                {
+                    "mint": mint,
+                    "symbol": "T",
+                    "virtual_sol_reserves": int(40 * SOL),
+                    # price = vsol / vtok, so vary vtok to vary the price
+                    "virtual_token_reserves": int(40 * SOL / price),
+                    "t_ingest": T0 + i,
+                    "created_unix": T0 - 100,
+                    "last_trade_unix": T0 + i,
+                    "drawdown_from_ath": 0.8,
+                    "usd_market_cap": 1000.0,
+                },
+                "market_cap",
+            )
+
+    feed(MINT, [1e-4] * 8)  # dead flat
+    card = index.card(MINT, now=T0 + 20, hunched=None, held=False)
+    assert card["price_moves"] == 0
+    assert card["two_sided_frac"] == 0.0  # a real measured zero
+    assert "two_sided_frac" not in card["absent"]
+
+    feed(OTHER, [1e-4, 1e-4, 1e-4, 2e-4])  # exactly one move
+    other = index.card(OTHER, now=T0 + 20, hunched=None, held=False)
+    assert other["price_moves"] == 1
+    assert other["two_sided_frac"] is None
+    assert "one price move" in other["absent"]["two_sided_frac"]
