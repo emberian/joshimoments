@@ -459,10 +459,18 @@ Listed in order of how much they threaten the conclusion.
 1. **Callout coverage.** Fix the 3% join rate before anything else. The one qualitative channel
    we have direct evidence the operator used is the one we could not test, and it is a collector
    problem, not a modelling problem.
-2. **Pixels, by the cheapest route first.** A vision LLM handed the *rendered* image and chart,
-   scored on this same cohort with these same nulls, is a ~$5 experiment. It decides whether the
-   visual channel carries anything at all, and it should be run before anything more ambitious,
-   because if pixels move the number that is the finding and it is cheap.
+2. **Pixels, by the cheapest route first — and the stimulus set now exists.**
+   `--stage render` builds one 512x512 card per cohort mint: the logo pasted at the top, then
+   the ticker, name, description and numbers **rendered as pixels rather than passed as tokens**.
+   That choice is deliberate. A human reading the name is doing visual word-form processing, not
+   consuming a token stream, and passing the words through a separate text channel would model a
+   different act than the one we are trying to simulate. It also keeps a vision-LLM arm honest:
+   one image in, one judgement out, nothing smuggled through a side door.
+   189 cards are built; **169 carry a real logo, 20 could not fetch one** (dead IPFS gateways) and
+   render with an empty frame rather than being dropped, so the cohort stays intact and the
+   missingness is visible in the stimulus instead of in a silently shorter list.
+   A vision LLM over those cards, scored on this cohort with these nulls, is a ~$5 experiment and
+   is the next thing to run.
 3. **A pre-verbal representation — TRIBE v2.** Every arm here asked grok to *say* something: a
    probability, a 0–100 score, a subset, a colour. If the human glance is a pattern-match that
    does not decompose onto language, verbalisation is exactly the lossy step, and no amount of
@@ -473,14 +481,28 @@ Listed in order of how much they threaten the conclusion.
    response to the *stimulus* rather than a verdict about it. It is **0.71 GB** and runs locally
    on this box, which also removes the 13.6 calls/min ceiling and the per-call cost entirely.
 
-   Three things would have to be handled honestly, and they are the reason this is item 3 and not
-   item 1:
-   - **~20k features against n=189 is §3.3 territory.** SMOTE-before-split manufactured AUC 0.95
-     from uniform noise in eleven published studies; 20,000 vertices on 189 entities will do the
-     same thing more elegantly. Any dimensionality reduction must be fixed *a priori* — an atlas
-     parcellation or a fixed ROI set chosen before seeing an outcome — never selected by fit.
-     Even then, 189 entities supports a handful of features, not a mesh. This needs the 606-mint
-     1 h cohort at minimum and really needs more tape.
+   **The overfitting objection is answered, and the machinery is in the harness.** The worry was
+   that 20,000 vertices against 189 entities is exactly the pathology §3.3 exists for. That
+   objection is aimed at *fitting*, and it dissolves by not fitting: `representation_test` scores
+   a representation with **distance correlation** and **RSA/Mantel**, which use only pairwise
+   distances and have no weights, no regularisation path, no hyperparameter and no split to leak
+   across — nothing with the capacity to memorise 189 labels. The outcomes are permuted, never the
+   representation, so the null preserves whatever geometry the encoder invents and asks only
+   whether its alignment to the outcomes is special. The price is that it cannot say *which*
+   dimensions matter, only whether the representation knows anything — which is precisely the
+   question "is TRIBE v2 an OK model of what a human sees here?".
+
+   Validated on both controls (§3.12) and two things are worth knowing before anyone quotes it:
+   - **dCor works, Mantel does not.** On a planted nonlinear dependence buried in 64 dimensions,
+     dCor returns p=0.0007 and **Mantel misses it entirely at p=0.187**. RSA is the statistic the
+     neuroscience literature defaults to and it is underpowered for this; any representation
+     result quoted from Mantel alone should be treated as a floor, not a reading.
+   - **Raw dCor is not an effect size.** It is biased up at finite n in high dimensions — the
+     known-zero world still returns dCor ≈ 0.295. The permutation p is the number to read.
+
+   Remaining honest limits:
+   - **Power is still n=189.** Not fitting removes the overfitting risk, not the sample-size one.
+     This wants the 606-mint 1 h cohort at minimum and really wants more tape.
    - **A pump.fun page is out of distribution.** TRIBE v2 is trained on people watching films and
      listening to speech. Predicted responses to a UI screenshot are unvalidated extrapolation,
      and the model itself only claims the "average subject".

@@ -1725,6 +1725,30 @@ def selftest() -> int:
     _, p2, _ = permutation_p(lab, out2, iters=2000, seed=5)
     check("permutation test finds a planted effect", p2 < 0.01, f"p={p2:.4f}")
 
+    # 8. The model-free representation test, on both controls. This is the
+    #    instrument a brain-encoder experiment would rest on, so it is guarded
+    #    here rather than trusted.
+    r2 = random.Random(1)
+    reps = [[r2.gauss(0, 1) for _ in range(64)] for _ in range(120)]
+    zero = representation_test(reps, [r2.gauss(0, 1) for _ in range(120)], iters=1500)
+    check("dCor finds nothing in a known-zero representation", zero["dcor_p"] > 0.05,
+          f"p={zero['dcor_p']:.3f}")
+    # A NONLINEAR dependence buried in 64 dimensions: the case a correlation misses.
+    eff = representation_test(reps, [abs(r[0]) * r[1] + 0.3 * r2.gauss(0, 1) for r in reps],
+                              iters=1500)
+    check("dCor finds a planted nonlinear dependence", eff["dcor_p"] < 0.01,
+          f"p={eff['dcor_p']:.4f}")
+    # Recorded as a real limitation, not a bug: RSA/Mantel — the statistic the
+    # neuroscience literature defaults to — MISSES that same planted effect. Any
+    # representation result quoted from Mantel alone is underpowered by construction.
+    check("Mantel is underpowered here (documented, not fixed)",
+          eff["mantel_p"] > eff["dcor_p"], f"mantel p={eff['mantel_p']:.3f}")
+    # dCor is biased UP at finite n in high dimensions -- the null run above returns
+    # a large raw value too. The permutation p is the reading; the raw dCor is not
+    # interpretable as an effect size.
+    check("raw dCor is not an effect size (null value is large too)",
+          zero["dcor"] > 0.1, f"null dcor={zero['dcor']:.3f}")
+
     print(f"\n  {'ALL PASS' if not fails else str(len(fails)) + ' FAILURE(S): ' + ', '.join(fails)}")
     return 1 if fails else 0
 
@@ -1750,7 +1774,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", required=True,
                     choices=("cohort", "meta", "screen", "score", "selftest", "latency",
-                             "batch"))
+                             "batch", "render"))
     ap.add_argument("--arm", default="full", choices=ALL_ARMS)
     ap.add_argument("--backend", default="grok", choices=("grok", "stub"))
     ap.add_argument("--model", default=None)
@@ -1826,6 +1850,39 @@ def main() -> int:
             print(f"  call {i}: {j.latency_s:.1f}s  ${j.cost_usd:.5f}  "
                   f"in={j.input_tokens} out={j.output_tokens}  "
                   f"{j.verdict}@{j.confidence}  err={j.error}")
+        return 0
+
+    if args.stage == "render":
+        # Build the visual stimulus set. Logos are cached on disk; a coin whose
+        # image will not fetch still gets a card (with the frame empty) rather than
+        # being dropped, so the cohort stays intact and the missingness is visible
+        # in the card itself rather than in a silently shorter list.
+        c = json.loads(cohort_p.read_text())
+        meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+        cards = CACHE / f"cards-{args.horizon}"
+        logos = CACHE / "logos"
+        logos.mkdir(parents=True, exist_ok=True)
+        done = missing = 0
+        with cf.ThreadPoolExecutor(8) as ex:
+            futs = {}
+            for row in c:
+                lp = logos / f"{row['mint']}.bin"
+                if lp.exists():
+                    continue
+                futs[ex.submit(fetch_logo, (meta.get(row["mint"]) or {}).get("image_uri"))] = lp
+            for fut in cf.as_completed(futs):
+                b = fut.result()
+                if b:
+                    futs[fut].write_bytes(b)
+        for row in c:
+            lp = logos / f"{row['mint']}.bin"
+            blob = lp.read_bytes() if lp.exists() else None
+            if not blob:
+                missing += 1
+            render_card(row, meta.get(row["mint"], {}), cards / f"{row['mint']}.png",
+                        logo=blob)
+            done += 1
+        print(f"rendered {done} cards -> {cards}  ({missing} without a logo)")
         return 0
 
     if args.stage == "batch":
@@ -1927,6 +1984,206 @@ def _backend(args) -> Backend:
         return StubBackend()
     return GrokCLIBackend(model=args.model, effort=args.effort)
 
+
+
+# --------------------------------------------------------------------------
+# Model-free dependence: testing a REPRESENTATION without fitting anything
+# --------------------------------------------------------------------------
+#
+# The objection to putting a brain-encoder's ~20k-vertex response against 189
+# entities is that fitting 20,000 features on 189 labels manufactures AUC 0.95 out
+# of uniform noise (PROGRAM.md §3.3, measured across eleven published studies).
+# That objection is aimed at FITTING, and it is dissolved by not fitting.
+#
+# Distance correlation (Székely & Rizzo) and RSA/Mantel both ask "do these two
+# spaces carry the same structure?" using only pairwise distances. No weights, no
+# regularisation path, no hyperparameter, no train/test split to leak across —
+# there is nothing in either statistic with the capacity to memorise 189 labels.
+# The price is that they cannot tell you WHICH dimensions matter, only whether the
+# representation as a whole knows anything. For "is TRIBE v2 an OK model of what a
+# human sees in a coin?" that is exactly the question.
+#
+# Both are still tested against a shuffled-label null and both are validated in
+# `selftest` on a known-ZERO and a known-EFFECT world, per §3.12.
+
+
+def _pairwise_abs(v: Sequence[float]) -> list[list[float]]:
+    return [[abs(a - b) for b in v] for a in v]
+
+
+def _double_centre(d: list[list[float]]) -> list[list[float]]:
+    n = len(d)
+    rm = [sum(r) / n for r in d]
+    cm = [sum(d[i][j] for i in range(n)) / n for j in range(n)]
+    gm = sum(rm) / n
+    return [[d[i][j] - rm[i] - cm[j] + gm for j in range(n)] for i in range(n)]
+
+
+def distance_correlation(dx: list[list[float]], dy: list[list[float]]) -> float:
+    """dCor in [0,1]. Zero IFF the two spaces are independent — not merely uncorrelated.
+
+    Takes DISTANCE MATRICES rather than raw features so the caller decides the
+    metric on each side (cosine over a cortical response, absolute difference over
+    a return). Nothing is fitted; this is a function of the two matrices alone.
+    """
+    a, b = _double_centre(dx), _double_centre(dy)
+    n = len(a)
+    dcov = sum(a[i][j] * b[i][j] for i in range(n) for j in range(n)) / (n * n)
+    dvx = sum(a[i][j] ** 2 for i in range(n) for j in range(n)) / (n * n)
+    dvy = sum(b[i][j] ** 2 for i in range(n) for j in range(n)) / (n * n)
+    den = (dvx * dvy) ** 0.5
+    return (dcov / den) ** 0.5 if den > 0 and dcov > 0 else 0.0
+
+
+def mantel(dx: list[list[float]], dy: list[list[float]]) -> float:
+    """RSA: Spearman correlation of the two distance matrices' upper triangles.
+
+    The standard representational-similarity statistic. Weaker than dCor at
+    detecting non-monotone structure, reported alongside it because it is the
+    number the neuroscience literature quotes and is therefore comparable.
+    """
+    n = len(dx)
+    xs = [dx[i][j] for i in range(n) for j in range(i + 1, n)]
+    ys = [dy[i][j] for i in range(n) for j in range(i + 1, n)]
+    return spearman(xs, ys)
+
+
+def representation_test(reps: Sequence[Sequence[float]], outcomes: Sequence[float], *,
+                        iters: int = 5000, seed: int = 17) -> dict[str, Any]:
+    """Does a representation know anything about the outcome? Nothing is fitted.
+
+    Permutes the OUTCOMES, never the representation, so the null preserves the
+    representation's own geometry exactly — including whatever clustering the
+    encoder invents — and asks only whether its alignment to the outcomes is
+    special.
+    """
+    n = len(outcomes)
+    dy = _pairwise_abs(outcomes)
+
+    def cos_d(u: Sequence[float], v: Sequence[float]) -> float:
+        du = sum(x * x for x in u) ** 0.5
+        dv = sum(x * x for x in v) ** 0.5
+        if du == 0 or dv == 0:
+            return 1.0
+        return 1.0 - sum(x * y for x, y in zip(u, v)) / (du * dv)
+
+    dx = [[cos_d(reps[i], reps[j]) for j in range(n)] for i in range(n)]
+    obs_d, obs_m = distance_correlation(dx, dy), mantel(dx, dy)
+    rng = random.Random(seed)
+    pool = list(outcomes)
+    hd = hm = 0
+    for _ in range(iters):
+        rng.shuffle(pool)
+        p = _pairwise_abs(pool)
+        if distance_correlation(dx, p) >= obs_d - 1e-12:
+            hd += 1
+        if abs(mantel(dx, p)) >= abs(obs_m) - 1e-12:
+            hm += 1
+    return {
+        "n": n,
+        "dcor": obs_d, "dcor_p": (hd + 1) / (iters + 1),
+        "mantel": obs_m, "mantel_p": (hm + 1) / (iters + 1),
+    }
+
+
+# --------------------------------------------------------------------------
+# The stimulus: a coin as a HUMAN sees it, rendered to pixels
+# --------------------------------------------------------------------------
+#
+# Every arm in this study handed the model a text transcription of a coin, and
+# `image_uri` went in as a URL STRING -- so nothing here ever tested the visual
+# channel, only whether a model can read a filename. A human clicking through the
+# feed sees a card: a logo, a name, a line of description, some numbers, all at
+# once, in one saccade.
+#
+# The text is rendered as PIXELS rather than passed alongside as tokens, on
+# purpose. A brain-encoding model like TRIBE v2 takes video; a human reading the
+# name is doing visual word-form processing, not consuming a token stream. Passing
+# the words as text through a separate channel would model a different act than the
+# one we are trying to simulate. It also keeps the stimulus honest for a vision
+# LLM: one image in, one judgement out, nothing smuggled through a side door.
+
+CARD_W, CARD_H = 512, 512
+
+
+def render_card(row: dict[str, Any], meta: dict[str, Any], out: Path,
+                *, logo: bytes | None = None) -> Path:
+    """One coin, one PNG. Logo, name, symbol, description, and the numbers."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (CARD_W, CARD_H), (14, 14, 18))
+    d = ImageDraw.Draw(img)
+
+    def font(sz: int):
+        for path in ("/System/Library/Fonts/Helvetica.ttc",
+                     "/System/Library/Fonts/Supplemental/Arial.ttf"):
+            try:
+                return ImageFont.truetype(path, sz)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    if logo:
+        try:
+            import io
+            lg = Image.open(io.BytesIO(logo)).convert("RGB").resize((224, 224))
+            img.paste(lg, (144, 24))
+        except Exception:
+            d.rectangle([144, 24, 368, 248], outline=(70, 70, 80), width=2)
+            d.text((228, 128), "no image", font=font(16), fill=(120, 120, 130))
+    else:
+        d.rectangle([144, 24, 368, 248], outline=(70, 70, 80), width=2)
+
+    y = 268
+    d.text((24, y), f"${row.get('symbol') or '?'}", font=font(34), fill=(240, 240, 245))
+    y += 44
+    d.text((24, y), str(meta.get("name") or "")[:40], font=font(22), fill=(190, 190, 200))
+    y += 34
+
+    desc = (meta.get("description") or "").replace("\r", " ").replace("\n", " ").strip()
+    f14 = font(14)
+    line = ""
+    for word in desc.split()[:60]:
+        trial = (line + " " + word).strip()
+        if d.textlength(trial, font=f14) > CARD_W - 48:
+            d.text((24, y), line, font=f14, fill=(150, 150, 160))
+            y += 19
+            line = word
+            if y > 400:
+                break
+        else:
+            line = trial
+    if line and y <= 400:
+        d.text((24, y), line, font=f14, fill=(150, 150, 160))
+
+    f13 = font(13)
+    socials = "twitter" if meta.get("twitter") else ""
+    socials += (" telegram" if meta.get("telegram") else "")
+    d.text((24, 430), f"mcap ${row['mc0_usd']:,.0f}   {row['drawdown'] * 100:.0f}% off ATH",
+           font=f13, fill=(200, 200, 210))
+    d.text((24, 452), f"{_fmt_num(row.get('reply_count'))} replies   "
+                      f"{'LIVE' if row.get('is_currently_live') else ''}   {socials}".strip(),
+           font=f13, fill=(150, 150, 160))
+    age_d = (row["age_s"] or 0) / 86400.0
+    d.text((24, 474), f"age {age_d:.1f}d   "
+                      f"{'graduated' if row.get('complete') else 'bonding'}",
+           font=f13, fill=(150, 150, 160))
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out)
+    return out
+
+
+def fetch_logo(uri: str | None, timeout: float = 20.0) -> bytes | None:
+    if not uri:
+        return None
+    url = uri.replace("ipfs://", "https://ipfs.io/ipfs/")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read(4_000_000)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
 
 if __name__ == "__main__":
     raise SystemExit(main())
