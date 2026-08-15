@@ -161,6 +161,43 @@ imposter is **not inert either**: 226 transactions, with its two busiest days 08
 08-09 is also the day it adopted the homoglyph; that is a same-day coincidence and is **not**
 read as causation here.
 
+### 3.1 What the ten days contain: 494 coins, median hold 45 seconds
+
+Unpacking his token-balance legs from the same corpus — **2,817 legs across 494 distinct
+mints** — gives the shape of the operation:
+
+| span between his first and last balance change on a mint | |
+|---|---|
+| p10 | 0 s |
+| **median** | **45 s** |
+| p90 | 2,994 s (50 min) |
+| max | 827,019 s (9.6 days) |
+| **under 120 s** | **309 / 494 = 62.6%** |
+| under 600 s | 390 / 494 = 78.9% |
+
+**He is a systematic sub-minute scalper across ~50 coins a day.** The 58-second round trip in
+§4 is not an anecdote — 45 s is the *median*, and the live capture landed almost exactly on it.
+
+*Measurement note:* this span is first-to-last balance change per mint, which is a proxy for
+hold time and not a settled position lifetime. `p10 = 0` is mints touched in a single
+transaction. The tail is real too — a 9.6-day position exists — so "scalper" describes the mass
+of the distribution, not every trade.
+
+### 3.2 He has never touched the operator's coins
+
+| cluster coin | balance legs in 10 days |
+|---|---|
+| nosis | **0** |
+| weave | **0** |
+| DREGG | **0** |
+| SOLVE | **0** |
+
+Zero, across 106M transactions and 494 of his own mints. Whatever relationship the operator has
+with this caller, it does **not** run through the operator's own coins, and there is no evidence
+here of him trading against them. This also matches the venue split in §1.4: he lives on
+**fresh bonding-curve launches**, and all four cluster coins have long since migrated to AMM
+pools.
+
 ---
 
 ## 4. A complete round trip, caught live
@@ -188,7 +225,8 @@ predating the subscription. The P&L is on **vendor-rounded floats**, which this 
 firehose docstring says are good for ranking and triage and not for accounting — so read
 +16.53% as a magnitude, not a settled figure. Fees are not included.
 
-**n = 1.** One round trip is an existence proof, not a distribution.
+**n = 1 live** — but §3.1 supplies the distribution it sits in, and this trip landed on the
+median (45 s) almost exactly. Read together they are a characterisation, not an anecdote.
 
 What it establishes: he snipes **brand-new bonding-curve launches within seconds** and exits
 inside a minute. All 5 of his captured rows are `pool: "pump"` (bonding curve), while all four
@@ -221,8 +259,12 @@ there turned out to be a 161-wallet crowd, not a person).
 * **§4 is n = 1**, live, and on vendor floats.
 * **The corpus ends 2026-08-14**; today is covered only by the live firehose tape. Two sources,
   adjacent windows.
-* **Transaction counts in §3 are token-balance touches**, not classified buys/sells — a
-  transaction touching his wallet is not necessarily a discretionary trade of his.
+* **Counts in §3 are token-balance touches**, not classified buys/sells — a transaction
+  touching his wallet is not necessarily a discretionary trade of his, and §3.1's spans are
+  first-to-last balance change per mint, a proxy for hold time rather than a settled position
+  lifetime.
+* **§3.2's zero is a zero on this corpus** — ten days, 2026-08-05 → 2026-08-14. It cannot speak
+  to DREGG's first forty days, which predate the window.
 * **The namespace census is one query on one day.** Handles are cheap to mint; thirteen today
   is not thirteen next week.
 * **Nothing here prices his calls.** No forward returns, no wiggle measurement, no null. This
