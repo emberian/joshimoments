@@ -979,7 +979,8 @@ def cmd_graph(
     sub = sub[sub["mint"].isin(midx)]
     sub["day"] = (sub["birth_time"] // 86400).astype(int)
     print(f"  coins in the arm                 : {len(sub):,} over {sub['deployer'].nunique():,} "
-          f"deployers, {len(wid):,} distinct snipers, {sum(len(s) for s in sets):,} edges")
+          f"deployers, {len(wid):,} distinct birth-slot wallets, "
+          f"{sum(len(s) for s in sets):,} ex-deployer edges")
 
     same, diff = [], []
     for _, g in sub.groupby("deployer"):

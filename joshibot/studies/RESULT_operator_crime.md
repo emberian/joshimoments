@@ -378,7 +378,8 @@ right about *that* much: these are not i.i.d. coins.
 
 Arm: top 400 deployers by launch count, capped at 25 coins each (same-deployer pairs are
 quadratic in a deployer's coin count, and one operator with 1,563 coins would contribute 1.2M
-pairs and dominate the mean). 9,999 coins, 1,519 distinct snipers, 19,111 edges.
+pairs and dominate the mean). 9,999 coins, 1,519 distinct birth-slot wallets (deployers included in that count),
+19,111 ex-deployer edges.
 
 | | mean Jaccard |
 |---|---:|
