@@ -64,7 +64,7 @@ Two things that were not in the brief and matter more than parts of it:
    reads **85.01 SOL at the 25th, 50th and 75th percentiles** and the reserved pool supply
    reads **20.7% of opening = 206.9e6 tokens** — two protocol constants, four significant
    figures, off token balances alone. §1.3.
-2. **A live duel, at one-second resolution, with wallet identities** — twenty `catwifglasses`
+2. **A live duel, at one-second resolution, with wallet identities** — twenty-two `glasses`
    branches on 2026-08-15, the original peaking at 17:19:31Z and falling 89% in eight minutes,
    with three derivative launches inside twelve minutes of the top. The cascade that made it
    run is a **198 SOL buy burst inside one minute** on a coin that had been doing 1–3 SOL/min,
