@@ -103,6 +103,36 @@ theorem no_basis_never_stops (p : Position) (h : p.basis = none)
     p.stopFires exitLamports thresholdBps = false := by
   simp [stopFires, pnlBps, h]
 
+/-- A stop-loss rule that may be ABSENT.
+
+`none` is a bag with no stop at all — the rule the Python `PositionPolicy` could not express
+until `stop_loss_pct` became optional, and the reason a mandatory stop cost this desk money:
+under a random walk a price stop is negative-expectation, and the bounce-free variance ratios
+measured on these pools read 0.80-1.01 on four of four. -/
+def stopFires? (p : Position) (exitLamports : Nat) (threshold : Option Int) : Bool :=
+  match threshold with
+  | none => false
+  | some bps => p.stopFires exitLamports bps
+
+/-- **An absent stop never fires**, at any price, for any position. -/
+theorem no_threshold_never_stops (p : Position) (exitLamports : Nat) :
+    p.stopFires? exitLamports none = false := by
+  simp [stopFires?]
+
+/-- **Every expressible stop fires somewhere**: at a total loss, all of them do.
+
+PnL in basis points is bounded below by -10000 (an exit of 0 lamports is -100%), so every
+threshold a percentage can name sits at or above the floor and is reached when the bag goes
+to zero. Together with `no_threshold_never_stops` this is the design claim stated exactly:
+NO number is equivalent to absence, so "no stop" cannot be encoded as a very deep stop like
+-95 — that one still sells the bottom. Absence has to be absence in the type. -/
+theorem every_expressible_stop_fires_at_zero
+    (p : Position) (b : CostBasis) (hb : p.basis = some b) (hpaid : b.lamportsPaid ≠ 0)
+    (thresholdBps : Int) (h : -10000 ≤ thresholdBps) :
+    p.stopFires? 0 (some thresholdBps) = true := by
+  simp [stopFires?, stopFires, pnlBps, hb, hpaid]
+  omega
+
 /-- Every basis names a provenance: an observed fill, or an operator assertion.
 
 Constructor exhaustiveness over a two-constructor inductive, and nothing more — it depends on

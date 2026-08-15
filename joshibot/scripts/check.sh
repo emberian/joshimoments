@@ -36,7 +36,8 @@ bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; fail=1; }
 # them, scripts/lp_report.py, IS gated. See scripts/lp/README.md.
 step "ruff"
 if uv run ruff check sentinel.py intel.py scout.py shitcoims_sentinel shitcoims_intelligence \
-    shitcoims_scout shitcoims_tape studies scripts/lp_report.py tests >/tmp/joshi-ruff.log 2>&1; then
+    shitcoims_scout shitcoims_tape shitcoims_paperdesk studies scripts/lp_report.py tests \
+    >/tmp/joshi-ruff.log 2>&1; then
   ok "lint clean"
 else
   tail -20 /tmp/joshi-ruff.log; bad "ruff"
@@ -94,6 +95,8 @@ import Joshi
 #print axioms Joshi.Reserves.sellOut_le_reserve
 #print axioms Joshi.Reserves.sellOut_mono
 #print axioms Joshi.Position.no_basis_never_stops
+#print axioms Joshi.Position.no_threshold_never_stops
+#print axioms Joshi.Position.every_expressible_stop_fires_at_zero
 #print axioms Joshi.decision_depends_only_on_the_view
 #print axioms Joshi.toStrategy_reads_only_the_visible_prefix
 #print axioms Joshi.exposure_bounded
