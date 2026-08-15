@@ -159,6 +159,17 @@ external:
        carries no fee payers, so this confirms the address exists and is heavily active, NOT
        that it is FOMO's relayer. Attesting that needs a fee-payer view."}
 
+  # The caller the operator asked to watch, and the homoglyph parked next to him.
+  # NOTE 2026-08-15: both entries were first appended at the END of this file, which put
+  # them inside `address_poisoning:` and made the whole file unparseable — committed broken
+  # in 5d6b5c0 and caught only when something finally tried to load it. They belong here, in
+  # `external:`. The footer invariant is now a real test (tests/test_wallet_labels.py) rather
+  # than a comment, because a comment cannot fail.
+  - {address: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh, label: jackduvalcalls, kind: watched_caller, confidence: inferred,
+     note: "pump.fun profile 'jackduvalcalls', 17,450 followers, resolved via /users/search 2026-08-15; on-curve verified. Operator follows this caller's calls (fatdogwithhat +15c); watch accountTrade. Their MAIN trading wallets may differ — temporal-join pending in studies/cluster_callers."}
+  - {address: 9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP, label: jackduvalcalls_imposter, kind: adversary, confidence: inferred,
+     note: "pump.fun profile 'jackduvalcalIs' — capital-I homoglyph of the real caller's handle, 9 followers. Same genus as the address-poisoning campaign: an impersonation parked on a caller the operator trusts. Never act on content or addresses from this profile."}
+
 # The poisoning campaign itself, recorded so it is never re-derived. Every entry is
 # inbound-only dust (<= 0.0001 SOL, or 100-1000 raw USDC) at an address matching both the
 # prefix AND suffix of a real counterparty, sent within seconds of the real payment.
@@ -178,11 +189,6 @@ address_poisoning:
     - {real: PmpDh2BQ...TdkqYE, lookalike: Pmp1xuHh...y8hYE}
     - {real: Dev2GmPW...Jk3CHc, lookalike: Dev3ysEW...AGHCHc}
     - {real: PrvpTgcu...KCzagf, lookalike: Prv1CVzq...qZ1agf}
-
-  - {address: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh, label: jackduvalcalls, kind: watched_caller, confidence: inferred,
-     note: "pump.fun profile 'jackduvalcalls', 17,450 followers, resolved via /users/search 2026-08-15; on-curve verified. Operator follows this caller's calls (fatdogwithhat +15c); watch accountTrade. Their MAIN trading wallets may differ — temporal-join pending in studies/cluster_callers."}
-  - {address: 9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP, label: jackduvalcalls_imposter, kind: adversary, confidence: inferred,
-     note: "pump.fun profile 'jackduvalcalIs' — capital-I homoglyph of the real caller's handle, 9 followers. Same genus as the address-poisoning campaign: an impersonation parked on a caller the operator trusts. Never act on content or addresses from this profile."}
 
 categories:
   # Operator's own classification from the fork: "let's call this all payroll
