@@ -378,6 +378,12 @@ materialisation on the way out. The memory knob for `UNNEST` is **threads** — 
 | threads=1, limit **4 GB** | 5.6 GB, 111 s | **completes** — the setting shipped |
 | threads=1, limit 3500 MB | 6.7 GB | *worse on both axes*: fell off a spill cliff, days went from ~2 min to >20, `/tmp` grew past 5.6 GB, and peak RSS went **up**, because re-read traffic costs more memory than the buffer it was meant to save |
 
+**A remote runner is left in place.** `persvati:~/joshibot-wiggle/` is a checkout with the
+research venv already synced and `JOSHIBOT_CORPUS` pointing at that box's raw shards. Re-running
+the corpus cohort there is one command, and `bulk_days()` now reads either corpus layout — the
+laptop's repacked one-file-per-day or the remote's hive-partitioned raw shards — so nothing
+needs repacking to move a fold onto a bigger machine.
+
 **Fold per day, and make the cache atomic.** Each corpus day is folded separately and written
 to a `.partial` file that is `rename`d on success, so a kill costs one day rather than the run.
 The first version checked only for existence, and a killed `COPY` left a zero-byte file that
