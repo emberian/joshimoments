@@ -166,7 +166,20 @@ external:
   # `external:`. The footer invariant is now a real test (tests/test_wallet_labels.py) rather
   # than a comment, because a comment cannot fail.
   - {address: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh, label: jackduvalcalls, kind: watched_caller, confidence: inferred,
-     note: "pump.fun profile 'jackduvalcalls', 17,450 followers, resolved via /users/search 2026-08-15; on-curve verified. Operator follows this caller's calls (fatdogwithhat +15c); watch accountTrade. Their MAIN trading wallets may differ — temporal-join pending in studies/cluster_callers."}
+     x_handle: jackduval,
+     note: "pump.fun profile 'jackduvalcalls', 17,468 followers, bio 'never wrong, always early.',
+       following: 0; resolved via /users/search 2026-08-15, on-curve verified. Operator follows this
+       caller (fatdogwithhat, calico); watched on accountTrade since 2026-08-15T17:07Z.
+       THE X HANDLE IS `@jackduval`, NOT `@jackduvalcalls` — 'jackduvalcalls' is the PUMP.FUN
+       username and there is no such account on X. The join is the bio: x.com/jackduval ('Jack
+       Duval🌊') carries the identical string 'never wrong, always early'. A `from:jackduvalcalls`
+       census returns nothing and a study built on it would be measuring no one, so the handle is
+       recorded here rather than left to be re-derived. See also @jackduvalstocks, same X display
+       name, possibly a second account of his and NOT assumed to be a squatter.
+       THIS IS HIS TRADING WALLET, contrary to the prior from RESULT_caller_wallets.md §1 that a
+       profile wallet is almost never one: 2,637 transactions over ten days, 494 distinct coins,
+       MEDIAN HOLD 45 SECONDS. He snipes fresh bonding-curve launches. He has touched nosis, weave,
+       DREGG and SOLVE exactly ZERO times. Full workup: studies/RESULT_jackduval_workup.md."}
   - {address: 9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP, label: jackduvalcalls_imposter, kind: adversary, confidence: inferred,
      note: "pump.fun profile 'jackduvalcalIs' — capital-I homoglyph of the real caller's handle, 9 followers.
        Same genus as the address-poisoning campaign: an impersonation parked on a caller the operator trusts.

@@ -95,10 +95,10 @@ decisive, but **not because the name matches** — it is follower mass:
 
 | profile | wallet | followers | username set at |
 |---|---|---|---|
-| **jackduvalcalls** | `BAr5csYt…XJPh` | **17,468** | never renamed |
+| **jackduvalcalls** (X: **@jackduval**) | `BAr5csYt…XJPh` | **17,468** | never renamed |
 | jackduvalll | | 20 | — |
 | jack_duval | | 13 | 2026-02-08 |
-| jackduvalstocks | | 13 | 2025-09-18 |
+| jackduvalstocks (same X display name — possibly also his, see §5) | | 13 | 2025-09-18 |
 | **jackduvalcalIs** (capital I) | `9T8QKsR2…ijvP` | 9 | **2026-08-09 12:22** |
 | …8 more | | 0–2 | |
 
@@ -210,10 +210,9 @@ What the census *does* contain is the other direction: **two tweets, by @chiikaw
 about this coin?"* (2026-08-11) and *"@jackduval $nosis → $dickcoin"* (2026-08-13). People pitch
 the operator's coin *to* him. He does not bite.
 
-*Identification caveat raised by those two rows:* they mention **`@jackduval`**, not
-`@jackduvalcalls`. The pump.fun username is `jackduvalcalls`; the X handle may be either. This
-matters for §5 — a call census run against the wrong handle would be measuring somebody else —
-and it is flagged rather than assumed.
+*Those two rows resolved the identification.* They mention **`@jackduval`**, not
+`@jackduvalcalls` — which turned out to be the real X handle. §5 has the confirmation and why it
+mattered.
 
 Zero, across 106M transactions and 494 of his own mints. Whatever relationship the operator has
 with this caller, it does **not** run through the operator's own coins, and there is no evidence
@@ -315,12 +314,27 @@ If a call goes out between his buy and his sell, his followers are his exit liqu
 needs the X census joined to these trade times — for each call, the signed offset from buy to
 tweet and from tweet to sell. Pending.
 
-**That arm is blocked on an identification question, and it must be settled first.** Everything
-above is keyed on a **wallet**, so none of it depends on which X handle he posts under. The call
-census does. `jackduvalcalls` is his **pump.fun username**; the only third-party references found
-anywhere in this session spell the X handle **`@jackduval`** (§3.2). A `from:` census run against
-the wrong string would return somebody else's calls, and forward returns computed on them would
-be meaningless while looking perfectly well-formed.
+**The identification question that arm depends on is now settled — and the obvious answer was
+wrong.** Everything above is keyed on a **wallet**, so none of it cares which handle he posts
+under. The call census does.
+
+> **His X handle is `@jackduval`, not `@jackduvalcalls`.**
+
+`jackduvalcalls` is his **pump.fun username**; there is no such account on X. The join is the
+**bio**, and it is an exact string match:
+
+| | |
+|---|---|
+| pump.fun `jackduvalcalls` (`BAr5csYt…`) | 17,468 followers, `following: 0`, bio **"never wrong, always early."** |
+| x.com/**jackduval** ("Jack Duval🌊") | bio **"never wrong, always early"**, posts about trading on Solana |
+
+This was found for **$0** by web search after §3.2's two third-party mentions spelled the handle
+that way. It matters because a `from:jackduvalcalls` census returns nothing while looking
+perfectly well-formed, and forward returns computed on it would be meaningless.
+
+Also noted, and deliberately **not** merged: **@jackduvalstocks** carries the same X display name
+"Jack Duval🌊" and has a pump.fun profile in the namespace (13 followers). §2 filed it as ordinary
+squatting; it may instead be a second account of his. Treated as an open question, not a fact.
 
 The ground-truth check is cheap and was specified in advance: the operator named **fatdogwithhat**
 and **calico** as calls they acted on. If those two do not appear in the collected history, the
