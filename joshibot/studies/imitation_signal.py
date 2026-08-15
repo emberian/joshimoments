@@ -1117,19 +1117,25 @@ def mde(
     """
     import numpy as np
 
+    # The shift is applied ONLY to rows that traded inside the window. A coin with no trade
+    # after entry is marked at exactly 0.00%, and no real effect can move it — multiplying
+    # that point mass by (1+delta) would make a +5% effect trivially detectable purely by
+    # relocating the spike at zero, and would report a power floor the study does not have.
     a0 = np.array([r[f"r{h}"] for r in treated if not r[f"admin{h}"]], dtype=float)
     b0 = np.array([r[f"r{h}"] for r in controls if not r[f"admin{h}"]], dtype=float)
+    a_live = np.array([bool(r[f"live{h}"]) for r in treated if not r[f"admin{h}"]])
     if len(a0) < 8 or len(b0) < 8:
         return {"h": h, "mde": None, "reason": "too few rows"}
     from scipy.stats import mannwhitneyu
 
     rng = np.random.default_rng(seed)
-    for delta in (0.05, 0.10, 0.15, 0.25, 0.40, 0.60, 1.00, 1.50, 2.50):
+    for delta in (0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.20, 0.35, 0.60, 1.00, 2.00):
         hits = 0
         for _ in range(draws):
-            a = rng.choice(a0, size=len(a0), replace=True)
+            idx = rng.integers(0, len(a0), size=len(a0))
+            a, alive = a0[idx], a_live[idx]
             b = rng.choice(b0, size=len(b0), replace=True)
-            shifted = (1.0 + a) * (1.0 + delta) - 1.0
+            shifted = np.where(alive, (1.0 + a) * (1.0 + delta) - 1.0, a)
             try:
                 p = mannwhitneyu(shifted, b, alternative="two-sided").pvalue
             except ValueError:
@@ -1149,6 +1155,40 @@ def mde(
         file=out,
     )
     return {"h": h, "n_treated": len(a0), "n_control": len(b0), "mde": None}
+
+
+def partial_spearman(
+    rows: Sequence[dict[str, Any]], x: str, y: str, controls: Sequence[str]
+) -> tuple[float, float, int]:
+    """Spearman of ``x`` against ``y`` after removing what ``controls`` explain of both.
+
+    The whole dose-response finding hangs on this. Clone spend is not randomly assigned: a
+    swarm forms around a coin that is already large, already moving and already trading, and
+    every one of those predicts mean reversion by itself. So the raw rank correlation between
+    "how much the parasites paid" and "how the host then did" is exactly the quantity the
+    free columns can manufacture.
+
+    Ranks first (so it stays a rank statistic and heavy tails cannot dominate), then OLS
+    residualisation of both the outcome ranks and the exposure ranks on the control ranks,
+    then correlate the residuals. Reported with the raw value beside it so the size of the
+    confounding is visible rather than merely asserted.
+    """
+    import numpy as np
+    from scipy.stats import rankdata, spearmanr
+
+    usable = [r for r in rows if all(np.isfinite(float(r.get(c, np.nan))) for c in (x, y, *controls))]
+    if len(usable) < 20:
+        return float("nan"), float("nan"), len(usable)
+    yr = rankdata([r[y] for r in usable])
+    xr = rankdata([r[x] for r in usable])
+    c = np.column_stack([rankdata([r[col] for r in usable]) for col in controls])
+    c = np.column_stack([np.ones(len(usable)), c])
+    beta_y, *_ = np.linalg.lstsq(c, yr, rcond=None)
+    beta_x, *_ = np.linalg.lstsq(c, xr, rcond=None)
+    ry = yr - c @ beta_y
+    rx = xr - c @ beta_x
+    rho, p = spearmanr(rx, ry)
+    return float(rho), float(p), len(usable)
 
 
 def mannwhitney(a: Sequence[float], b: Sequence[float]) -> tuple[float, float]:
@@ -1358,9 +1398,15 @@ def report(  # noqa: C901 - a study report is a linear script by nature
             if len(set(x)) < 3:
                 continue
             rho, p = spearmanr(x, y)
-            dose_rows.append({"h": h, "var": name, "rho": float(rho), "p": float(p), "n": len(y)})
+            prho, pp, pn = partial_spearman(usable, name, f"r{h}", FREE_COLUMNS)
+            dose_rows.append(
+                {"h": h, "var": name, "rho": float(rho), "p": float(p), "n": len(y),
+                 "partial_rho": prho, "partial_p": pp}
+            )
+            verdict = "" if pp != pp or pp >= 0.05 else "  <- survives"
             print(
-                f"  r{h//60:>3d}m ~ {name:<26} rho={rho:+.3f} p={p:.4f} n={len(y)}",
+                f"  r{h//60:>3d}m ~ {name:<26} raw rho={rho:+.3f} p={p:.4f} | "
+                f"PARTIAL (free columns removed) rho={prho:+.3f} p={pp:.4f}  n={len(y)}{verdict}",
                 file=out,
             )
     result["dose_response"] = dose_rows
@@ -1642,17 +1688,13 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         if d["p"] == d["p"]:
             pvals.append(d["p"])
             names.append(f"treated-vs-control r{d['h']//60}m")
-    if pvals:
-        rejected = bh_fdr(pvals, q=0.10)
-        for nm, p, rej in zip(names, pvals, rejected, strict=True):
-            print(f"  {nm:<34} p={p:.4f}  {'SURVIVES' if rej else 'fails'} BH-FDR q=0.10", file=out)
-        result["fdr"] = [
-            {"test": n, "p": p, "rejected": r} for n, p, r in zip(names, pvals, rejected, strict=True)
-        ]
+    # The PARTIAL p-value enters the family, never the raw one. A raw dose correlation is
+    # exactly what the free columns manufacture, so entering it here would let confounding
+    # buy FDR survival for the hypothesis.
     for d in result.get("dose_response", []):
-        if d["p"] == d["p"]:
-            pvals.append(d["p"])
-            names.append(f"dose {d['var'][:18]} r{d['h']//60}m")
+        if d.get("partial_p") == d.get("partial_p"):
+            pvals.append(d["partial_p"])
+            names.append(f"dose[partial] {d['var'][:16]} r{d['h']//60}m")
     for d in result.get("clone_arm", {}).get("diffs", []):
         if d["p"] == d["p"]:
             pvals.append(d["p"])
@@ -1667,10 +1709,12 @@ def report(  # noqa: C901 - a study report is a linear script by nature
             {"test": n, "p": p, "rejected": r} for n, p, r in zip(names, pvals, rejected, strict=True)
         ]
         print(
-            f"  BH-FDR over all {len(pvals)} control-arm tests at q=0.10: "
-            f"{sum(rejected)} survive",
+            f"  the whole family, {len(pvals)} tests, BH-FDR at q=0.10 "
+            f"({sum(rejected)} survive):",
             file=out,
         )
+        for nm, p, rej in sorted(zip(names, pvals, rejected, strict=True), key=lambda z: z[1]):
+            print(f"    {nm:<38} p={p:.4f}  {'SURVIVES' if rej else 'fails'}", file=out)
     n_config = 3 * len(HORIZONS_S) * 2 * 2
     print(
         f"  configurations this file can produce: ~{n_config} (k in 3..5, {len(HORIZONS_S)} "
@@ -1995,11 +2039,16 @@ def retro_fetch_set(
     of everything else to serve as the control pool. Random is load-bearing — a control pool
     chosen by any property of the coin would confound the very comparison it exists for.
     """
-    _onsets, det = run_detector(launches, None, k=k, window_s=window_s)
+    onsets, det = run_detector(launches, None, k=k, window_s=window_s)
     need: set[str] = set()
-    for fam in det.families():
-        if len(fam.members) >= k:
-            need.update(m.mint for m in fam.members)
+    # Only the members present AT ONSET, which is exactly k of them — that is the whole set
+    # the traction probe reads and the only one a host can be chosen from. Taking every
+    # member of the final family instead costs 20,901 mints on a 24 h census against 5,715,
+    # to price forty-member farms whose late clones no decision depends on.
+    for ev in onsets:
+        need.update(ev["members"])
+    for ev in onsets:
+        need.add(ev["host_mint"])
     rest = [l.mint for l in launches if l.mint not in need]
     rng = random.Random(seed)
     rng.shuffle(rest)
