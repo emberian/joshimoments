@@ -433,17 +433,36 @@ def build_app(index: CoinIndex | None = None) -> Any:
     app = FastAPI(title="shitcoims hunch", docs_url=None, redoc_url=None)
     coins = index or CoinIndex()
 
-    def _hunch_state(now: float) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-        tape = read_hunches()
-        outcomes = hunch_outcomes()
+    def _hunched_by_mint(now: float) -> dict[str, dict[str, Any]]:
+        """The "you already called this one" badge. Reads the TAPE only -- a few kB.
+
+        Kept separate from :func:`hunch_outcomes` deliberately. The card list is POLLED
+        every few seconds, and joining every card to the desk's ledger to render one badge
+        cost a full scan of a 54 MB/day file per request -- measured at 1.5 s, i.e. a
+        quarter of the poll interval spent re-reading a day of rows to answer a question the
+        4 kB tape already answers. The outcome join is what ``/hunch/tape`` is for.
+        """
         by_mint: dict[str, dict[str, Any]] = {}
-        for h in tape:
+        for h in read_hunches():
             entry = by_mint.setdefault(h.mint, {"n": 0, "last_kind": None, "last_at": None})
             entry["n"] += 1
             entry["last_kind"] = h.kind
             entry["last_at"] = iso(h.t_gesture_unix)
             entry["last_seconds"] = now - h.t_gesture_unix
-        return by_mint, outcomes
+        return by_mint
+
+    #: Memoised outcome join: ``(computed_at, outcomes)``. The scan is unavoidable for the
+    #: tape view (the outcome of a hunch is a fact about the DESK, and lives in its ledger),
+    #: so it is amortised instead -- a positions-and-P&L view is not more useful for being
+    #: five seconds fresher, and the desk's own writes are append-only anyway.
+    outcome_cache: dict[str, Any] = {"at": 0.0, "value": {}}
+    OUTCOME_TTL_S = 15.0
+
+    def _outcomes(now: float) -> dict[str, dict[str, Any]]:
+        if now - float(outcome_cache["at"]) > OUTCOME_TTL_S:
+            outcome_cache["value"] = hunch_outcomes()
+            outcome_cache["at"] = now
+        return outcome_cache["value"]
 
     @app.get("/hunch/health")
     def health() -> dict[str, Any]:
@@ -477,7 +496,7 @@ def build_app(index: CoinIndex | None = None) -> Any:
     ) -> dict[str, Any]:
         now = time.time()
         coins.refresh(now)
-        hunched, _ = _hunch_state(now)
+        hunched = _hunched_by_mint(now)
         held = set(held_candidates(now))
         rows: list[dict[str, Any]] = []
         for mint in list(coins.coins):
@@ -543,7 +562,7 @@ def build_app(index: CoinIndex | None = None) -> Any:
             raise HTTPException(status_code=400, detail="not a 32-byte base58 address")
         now = time.time()
         coins.refresh(now)
-        hunched, _ = _hunch_state(now)
+        hunched = _hunched_by_mint(now)
         held = set(held_candidates(now))
         card = coins.card(mint, now=now, hunched=hunched.get(mint), held=mint in held)
         full = readout(mint, clip_lamports=coins.clip_lamports, now=now)
@@ -661,7 +680,7 @@ def build_app(index: CoinIndex | None = None) -> Any:
     def tape(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
         now = time.time()
         rows = read_hunches()[-limit:]
-        outcomes = hunch_outcomes()
+        outcomes = _outcomes(now)
         return {
             "generated_at": iso(now),
             "items": [
