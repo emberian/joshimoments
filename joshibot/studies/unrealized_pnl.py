@@ -1298,12 +1298,13 @@ def cmd_hazard(args: argparse.Namespace) -> int:
     con.execute(
         f"""
         CREATE OR REPLACE TABLE cand AS
-        SELECT e.mint, e.owner, e.episode, g.t
+        SELECT e.mint, e.owner, e.episode, g.k,
+               c.t_first + g.k * {dt} AS t
         FROM ep e JOIN coins c USING (mint),
              LATERAL (SELECT unnest(range(
-                 e.t_in + {dt},
-                 least(e.t_out, c.t_last) + 1,
-                 {dt})) AS t) g
+                 CAST(floor((e.t_in - c.t_first) / {dt}) AS BIGINT) + 1,
+                 CAST(floor((least(e.t_out, c.t_last) - c.t_first) / {dt}) AS BIGINT) + 1,
+                 1)) AS k) g
         """
     )
     n_cand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
@@ -1312,18 +1313,23 @@ def cmd_hazard(args: argparse.Namespace) -> int:
         print("[hazard] NULL: empty risk set.")
         return 0
     if n_cand > args.max_ticks:
+        # BERNOULLI, not reservoir. A reservoir sample of 40M rows has to hold 40M rows;
+        # a percentage sample streams. The risk set is exchangeable across ticks, so the
+        # cheaper sampler is also the correct one here.
+        pct = 100.0 * args.max_ticks / n_cand
         con.execute(
             f"CREATE OR REPLACE TABLE cand AS SELECT * FROM cand "
-            f"USING SAMPLE {args.max_ticks} ROWS (reservoir, {args.seed})"
+            f"USING SAMPLE {pct:.4f}% (bernoulli, {args.seed})"
         )
-        print(f"[hazard]   subsampled to {args.max_ticks:,} ticks", flush=True)
+        n_cand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+        print(f"[hazard]   subsampled to {n_cand:,} ticks ({pct:.2f}%)", flush=True)
 
     out = _out() / "hazard.parquet"
     _copy(
         con,
         f"""
         WITH withstate AS (
-            SELECT c.mint, c.owner, c.episode, c.t, s.qty_after, s.basis_after
+            SELECT c.mint, c.owner, c.episode, c.k, c.t, s.qty_after, s.basis_after
             FROM cand c ASOF JOIN st s
               ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
              AND c.t >= s.block_time
@@ -1332,14 +1338,21 @@ def cmd_hazard(args: argparse.Namespace) -> int:
             SELECT w.*, m.mark, m.rv
             FROM withstate w ASOF JOIN mkv m ON w.mint = m.mint AND w.t >= m.block_time
         ),
+        -- The label is an EQUI-JOIN on tick index, not a correlated EXISTS. Both grids are
+        -- anchored to the coin's own first observation, so a sell at time ts falls in tick
+        -- floor((ts - t_first)/dt) by construction, and a 40-million-row range-correlated
+        -- subquery becomes a hash join.
+        sellticks AS (
+            SELECT DISTINCT e.mint, e.owner, e.episode,
+                   CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k
+            FROM ev e JOIN coins c USING (mint) WHERE e.delta_raw < 0
+        ),
         lab AS (
-            SELECT wm.*,
-                   EXISTS (SELECT 1 FROM ev e
-                           WHERE e.mint = wm.mint AND e.owner = wm.owner
-                             AND e.episode = wm.episode AND e.delta_raw < 0
-                             AND e.block_time > wm.t AND e.block_time <= wm.t + {dt})
-                       AS sold_next
+            SELECT wm.*, (sk.k IS NOT NULL) AS sold_next
             FROM withmark wm
+            LEFT JOIN sellticks sk
+              ON sk.mint = wm.mint AND sk.owner = wm.owner
+             AND sk.episode = wm.episode AND sk.k = wm.k
         )
         SELECT mint, owner, episode, t, qty_after, basis_after, mark, rv,
                mark / basis_after - 1.0 AS upnl, sold_next
@@ -2367,7 +2380,7 @@ def main(argv: list[str] | None = None) -> int:
     hz.add_argument("--max-coins", type=int, default=3000)
     hz.add_argument("--min-ev", type=int, default=200)
     hz.add_argument("--max-ev", type=int, default=200000)
-    hz.add_argument("--max-ticks", type=int, default=40000000)
+    hz.add_argument("--max-ticks", type=int, default=20000000)
     hz.add_argument("--min-sol", type=float, default=0.01)
     hz.add_argument("--seed", type=int, default=20260815)
     hz.set_defaults(fn=cmd_hazard)
