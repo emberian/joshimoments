@@ -69,7 +69,6 @@ full pump.fun flow says:
    "This deployer has never dumped before" is a **RISK** factor, not a safety factor: those
    coins collapse at **1.71×** the base rate. A clean record is mostly indistinguishable from
    no record, and no record means a first-timer.
-
 7. **Three of the four cheap discriminators are nulls, and two of them are nulls for a reason
    worth keeping.** NCD does cluster same-deployer coins — but 63% of the effect survives
    shuffling each tape's order, so it is a **size-histogram fingerprint, not a sequence one**.
@@ -77,7 +76,7 @@ full pump.fun flow says:
    of consecutive trades share a timestamp, so the event rate sits above the sampling Nyquist
    and every flagged peak piles up at a band edge. The size-vs-impact exponent separates arms
    and the separation is **61% volatility** — the `vol-control` lesson arriving in a new place.
-   Benford's serial-arm effect dies once trade-size repetition is held fixed (§7.2).
+   Benford's serial-arm effect dies once trade-size repetition is held fixed (§8).
 
 **What this does not do: it does not give an exit signal, and it does not predict which
 coins go up.** Everything here is birth-time triage.
@@ -144,7 +143,7 @@ mcap_lamports = k · 1e15 / v_tok²
 balance is gone — 206.9M of the 1e9 supply is held back for the migration LP. So graduation
 must occur at `v_tok = 2.799e14`, i.e. **411 SOL**. Observed median peak over 6,549 graduated
 coins: **410.9 SOL**. (Reading the peak at `bal = 0` instead gives a nonsense 6,040 SOL,
-identical for every graduated coin — §9 trap 3.)
+identical for every graduated coin — §10 trap 3.)
 
 **External, and genuinely independent.** `state/boards/` is a vendor feed we did not derive.
 Comparing its `virtual_token_reserves` against ours at the same wall-clock second:
@@ -275,7 +274,7 @@ infrastructure" claim, visible without any clustering at all.
 ## 5. The predictive test
 
 Temporal split on birth time: train = days 0–4, test = days 5–9. Every history feature is
-computed over events whose own timestamp precedes the coin's birth (§9 trap 4). Entity =
+computed over events whose own timestamp precedes the coin's birth (§10 trap 4). Entity =
 deployer; 52.3% of test coins have a deployer seen in training, which is the mechanism, not a
 leak.
 
@@ -526,7 +525,7 @@ Three things a reader should take from the gate table rather than from the botto
 
 ---
 
-## 7.2 The four cheap discriminators
+## 8. The four cheap discriminators
 
 *Code: `studies/operator_crime_discriminators.py` (+ `studies/operator_crime_benford_strat.py`).
 Artifacts: `studies/data/operator_crime/discriminators/`. Seed 20260815. Run on the ten-day
@@ -537,7 +536,7 @@ Each was budgeted as an afternoon with a null attached, on the understanding tha
 result. **Three of the four are nulls, and two of the three are nulls for an instructive
 reason rather than for want of signal.**
 
-### 7.2.0 Three data pathologies, and one of them invalidates a natural mistake
+### 8.1 Three data pathologies, and one of them invalidates a natural mistake
 
 * **A ledger row is a LEG, not a trade.** 5.05% of curve transactions carry 2–20 rows sharing
   one `curve_bal_after`. Checking the chain identity `curve_bal_after[i] + Σq[i] ==
@@ -554,7 +553,7 @@ reason rather than for want of signal.**
   clean of the artifact — which also means "deviates from Benford" carries no forensic content
   here.
 
-### (a) Normalized compression distance — **SURVIVES, but not as claimed**
+### 8.3 (a) Normalized compression distance — **SURVIVES, but not as claimed**
 
 Serialization, stated: three ASCII bytes per trade in chain order — `B`/`S`; `chr(65 + min(63,
 ⌊log₂|q|⌋))`; `chr(97 + min(25, ⌊log₂(1+Δt_s)⌋))`. No address, no absolute time, no mint.
@@ -575,7 +574,7 @@ and 65.1% at N=512. So same-deployer coins do compress together, and two thirds 
 **size-histogram fingerprint**, not a sequence one. The absolute gap is also small: 0.008 of
 NCD on a base of 0.86, about 0.9%. Unmistakable in aggregate, useless on a single coin.
 
-### (b) Benford — **NULL for the serial arm; the rest is trade-size diversity**
+### 8.4 (b) Benford — **NULL for the serial arm; the rest is trade-size diversity**
 
 Per-coin MAD from the first 50 trades against a **finite-sample floor of 0.0337** (20,000
 simulations of 50 draws from the ambient law; p95 0.0496). Observed per-coin mean 0.052,
@@ -594,7 +593,7 @@ in the first 50 trades and MAD); distinct-size means run 37.5 for not-dumped vs 
 dumped. Stratifying on distinct-size count **annihilates the serial-vs-solo effect** and halves
 the other two. What survives is a trade-size-diversity signal wearing a forensics costume.
 
-### (c) Lomb–Scargle — **NULL, and the naive version is an artifact detector**
+### 8.5 (c) Lomb–Scargle — **NULL, and the naive version is an artifact detector**
 
 400 log-spaced frequencies, astropy-standard normalization, 19 realizations of each null per
 coin. Two nulls: **rotation** (rotate the value sequence, hold x fixed so the quantization comb
@@ -616,7 +615,7 @@ timestamps with 63% zero gaps there is no band left in which to see one.** A sch
 period under a few seconds is invisible *by construction*. The prior study's inter-arrival CV
 was not missing anything this instrument could have caught.
 
-### (d) Size-vs-impact exponent — **the control passes exactly; the wash reading fails**
+### 8.6 (d) Size-vs-impact exponent — **the control passes exactly; the wash reading fails**
 
 The h = 0 control confirms the price identity to four decimals: with relative size
 `x = log(|q| / v_tok_before)` the within-coin exponent is **1.0003** in every arm. Immediate
@@ -662,7 +661,7 @@ order-driven markets with hidden liquidity; a CFMM has no hidden liquidity.
 the opposite of the reversion a wash trade would leave. Stated in the honest direction: this
 is "no difference detected", not "shown equal" — the β confidence intervals are wide.
 
-### 7.2.1 Multiplicity
+### 8.2 Multiplicity
 
 16 pre-registered confirmatory cells: (a) 2 lengths × {real, shuffled}; (b) 3 contrasts;
 (c) 3 contrasts on the detrended primary; (d) 3 contrasts × 2 horizons. Everything else — h=0
@@ -680,7 +679,7 @@ does not protect against measuring the wrong thing fourteen times.**
 
 ---
 
-## 8. Trials counted
+## 9. Trials counted
 
 | family | cells |
 |---|---:|
@@ -690,10 +689,10 @@ does not protect against measuring the wrong thing fourteen times.**
 | rotation nulls (arms with history features) | 3 |
 | sniper-reuse: 1 statistic × 1 null | 1 |
 | screen gates × 2 outcomes | 12 |
-| four cheap discriminators, pre-registered confirmatory cells (§7.2) | 16 |
+| four cheap discriminators, pre-registered confirmatory cells (§8) | 16 |
 | **substantive configurations** | **~40** |
 
-The 16 discriminator cells carry their own **BY-FDR at q = 0.10** (14 of 16 survive, §7.2.1).
+The 16 discriminator cells carry their own **BY-FDR at q = 0.10** (14 of 16 survive, §8.2).
 The rest of this document is not FDR-corrected as a family, because it is not a family of
 comparable tests: it is one label ladder, one predictive comparison with two nulls, and one
 screen. Where a claim rests on a p-value it is a permutation p against a structure-preserving
@@ -714,7 +713,7 @@ quantities, never as the thing being optimised, and the primary label `is_rip` i
 
 ---
 
-## 9. Method notes: five traps, paid for
+## 10. Method notes: five traps, paid for
 
 Each produced a wrong number first and would have been invisible in the output.
 
@@ -758,7 +757,7 @@ self-inflated for the operator unless the deployer is removed. It was worth 2.7�
 
 ---
 
-## 10. Controls
+## 11. Controls
 
 `tests/test_operator_crime.py`, six tests, all green. PROGRAM.md §3.12 — *both controls,
 always* — is the rule they exist for, because the SVN study's z-score bug passed its
@@ -778,7 +777,7 @@ instrument is a constant and every headline built on it is meaningless.
 
 ---
 
-## 11. What this does NOT establish
+## 12. What this does NOT establish
 
 1. **No funding lineage.** The corpus has no SOL transfers. Every "operator" here is a
    deployer wallet or a sniper wallet, never a funding-tree entity. Sybil wallets are free, so
@@ -807,18 +806,18 @@ instrument is a constant and every headline built on it is meaningless.
    thing that settles it.
 7. **31% of coins are priced approximately** (§2.2).
 8. **This is not an exit signal and not an entry edge** (§0).
-9. **The discriminators ran on the serial/solo cohort, not the whole corpus.** §7.2's tape is
+9. **The discriminators ran on the serial/solo cohort, not the whole corpus.** §8's tape is
    17,234 coins with ≥100 curve trades, selected as top-60-deployer coins plus a matched
    single-launch sample. It is the right sample for a labelled same-vs-different-operator test
    and the wrong one for a population statement.
-10. **"No scheduler detected" is bounded by the clock, not by the chain.** §7.2(c) can only
+10. **"No scheduler detected" is bounded by the clock, not by the chain.** §8.5 can only
     speak about periods above a few seconds. A sub-second bot is invisible in this corpus at
     any sample size; catching one needs the transaction's own timestamp resolution, which
     means a different pull.
 
 ---
 
-## 12. What to do with this
+## 13. What to do with this
 
 1. **Ship the CLEAN screen as birth-time triage for the $40 bets**, at the stated operating
    point: 4.8% coverage, 99.96% clean, 2 of 771 collapses admitted. It needs one slot of chain
