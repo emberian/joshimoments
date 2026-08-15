@@ -13,6 +13,7 @@ import base64
 import csv
 import os
 import struct
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,7 +30,7 @@ from solders.transaction import VersionedTransaction
 from shitcoims_sentinel import executor as executor_module
 from shitcoims_sentinel.clients import ExternalServiceError
 from shitcoims_sentinel.config import AppConfig, load_config
-from shitcoims_sentinel.domain import WSOL_MINT, TokenHolding
+from shitcoims_sentinel.domain import WSOL_MINT, PoolSnapshot, TokenHolding, utc_now
 from shitcoims_sentinel.executor import ExecutionGate, SellExecutor
 from shitcoims_sentinel.storage import StateStore
 from shitcoims_sentinel.transaction import (
@@ -593,6 +594,129 @@ async def test_a_compute_request_far_above_consumption_is_reported(tmp_path: Pat
     warning = warnings[0]
     assert warning["severity"] == "warning"
     assert warning["context"]["simulated_units_consumed"] == 123_615
+
+
+def cp_pool(mint: str = "target", *, dex_id: str = "pumpswap", sol: str = "40") -> PoolSnapshot:
+    """A constant-product pool holding `sol` SOL against tokens priced at 1e-7 SOL each."""
+
+    return PoolSnapshot(
+        pair_address="pair",
+        dex_id=dex_id,
+        base_mint=mint,
+        quote_mint=WSOL_MINT,
+        liquidity_usd=Decimal("7000"),
+        reserve_value=Decimal(sol),
+        reserve_unit="SOL",
+        price_native=Decimal("0.0000001"),
+        observed_at=utc_now(),
+    )
+
+
+async def test_an_order_authorising_less_than_the_pool_would_pay_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The replacement for a 1500bps tolerance, which is an adversary's budget to spend.
+
+    The threshold Jupiter puts on chain is what actually constrains the fill, so that is
+    what is compared against the pool's own arithmetic. Here the order authorises far less
+    than the reserves imply, which is the shape of a sandwich, and the sale does not happen.
+    """
+
+    target = holding("target", 1_000 * 10**6)
+    harness = make_harness(
+        tmp_path,
+        holdings=[target],
+        post_token_amounts={"target-account": 0},
+        threshold=1,  # authorises giving essentially the whole fill away
+    )
+
+    result = await harness.executor.sell(
+        mint="target",
+        name="TGT",
+        reason="exit_stop",
+        observed_holding=target,
+        pool=cp_pool(),
+    )
+
+    assert result.status == "skipped"
+    assert "below the" in result.message
+    assert harness.jupiter.execute_calls == []  # nothing was submitted
+    assert harness.pending("target") is None
+    refusal = [item for item in harness.notifier.sent if "SELL REFUSED" in item["message"]]
+    assert refusal and refusal[0]["severity"] == "critical"
+    assert refusal[0]["context"]["reserve_floor_lamports"] > 1
+
+
+async def test_an_emergency_exit_is_never_blocked_by_the_reserve_floor(tmp_path: Path) -> None:
+    """Not selling a rugging bag is the worse failure, by a wide margin."""
+
+    target = holding("target", 1_000 * 10**6)
+    harness = make_harness(
+        tmp_path,
+        holdings=[target],
+        post_token_amounts={"target-account": 0},
+        threshold=1,
+    )
+
+    result = await harness.executor.sell(
+        mint="target",
+        name="TGT",
+        reason="exit_rug",
+        observed_holding=target,
+        pool=cp_pool(),
+    )
+
+    assert result.status == "success"
+    assert harness.jupiter.execute_calls
+    alarm = [item for item in harness.notifier.sent if "PRICED BELOW THE POOL" in item["message"]]
+    assert alarm and alarm[0]["severity"] == "critical"
+
+
+async def test_a_pool_that_cannot_be_modelled_never_blocks_a_sale(tmp_path: Path) -> None:
+    """No pool, and a pool that does not price on the constant-product curve, both proceed.
+
+    The floor is evidence or it is nothing. A fabricated one would be a new way to fail to
+    sell, which is the failure this system exists to avoid.
+    """
+
+    for pool in (None, cp_pool(dex_id="meteora")):
+        target = holding("target", 1_000 * 10**6)
+        case = tmp_path / f"case-{pool.dex_id if pool else 'none'}"
+        case.mkdir(parents=True, exist_ok=True)
+        harness = make_harness(
+            case,
+            holdings=[target],
+            post_token_amounts={"target-account": 0},
+            threshold=1,
+        )
+        result = await harness.executor.sell(
+            mint="target",
+            name="TGT",
+            reason="exit_stop",
+            observed_holding=target,
+            pool=pool,
+        )
+        assert result.status == "success"
+
+
+async def test_an_order_at_or_above_the_pool_floor_is_never_questioned(tmp_path: Path) -> None:
+    target = holding("target", 1_000 * 10**6)
+    # 1000 tokens at 1e-7 SOL is ~1e-4 SOL = 100,000 lamports before impact; OUT_AMOUNT is
+    # far above that, so the authorised threshold clears the floor comfortably.
+    harness = make_harness(
+        tmp_path, holdings=[target], post_token_amounts={"target-account": 0}
+    )
+
+    result = await harness.executor.sell(
+        mint="target",
+        name="TGT",
+        reason="exit_stop",
+        observed_holding=target,
+        pool=cp_pool(),
+    )
+
+    assert result.status == "success"
+    assert not any("SELL REFUSED" in item["message"] for item in harness.notifier.sent)
 
 
 async def test_pending_exit_walks_intent_then_submitting_then_deletion(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ import uvicorn
 from solders.pubkey import Pubkey
 
 from .config import ConfigError, load_config
-from .domain import DecisionKind, TokenHolding, to_jsonable
+from .domain import DecisionKind, PoolSnapshot, TokenHolding, to_jsonable
 from .engine import SentinelEngine
 from .executor import ExecutionResult
 from .notifier import telegram_bot_identity, telegram_confirm_pairing, telegram_send_test
@@ -259,6 +259,7 @@ class _ObservationOnlyExecutor:
         reason: DecisionKind | str,
         observed_holding: TokenHolding,
         amount: int | None = None,
+        pool: PoolSnapshot | None = None,
     ) -> ExecutionResult:
         requested = observed_holding.amount if amount is None else int(amount)
         self.suppressed.append(

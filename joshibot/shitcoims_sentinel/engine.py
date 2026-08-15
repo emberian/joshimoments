@@ -1301,6 +1301,9 @@ class SentinelEngine:
                     reason=decision.kind,
                     observed_holding=holding,
                     amount=decision.sell_amount,
+                    # The pool this cycle observed, so the executor can bound the fill by
+                    # the pool's own arithmetic instead of by a 1500bps tolerance.
+                    pool=pool,
                 )
 
         self.rug_detector.record(

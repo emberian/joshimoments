@@ -180,6 +180,7 @@ class RecordingExecutor:
         reason: Any,
         observed_holding: TokenHolding,
         amount: int | None = None,
+        pool: Any = None,
     ) -> ExecutionResult:
         self.calls.append(
             {
@@ -190,6 +191,7 @@ class RecordingExecutor:
                 "amount": amount,
             }
         )
+        self.pools = [*getattr(self, "pools", []), pool]
         return self.result
 
 

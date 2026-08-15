@@ -12,6 +12,15 @@ jupiter:
   # Create a Jupiter API key at portal.jup.ag and put only the key in this file.
   api_key_file: "~/.jup-shitcoims"
   base_url: "https://api.jup.ag/swap/v2"
+  # A CEILING, not the working tolerance. A normal exit asks for 250 bps
+  # (`clients.TIGHT_EXIT_SLIPPAGE_BPS`); only a rug or a panic uses the full number, where
+  # getting out matters more than the price. Read 1500 as "an emergency exit may pay
+  # anything", not as "we accept 15% slippage".
+  #
+  # It is NOT what bounds a normal fill. A tolerance is a budget an adversary can spend in
+  # full; the actual bound is a min-out computed from the observed pool reserves through the
+  # Lean-mirrored constant-product fill — see `shitcoims_sentinel/reserves.py`. An order
+  # authorising less than the pool itself would pay is refused outright.
   slippage_bps: 1500
   max_priority_fee_lamports: 5000000
   # Force on-chain Metis routing so the returned transaction can be narrowly validated.

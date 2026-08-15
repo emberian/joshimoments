@@ -12,14 +12,16 @@ from solders.transaction import VersionedTransaction
 
 from .clients import (
     SIMULATION_ADDRESS_LIMIT,
+    WIDE_EXIT_REASONS,
     ExternalServiceError,
     JupiterClient,
     SolanaRpc,
     exit_slippage_bps,
 )
 from .config import AppConfig
-from .domain import DecisionKind, TokenHolding, utc_now
+from .domain import DecisionKind, PoolSnapshot, TokenHolding, utc_now
 from .notifier import Notifier
+from .reserves import reserve_minimum_out
 from .secrets import read_secret_file
 from .storage import StateStore
 from .transaction import (
@@ -482,6 +484,82 @@ class SellExecutor:
                 consumed.append(units)
         return max(consumed) if consumed else None
 
+    async def _reserve_floor_refusal(
+        self,
+        *,
+        mint: str,
+        name: str,
+        reason: DecisionKind | str,
+        pool: PoolSnapshot | None,
+        holding: TokenHolding,
+        amount: int,
+        order: dict[str, Any],
+    ) -> ExecutionResult | None:
+        """Refuse an order that authorises paying away more than the pool itself would take.
+
+        `jupiter.slippage_bps` is a TOLERANCE — a budget an adversary may spend in full, and
+        at 1500 it is their unconstrained optimum. This is the other kind of bound: what the
+        observed pool must pay by its own arithmetic, via the Lean-mirrored constant-product
+        fill in `shitcoims_kernel`. The order's on-chain `otherAmountThreshold` is what
+        actually constrains the fill, so that is what is compared.
+
+        Two deliberate asymmetries:
+        - It is ONE-SIDED. An order that pays MORE than the model is never questioned.
+        - An emergency exit is never blocked. On a rug or a panic, not selling is the worse
+          outcome by a wide margin, so those are reported and allowed through.
+
+        Returns None when the sale should proceed, which includes every case where the pool
+        cannot be modelled — see `reserves.py`. There is no fabricated floor.
+        """
+
+        floor = reserve_minimum_out(pool, holding, amount)
+        if floor is None:
+            return None
+        try:
+            authorised = int(order.get("otherAmountThreshold") or 0)
+        except (TypeError, ValueError):
+            return None
+        if authorised >= floor:
+            return None
+
+        context = {
+            "mint": mint,
+            "amount": amount,
+            "reason": str(reason),
+            "authorised_minimum_out_lamports": authorised,
+            "reserve_floor_lamports": floor,
+            "dex_id": pool.dex_id if pool is not None else None,
+            "auto_action": False,
+        }
+        if str(reason) in WIDE_EXIT_REASONS:
+            await self.notifier.send(
+                severity="critical",
+                category="execution",
+                message=(
+                    f"EMERGENCY EXIT PRICED BELOW THE POOL for {name}: order authorises "
+                    f"{authorised} lamports against a {floor} reserve floor. Selling anyway."
+                ),
+                context=context,
+                dedup_key=f"reserve-floor-emergency:{mint}",
+                dedup_seconds=0,
+            )
+            return None
+
+        message = (
+            f"SELL REFUSED: {name} order authorises {authorised} lamports, below the "
+            f"{floor} floor computed from the observed pool reserves"
+        )
+        await self.notifier.send(
+            severity="critical",
+            category="execution",
+            message=message,
+            context=context,
+            dedup_key=f"reserve-floor:{mint}",
+            dedup_seconds=300,
+        )
+        self.state.delete("pending_exits", mint)
+        return ExecutionResult("skipped", None, 0, message, 0)
+
     async def _record_landing_bid(
         self,
         *,
@@ -561,6 +639,7 @@ class SellExecutor:
         reason: DecisionKind | str,
         observed_holding: TokenHolding,
         amount: int | None = None,
+        pool: PoolSnapshot | None = None,
     ) -> ExecutionResult:
         requested = observed_holding.amount if amount is None else int(amount)
         if requested <= 0 or requested > observed_holding.amount:
@@ -692,6 +771,17 @@ class SellExecutor:
                     str(self.keypair.pubkey()),
                     slippage_bps=exit_slippage_bps(str(reason), self.config.jupiter),
                 )
+                refusal = await self._reserve_floor_refusal(
+                    mint=mint,
+                    name=name,
+                    reason=reason,
+                    pool=pool,
+                    holding=current,
+                    amount=sell_now,
+                    order=order,
+                )
+                if refusal is not None:
+                    return refusal
                 validated = await validate_jupiter_exit_transaction(
                     encoded=str(order["transaction"]),
                     shitcoims_pubkey=self.keypair.pubkey(),
