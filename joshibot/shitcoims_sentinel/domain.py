@@ -288,7 +288,11 @@ def evaluate_position(
     if stop is not None and pnl is not None and pnl <= stop:
         needed = max(1, int(policy.floor_confirm_quotes))
         streak = state.below_stop_streak + 1
-        next_state = dataclasses.replace(state, below_stop_streak=streak)
+        # A quote this far down also contradicts any take-profit confirmation in progress.
+        # Leaving that streak standing would let a zigzag arm on one quote instead of N.
+        next_state = dataclasses.replace(
+            state, below_stop_streak=streak, above_take_profit_streak=0
+        )
         if streak >= needed:
             return Decision(
                 DecisionKind.EXIT_STOP,

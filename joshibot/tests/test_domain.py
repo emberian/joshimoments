@@ -254,6 +254,18 @@ def test_one_wick_cannot_end_a_position_in_either_direction() -> None:
     assert reverted_up.next_state.above_take_profit_streak == 0
     assert reverted_down.next_state.below_stop_streak == 0
 
+    # A quote past the OTHER threshold also cancels a confirmation in progress, so a
+    # zigzag cannot accumulate one quote on each side and act on the next.
+    crossed = evaluate_position(
+        policy=two,
+        holding=holding(),
+        quote=quote("0.5"),
+        state=up_wick.next_state,
+        rug=RugSignal(False),
+    )
+    assert crossed.next_state.above_take_profit_streak == 0
+    assert crossed.next_state.below_stop_streak == 1
+
     # A second consecutive quote past the threshold does act, on both sides.
     confirmed_up = evaluate_position(
         policy=two,
