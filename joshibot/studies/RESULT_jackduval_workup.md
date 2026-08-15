@@ -207,6 +207,50 @@ here of him trading against them. This also matches the venue split in §1.4: he
 **fresh bonding-curve launches**, and all four cluster coins have long since migrated to AMM
 pools.
 
+### 3.3 The imposter does not trade against him — a null, and the null is the finding
+
+The hypothesis worth testing was that `9T8QKsR2…` snipes or dumps into the real caller's flow:
+wear his name, ride his followers. Run against the same corpus, it does not survive.
+
+| | jackduvalcalls | imposter |
+|---|---|---|
+| balance legs | 2,817 | 457 |
+| distinct mints | 494 | **45** |
+| **median hold span** | **45 s** | **2,749 s (46 min)** |
+| under 120 s | 62.7% | **7 / 45 = 15.6%** |
+| the operator's four coins | 0 | **0** |
+
+**They are not the same kind of trader.** A 45-second median against a 46-minute one is two
+different operations; the imposter is not a scalper at all.
+
+**Coins both wallets touched: 5 — and one is USDC**, leaving **four** real overlaps. Their
+timing settles it:
+
+| offset of imposter's first touch vs the caller's | |
+|---|---|
+| −87,290 s | imposter first, by **24 hours** |
+| −4,069 s | imposter first, by 68 minutes |
+| +614 s | caller first, by 10 minutes |
+| +39,935 s | caller first, by 11 hours |
+
+**Sniping and dumping-into-flow are second-scale acts.** These offsets are hours and days. On
+this corpus the imposter never lands close enough to the caller's trades to be trading against
+them.
+
+*The null this deliberately does not lean on.* Four shared coins out of 45 and 494, against a
+ten-day universe of roughly 58,000 launches, is ~10× a naive independence expectation of 0.4 —
+and that naive number is worthless here, because neither wallet draws uniformly from all
+launches. Both select for coins that are getting attention, which shrinks the effective universe
+by orders of magnitude and inflates overlap for free. This repo has had a naive null manufacture
+an effect three separate times (`RESULT_flow_signals`; `RESULT_copytrading` 73× → 0.98×;
+`RESULT_caller_wallets` §2.1, 20× → 1.20×). So the overlap count is reported and **not**
+interpreted; the **timing** is what carries the conclusion, and it needs no null at all.
+
+**Verdict: the impersonation is an identity attack, not an on-chain predation pattern** — on
+this ten-day window. It remains a live hazard for exactly the reason it was labelled
+`adversary`: the risk is that a human reads `jackduvalcalIs` as `jackduvalcalls` and acts on it.
+That risk does not require the wallet to do anything at all.
+
 ---
 
 ## 4. A complete round trip, caught live
