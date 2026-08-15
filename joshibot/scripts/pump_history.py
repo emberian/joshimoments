@@ -37,6 +37,46 @@ the same shape is 2.5% real fills, 31% reverts and 66% no-op reference rows, so 
 pump leg to have actually MOVED is a ~40x output reduction that costs nothing: the predicate
 reads only columns the scan already pays for.
 
+SCHEMA — READ THIS BEFORE WRITING A STUDY AGAINST IT
+-----------------------------------------------------
+One parquet file per UTC day under ``state/bulk_pump/daily/<YYYY-MM-DD>.parquet``. Read the
+directory as a dataset and the ``day`` partition column comes along::
+
+    import pyarrow.dataset as ds
+    tape = ds.dataset("state/bulk_pump/daily", format="parquet")
+
+======================== ============================================================
+column                   note
+======================== ============================================================
+``signature``            base58, the join key against the live tapes
+``block_slot``           int64
+``block_time``           int64, **unix seconds** (not a timestamp column)
+``tx_index``             int64, position within the block — orderable within a slot,
+                         which ``getTransaction`` cannot give you
+``fee_lamports``         **string**
+``err``                  **string, and EMPTY STRING means success — never NULL.**
+                         ``WHERE err IS NULL`` matches nothing, ever. Use ``err = ''``.
+``compute_units``        **string**
+``pre`` / ``post``       list<struct<owner, mint, amount, decimals, account_index>>,
+                         ``amount`` a **string**
+``schema_version``       ``bulk_pump.v1``
+``provenance_*``         source, extraction time, sha256 of the exact query text
+======================== ============================================================
+
+**Every raw amount is a string.** Same rule as ``shitcoims_cluster.tape``: a 1e9-supply
+6-decimal token is 1e15 raw units, already inside one order of magnitude of the 2**53 float
+cliff. Cast to ``int``, never to ``float``.
+
+**The arrays are narrowed to the OWNERS holding a pump mint, not to the pump mints.** That is
+deliberate and load-bearing: it keeps the other side of the pool — the WSOL or USDC leg, whose
+mint does not end in 'pump' — so a fill is reconstructible. ``verify`` is what proves it.
+
+**Not replay grade for boosted PumpSwap pools.** Same limitation as ``bulk_history``: a boosted
+pool prices against ``pool_quote + virtual_quote_reserves``, the virtual term lives in the swap
+event in ``log_messages``, and that column is empty for this window. Vault levels here are
+exact; the curve reserve for a boosted pool is not derivable from them. See
+:mod:`shitcoims_cluster.pumpswap`.
+
 THE EXPORT PATH, AND WHY IT IS NOT ``bq query``
 -----------------------------------------------
 ``bulk_history.py`` streams results through ``bq query --format=json``, capped at 2M rows/day.
@@ -93,12 +133,31 @@ def repack(root: Path, *, force: bool = False) -> int:
         shards = sorted(day_dir.glob("*.parquet"))
         if not shards:
             continue
-        table = ds.dataset(day_dir, format="parquet").to_table()
+        dataset = ds.dataset(day_dir, format="parquet")
+        # STREAMED, not `to_table()`. A day is ~10.8M rows and ~3 GB compressed; materialising
+        # one as a single Arrow table costs on the order of 20 GB of RAM and takes the laptop
+        # down. Row groups go out as they come in, so peak memory is one batch.
+        rows = 0
         temp = target.with_suffix(".parquet.partial")
-        pq.write_table(table, temp, compression="zstd", version="2.6")
+        writer = None
+        try:
+            for batch in dataset.to_batches(batch_size=250_000):
+                if batch.num_rows == 0:
+                    continue
+                if writer is None:
+                    writer = pq.ParquetWriter(temp, batch.schema, compression="zstd",
+                                              version="2.6")
+                writer.write_batch(batch)
+                rows += batch.num_rows
+        finally:
+            if writer is not None:
+                writer.close()
+        if writer is None:
+            temp.unlink(missing_ok=True)
+            continue
         temp.replace(target)
         written += 1
-        print(f"  {day}: {len(shards):>5} shards -> {table.num_rows:>10,} rows, "
+        print(f"  {day}: {len(shards):>5} shards -> {rows:>12,} rows, "
               f"{target.stat().st_size / 1e9:.2f} GB", file=sys.stderr)
     print(f"\nrepacked {written} day(s) into {out_dir}", file=sys.stderr)
     return 0
@@ -108,20 +167,27 @@ def summarise(root: Path) -> int:
     ds, _ = _pyarrow()
     total_rows = 0
     total_bytes = 0
-    print(f"{'day':<12} {'rows':>12} {'GB':>7}  {'distinct pump mints':>20}")
+    all_mints: set[str] = set()
+    print(f"{'day':<12} {'rows':>13} {'GB':>7}  {'distinct pump mints':>20}")
     for path in sorted((root / "daily").glob("*.parquet")):
-        table = ds.dataset(path, format="parquet").to_table(columns=["post"])
+        dataset = ds.dataset(path, format="parquet")
         mints: set[str] = set()
-        for legs in table.column("post").to_pylist():
-            for leg in legs or []:
-                mint = leg.get("mint") or ""
-                if mint.endswith("pump"):
-                    mints.add(mint)
+        rows = 0
+        # Streamed for the same reason repack is: a day does not fit in memory.
+        for batch in dataset.to_batches(columns=["post"], batch_size=100_000):
+            rows += batch.num_rows
+            for legs in batch.column("post").to_pylist():
+                for leg in legs or []:
+                    mint = leg.get("mint") or ""
+                    if mint.endswith("pump"):
+                        mints.add(mint)
         size = path.stat().st_size
-        total_rows += table.num_rows
+        total_rows += rows
         total_bytes += size
-        print(f"{path.stem:<12} {table.num_rows:>12,} {size / 1e9:>7.2f}  {len(mints):>20,}")
-    print(f"\n{'TOTAL':<12} {total_rows:>12,} {total_bytes / 1e9:>7.2f} GB")
+        all_mints |= mints
+        print(f"{path.stem:<12} {rows:>13,} {size / 1e9:>7.2f}  {len(mints):>20,}")
+    print(f"\n{'TOTAL':<12} {total_rows:>13,} {total_bytes / 1e9:>7.2f} GB"
+          f"  {len(all_mints):>20,} distinct pump mints across the window")
     return 0
 
 
@@ -162,17 +228,22 @@ def verify(root: Path, *, sample_days: int = 2) -> int:
     examples: list[str] = []
     absent_by_cell: dict[tuple[str, str], int] = defaultdict(int)
     for day in chosen:
-        table = ds.dataset(root / "daily" / f"{day}.parquet", format="parquet").to_table(
-            columns=["signature", "pre", "post"]
-        )
+        wanted = {sig for (_pool, sig), lrow in live.items()
+                  if str(lrow["t_event"])[:10] == day}
+        dataset = ds.dataset(root / "daily" / f"{day}.parquet", format="parquet")
         by_sig: dict[str, tuple[list, list]] = {}
-        for sig, pre, post in zip(
-            table.column("signature").to_pylist(),
-            table.column("pre").to_pylist(),
-            table.column("post").to_pylist(),
-            strict=True,
-        ):
-            by_sig[str(sig)] = (pre or [], post or [])
+        # Streamed, and only the handful of signatures the live tape can speak to are kept.
+        # Materialising the day would be ~10.8M rows of nested structs to answer a question
+        # about a few hundred.
+        for batch in dataset.to_batches(columns=["signature", "pre", "post"], batch_size=100_000):
+            sigs = batch.column("signature").to_pylist()
+            if not any(s in wanted for s in sigs):
+                continue
+            pres = batch.column("pre").to_pylist()
+            posts = batch.column("post").to_pylist()
+            for sig, pre, post in zip(sigs, pres, posts, strict=True):
+                if str(sig) in wanted:
+                    by_sig[str(sig)] = (pre or [], post or [])
 
         for (pool, signature), lrow in live.items():
             if str(lrow["t_event"])[:10] != day:
