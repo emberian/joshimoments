@@ -570,6 +570,12 @@ def build_app(index: CoinIndex | None = None) -> Any:
             # The wiggle book's own candidate ordering, offered as a lens rather than a
             # ranking: it is the RULE's taste, and this surface exists to be disagreed with.
             "wiggle": lambda c: -((c.get("two_sided_frac") or 0.0) * 100 + (c.get("wiggle_n") or 0)),
+            # Most-recently-called-out first, coins with no callout last. The operator's
+            # own first stop when browsing; ordering by it is what makes the card list a
+            # replacement for that browse rather than a different one.
+            "callout": lambda c: (
+                c["callout_last_s"] if c.get("callout_last_s") is not None else 1e12
+            ),
             "drawdown": lambda c: -(c.get("drawdown_from_ath") or -1.0),
             "mcap": lambda c: -(c.get("usd_market_cap") or 0.0),
             "age": lambda c: (c.get("age_s") if c.get("age_s") is not None else 1e12),
