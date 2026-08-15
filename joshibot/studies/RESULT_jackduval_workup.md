@@ -44,9 +44,9 @@ are hours to days apart, which is nowhere near close enough to be trading agains
 
 Two corrections worth carrying. **His X handle is `@jackduval`, not `@jackduvalcalls`** — the
 latter is only his pump.fun username and is not an X account at all. And **`fatdogwithhat` and
-`calico` were not found** in either his tweets or his 493 coins, most likely because three coins
-of that name were minted *today* after both tapes end — so **the X arm is unvalidated against the
-two calls the operator named, and closing that needs the mint address from the operator.**
+`calico` were not found** in either his tweets or his 493 coins — most likely because three coins
+of that name were minted *today*, after both tapes end. Left unresolved on the operator's
+instruction; nothing here rests on those two coins, and §5.1 makes the question moot anyway.
 
 ---
 
@@ -398,8 +398,13 @@ calls — the name `jackduvalcalls` describes a pump.fun profile, not the behavi
 coins his wallet touched. This is most likely **coverage, not identity**: three separate coins
 named `fatdogwithhat` were minted *today* between 16:47 and 16:56 UTC, after both the corpus
 (ends 08-15T00:00Z) and the census (ends 15:15Z). **The X arm is therefore unvalidated against
-the operator's two named calls**, and "the fatdogwithhat call" does not identify a mint. *This
-needs the address from the operator to close.*
+the operator's two named calls**, and "the fatdogwithhat call" does not identify a mint.
+
+*Closed as won't-fix on the operator's instruction ("don't worry about that fatdogwithhat tbh").*
+The gap is recorded rather than resolved: the census stands on its own 475 tweets, and no claim in
+this file rests on those two coins. Note the finding it would have tested is now moot anyway —
+§5.1 shows he posts five contract addresses in two weeks, so "his calls" is not a population large
+enough to score regardless of which two coins seeded the question.
 
 ### 5.2 The wallet loses money — 82% of his round trips are losers
 
