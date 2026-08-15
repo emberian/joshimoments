@@ -20,7 +20,10 @@ from `RESULT_caller_wallets.md` §1**, his pump.fun profile wallet *is* his trad
 **2,637 transactions over ten days across 494 coins, median hold 45 seconds**, 53.5% of positions
 closed inside a minute and 90.9% inside an hour. Ninety seconds after the subscription went up it
 caught a whole round trip — into a coin **14 seconds after it was created**, out 58 seconds later,
-2.596 SOL in and 3.025 out, reconciling to the decimal.
+2.596 SOL in and 3.025 out, reconciling to the decimal. **In its first hour the watch recorded
+four complete round trips, all four profitable and all four under a minute: +0.7276 SOL on 7.116
+SOL deployed.** That sample cannot hide losers — `accountTrade` reports every trade the wallet
+makes — but four is four, and it shows the shape rather than an edge.
 
 Three things the operator should take from that. **He never touches your coins** — nosis, weave,
 DREGG and SOLVE appear zero times in 106M transactions, and he has never posted about them
@@ -318,8 +321,31 @@ predating the subscription. The P&L is on **vendor-rounded floats**, which this 
 firehose docstring says are good for ranking and triage and not for accounting — so read
 +16.53% as a magnitude, not a settled figure. Fees are not included.
 
-**n = 1 live** — but §3.1 supplies the distribution it sits in, and this trip landed on the
-median (45 s) almost exactly. Read together they are a characterisation, not an anecdote.
+### 4.1 One hour of the watch: four round trips, four winners
+
+By 18:05 UTC — one hour of subscription — the tape held **four complete, fully-exited round
+trips**, every one of them sub-minute:
+
+| coin | SOL in | SOL out | net | hold |
+|---|---|---|---|---|
+| `WBQmYhEA…` | 2.5963 | 3.0254 | **+0.4291** | 58 s |
+| `DGHaiWyp…` | 1.4303 | 1.4784 | **+0.0481** | 26 s |
+| `Foz4nbfG…` | 1.3812 | 1.5683 | **+0.1871** | 32 s |
+| `7MK1dXbn…` | 1.7082 | 1.7716 | **+0.0633** | 43 s |
+| **total** | **7.1160** | **7.8437** | **+0.7276** | median 37.5 s |
+
+**Four for four, +0.7276 SOL in an hour**, every position closed to a zero balance, holds of 58 /
+26 / 32 / 43 seconds against the corpus median of 45 s.
+
+**This sample is unbiased in the one way that matters.** `accountTrade` reports *every* trade by
+the subscribed wallet, so losers cannot be hidden from it — and no `metered_stale` alarm fired,
+so there is no silent gap in which losses could have gone unrecorded. That is a different and
+much stronger position than the survivorship traps this repo keeps finding elsewhere.
+
+**It is still n = 4, over one hour, on vendor-rounded floats, with fees excluded.** Four
+consecutive winners is entirely achievable by luck, and nothing here establishes an edge — only
+that in this hour he did not lose. What it does establish firmly is the *shape*: he takes
+1.4–2.6 SOL positions into brand-new coins and is flat again inside a minute.
 
 What it establishes: he snipes **brand-new bonding-curve launches within seconds** and exits
 inside a minute. All 5 of his captured rows are `pool: "pump"` (bonding curve), while all four
@@ -375,7 +401,9 @@ there turned out to be a 161-wallet crowd, not a person).
 
 ## 6. Limits
 
-* **§4 is n = 1**, live, and on vendor floats.
+* **§4.1 is n = 4 round trips over one hour**, on vendor floats, fees excluded. Four consecutive
+  winners is well within luck. The sample cannot hide losses (accountTrade reports every trade,
+  and no `metered_stale` alarm fired) but it is far too small to claim an edge.
 * **The corpus ends 2026-08-14**; today is covered only by the live firehose tape. Two sources,
   adjacent windows.
 * **Counts in §3 are token-balance touches**, not classified buys/sells — a transaction
