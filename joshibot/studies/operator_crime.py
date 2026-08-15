@@ -79,11 +79,18 @@ the ledger costs.
 ``graph``    sniper reuse vs a degree-preserving null; custody components; known entities
 ``predict``  the headline: coin-birth features vs operator history, temporal split
 ``screen``   the birth-time CLEAN screen and its operating point
+``risks``    cause-specific cumulative incidence: rip vs graduation, clock-censored
 ``tape``     per-trade tapes for the four cheap discriminators
 ``verify``   falsify the price identity against the boards tape's virtual reserves
 
 Invocation is always ``uv run --group research python -m studies.operator_crime <cmd>``.
 Nothing here touches the network, signs anything, or reads the live sentinel's state.
+
+The four cheap discriminators (compression distance, Benford, Lomb-Scargle, size-vs-impact)
+live in :mod:`studies.operator_crime_discriminators`, which consumes ``tape`` and ``cohort``.
+They are a separate module because they are a separate question -- this one asks who did it,
+that one asks whether the tape itself carries a machine's fingerprint -- and three of the four
+came back null. See ``RESULT_operator_crime.md`` §7.2.
 """
 
 from __future__ import annotations
@@ -639,6 +646,17 @@ cb AS (
   FROM read_parquet('{ledger}') l JOIN coh c
     ON l.mint = c.mint AND l.owner = c.curve_owner
 )
+-- **A ROW HERE IS A LEG, NOT A TRADE, and a consumer that forgets it misstates ~5% of its
+-- sizes.** 5.05% of curve transactions carry 2-20 rows sharing one `curve_bal_after` -- one
+-- per owner whose balance moved. The tape keeps them separate because `owner` is the whole
+-- point of the artifact and aggregating would destroy it, so the obligation is on the reader:
+--
+--     trade size q := sum(delta_raw) OVER (mint, block_slot, tx_index)
+--
+-- The evidence that this is the right unit rather than a preference: the chain identity
+-- `curve_bal_after[i] + q[i] == curve_bal_after[i-1]` fails 20.2% of the time per row and
+-- 3.9% per transaction. `studies/operator_crime_discriminators.py` aggregates on load.
+--
 -- INNER join, deliberately. A trade with no curve leg in the same transaction is a trade the
 -- curve was not a party to: a wallet-to-wallet transfer, or -- overwhelmingly -- a PumpSwap
 -- trade after the coin migrated, where the pool and not the curve holds the reserves. 81% of
