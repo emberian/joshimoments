@@ -60,8 +60,10 @@ Two things that were not in the brief and matter more than parts of it:
    85 SOL threshold with an IQR of [65, 101] — a hump, where a fixed protocol constant has to
    be a spike. The cause was the create transaction: the curve's net token delta on that row
    is `supply − dev_buy`, which biased every price on every coin and, through the sign filter,
-   **silently deleted every dev buy in the corpus**. Fixed, the distribution has a hard left
-   edge at 85 SOL with 91.1% of graduated coins at or above it. §1.3.
+   **silently deleted every dev buy in the corpus**. Fixed, the reconstructed graduation raise
+   reads **85.01 SOL at the 25th, 50th and 75th percentiles** and the reserved pool supply
+   reads **20.7% of opening = 206.9e6 tokens** — two protocol constants, four significant
+   figures, off token balances alone. §1.3.
 2. **A live duel, at one-second resolution, with wallet identities** — twenty `catwifglasses`
    branches on 2026-08-15, the original peaking at 17:19:31Z and falling 89% in eight minutes,
    with three derivative launches inside twelve minutes of the top. The cascade that made it
@@ -121,26 +123,26 @@ Mints and owners are dictionary-encoded to int32 in the first pass. That is not 
 un-encoded slice is 127M rows of two base58 strings and spilled **52 GB** to temp on a 16 GB
 budget before being killed; encoded, the whole build fits in memory and runs in 65 seconds.
 
-### 1.3 The graduation cliff, and the bug it caught
+### 1.3 The graduation cliff, the bug it caught, and the residual it bounds
 
 The only external anchor this pricing has is the protocol's own constant. pump.fun completes a
-curve at exactly **85 SOL raised** — `v_tok` from 1.073e15 to 2.799e14, i.e. 793.1e6 tokens
-sold, which is the classic config's sellable supply to the lamport. So the reconstructed net
-SOL into the curve, for coins that graduated, has to be a **spike at 85** and not a hump
-anywhere else.
+curve at exactly **85 SOL raised**, reserving **206.9e6 tokens** for the pool — `v_tok` from
+1.073e15 to 2.799e14. So two numbers reconstructed from the tape have to reproduce two protocol
+constants, and they have to do it as a **spike**, not as a hump.
 
-The first build gave median **80.98 SOL**, IQR **[65.4, 101.3]**. That is a hump, and the
-operator's response to it — *"the fact that that number doesn't exactly reproduce the
-graduation cliff indicates we still have bugs don't we??"* — is the reason this section exists.
-There were two, and they were the same transaction:
+The first build gave a median raise of **80.98 SOL** with an IQR of **[65.4, 101.3]**. The
+operator's response to that — *"the fact that that number doesn't exactly reproduce the
+graduation cliff indicates we still have bugs don't we??"* — is why this section exists. **A
+5% miss on a hard protocol constant is a bug report, not a tolerance**, and there was a bug.
 
-**A pump.fun create writes the whole supply into the curve AND executes the dev buy in one
-transaction**, so the curve's *net* delta on that row is `supply − dev_buy`, not `supply`.
+**The create transaction.** A pump.fun create writes the whole supply into the curve **and**
+executes the dev buy in one transaction, so the curve's *net* token delta on that row is
+`supply − dev_buy`, not `supply`. Two failures followed from taking that net at face value:
 
-1. `bal0 = max(cumulative sum)` therefore understates the opening balance by whatever part of
-   the dev buy is never sold back, which shifts `OFFSET` and biases **every price on the coin**.
-   The smear is directly visible: `bal0/1e15` piles up at 1.0000 and then trails 0.9999,
-   0.9998, 0.9997 — one bucket per dev-buy size.
+1. `bal0 = max(cumulative sum)` understates the opening balance by whatever part of the dev buy
+   is never sold back, which shifts `OFFSET` and biases **every price on the coin**. The smear
+   is directly visible: `bal0/1e15` piles up at 1.0000 and then trails 0.9999, 0.9998, 0.9997 —
+   one bucket per dev-buy size.
 2. On that first row `bal_before = bal_after − cp_delta` evaluates to ≈0, so `v_tok_before` is
    the bare offset, the implied SOL leg comes out large and **negative** against a positive
    token leg, and the sign filter **silently deleted every dev buy in the corpus**.
@@ -148,24 +150,35 @@ transaction**, so the curve's *net* delta on that row is `supply − dev_buy`, n
 Both are fixed by reconstructing the gross opening balance from the transaction's own legs
 (`bal0_gross = bal_after(first tx) + Σ trader deltas in that tx`) and using
 `v_tok_before = V_TOK_VIRT` on the create, which is what it is by definition. After the fix
-`bal0` snaps to exactly 1.0000 for **31,473 of 36,651** (mint, counterparty) pairs, and the
-raise distribution has a hard left edge:
+`bal0` snaps to exactly 1.0000 for **31,473 of 36,651** (mint, counterparty) pairs.
 
-| net curve SOL for graduated coins | before | after |
-|---|---|---|
-| median | 80.98 | **119.9** |
-| share below 85 SOL | — | **8.9%** |
-| modal 2.5-SOL bin | broad 70–130 | **[85.0, 87.5)** |
+**And then the check passes, exactly.** On 1,975 graduated coins with ≥50 curve trades, the
+endpoint identity `K·(1/v_final − 1/v_initial)` reads:
 
-The mass **above** 85 is post-migration contamination on coins where the pool was never
-identified as a separate counterparty, so their pool trades keep getting priced on the curve
-route; it is bounded, explainable, and does not affect the left edge. The left edge is the
-check, and it now reproduces a protocol constant nobody fed the estimator. Every SOL number in
-this document is from the post-fix tape.
+| | |
+|---|---|
+| reconstructed raise, **q25 / q50 / q75** | **85.01 / 85.01 / 85.01 SOL** |
+| curve balance left at graduation, median | **20.7% of opening** = 206.9e6 tokens |
 
-**The general lesson, which is cheap and was nearly skipped: an instrument check that lands
-*near* the right answer is not a passing check.** A 5% miss on a quantity that is a hard
-protocol constant is a bug report, not a tolerance.
+**Two protocol constants, four significant figures, flat across the interquartile range.** That
+is the cliff. The pricing identity is correct and the offsets are correct.
+
+**The residual, measured rather than assumed.** The *path sum* — adding up the per-trade SOL
+legs — does **not** equal the endpoint identity for every coin: the ratio runs 1.000 at p10,
+1.002 at p25, **1.238 at the median**, 1.90 at p90. A signed path sum telescopes exactly when
+no step is missing, so the excess is the SOL of steps this tape drops: transactions filtered by
+the sign guard (0.44% of legs), by the 30%-of-supply migration guard, by `n_cp_legs > 1`, and
+curve movements carrying no trader leg at all. Each dropped **buy** leaves a gap that the
+following trades price from the true balance, so the sum runs high.
+
+**What that does and does not affect, quantified:** the gap is **3.18% of gross SOL volume** at
+the median. It looks large as a ratio only because it is being compared to a *net* raise — 85
+SOL of net accumulation out of hundreds of SOL of gross churn — and **no conclusion in this
+document rests on a net SOL quantity.** `eta`'s numerator is gross volume (accurate to ~3%,
+and a common scale factor cannot change a monotone ranking across deciles); the drain shares,
+the rotation buy share and the wiggle statistics are SOL-over-SOL or log-price quantities in
+which the factor cancels exactly. It is recorded as an open defect rather than hidden, and the
+fix is to price the dropped steps rather than to drop them.
 
 ---
 
@@ -952,6 +965,10 @@ apart, with exponential backoff.
 
 1. **The PvP score is largely age** (§3.4). Within-band univariate AUC is 0.485–0.560. Every
    marginal number in §3.2 should be read with that beside it.
+1b. **The per-trade path sum over-counts net SOL by a median 24%** (§1.3), which is 3.18% of
+   gross volume. Every conclusion here uses gross SOL, SOL-over-SOL ratios, or log price, so
+   the defect is bounded and does not move a sign — but it is a defect and the fix is to price
+   the dropped steps.
 2. **The transition null is resolution-limited** (§6). A lead shorter than 30 minutes is
    invisible by construction. This is the limit most likely to change a verdict.
 3. **The wiggle result is an ORACLE ceiling** (§5). The filter turns at exact extremes. This
