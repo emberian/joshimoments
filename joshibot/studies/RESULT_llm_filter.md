@@ -1,7 +1,7 @@
 # RESULT: the LLM glance costs 40 seconds and half a cent, and on this cohort it knows nothing
 
-2026-08-15. `studies/llm_filter.py` over `state/boards/`, six screening arms, 945 model
-calls, **$3.19 measured spend**. The question was whether an LLM's few-second look at a
+2026-08-15. `studies/llm_filter.py` over `state/boards/`, eight screening arms, **1,150 coin
+judgements in 1,166 model calls, $4.74 measured spend** (the CLI reports its own cost). The question was whether an LLM's few-second look at a
 coin — name, description, image, socials, the vibe — carries information that five numeric
 comparisons do not. On the cohort we can actually evaluate, it does not, and the
 content-free control scores *better* than the sighted one.
@@ -76,9 +76,47 @@ and the p90 balloons past 100 s under sustained load.
 - The scalper holds for 180–420 s (`shitcoims_scalper.policy.JitterRanges`). A 40 s decision
   latency **consumes 10–22% of the intended hold before the position is even opened**.
 
-So the LLM cannot be a first-stage screen. It is at best a **second-stage filter over
-candidates a cheap filter has already cut by ≥4.4×** — and a second stage is only worth 40 s
-and half a cent if it adds information. The rest of this report is about whether it does.
+### Batching demolishes the cost ceiling and does not fix the latency one
+
+The per-call preamble is fixed, so at batch 1 the overhead *is* the cost. Putting N coins in one
+call with an array schema, measured single-threaded (`--stage batch`, no concurrency at all):
+
+| coins/call | coins/min | $/coin | tokens/coin | ids returned | ρ vs the single-call score |
+|---|---|---|---|---|---|
+| 1 | 1.4 | $0.00483 | 12,470 | 100% | — |
+| 5 | 6.7 | $0.00118 | 3,198 | 87% | 0.567 |
+| 10 | 12.3 | $0.00064 | 1,678 | 93% | 0.657 |
+| **25** | **28.0** | **$0.00023** | **525** | 87% | 0.537 |
+| 50 | 35.9 | $0.00016 | 348 | 78% | 0.536 |
+
+**Batch 25 is 20× the throughput and 21× the cost efficiency of batch 1, on one worker.** The
+full 189-coin cohort screens in **8 calls, $0.045, 409 s single-threaded** — against $1.06 and
+ten concurrent workers unbatched, a **24× cost reduction**. Combined with ten workers it would
+clear 280 coins/min, far above both the 15/min arrival rate and the 59.7/min board-entry rate.
+The cost objection to an LLM screen is *not real*; it is an artifact of calling it one coin at a
+time.
+
+Two things batching does not fix, and one it breaks:
+
+- **Latency is unchanged.** A batch-25 call still takes ~52 s, so an individual coin's verdict
+  is no fresher. Batching buys throughput, not freshness, and freshness is what a 180–420 s hold
+  needs.
+- **It silently drops coins.** At batch 50 only **78%** of requested ids came back; at 25, 87% in
+  the sampled probe (the ordered full-cohort run happened to return all 189). A screen that
+  omits a fifth of its candidates without saying so is a correctness bug, and `screen_batched`
+  records an omission as an **error**, never an imputed 0.5.
+- **It changes the answer.** Rank correlation between a coin's batched score and its single-call
+  score is only **0.54–0.66**. Judged alone, a coin is scored against the model's prior; judged
+  in a list of 25, against its accidental neighbours. Roughly half the ranking is batch context.
+
+That last point could have cut either way — the single-call judgement turned out to carry no
+information, so a *different* answer might have been a better one. It was not: see the batch arms
+in §5.
+
+So the LLM cannot be a first-stage screen on **latency** grounds, and batching does not rescue
+that. It is at best a **second-stage filter over candidates a cheap filter has already cut** —
+and a second stage is only worth 40–52 s if it adds information. The rest of this report is about
+whether it does.
 
 ---
 
@@ -205,6 +243,8 @@ AUC of the selector you would actually run (top half by signal; threshold report
 | **blind** — verdict | no | 189 | 0% | **+0.152** | 0.036 | 0.579 (thr 0.070) | 0.140 |
 | **probfull** — P(up) | yes | 184 (5 err) | 1% | **+0.040** | 0.603 | 0.503 (thr 0.340) | 0.937 |
 | **probblind** — P(up) | no | 189 | 3% | **+0.227** | **0.0016** | 0.634 (thr 0.380) | 0.0082 |
+| **batchfull** — 25/call | yes | 189 | 24% | **−0.004** | 0.949 | 0.500 (thr 0.430) | 1.000 |
+| **batchblind** — 25/call | no | 189 | 33% | **+0.065** | 0.371 | 0.548 (thr 0.430) | 0.263 |
 | *baseline, for reference* | — | 189 | 44% | +0.321 | 0.0005 | 0.623 | 0.0025 |
 
 **Every sighted arm is indistinguishable from zero. Both blind arms are not.**
@@ -217,6 +257,35 @@ the degenerate verdict, produced 18 distinct values spanning 0.12–0.57 and a c
 Meanwhile the arm **forbidden to see the name, description, image and socials** reached
 Spearman **+0.227 (p=0.0016)** and AUC **0.634 (p=0.0082)** — nominally matching the drawdown
 baseline. That inversion is the result of this study, and §6 is about whether it survives.
+
+**Batching is what finally broke the degenerate verdict, and it changed nothing.** Judged 25 at
+a time the model stops refusing: buy rates of 24% and 33%, **52–54 distinct signal values**
+spanning 0.08–0.78, against 18–22 values in a compressed 0.12–0.62 band when judged alone. Forced
+to rank coins against each other it produces a well-spread, well-behaved score — and that score's
+correlation with the 8 h outcome is **−0.004** sighted and **+0.065** blind. The contrast problem
+and the information problem were separate problems, and only the first one was ever fixable.
+
+### Replication on a cohort the model was actually built to judge
+
+The obvious objection to everything above is §3's: the 8 h cohort is 88% graduated, median 15
+days old, and the model *said so*. So the probability framing was re-run at the **1 h horizon**
+on a seeded uniform draw of 189 from the 606-mint deduplicated population — median age 3.3 days,
+median $34k market cap, **25% of it under an hour old**, t0 spanning 8.9 h instead of 2.0 h.
+
+Baseline on that cohort (threshold 50% off ATH): p(up) gap +7.3 pp (p=0.341), **AUC 0.615
+(p=0.0059)**, **Spearman(−drawdown, return) +0.330 (p=0.0001)**. Same strength, different
+population. The strongest single unfitted column here is not market cap but **age** (rankscore
+0.323, p=0.0004) — younger is better — with drawdown second at 0.335.
+
+| arm (1 h horizon) | sees content | usable n | Spearman | p | ρ \| drawdown | p | top-half AUC | p |
+|---|---|---|---|---|---|---|---|---|
+| **probfull** | yes | 183 (6 err) | **−0.116** | 0.124 | −0.101 | 0.184 | 0.506 (thr 0.320) | 0.872 |
+
+**The sighted arm is negative on the representative cohort too.** Not significantly so, but the
+point estimate is on the wrong side of zero at both horizons, on two disjoint cohorts, in both
+framings. Grok again refused to buy anything (0 of 183), this time on coins that genuinely are
+fresh launches — so the degenerate verdict was not, after all, a correct read of a bad cohort.
+It is just what this model does when asked to buy a memecoin.
 
 ---
 
@@ -259,7 +328,9 @@ anything *beyond* them. Partialling the incumbent's own columns out of the rank 
 |---|---|---|---|---|---|---|
 | blind (verdict) | +0.152 | 0.036 | **−0.005** | 0.946 | +0.145 | 0.046 |
 | **probblind** | **+0.227** | **0.0016** | **+0.102** | **0.164** | **+0.086** | 0.243 |
+| batchblind | +0.065 | 0.371 | −0.030 | 0.685 | −0.055 | 0.449 |
 | probfull | +0.040 | 0.603 | +0.021 | 0.795 | −0.104 | 0.160 |
+| batchfull | −0.004 | 0.949 | −0.058 | 0.433 | −0.159 | 0.030 |
 | full | −0.001 | 0.984 | −0.108 | 0.140 | −0.021 | 0.776 |
 
 **Control for drawdown and the best arm in the study drops from +0.227 (p=0.0016) to +0.102
@@ -276,11 +347,12 @@ day, and it is damning anyway: the sighted arm's p(up) gap is **+17.3 pp in the 
 −25.7 pp in the late half**. A signal that reverses sign across a 2-hour window is noise with a
 story attached.
 
-**Trials accounting (§3.9).** Six arms × four reported statistics = 24 tests, and the arms were
+**Trials accounting (§3.9).** Eight arms × four reported statistics = 32 tests, and the arms were
 not pre-registered — the probability framing was added *after* the verdict framing came back
 degenerate, and the 1 h horizon was added after the 8 h cohort turned out to be unrepresentative.
-Bonferroni for family-wise 5% is **p < 0.0021**. `probblind`'s raw ρ (p=0.0016) clears it; every
-partial correlation, every sighted arm, and every AUC does not. **The only result that survives
+Bonferroni for family-wise 5% is **p < 0.0016**. `probblind`'s raw ρ (p=0.0016) sits exactly *on* it and
+clears nothing with room to spare; every partial correlation, every sighted arm, every batch arm
+and every AUC misses it outright. **The only result that survives
 both the correction and the drawdown control is that there is no result.** The baseline is
 exempt: it was published before this study and is the thing being tested against.
 
@@ -298,8 +370,14 @@ useless.** Three claims, in decreasing order of confidence:
 2. **The best arm was re-deriving drawdown.** `probblind` reached ρ=+0.227 (p=0.0016) on numbers
    alone, then fell to **+0.102 (p=0.164)** with drawdown partialled out and **+0.086 (p=0.243)**
    with market cap partialled out. Nothing survives past the incumbent's own columns.
-3. **No arm beat the baseline on any statistic.** Best AUC 0.634 versus 0.623 — a difference of
-   0.011, inside the noise, and gone under the partials. Best Spearman +0.227 versus +0.321.
+3. **No arm beat the baseline on any statistic, at either horizon.** Best AUC 0.634 versus
+   0.623 — a difference of 0.011, inside the noise, and gone under the partials. Best Spearman
+   +0.227 versus +0.321. On the younger 1 h cohort the sighted arm is **−0.116** against a
+   baseline of **+0.330**.
+
+The point estimate for the sighted LLM is on the **wrong side of zero** at both horizons, on two
+disjoint cohorts, in both framings. That is four independent chances to show a positive sign and
+it took none of them.
 
 And the cost of not beating it: **40 s and $0.005 per coin**, a 13.6 calls/min ceiling below the
 arrival rate, and 10–22% of the intended hold spent waiting for the verdict.
@@ -319,25 +397,28 @@ policy — and it is the study's best argument for §8.1 over any amount of prom
 
 Listed in order of how much they threaten the conclusion.
 
-1. **A cohort the model was built to judge.** The decisive weakness is §3's finding: 8 h
-   evaluability selects for 15-day-old graduated coins. A vibe judgement plausibly matters most
-   for a 90-second-old launch with a picture and a name and nothing else — and those coins are
-   almost entirely absent here (8 of 189). The two 1 h-horizon arms in this study
-   (`--horizon 3600`, 25% of the cohort under an hour old) are the first step; a proper answer
-   needs entry-time screening on the live feed, where age is not selected on at all.
-2. **The image.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
-   a single picture. "Glancing at the chart and the vibe" is substantially a *visual* act and
-   this study did not test it. This is the largest thing left undone and it is not cheap to fix
-   at 40 s/call.
-3. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for
-   the LLM, and `RESULT_board_entry.md` already flags it.
+1. **The image.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
+   a single picture. "Glancing at the coin and the vibe" is substantially a *visual* act and this
+   study did not test it — it tested whether an LLM can read a filename. This is the largest
+   thing left undone, it is the one that could genuinely overturn the conclusion, and it is not
+   cheap: image tokens on top of 40 s/call.
+2. **Entry-time screening on the live feed.** The 1 h replication weakened the cohort objection
+   but did not remove it: any horizon that requires an observed forward return still conditions
+   on survival-in-view. Only screening at the moment of arrival, with the outcome collected
+   afterwards, removes age from the selection entirely. That is a collector change, not a study.
+3. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for the
+   LLM, and `RESULT_board_entry.md` already flags it.
 4. **Power.** n=189 is what the 8 h horizon leaves after entity dedup — a property of the data,
    not the budget. The null band on the p(up) gap is ±14 pp. A weak-but-real edge of 5 pp is
-   undetectable here and this study cannot rule one out.
-5. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two
-   framings were tried and the second was a reaction to the first. But the content-free control
-   argues the ceiling is low — the model's answers barely moved when the content was removed, so
-   prompt work on the content is polishing a channel that carries ~0.01 of signal.
+   undetectable here and this study cannot rule one out. What it *can* rule out is an edge large
+   enough to be worth 40 s and half a cent.
+5. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two framings
+   were tried and the second was a reaction to the first. But the paired arm test argues the
+   ceiling is *below zero*, not merely low — the content channel measurably degraded the ranking
+   (p=0.0008), so prompt work on the content is polishing a channel that is subtracting.
+6. **A different model.** Only `grok-4.6` at `--reasoning-effort low` was tested. `grok-4.5` and
+   the Claude path are both one flag / one class away and neither was tried; the finding is about
+   this model, on this cohort, at this effort setting.
 
 ## 9. Caveats
 
@@ -350,7 +431,12 @@ Listed in order of how much they threaten the conclusion.
 - **5 of 189 probfull calls returned no structured output** and are excluded, not imputed.
 - **`grok -p` is nondeterministic and unversioned against us.** Re-running will not reproduce
   these verdicts exactly. The decision logs in `.cache/llm_filter/` are the record.
-- **Total spend $3.19 across 945 calls**, under a $1.80-per-arm cap enforced in the harness.
+- **Total spend $4.74 across 1,166 calls**, under a $1.80-per-arm cap enforced in the harness.
+  The batch arms cost $0.10 of that and covered the same 378 judgements as $1.40 of unbatched
+  ones.
+- **Batching was added mid-study**, after the operator asked whether it had been tried. It had
+  not been, and it should have been from the start — it is the difference between "an LLM screen
+  is unaffordable" and "an LLM screen is affordable and useless".
 
 ## 10. Reproducing
 
@@ -360,7 +446,10 @@ python studies/llm_filter.py --stage cohort                   # tape -> 189 mint
 python studies/llm_filter.py --stage meta                     # immutable metadata only
 python studies/llm_filter.py --stage screen --arm full  --backend grok --max-usd 1.80
 python studies/llm_filter.py --stage screen --arm blind --backend grok --max-usd 1.80
+python studies/llm_filter.py --stage screen --arm batchfull --batch 25 --backend grok
+python studies/llm_filter.py --stage batch  --arm probblind         # throughput curve
 python studies/llm_filter.py --stage score
+python studies/llm_filter.py --stage score --horizon 3600
 ```
 
 `--backend stub` runs the whole pipeline with zero spend and must report nothing; that is the

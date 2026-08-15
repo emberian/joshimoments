@@ -69,6 +69,7 @@ import shutil
 import statistics as st
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -141,12 +142,194 @@ PROB_SCHEMA = {
 }
 
 PROB_ARMS = ("probfull", "probblind")
-ALL_ARMS = ("full", "blind", "probfull", "probblind")
+# The batch arms ask the same probability question with N coins in one call. They
+# exist because batching is the ONLY lever that moves the throughput ceiling by an
+# order of magnitude, and a lever that changes the answer is not a free one — so
+# they are scored as arms, against the same outcomes, not just timed.
+BATCH_ARMS = ("batchfull", "batchblind", "tastefull", "tastepick", "colourfull")
+ALL_ARMS = ("full", "blind", "probfull", "probblind", "batchfull", "batchblind",
+            "tastefull", "tastepick", "colourfull")
+
+# THE COLOUR ARM — the operator's idea, and the only elicitation here that does not
+# impose a scale at all.
+#
+# Every other arm hands the model an axis we invented (probability of up, 0-100
+# conviction, buy/skip) and then measures along it. If the model's judgement does
+# not decompose onto our axis, that failure is indistinguishable from having no
+# judgement. A palette has no axis: the labels are arbitrary, unordered, and carry
+# no instruction about what "good" means.
+#
+# So we never order them. The test asks only whether the model's own partition of
+# the coins separates the outcomes AT ALL -- a rank-based between-group statistic
+# with a shuffled-label null. If some colour reliably lands on coins that run, that
+# is the vibe channel showing up without us having named it. If the partition is
+# outcome-independent, no scale we chose was ever the problem.
+PALETTE = ("crimson", "amber", "gold", "emerald", "teal", "azure",
+           "indigo", "violet", "magenta", "slate")
+
+COLOUR_RULES = (
+    "You are looking at {n} Solana memecoins that just hit a pump.fun trending board. "
+    "Do not analyse them and do not rate them. Just tell me what COLOUR each one is.\n\n"
+    "Use only these words: " + ", ".join(PALETTE) + ".\n\n"
+    "There is no right answer and no scale -- these colours are not ranked and none of "
+    "them means good or bad. Go on feel: the name, the joke, the description, the shape "
+    "it is in. Give the most vivid colour you actually sense in each coin, and use the "
+    "whole palette rather than defaulting to a couple of them.\n\n"
+    "Reply with one line per coin and nothing else, in this exact form:\n"
+    "0 crimson\n1 slate\n2 gold\n"
+)
+
+
+def parse_colours(text: str) -> dict[int, str]:
+    """`12 azure` per line. Anything else is ignored rather than guessed at."""
+    out: dict[int, str] = {}
+    for line in text.splitlines():
+        m = re.match(r"\s*\[?(\d+)\]?[\s:.\-]+([a-zA-Z]+)\s*$", line.strip())
+        if m and m.group(2).lower() in PALETTE:
+            out[int(m.group(1))] = m.group(2).lower()
+    return out
+
+
+def kruskal_between(groups: Sequence[Sequence[float]]) -> float:
+    """Between-group spread of MEAN RANKS. Larger = the partition separates outcomes.
+
+    Rank-based so the heavy return tail cannot manufacture it, and deliberately
+    unnormalised -- it is only ever compared against its own permutation null, so
+    the constant does not matter and a chi-square approximation is not needed.
+    """
+    allv = sorted(v for g in groups for v in g)
+    rk = {}
+    i = 0
+    while i < len(allv):
+        j = i
+        while j + 1 < len(allv) and allv[j + 1] == allv[i]:
+            j += 1
+        rk[allv[i]] = (i + j) / 2.0 + 1.0
+        i = j + 1
+    n = len(allv)
+    if n < 2:
+        return 0.0
+    grand = (n + 1) / 2.0
+    return sum(len(g) * ((sum(rk[v] for v in g) / len(g)) - grand) ** 2
+               for g in groups if g) / n
+
+# THE PROMPT WAS PART OF THE EXPERIMENT AND THE FIRST VERSION WAS BAD.
+# Two defects, both ours, both plausible causes of the degenerate verdict:
+#   1. PROB_RULES/SYSTEM_RULES tell the model "Most of these coins go to zero"
+#      before asking it to judge. That is priming the answer, not eliciting it.
+#   2. Every arm ran at --reasoning-effort low with a bare-number schema, so the
+#      model had no room to look at anything before committing to a figure.
+# "Will this run" is a taste judgement, and we asked for it in a form that admits
+# no taste. This arm removes the prior, raises the effort, gives the model a
+# free-text `take` field to think in before it scores, and asks for an integer
+# 0-100 rank rather than a probability -- a scale people actually have taste on.
+# It is batched, because batching is what produced spread in the first place and
+# is cheap enough that testing our own prompt is not a budget decision.
+TASTE_RULES = (
+    "You are a degen memecoin trader with good instincts and real money on the line. "
+    "You are looking at coins that just hit a pump.fun trending board. You know what a "
+    "coin that is about to run looks like and what a dead one looks like -- the name, "
+    "the joke, whether the description sounds like a person or a template, whether "
+    "anyone is talking, where it is in its own move. Trust that. "
+    "For each coin give a `take` (a short, blunt, honest read -- what you actually "
+    "notice) and a `score` from 0 to 100: how much you would want to be long it for the "
+    "next eight hours, where 0 is 'this is over' and 100 is 'I am buying this right now'. "
+    "SPREAD YOUR SCORES. Rank them against each other. If you give everything the same "
+    "number you have told me nothing. Some of these will run and some will not; your job "
+    "is to tell them apart, not to tell me memecoins are risky. "
+    "Answer with strict JSON only: a `verdicts` array of {id, score, take}, every id present."
+)
+
+# THE PICK ARM — the operator's design, and the closest thing here to the actual
+# human behaviour being modelled. Every arm above forces a judgement on EVERY coin:
+# a probability, a score, a verdict. That is not what clicking through a callout
+# feed is. The human looks at fifty things and picks three, and says nothing at all
+# about the other forty-seven.
+#
+# Three defects it fixes at once:
+#   * No forced opinion. Silence is a legitimate answer, so a coin the model has
+#     nothing to say about no longer drags a manufactured 0.31 into the ranking.
+#   * No output schema. Constrained decoding is dropped entirely -- the model
+#     writes prose and we parse one line out of it. If overconstraining was what
+#     flattened the earlier arms, this is where that shows.
+#   * Omission stops being an error and becomes the SIGNAL. The batch arms had to
+#     treat a missing id as a bug; here not-mentioned means not-picked, which is a
+#     complete and well-defined selector with no missingness at all.
+#
+# The selection RATE is then the model's own choice and is itself a result: a
+# screen that picks 45 of 50 is not screening, and one that picks 0 is the off
+# switch again.
+PICK_RULES = (
+    "You are a degen memecoin trader with good instincts and real money on the line. "
+    "Below are {n} coins that just hit a pump.fun trending board. You know what a coin "
+    "that is about to run looks like and what a dead one looks like -- the name, the "
+    "joke, whether the description sounds like a person or a template, whether anyone "
+    "is talking, where it is in its own move. Trust that.\n\n"
+    "Tell me which ones you would ACTUALLY BUY and hold for the next eight hours. "
+    "Pick as many or as few as you genuinely mean -- three, ten, one, none. Do not pick "
+    "something to fill a quota and do not pass on everything to be safe.\n\n"
+    "Start your reply with exactly one line in this form and nothing else on it:\n"
+    "PICKS: 3, 17, 42\n"
+    "(or `PICKS: none`). After that line, say whatever you want about why."
+)
+
+
+def parse_picks(text: str, n: int) -> set[int] | None:
+    """Pull the ids out of a free-form reply. None means the reply was unusable.
+
+    Deliberately strict: the PICKS line or nothing. Scavenging stray integers out
+    of the prose would silently invent selections out of a model that was chatting,
+    and a selector built from a parser's guesses is not a selector.
+    """
+    # Anywhere in the reply, not just at a line start: the harness concatenates its
+    # thinking with the answer, so the marker legitimately lands mid-line
+    # ("...a live catalyst.PICKS: none"). Requiring column zero read that as a
+    # parse failure and threw away a real verdict.
+    m = re.search(r"PICKS\s*:\s*([^\n]*)", text, re.I)
+    if not m:
+        return None
+    body = m.group(1).strip()
+    if not body or re.match(r"none\b", body, re.I):
+        return set()   # an empty selection is an ANSWER, not a failure
+    got = {int(x) for x in re.findall(r"\d+", body)}
+    return {i for i in got if 0 <= i < n}
+
+
+TASTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "take": {"type": "string"},
+                },
+                "required": ["id", "score", "take"],
+            },
+        }
+    },
+    "required": ["verdicts"],
+}
 
 
 def base_arm(arm: str) -> str:
-    """'probfull' -> 'full'. The prompt body is shared; only the ask differs."""
-    return arm[4:] if arm.startswith("prob") else arm
+    """Which FEATURE SET an arm sees: 'full' (with content) or 'blind' (numbers only).
+
+    Only the ask differs between framings; the prompt body is shared. This was
+    briefly wrong and it mattered: the taste and colour arms fell through to their
+    own names, so they rendered the BLIND body and were asked for a vibe judgement
+    on a table of numbers with no name, description or image in it. The model said
+    so in its reply ("the board feed only has metrics") — which is the only reason
+    it was caught.
+    """
+    for pre in ("prob", "batch", "taste", "colour"):
+        if arm.startswith(pre):
+            rest = arm[len(pre):]
+            return "blind" if rest == "blind" else "full"
+    return arm
 
 
 # --------------------------------------------------------------------------
@@ -437,12 +620,17 @@ class GrokCLIBackend:
     )
 
     def __init__(self, *, binary: str | None = None, model: str | None = None,
-                 effort: str = "low", cwd: str | None = None, timeout_s: float = 300.0) -> None:
+                 effort: str = "low", cwd: str | None = None, timeout_s: float = 900.0) -> None:
         self.binary = binary or shutil.which("grok") or str(Path.home() / ".grok" / "bin" / "grok")
         self.model = model
         self.effort = effort
         self.timeout_s = timeout_s
-        self.cwd = cwd or str(CACHE / "grokhome")
+        # An EMPTY directory, and deliberately not inside .cache/llm_filter: grok is
+        # an agent and it will look around. Pointed at the cache it announced it was
+        # going to read "prior decision logs and a cohort file" — i.e. this study's
+        # own answers — which would have contaminated the arm silently if the reply
+        # had happened to parse.
+        self.cwd = cwd or str(Path(tempfile.gettempdir()) / "llm_filter_grokhome")
         Path(self.cwd).mkdir(parents=True, exist_ok=True)
 
     def judge(self, prompt: str, arm: str = "full") -> Judgement:
@@ -497,6 +685,139 @@ class GrokCLIBackend:
         conf = max(0.0, min(1.0, float(so.get("confidence", 0.5))))
         return Judgement(so["verdict"], conf, signal_from_verdict(so["verdict"], conf),
                          str(so.get("reason", ""))[:400], dt, cost, tin, tout, self.name)
+
+
+BATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "p_up": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                },
+                "required": ["id", "p_up"],
+            },
+        }
+    },
+    "required": ["verdicts"],
+}
+
+
+def render_batch_prompt(rows: Sequence[dict[str, Any]],
+                        meta: dict[str, dict[str, Any]], arm: str) -> str:
+    """N coins in one call. The reason to want this, and the reason to distrust it.
+
+    WANT: the CLI bills a ~15k-token system preamble on every invocation whatever
+    the prompt says, so at batch 1 the overhead IS the cost. Amortising it over 25
+    coins is the only lever that moves the throughput ceiling by an order of
+    magnitude, and the ceiling is what decides whether this can run at all.
+
+    DISTRUST: it changes the task. Judged alone, a coin is scored against the
+    model's prior; judged in a list of 25, it is scored against its neighbours,
+    and the neighbours are an accident of batching. The scores also stop being
+    independent — one confident opinion at the top of the list can anchor the
+    rest. `--stage batch` therefore measures BOTH the speedup and the rank
+    agreement with the single-call answers on the same coins, because a batched
+    number that disagrees with the unbatched one is cheaper at doing something else.
+    """
+    body = []
+    for i, row in enumerate(rows):
+        m = meta.get(row["mint"], {})
+        bits = [f"age {_fmt_num(row['age_s'], 's')}",
+                f"last trade {_fmt_num(row['trade_recency_s'], 's')} ago",
+                f"mcap ${_fmt_num(row['mc0_usd'])}",
+                f"{row['drawdown'] * 100:.0f}% off ATH",
+                f"{_fmt_num(row['sol_in_curve'], ' SOL', 1)} in curve",
+                f"{_fmt_num(row.get('reply_count'))} replies",
+                f"live={bool(row.get('is_currently_live'))}",
+                f"graduated={bool(row.get('complete'))}",
+                f"board={row['board']}#{row.get('rank')}"]
+        if base_arm(arm) == "full":
+            desc = (m.get("description") or "").strip().replace("\n", " ")[:200]
+            bits = [f"symbol {row.get('symbol')!r}", f"name {m.get('name')!r}",
+                    f"desc {desc!r}", f"image={'yes' if m.get('image_uri') else 'no'}",
+                    f"socials={'yes' if (m.get('twitter') or m.get('telegram')) else 'no'}"] + bits
+        body.append(f"[{i}] " + ", ".join(bits))
+    if arm == "colourfull":
+        return (COLOUR_RULES.format(n=len(rows)) + "\n\n" + "\n".join(body))
+    if arm == "tastepick":
+        return (PICK_RULES.format(n=len(rows)) + "\n\n" + "\n".join(body))
+    if arm == "tastefull":
+        return (TASTE_RULES + f"\n\nHere are {len(rows)} coins.\n\n"
+                + "\n".join(body) + "\n\nJSON only.")
+    return (PROB_RULES.replace("You will see one coin as it appears on a trending board.",
+                               f"You will see {len(rows)} coins, each with an id.")
+            .replace("Answer with strict JSON only: p_up in [0,1] and a one-sentence reason.",
+                     "Answer with strict JSON only: a `verdicts` array with one {id, p_up} "
+                     "per coin, every id present, no reasons.")
+            + "\n\n" + "\n".join(body) + "\n\nJSON only.")
+
+
+def grok_batch(be: "GrokCLIBackend", prompt: str,
+               arm: str = "batchfull") -> tuple[dict[int, float], Judgement]:
+    """One call, many verdicts. Returns {id: signal in [0,1]} plus cost/latency."""
+    taste = arm == "tastefull"
+    pick = arm == "tastepick"
+    colour = arm == "colourfull"
+    cmd = [be.binary, "-p", prompt, "--output-format", "json",
+           "--reasoning-effort", ("high" if (taste or pick) else be.effort),
+           # ONE turn. Without the schema the harness is free to act like an agent
+           # instead of answering, and it did: it narrated a plan to go read files
+           # and never emitted a verdict.
+           "--max-turns", "1", "--no-memory", "--verbatim",]
+    if not (pick or colour):   # these arms run UNCONSTRAINED: no schema, prose out
+        cmd += ["--json-schema", json.dumps(TASTE_SCHEMA if taste else BATCH_SCHEMA)]
+    cmd += [
+           "--cwd", be.cwd, "--disallowed-tools", be._DISALLOWED]
+    if be.model:
+        cmd += ["-m", be.model]
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=be.timeout_s)
+    except subprocess.TimeoutExpired:
+        return {}, Judgement("skip", 0.0, 0.5, "", time.monotonic() - t0, 0.0, 0, 0,
+                             be.name, error="timeout")
+    dt = time.monotonic() - t0
+    try:
+        d = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}, Judgement("skip", 0.0, 0.5, "", dt, 0.0, 0, 0, be.name,
+                             error=f"unparseable: {proc.stdout[-200:]}")
+    u = d.get("usage") or {}
+    j = Judgement("skip", 0.0, 0.5, "", dt, float(d.get("total_cost_usd") or 0.0),
+                  int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0), be.name)
+    out: dict[int, float] = {}
+    if colour:
+        cols = parse_colours(d.get("text") or "")
+        if not cols:
+            return {}, Judgement("skip", 0.0, 0.5, (d.get("text") or "")[:400], dt,
+                                 j.cost_usd, j.input_tokens, j.output_tokens, be.name,
+                                 error="no colour lines")
+        # Encode the LABEL as the payload; nothing downstream may treat it as ordered.
+        return ({i: float(PALETTE.index(c)) for i, c in cols.items()},
+                Judgement("skip", 0.0, 0.5, "", dt, j.cost_usd, j.input_tokens,
+                          j.output_tokens, be.name))
+    if pick:
+        # n is not known here, so accept any id and let the caller clamp.
+        picks = parse_picks(d.get("text") or "", 10_000)
+        if picks is None:
+            return {}, Judgement("skip", 0.0, 0.5, (d.get("text") or "")[:400], dt,
+                                 j.cost_usd, j.input_tokens, j.output_tokens, be.name,
+                                 error="no PICKS line")
+        j = Judgement("skip", 0.0, 0.5, (d.get("text") or "")[:600], dt, j.cost_usd,
+                      j.input_tokens, j.output_tokens, be.name)
+        return {i: 1.0 for i in picks}, j
+    so = d.get("structuredOutput") or _salvage_json(d.get("text") or "") or {}
+    for e in (so.get("verdicts") or []):
+        try:
+            v = float(e["score"]) / 100.0 if taste else float(e["p_up"])
+            out[int(e["id"])] = max(0.0, min(1.0, v))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out, j
 
 
 def _salvage_json(text: str) -> dict[str, Any] | None:
@@ -644,6 +965,99 @@ class ScreenStats:
             "wall_s": round(self.wall_s, 1),
             "calls_per_min": round(60.0 * self.calls / self.wall_s, 2) if self.wall_s else 0.0,
         }
+
+
+def screen_batched(cohort: list[dict[str, Any]], meta: dict[str, dict[str, Any]], *,
+                   arm: str, backend: "GrokCLIBackend", batch: int, max_usd: float,
+                   seed: int, out_path: Path) -> ScreenStats:
+    """Screen the cohort N coins per call, in cohort (time) order.
+
+    Ordered by t0 rather than shuffled on purpose: a live screen would batch
+    whatever arrived in the last few seconds, so its neighbours are contemporaries.
+    Shuffling would make the batch context artificially diverse and flatter the
+    method. A coin the model omits from its answer is recorded as an ERROR, not
+    imputed — silent omission is the failure mode that makes batching dangerous
+    and it must show up in the numbers.
+    """
+    policy = LLMFilterPolicy(policy_id=f"llm-glance-{arm}{batch}-v1", seed=seed)
+    stats = ScreenStats()
+    t_start = time.monotonic()
+    with out_path.open("a") as fh:
+        for start in range(0, len(cohort), batch):
+            if stats.cost_usd >= max_usd:
+                print(f"  !! cost cap ${max_usd:.2f} reached", flush=True)
+                break
+            rows = cohort[start:start + batch]
+            res, j = grok_batch(backend, render_batch_prompt(rows, meta, arm), arm)
+            stats.calls += 1
+            stats.cost_usd += j.cost_usd
+            stats.input_tokens += j.input_tokens
+            stats.output_tokens += j.output_tokens
+            stats.latencies.append(j.latency_s)
+            picking = arm == "tastepick"
+            colouring = arm == "colourfull"
+            for i, row in enumerate(rows):
+                p_up = res.get(i)
+                if colouring:
+                    lab = res.get(i)
+                    err = j.error or (None if lab is not None else "no colour")
+                    fx = {k: row.get(k) for k in ("age_s", "drawdown", "mc0_usd")}
+                    # A colour is not a preference, so the policy stays uninformative:
+                    # every coin gets the same coin-flip entry probability and a valid
+                    # propensity. The colour rides along as a LABEL, never as a score.
+                    d2 = policy.decide(mint=row["mint"], features=fx, verdict="skip",
+                                       confidence=0.0, now_unix=row["t0"], signal=0.5)
+                    fh.write(json.dumps({
+                        "mint": row["mint"], "arm": arm, "t0": row["t0"],
+                        "verdict": "skip", "confidence": 0.0, "signal": 0.5,
+                        "p_up": None,
+                        "colour": None if lab is None else PALETTE[int(lab)],
+                        "reason": "", "error": err, "batch": batch,
+                        "latency_s": round(j.latency_s / len(rows), 3),
+                        "cost_usd": j.cost_usd / len(rows),
+                        "input_tokens": j.input_tokens // len(rows),
+                        "output_tokens": j.output_tokens // len(rows),
+                        "prompt_sha256": "", "prompt_chars": 0,
+                        "decision": {"action": d2.action, "propensity": d2.propensity,
+                                     "p_enter": d2.p_enter, "explored": d2.explored},
+                        "propensity_record": to_propensity_record(d2).to_json(),
+                    }) + "\n")
+                    continue
+                if picking:
+                    # Not mentioned IS the decision. Only a failed parse is an error.
+                    p_up = 1.0 if i in res else 0.0
+                    err = j.error
+                else:
+                    err = j.error or (None if p_up is not None else "omitted from batch")
+                if err:
+                    stats.errors += 1
+                sig = 0.5 if p_up is None else p_up
+                feats = {k: row.get(k) for k in
+                         ("age_s", "trade_recency_s", "sol_in_curve", "drawdown", "mc0_usd",
+                          "reply_count", "is_currently_live", "complete", "rank", "board")}
+                d = policy.decide(mint=row["mint"], features=feats,
+                                  verdict="buy" if sig >= 0.5 else "skip",
+                                  confidence=abs(sig - 0.5) * 2, now_unix=row["t0"], signal=sig)
+                fh.write(json.dumps({
+                    "mint": row["mint"], "arm": arm, "t0": row["t0"],
+                    "verdict": "buy" if sig >= 0.5 else "skip",
+                    "confidence": abs(sig - 0.5) * 2, "signal": sig, "p_up": p_up,
+                    "reason": j.reason if arm == "tastepick" else "",
+                    "error": err, "batch": batch,
+                    "latency_s": round(j.latency_s / len(rows), 3),
+                    "cost_usd": j.cost_usd / len(rows),
+                    "input_tokens": j.input_tokens // len(rows),
+                    "output_tokens": j.output_tokens // len(rows),
+                    "prompt_sha256": "", "prompt_chars": 0,
+                    "decision": {"action": d.action, "propensity": d.propensity,
+                                 "p_enter": d.p_enter, "explored": d.explored},
+                    "propensity_record": to_propensity_record(d).to_json(),
+                }) + "\n")
+            fh.flush()
+            print(f"    {start + len(rows)}/{len(cohort)}  ${stats.cost_usd:.2f}  "
+                  f"{stats.errors} omitted", flush=True)
+    stats.wall_s = time.monotonic() - t_start
+    return stats
 
 
 def screen(cohort: list[dict[str, Any]], meta: dict[str, dict[str, Any]], *,
@@ -1132,6 +1546,34 @@ def score(cohort: list[dict[str, Any]], decisions: dict[str, list[dict[str, Any]
             describe(f"{half} (n={len(sub)})", s, j, horizon)
         print()
 
+    # ---- the colour arm gets its own test: an UNORDERED partition, so no rank
+    # correlation and no AUC is meaningful. The only honest question is whether the
+    # model's own grouping separates the outcomes at all.
+    for arm, recs in sorted(decisions.items()):
+        cols = [(r.get("colour"), outcomes.get(r["mint"])) for r in recs
+                if r.get("colour") and r["mint"] in outcomes]
+        if len(cols) < 30:
+            continue
+        buckets: dict[str, list[float]] = {}
+        for c_, v_ in cols:
+            buckets.setdefault(c_, []).append(v_)
+        print(f"COLOUR PARTITION — arm {arm} (n={len(cols)}, "
+              f"{len(buckets)} of {len(PALETTE)} colours used)")
+        for name, g in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+            print(f"    {name:>9}  n={len(g):>4}  median {st.median(g) * 100:>8.2f}%  "
+                  f"p(up) {_pup(g):>5.1f}%")
+        labs = [c_ for c_, _ in cols]
+        vals2 = [v_ for _, v_ in cols]
+        obs, pk, (klo, khi) = permutation_stat(
+            labs, vals2,
+            lambda L, V: kruskal_between(
+                [[v for l2, v in zip(L, V) if l2 == k] for k in sorted(set(L))]),
+            iters=iters, seed=seed)
+        print(f"    between-colour rank spread {obs:.3f}  p={pk:.4f}  "
+              f"null 95% [{klo:.3f}, {khi:.3f}]")
+        print("    The colours are NOT ordered and are never treated as a score; this")
+        print("    asks only whether the model's own partition knows anything.\n")
+
     # ---- §3.9, trials accounting. Every arm above was tested on two headline
     # statistics (rank AUC and Spearman), and the arms themselves were not
     # pre-registered — the probability framing was added AFTER the verdict framing
@@ -1307,7 +1749,8 @@ def _load_jsonl(p: Path) -> list[dict[str, Any]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", required=True,
-                    choices=("cohort", "meta", "screen", "score", "selftest", "latency"))
+                    choices=("cohort", "meta", "screen", "score", "selftest", "latency",
+                             "batch"))
     ap.add_argument("--arm", default="full", choices=ALL_ARMS)
     ap.add_argument("--backend", default="grok", choices=("grok", "stub"))
     ap.add_argument("--model", default=None)
@@ -1318,6 +1761,8 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=20000)
     ap.add_argument("--seed", type=int, default=17)
     ap.add_argument("--limit", type=int, default=0, help="screen only the first N (debug)")
+    ap.add_argument("--batch-sizes", default="1,5,10,25,50")
+    ap.add_argument("--batch", type=int, default=25, help="coins per call for the batch arms")
     ap.add_argument("--sample", type=int, default=0,
                     help="cohort stage: seeded uniform draw down to N entities")
     args = ap.parse_args()
@@ -1383,6 +1828,51 @@ def main() -> int:
                   f"{j.verdict}@{j.confidence}  err={j.error}")
         return 0
 
+    if args.stage == "batch":
+        # THE THROUGHPUT QUESTION, measured rather than asserted. Two things come
+        # out of it: how much the fixed per-call preamble amortises, and whether
+        # the answers survive being asked together.
+        c = json.loads(cohort_p.read_text())
+        meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+        be = _backend(args)
+        if not isinstance(be, GrokCLIBackend):
+            print("batch staging needs the grok backend")
+            return 2
+        single = {r["mint"]: _signal(r)
+                  for r in _load_jsonl(dec_path(args.arm, args.backend, args.horizon))
+                  if not r.get("error")}
+        sizes = [int(x) for x in args.batch_sizes.split(",")]
+        rng = random.Random(args.seed)
+        print(f"{'batch':>6}{'calls':>7}{'coins':>7}{'wall_s':>9}{'coins/min':>11}"
+              f"{'$/coin':>10}{'tok/coin':>10}{'returned':>10}{'rho vs single':>15}")
+        for n in sizes:
+            pool = [r for r in c if r["mint"] in single] or c
+            reps = max(1, min(3, len(pool) // n))
+            got: dict[str, float] = {}
+            cost = tin = tout = 0
+            t0 = time.monotonic()
+            for _ in range(reps):
+                rows = rng.sample(pool, n)
+                res, j = grok_batch(be, render_batch_prompt(rows, meta, args.arm), args.arm)
+                cost += j.cost_usd
+                tin += j.input_tokens
+                tout += j.output_tokens
+                for i, row in enumerate(rows):
+                    if i in res:
+                        got[row["mint"]] = res[i]
+            wall = time.monotonic() - t0
+            coins = reps * n
+            shared = [m for m in got if m in single]
+            rho = (spearman([got[m] for m in shared], [single[m] for m in shared])
+                   if len(shared) > 5 else float("nan"))
+            print(f"{n:>6}{reps:>7}{coins:>7}{wall:>9.1f}{60 * coins / wall:>11.1f}"
+                  f"{cost / coins:>10.5f}{(tin + tout) // max(1, coins):>10}"
+                  f"{len(got):>10}{rho:>15.3f}")
+        print("\n  'rho vs single' is the rank correlation between the batched score and the")
+        print("  SINGLE-CALL score for the same coin. Near 1.0 means batching is free; well")
+        print("  below means the speedup bought a different question being answered.")
+        return 0
+
     if args.stage == "screen":
         c = json.loads(cohort_p.read_text())
         if args.limit:
@@ -1392,8 +1882,16 @@ def main() -> int:
             print("refusing to run the sighted arm without metadata; run --stage meta")
             return 2
         out = dec_path(args.arm, args.backend, args.horizon)
-        s = screen(c, meta, arm=args.arm, backend=_backend(args), workers=args.workers,
-                   max_usd=args.max_usd, seed=args.seed, out_path=out)
+        if args.arm in BATCH_ARMS:
+            be = _backend(args)
+            if not isinstance(be, GrokCLIBackend):
+                print("batch arms need the grok backend")
+                return 2
+            s = screen_batched(c, meta, arm=args.arm, backend=be, batch=args.batch,
+                               max_usd=args.max_usd, seed=args.seed, out_path=out)
+        else:
+            s = screen(c, meta, arm=args.arm, backend=_backend(args), workers=args.workers,
+                       max_usd=args.max_usd, seed=args.seed, out_path=out)
         print(json.dumps(s.summary(), indent=1))
         print(f"  -> {out}")
         return 0
