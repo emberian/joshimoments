@@ -25,11 +25,14 @@ detector on that would have been a mistake, and the control says so out loud:
 | `6Eegkyd2…` | 2,639 | **52.8%** | **99.2%** |
 | `DkWzWsQT…` | 2,511 | **53.1%** | **98.8%** |
 | `D7xK1ZLz…` | 2,037 | **48.9%** | **99.6%** |
-| **`FBvxneTq…` — universal launch sniper, 17,908 coins** | 262 | **42.7%** | **1.4%** |
+| **`FBvxneTq…` — universal launch sniper** | 262 | **42.7%** | **6.3%** *(corrected, §5.1)* |
 
-**The negative control sits at 42.7% same-slot.** A wallet that shares 1.4% of its portfolio with
-the caller — i.e. one that is provably not coordinated with him, just fast — concentrates at the
-same slot almost as hard as the three that share 99%.
+**The negative control sits at 42.7% same-slot.** A wallet that shares 6.3% of its traded
+portfolio with the caller — i.e. one that is provably not coordinated with him, just fast —
+concentrates at the same slot almost as hard as the three that share 99%.
+
+*(That 6.3% was first published as 1.4%. The correction, and why it makes the control **better**
+rather than worse, is §5.1.)*
 
 The reason is structural: **everyone racing a new launch lands in the same few slots.** Same-slot
 co-occurrence measures *how contested a coin's first seconds were*, not *who is working together*.
@@ -185,3 +188,159 @@ estimated. What this window establishes is the mechanism, and that the live subs
 right instrument for it — the retrospective corpus produced a 99% breadth statistic and an open
 question, and forty seconds of forward tape closed the question the corpus could not.
 
+
+---
+
+## 5. What the framework is, and what it caught in its own inputs
+
+`studies/bundle_hypothesizer.py` — nine channels, each with its own structure-preserving null.
+The extraction was validated against §1's hand numbers first and reproduces them exactly
+(99.2 / 98.8 / 99.6).
+
+### 5.1 The control was weaker than published — and fixing it strengthened the result
+
+The negative control was reported in §1 as touching **17,908 coins** and sharing **1.4%**.
+**15,671 of those mints it never traded.** They are inbound airdrop dust: **24,699 inbound
+transfer legs and zero outbound**. Its real traded book is **2,237 coins**, so true specificity is
+**6.3%, not 1.4%**.
+
+The separation is therefore **99.6% vs 6.3%** — still decisive, and now for the right reason.
+
+The lesson generalises past this one wallet: **coins touched is not coins traded**, and
+unsolicited inbound dust silently inflates the denominator of any portfolio-overlap statistic. It
+is the same genus as the address-poisoning campaign `wallet_labels.yaml` already documents — dust
+arriving uninvited — except here it corrupts a *measurement* rather than a label. Any future
+breadth statistic must be computed over the traded book.
+
+### 5.2 The gate, pre-declared and passed without per-case tuning
+
+One threshold set (`spec ≥ 0.60, pop_z ≥ 5, cb_ratio ≥ 3, cb_p ≤ 0.01, |P| ≥ 20`), declared before
+running and applied unchanged to every arm:
+
+| arm | n | fired |
+|---|---|---|
+| known positives | 3 | **3** |
+| universal-sniper control | 1 | **0** |
+| **hard negatives** (top-40 co-traders) | 40 | **0** |
+| random co-traders | 100 | 1 |
+| synthetic known-**zero** | 34 | **0** — 0% FPR |
+| synthetic known-**effect** | 34 | **3 of 3 planted** |
+
+**The hard negatives are what make this mean anything.** `64hP97Bwr5…` shares **302** of the
+caller's coins — *more than known-positive `D7xK1ZLz…`'s 275*. **Raw overlap count cannot separate
+coordination from being busy**; only the asymmetric *fraction* can. A detector built on "how many
+coins do they share" would rank a non-member above a member.
+
+Both PROGRAM.md §3.12 controls ran. 18 of 100 randoms are reported **undecidable** (`|P| < 20`,
+underpowered) rather than counted as negatives.
+
+---
+
+## 6. Which channels actually carry information
+
+| channel | verdict |
+|---|---|
+| **portfolio specificity** | **separates on its own** — the only channel that does |
+| **lifecycle coupling** | **fires** — `6Eeg` and `DkWz` share first slot **437,325,417 exactly**; **0 of 2,556** background pairs tie |
+| **cross-wallet size choreography** | **fires** — log-size-ratio sd **0.64–0.77** vs background **2.32**; they trade at ~**1.02×** the caller's clip |
+| accumulate/dump asymmetry | **null, and near-tautological** — it restates channel 1 |
+| relay / sequential | null — they are co-timed, not staggered |
+| rotation | null — zero links |
+| wash trading | 2.38% **ceiling** only, never a finding |
+| timing | separates by effect size (16× vs 2.3×) but **every arm including the control hits the MC p-floor** |
+
+Three results here are worth more than the detections.
+
+**Marino's asymmetry is absent.** `PROGRAM.md` §1.1 imports as a "free structural prior" that
+accumulation is multi-wallet while the dump is single-wallet. On this fleet, **buy-wallets =
+sell-wallets = 2.746, exactly**. They accumulate together and they dump together. The imported
+prior does not hold here and should not be assumed elsewhere without checking.
+
+**The self-CV size statistic from `RESULT_caller_wallets` §6.1 does not separate.** What separates
+is *cross-wallet* size agreement — the ratio between wallets' clips, not the variance within one
+wallet's own. That is a different statistic than the one this repo already had.
+
+**It is confirmed not an atomic Jito bundle.** `tx_index` median offset **6**, only ~13% adjacent,
+and **fees are not elevated** — no Jito tip signature. A fleet firing simultaneously, not one
+bundle. §1's reading holds.
+
+---
+
+## 7. The shape is *nested*, which is what rules out copy bots
+
+The decisive structural fact, and it needs no null:
+
+```
+D7xK (277)  ⊂  DkWz (343)  ⊂  6Eeg (355)  ⊂  CALLER (494)
+```
+
+…and the three shadows are **95.8–99.6% contained in each other**.
+
+**Three independent copy bots would each be contained in the caller, but NOT in one another.**
+Independent copiers of the same target overlap only through the target; they would not form a
+chain. A nested hierarchy is what one operator running wallets at different capital tiers looks
+like. Together with §4's 40 ms synchronised exit, "copy bot" is no longer the live alternative.
+
+The framework also proposed a **fourth member on its own initiative**:
+`7uyGRgoCRKfynPbB35kWQwEGz9pmRvUyNFunV939mXpN` — 53 coins, 96.2% contained, top-5 under both
+nulls. Proposed, not attested; `inferred` at best.
+
+---
+
+## 8. The operator's four coins — no supply parking, and two false alarms killed first
+
+**Both false alarms are reported because each was one edit away from being published as a finding.**
+
+1. The first transfer detector picked **one pool per mint**. Correct pre-graduation, catastrophic
+   after: nosis has an 81,452-signature pool *and* a 21,588-signature second pool plus routers, so
+   **17% of legs were misfiled as transfers**, producing a 686-wallet component and a headline of
+   **"+44.4 pp, high-risk"**. Fixed with a wSOL test (94,411 of nosis's 98,435 signatures are
+   swaps) plus structural infrastructure detection.
+2. Union-find over what remained *still* gave **+37.2 pp** — a star on one hub. That hub made
+   **0 curve buys and 703 outbound transfers to 168 addresses**, of which **136 later bought and
+   133 sold on the curve independently**. It is a **distributor/faucet, not parked supply**. Fixed
+   by excluding hubs on fan-out.
+
+This is `PROGRAM.md` §4's warning about union-find arriving on schedule, twice.
+
+After both fixes:
+
+| coin | naive top-10 | bundle-adjusted | **delta** | launch answerable? |
+|---|---|---|---|---|
+| nosis | 19.4% | 19.4% | **+0.0 pp** | **yes** |
+| weave | 26.0% | 26.0% | **+0.0 pp** | no |
+| SOLVE | 48.2% | 48.8% | **+0.6 pp** | no |
+| DREGG | 48.9% | 49.4% | **+0.5 pp** | no |
+
+MELT's high-risk marker is **+24 pp** and its low-risk marker **+6 pp**. **All four sit below even
+the low-risk marker. There is no detectable supply parking on any of the operator's coins.**
+
+**nosis's launch — the only one inside the corpus.** Five wallets bought in the create slot at
+`tx_index` 44 / 495 / 504 / 510 / 565 / 566. Scattered, with only 565/566 adjacent: **a
+competitive snipe, not a bundle.** 37 buyers in the first 50 slots, 15 of whom still hold, for
+**7.1% of supply** today. All five first-slot wallets touch **only one** of the operator's four
+coins — no recurring cross-coin fleet works these launches.
+
+**On `numerics.py:29`'s naive Gini** (`PROGRAM.md:389`: "bundle-correct it or drop it"): on these
+four coins the naive figure is essentially right — nosis 0.8990 → 0.8990. The fragmentation the
+program worries about **is not present here**. The bug is real and worth fixing; it is not
+currently producing a wrong number on the operator's own coins.
+
+---
+
+## 9. Limits
+
+* **Funding ancestry is not computable on this machine** (§3), and it is the one thing that would
+  separate "one entity's wallets" from "a co-located fleet renting the same signal". Both produce
+  nested portfolios and symmetric same-slot timing. **Not faked.**
+* **Trials: 9 channels × 2 nulls = 18 tests**, one threshold set. Divide any single channel's p by
+  18. The claims offered as real are the gate outcome, the nesting, and the ~0 pp concentration
+  deltas — none of which is a marginal p-value.
+* **Exclusions itemised**: 18/100 randoms undecidable; 70/145 left-censored and 71/145
+  right-censored on the lifecycle channel; zero-delta legs, `err` transactions and wSOL legs
+  dropped.
+* **§8's launch verdict covers nosis only.** SOLVE, DREGG and weave launched before the
+  owner-bearing corpus begins, and the 48-day tape that reaches them has no owner column. No
+  verdict was guessed for them.
+* Both giant-component artifacts are kept **in the module** rather than deleted, because the
+  failure mode is the reusable lesson.

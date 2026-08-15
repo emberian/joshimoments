@@ -30,7 +30,7 @@ exactly five contract addresses** — 408 of the 475 are replies. And over ten d
 **1,229 FIFO round trips at a 17.7% win rate, median round-trip return −40.6%, −179.65 SOL
 total**. His bio says *"never wrong, always early."* He is early; he is wrong 82% of the time.
 Three further wallets trade **99% of their coins in the same second as his buys** (a universal
-sniper control answers 1.4%), so he is not operating alone — though "his own wallets" and "a copy
+sniper control answers 6.3%), so he is not operating alone — though "his own wallets" and "a copy
 bot that only follows him" are not separable here.
 
 Three things the operator should take from that. **He never touches your coins** — nosis, weave,
@@ -496,14 +496,14 @@ nothing. What decides it is **breadth**: scanning each candidate against the who
 | `6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB` | 355 | **352 (99.2%)** | 925 | 0 |
 | `DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT` | 342 | **338 (98.8%)** | 892 | 0 |
 | `D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42` | 276 | **275 (99.6%)** | 656 | 0 |
-| `FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN` *(control)* | 17,908 | 247 (**1.4%**) | 93 | 0 |
+| `FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN` *(control)* | 2,237 *traded* | 141 (**6.3%**) | 93 | 0 |
 
 All on-curve, no pump.fun profiles. Median offset from his buy is **+0 s** — the same second on
 259 / 247 / 175 of the shared coins — in **separate transactions in the same slot**, i.e. a
 bundle, not one transaction funding several wallets.
 
 The fourth row is the control that makes the first three mean anything: a universal launch sniper
-that touches 17,908 coins answers **1.4%**. Three wallets answering 99% are not sampling the
+that trades 2,237 coins answers **6.3%**. Three wallets answering 99% are not sampling the
 market, they are sampling *him*.
 
 **This does not separate "his own wallets" from "a copy bot that follows only him."** Confidence
@@ -521,11 +521,11 @@ Joining each wallet's buys to his, per shared coin, over ±4 slots:
 | `D7xK1ZLz…` (n=2,037) | 6.6% | 6.1% | 5.4% | **48.9%** | 5.0% | 5.8% | 5.8% |
 | **control** `FBvxneTq…` (n=262) | 7.3% | 8.0% | 5.0% | **42.7%** | 6.1% | 6.5% | 3.8% |
 
-**The control sits at 42.7% too.** A universal launch sniper that shares 1.4% of its coins with him
+**The control sits at 42.7% too.** A universal launch sniper that shares 6.3% of its traded coins with him
 concentrates at the same slot almost as hard as the three candidates do — because *everyone racing
 a new coin lands in the same few slots*. **Same-slot co-occurrence measures launch-sniping, not
 coordination**, and a detector built on it would mostly detect the former. What separates the three
-is breadth (99% vs 1.4%), which is timing-free.
+is breadth (99% vs 6.3%), which is timing-free.
 
 Two further shape facts. The profiles are **symmetric** — d = −1 and d = +1 are equal to within a
 few counts (208/208, 200/197, 167/166) — which argues *against* "reactive copy bot", since a copier

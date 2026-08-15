@@ -199,8 +199,8 @@ external:
   # Three wallets that appear to exist only to trade alongside jackduvalcalls. Found by the
   # temporal join in studies/jackduval_workup.py and kept because the EVIDENCE IS BREADTH,
   # not timing: each trades ~99% of its coins in common with him, while a universal launch
-  # sniper touching 17,908 coins (FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, the control
-  # that makes this mean anything) answers 1.4%. All on-curve; none has a pump.fun profile.
+  # sniper trading 2,237 coins (FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, the control
+  # that makes this mean anything) answers 6.3%. All on-curve; none has a pump.fun profile.
   #
   # WHAT THIS IS NOT: it is NOT established that these are his own wallets. A copy bot that
   # follows only him produces the same 99%. Two shape facts narrow it without closing it --
@@ -208,7 +208,7 @@ external:
   # copier would not produce, and same-slot tx_index offsets are spread over +/-1..3 rather
   # than consecutive, so this is not one atomic Jito bundle either. Co-scheduled, not chained.
   #
-  # DO NOT read same-slot co-occurrence as the evidence. The 1.4% control ALSO sits at 42.7%
+  # DO NOT read same-slot co-occurrence as the evidence. The 6.3% control ALSO sits at 42.7%
   # same-slot, because everyone racing a new launch lands in the same few slots. Same-slot
   # measures sniping; breadth measures coordination. See studies/RESULT_jackduval_workup.md
   # section 5.7.1.
@@ -219,7 +219,16 @@ external:
   - {address: D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42, label: jackduval_coordinated_c, kind: coordinated_set, confidence: inferred,
      note: "276 pump coins in 10 days, 275 of them (99.6%) also traded by jackduvalcalls; 656 same-slot with his buys, 0 same-transaction."}
   - {address: FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, label: universal_launch_sniper, kind: control, confidence: inferred,
-     note: "NOT a coordinated wallet -- this is the NEGATIVE CONTROL that gives the three above their meaning. Touches 17,908 pump coins in ten days and shares only 247 (1.4%) with jackduvalcalls, yet still sits at 42.7% same-slot with his buys. Kept in this file so nobody re-derives it and so no future study mistakes same-slot co-occurrence for coordination."}
+     note: "NOT a coordinated wallet -- this is the NEGATIVE CONTROL that gives the three above their meaning.
+       CORRECTED 2026-08-15: first recorded as touching 17,908 coins and sharing 1.4%. 15,671 of those mints it
+       NEVER TRADED -- they are inbound airdrop dust (24,699 inbound transfer legs, ZERO outbound). Its real
+       traded book is 2,237 coins and its true specificity is 6.3%. The separation is 99.6% vs 6.3%, still
+       decisive and now for the right reason. The lesson generalises and is why this note is long: COINS
+       TOUCHED IS NOT COINS TRADED, and unsolicited inbound dust silently inflates any portfolio-overlap
+       denominator. Same genus as the address_poisoning block below -- dust arriving uninvited, corrupting a
+       measurement rather than a label.
+       It still sits at 42.7% same-slot with jackduvalcalls' buys, which is the reason to keep it: no future
+       study should mistake same-slot co-occurrence for coordination."}
 
 # The namespace census behind the imposter entry above, so the hazard's SHAPE is recorded
 # and not re-derived. `/users/search?searchTerm=jackduval` returns THIRTEEN profiles, all
