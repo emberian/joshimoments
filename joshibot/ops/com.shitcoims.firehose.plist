@@ -15,7 +15,11 @@
     <string>-m</string>
     <string>shitcoims_scalper.firehose</string>
     <string>--subscribe</string>
-    <string>newToken,migration</string>
+    <string>newToken,migration,tokenTrade</string>
+    <string>--keys</string>
+    <!-- the four cluster coins; hunched/held coins get dynamic subscription when the
+         hunch glass lands. The funded ~/.pumpportal-key gates these streams. -->
+    <string>FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump,8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump,XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump,GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOUR_USERNAME/dev/joshibot</string>

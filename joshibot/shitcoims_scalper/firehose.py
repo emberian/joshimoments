@@ -186,6 +186,25 @@ LOGGER = logging.getLogger("shitcoims.scalper.firehose")
 
 PUMPPORTAL_URL: Final[str] = "wss://pumpportal.fun/api/data"
 
+#: Funded PumpPortal API key (0.01 SOL / 10k events) unlocks subscribeTokenTrade /
+#: subscribeAccountTrade. The key is a CREDENTIAL: read from a 0600 file, appended to the
+#: URL at connect time only, and never logged -- every log line uses the BASE url. A
+#: missing file simply means the gated methods stay gated, which the server reports as a
+#: control row; nothing crashes.
+PUMPPORTAL_KEY_FILE: Final[str] = "~/.pumpportal-key"
+
+
+def _credentialed_url(base: str, key_file: str = PUMPPORTAL_KEY_FILE) -> str:
+    try:
+        key = Path(os.path.expanduser(key_file)).read_text().strip()
+    except OSError:
+        return base
+    if not key:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}api-key={key}"
+
+
 #: The pump.fun program, for the Helius fallback described in the module docstring.
 PUMP_FUN_PROGRAM: Final[str] = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
@@ -1030,7 +1049,7 @@ class FirehoseClient:
         self.attempts += 1
         opened = False
         try:
-            async with self._connect(self.url) as socket:
+            async with self._connect(_credentialed_url(self.url)) as socket:
                 now = self._clock()
                 self._emit_all(self.ledger.open(now))
                 opened = True
