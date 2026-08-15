@@ -1,7 +1,7 @@
 # RESULT: the LLM glance costs 40 seconds and half a cent, and on this cohort it knows nothing
 
-2026-08-15. `studies/llm_filter.py` over `state/boards/`, eight screening arms, **1,150 coin
-judgements in 1,166 model calls, $4.74 measured spend** (the CLI reports its own cost). The question was whether an LLM's few-second look at a
+2026-08-15. `studies/llm_filter.py` over `state/boards/`, **nine screening arms across five
+elicitations**, ~1,530 coin judgements, **$5.4 measured spend** (the CLI reports its own cost). The question was whether an LLM's few-second look at a
 coin — name, description, image, socials, the vibe — carries information that five numeric
 comparisons do not. On the cohort we can actually evaluate, it does not, and the
 content-free control scores *better* than the sighted one.
@@ -287,6 +287,45 @@ framings. Grok again refused to buy anything (0 of 183), this time on coins that
 fresh launches — so the degenerate verdict was not, after all, a correct read of a bad cohort.
 It is just what this model does when asked to buy a memecoin.
 
+### Taking the scale away entirely
+
+Every arm so far handed the model an axis we invented — probability of up, buy/skip — and
+measured along it. If its judgement does not decompose onto our axis, that is indistinguishable
+from having no judgement. Two elicitations that impose less, both batched at 50, both
+**unconstrained** (no output schema at all, prose in and prose out), both at
+`--reasoning-effort high`:
+
+**Pick a subset.** "Which of these 50 would you actually buy? As many or as few as you genuinely
+mean — three, ten, one, none." Saying nothing about a coin *is* the decision, so there is no
+missingness and the selection rate is the model's own choice. Given that freedom, with the full
+name/description/image/socials in front of it, grok picked **1 coin out of 100**, and on one
+batch returned `PICKS: none` with the assessment *"this board is a graveyard sitting on top of a
+printer farm."* The refusal is not a prompt artifact — it survives removing the bearish priming,
+removing the schema, raising the effort, and letting the model choose its own rate.
+
+**Colour.** An unordered ten-word palette, no scale, no right answer: *"tell me what colour each
+one is."* This is the only elicitation the model actually differentiated on — it used **all ten
+colours**, spread 15–25 coins each, 2 parse failures in 189. The colours are never treated as
+ordered; the test asks only whether the model's own partition separates the outcomes.
+
+| colour | n | median 8 h | p(up) |
+|---|---|---|---|
+| slate | 20 | **+10.72%** | 70.0% |
+| emerald | 15 | +7.14% | 53.3% |
+| indigo | 16 | +3.56% | 62.5% |
+| gold | 25 | +0.06% | 52.0% |
+| teal | 17 | −0.07% | 47.1% |
+| magenta | 18 | −0.22% | 44.4% |
+| amber | 22 | −0.35% | 45.5% |
+| crimson | 23 | −0.42% | 39.1% |
+| violet | 15 | −0.64% | 26.7% |
+| azure | 16 | −1.11% | 37.5% |
+
+Between-colour rank spread **242.9, p=0.0769**, null 95% [43.6, **292.4**]. **The observed spread
+sits inside the null band.** This is the closest anything in the study came to a signal — a
+34-point p(up) range across the model's own unprompted categories — and it still does not clear a
+shuffled-label relabeling, before any correction for the nine arms tried.
+
 ---
 
 ## 6. What the nulls said
@@ -347,11 +386,10 @@ day, and it is damning anyway: the sighted arm's p(up) gap is **+17.3 pp in the 
 −25.7 pp in the late half**. A signal that reverses sign across a 2-hour window is noise with a
 story attached.
 
-**Trials accounting (§3.9).** Eight arms × four reported statistics = 32 tests, and the arms were
+**Trials accounting (§3.9).** Nine arms × four reported statistics = 36 tests, and the arms were
 not pre-registered — the probability framing was added *after* the verdict framing came back
 degenerate, and the 1 h horizon was added after the 8 h cohort turned out to be unrepresentative.
-Bonferroni for family-wise 5% is **p < 0.0016**. `probblind`'s raw ρ (p=0.0016) sits exactly *on* it and
-clears nothing with room to spare; every partial correlation, every sighted arm, every batch arm
+Bonferroni for family-wise 5% is **p < 0.0014**. `probblind`'s raw ρ (p=0.0016) now **misses** it; every partial correlation, every sighted arm, every batch arm
 and every AUC misses it outright. **The only result that survives
 both the correction and the drawdown control is that there is no result.** The baseline is
 exempt: it was published before this study and is the thing being tested against.
@@ -370,7 +408,12 @@ useless.** Three claims, in decreasing order of confidence:
 2. **The best arm was re-deriving drawdown.** `probblind` reached ρ=+0.227 (p=0.0016) on numbers
    alone, then fell to **+0.102 (p=0.164)** with drawdown partialled out and **+0.086 (p=0.243)**
    with market cap partialled out. Nothing survives past the incumbent's own columns.
-3. **No arm beat the baseline on any statistic, at either horizon.** Best AUC 0.634 versus
+3. **Five different elicitations, none of them worked.** Buy/skip verdict, calibrated
+   probability, batched 0–100 conviction, free-form pick-a-subset, and an unordered colour
+   palette. The first four found nothing; the fifth produced a 34-point p(up) spread across the
+   model's own categories that still sits inside its shuffled-label null (p=0.077). We did not
+   fail to find the right prompt for one round — we failed across the space of ways to ask.
+4. **No arm beat the baseline on any statistic, at either horizon.** Best AUC 0.634 versus
    0.623 — a difference of 0.011, inside the noise, and gone under the partials. Best Spearman
    +0.227 versus +0.321. On the younger 1 h cohort the sighted arm is **−0.116** against a
    baseline of **+0.330**.
@@ -397,26 +440,29 @@ policy — and it is the study's best argument for §8.1 over any amount of prom
 
 Listed in order of how much they threaten the conclusion.
 
-1. **The image.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
+1. **Callout coverage.** Fix the 3% join rate before anything else. The one qualitative channel
+   we have direct evidence the operator used is the one we could not test, and it is a collector
+   problem, not a modelling problem.
+2. **The image.** `image_uri` was passed as a **URL string**, not as pixels. The model never saw
    a single picture. "Glancing at the coin and the vibe" is substantially a *visual* act and this
    study did not test it — it tested whether an LLM can read a filename. This is the largest
    thing left undone, it is the one that could genuinely overturn the conclusion, and it is not
    cheap: image tokens on top of 40 s/call.
-2. **Entry-time screening on the live feed.** The 1 h replication weakened the cohort objection
+3. **Entry-time screening on the live feed.** The 1 h replication weakened the cohort objection
    but did not remove it: any horizon that requires an observed forward return still conditions
    on survival-in-view. Only screening at the moment of arrival, with the outcome collected
    afterwards, removes age from the selection entirely. That is a collector change, not a study.
-3. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for the
+4. **Held-out day.** One 10 h tape, one regime. §3.1 is unmet for the baseline as well as for the
    LLM, and `RESULT_board_entry.md` already flags it.
-4. **Power.** n=189 is what the 8 h horizon leaves after entity dedup — a property of the data,
+5. **Power.** n=189 is what the 8 h horizon leaves after entity dedup — a property of the data,
    not the budget. The null band on the p(up) gap is ±14 pp. A weak-but-real edge of 5 pp is
    undetectable here and this study cannot rule one out. What it *can* rule out is an edge large
    enough to be worth 40 s and half a cent.
-5. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two framings
+6. **A better prompt.** Possible, and the honest place to be sceptical of ourselves: two framings
    were tried and the second was a reaction to the first. But the paired arm test argues the
    ceiling is *below zero*, not merely low — the content channel measurably degraded the ranking
    (p=0.0008), so prompt work on the content is polishing a channel that is subtracting.
-6. **A different model.** Only `grok-4.6` at `--reasoning-effort low` was tested. `grok-4.5` and
+7. **A different model.** Only `grok-4.6` at `--reasoning-effort low` was tested. `grok-4.5` and
    the Claude path are both one flag / one class away and neither was tried; the finding is about
    this model, on this cohort, at this effort setting.
 
@@ -429,6 +475,13 @@ Listed in order of how much they threaten the conclusion.
   the identical survivor cohort, so the bias cancels in the contrast — it does not cancel in the
   level, and every level quoted here is biased up.
 - **5 of 189 probfull calls returned no structured output** and are excluded, not imputed.
+- **The callout channel — the operator's actual strategy input — is not in these prompts, and
+  could not have been.** The original manual method was clicking through *the callout feed*: who
+  called it, how many calls, which channel. `intelligence_state/intelligence.sqlite3` holds 9,354
+  observations across four sources (Apify X search, ClaudeKOL public actions, Helius, KOL config)
+  — but only **10 of the 333 cohort mints (3%)** appear in it at all. So this study tested an LLM
+  on pump.fun metadata, which is a strictly weaker feature set than the human was using. A null
+  on "name and description" is not a null on "who called this and how loudly".
 - **`grok -p` is nondeterministic and unversioned against us.** Re-running will not reproduce
   these verdicts exactly. The decision logs in `.cache/llm_filter/` are the record.
 - **Total spend $4.74 across 1,166 calls**, under a $1.80-per-arm cap enforced in the harness.
