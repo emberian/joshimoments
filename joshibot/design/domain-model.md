@@ -162,6 +162,8 @@ public abstract record OrderState
 
 public sealed record Plan(
     OrderKind Kind,
+    WalletId Wallet,                    // which wallet acts — the per-wallet allowlist and
+                                        //   the per-key signer spool follow from this (§10)
     IReadOnlyList<PlannedLeg> Legs,
     Lamports PriorityFee,               // from the friction artifact — MEASURED 21–53k, not 500k
     Lamports RentTotal,                 // position rent + binArray pioneer rent, itemized in Legs
@@ -204,6 +206,12 @@ public enum DivergenceClass { None, Bug, ModelingError, ParameterGap, Irreducibl
 
 The divergence stream is a first-class research input: `ParameterGap` rows feed the friction
 artifact's next version; a run of `Bug` rows pages the operator.
+
+The reconciler that produces these rows — the only tape→journal bridge, the only
+`Unresolved` resolver, the classifier whose own mislabels are scar class #11 — has its own
+design page: **design/reconciler.md**. Its contract, not repeated here: deterministic
+event derivation (idempotent under replay), the discriminating-test battery, and
+`Unclassified`/unreconcilable as rendered states, never retry loops.
 
 ---
 
@@ -344,6 +352,44 @@ population, **n beside every rate**, calibration curve on the glass. The point i
 grade the operator — it is that the operator's taste is the desk's best-measured signal and
 this is what "measured" means.
 
+### 6.2 The HUNCH — the minute-scale species, and the zap
+
+Already live in v1 (`state/hunches.jsonl`, the coin-explorer build); v2 imports that tape —
+its row shape is this record's, deliberately. A hunch **is** an Expectation, specialized:
+
+```csharp
+// Claim vocabulary gains the two minute-scale members:
+//   public sealed record Wiggle : Claim;      // "this will oscillate tradably"
+//   public sealed record Activity : Claim;    // "something is happening here"
+
+public sealed record Hunch(
+    Expectation Belief,                 // claim: Wiggle | Activity | Drift, horizon in MINUTES
+    PositionProposal? Proposal);        // immediate: paper by default; live only inside an
+                                        //   armed Scalp playbook's pre-authorized budget
+
+// Scored by the POSITION OUTCOME, not Brier-on-drift — the hunch's claim is "this is
+// tradable by me, now," and the position is the measurement. Separate scorecard section;
+// the two scoring regimes are never summed.
+```
+
+The **zap** is the hunch's other half — the one-keystroke exit on every operator position,
+and the reason it is a domain object rather than a UI event:
+
+```csharp
+public sealed record ZapRecord(
+    Ulid LotRef, Instant TEvent,
+    TapeStateRef StateAtExit,           // FULL tape-state snapshot ref at the moment of exit:
+                                        //   reserves, flow, board membership, age, drawdown —
+                                        //   everything a reactive policy could have seen
+    Lamports Realized);
+```
+
+The accumulated (state, exit) pairs are the training set for the reactive-exit-policy
+search (rung 0: the fitted exit policy whose health monitor replaces the clock — the
+5-minute wiggle clock is the *backstop*, not the policy; hold-duration was an outcome
+miscast as a rule). Doctrine, normative: **the zap never has ceremony** — entry may carry
+ceremony (placed per population, JOSHI.md §4); exit is one keystroke, always, per position.
+
 ---
 
 ## 7. PLAYBOOK — typed program over commands, Lean-checked
@@ -367,7 +413,12 @@ public enum PlaybookStatus
                   // grammar cardinality N computed (feeds deflated-Sharpe honestly)
     Simulated,    // replay harness: exact kernel fills, purged walk-forward, trials counted
     Shadow,       // paperdesk pattern: propensity-logged, no money
-    Armed,        // per-playbook live flag + size caps; three-gate ceremony still applies per order
+    Armed,        // per-playbook live flag + budget/caps through the full three-gate ceremony.
+                  // Ceremony PLACEMENT is per population (proposed-normative, JOSHI.md §4):
+                  //   Quality — ceremony per order (typed size confirmation);
+                  //   Scalp   — ceremony HERE, at arm time; thereafter clicks spend
+                  //             pre-authorized budget inside the playbook. Gates stay
+                  //             structural either way; disarm/zap one keystroke, always.
     Retired
 }
 
@@ -430,8 +481,11 @@ public sealed record ModelDied(ModelId Model, Instant At, string Diagnostic);
 
 `ModelDied` is an ordinary journal event, which means playbook gates and expectations can
 subscribe to it: *"exit when the model stops predicting"* is a gate clause, not a special
-case. The wiggle book's 5-minute clock is the degenerate first instance (a clock is a model
-whose residual is elapsed time).
+case. The first real instance is the **reactive-exit policy** fitted to the zap-recorded
+(state, exit) pairs (§6.2) — the operator's exits were never duration-based, so the model
+to monitor is the reaction, and the wiggle book's 5-minute clock is demoted to the backstop
+that fires when the fitted policy has nothing to say (a clock is a model whose residual is
+elapsed time — the degenerate case, kept as the floor, not the policy).
 
 ---
 
@@ -451,18 +505,67 @@ public sealed record TollClaimObserved(TollId Stream, Instant TEvent, Lamports A
 // THE structural rule from the memory: obligations attach to fee streams, NEVER the book.
 // An LP-strategy agent once recommended dismantling 2/3 of the book to cover 5 days of
 // fee income because a brief handed it cash dates. The constructor makes that unwritable:
+public readonly record struct Usd(decimal Value);   // obligations are FIAT — rent is dollars
 public sealed record Obligation(
-    string Name, Lamports PerMonth, DayOfMonth Due,
+    string Name, Usd PerMonth, DayOfMonth Due,
     TollId CoveredBy);                 // TollId, not Book. There is no overload taking Book.
 
 // The right control is a TRIGGER, not a schedule: monitor run-rate vs upcoming dates,
-// act only if coverage actually fails.
-public sealed record CoverageReading(TollId Stream, Instant At, decimal RunRatePerDay, decimal DaysCovered);
+// act only if coverage actually fails. Income is SOL and obligations are USD, so a
+// CoverageReading carries its own conversion exposure — days-covered is a function of a
+// rate that moves, and the glass renders the sensitivity, never just the point estimate.
+public sealed record CoverageReading(
+    TollId Stream, Instant At,
+    Lamports RunRatePerDay,
+    decimal SolUsd, string SolUsdSource,        // provenance — never a hardcoded constant (scar #8)
+    decimal DaysCovered,
+    decimal DaysCoveredIfSolMinus30Pct);        // the exposure, in the unit that matters
+
+// Default mitigation (JOSHI.md §9.5), the boring one: a SCHEDULED USDC conversion sized
+// to ~30 days of obligations, executed as ordinary orders through the pipeline. The buffer
+// is what makes "the book is never dismantled for the calendar" survivable.
 ```
 
 ---
 
-## 10. ATTESTATION — the operator's labels, kept apart from measurement
+## 10. WALLET — five wallets, two live keys, roles as types
+
+The desk is not one wallet. It runs **five** (trading "shitcoims", LP "tha funds", the
+pumpfun_main lineage, and their kin — `RESULT_position_history.md` reconstructed all five),
+with **at least two live keys** (`~/.shitcoims-wallet` trading, `~/.thafunds-wallet` LP).
+v1's signer machinery was single-key by silent assumption; v2 makes the wallet a domain
+object and the assumption a field:
+
+```csharp
+public readonly record struct WalletId(string Address);
+
+public sealed record Wallet(
+    WalletId Id,
+    string Label,                       // "shitcoims", "tha funds", …
+    WalletRole Role,                    // Trading | Lp | FeeVault | Escrow | Legacy
+    KeyCustody Custody,                 // LiveKey(path, box) | WatchOnly — most of the five
+                                        //   are watch-only; the reconciler tracks ALL of them
+    AllowlistRef Allowlist);            // PER-WALLET: the LP key's list has no swap
+                                        //   discriminator, the trading key's no DLMM ixs —
+                                        //   a key can only do its role's job
+
+public abstract record KeyCustody
+{
+    public sealed record LiveKey(string KeyfilePath, string Box) : KeyCustody;  // Box: "mac"
+    public sealed record WatchOnly : KeyCustody;    // reconciled, never signed for
+}
+```
+
+Consequences elsewhere in the model: every `Plan` names its `WalletId` (§4) and validates
+against that wallet's allowlist; `joshi-signer` keeps **one spool stream per key**
+(`signer/<key>`), so a signed-send on either key survives a link drop independently; the
+Book projection is per-wallet subledgers aggregated, never a blind sum; and the reconciler
+(design/reconciler.md) watches all five addresses and their token accounts — the
+watch-only wallets are where labeling errors hid last time.
+
+---
+
+## 11. ATTESTATION — the operator's labels, kept apart from measurement
 
 ```csharp
 public sealed record Attestation(
@@ -480,7 +583,7 @@ attested in different columns that are never summed. The attested address book i
 
 ---
 
-## 11. What is deliberately NOT in the domain model
+## 12. What is deliberately NOT in the domain model
 
 - **Quote** is not a domain object — it is transient plan input, and keeping it out of the
   model is load-bearing (see §5).

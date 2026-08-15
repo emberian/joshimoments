@@ -1,7 +1,8 @@
 # JOSHI — the desk platform (v2 design)
 
 Design document, 2026-08-15. Status: **design lane output — no code here, no code changed.**
-Companions: `design/domain-model.md` (type sketches), `design/glass.md` (the one-glass UI).
+Companions: `design/domain-model.md` (type sketches), `design/glass.md` (the personal pump
+app), `design/reconciler.md` (the only tape→journal bridge, designed as an instrument).
 This document **supersedes SUBSTRATE.md where they conflict**; §10 reconciles them explicitly.
 The house rules bind: PROGRAM.md §3 methodology, the Lean tripwire, harden-don't-rewrite.
 
@@ -12,10 +13,21 @@ becomes the organ donor and reference implementation; it keeps running throughou
 
 ## 0. What JOSHI is
 
-**One glass.** A local app through which the operator runs the desk without opening
-trade.padre.gg, jup.ag, app.meteora.ag, or pump.fun — charts, positions, LP book, fee
-streams, boards, callouts, orders, all served from our own tapes and our own execution rails,
-with provenance on hover and a sample size beside every rate.
+**The operator's personal copy of the pump app.** Operator, verbatim: *"basically JOSHI is
+turning into my personal copy of the pump app. we should be thinking about it that way
+explicitly."* Adopted as the product definition. JOSHI-glass is pump.fun rebuilt for one
+operator: the same daily surfaces — trenches/new-coins feed, callouts, boards/trending, the
+coin page, the quick-trade panel, the creator/fee view — served from **our** tapes with the
+instrument disciplines (provenance on hover, n beside every rate, four-state data), with the
+operator-native gestures (hunch, zap, expectation, duel) woven in. Parity surfaces are the
+spine and ship first; superpowers second; the engine room (journal, playbooks, models)
+underneath. The frame also settles the one exception cleanly: JOSHI clones the *consumer*
+surface the operator lives in daily — the **creator** side (launching) stays on the real
+pump.fun, manual forever, because the renewable asset is the launch capability, not a button.
+
+**One glass.** The same app absorbs the other three tabs — trade.padre.gg, jup.ag,
+app.meteora.ag — as panels of that personal pump app: charts, positions, LP book, fee
+streams, orders, all from our own tapes and our own execution rails.
 
 **One log.** An append-only, typed event journal as the single seam. Every state store is a
 projection of it; the only mutation path is a command; every automated decision carries its
@@ -130,6 +142,8 @@ invariants.
 | **Projection** | name@version | rebuildable fold | never a source of truth; replay-from-genesis is a test |
 | **Order** | ulid | intent→plan→simulated→armed→sent→landed/failed/expired/**unresolved** | armed only from a 3-gate proof; signature recorded before submit; unresolved never auto-resumed; every landing reconciled and divergence classified {bug, modeling error, parameter gap, irreducible} |
 | **Expectation** | ulid | recorded→compiled→active→resolved/withdrawn/censored | utterance kept verbatim; typed claim; evidence links at creation; **scored** at horizon (Brier, pessimistic marking, censoring recorded not dropped) |
+| **Hunch** | ulid | recorded→positioned→zapped/expired | the minute-horizon species of Expectation (claim: Wiggle \| Activity) carrying an immediate PositionProposal; scored by **position outcome**, not Brier-on-drift; the zap records full tape-state at exit — (state, exit) pairs are the reactive-exit training set |
+| **Wallet** | address | — | role, key custody, **per-wallet allowlists**; five wallets, at least two live keys; the signer keeps one spool per key; the reconciler tracks all five |
 | **Playbook** | id@semver | draft→checked→simulated→shadow→armed→retired | a typed term over commands with gates, authored in the Lean DSL; trial count from grammar cardinality; every activation propensity-logged; population-scoped |
 | **Position/Lot** | mint+lot | open→scaling→closed | basis is a provenance type: FromChainFills \| OperatorAttested \| Unknown — Unknown ⇒ rug-only; **population tag {quality, scalp} mandatory**, playbooks scoped to one |
 | **Book** | singleton | — | cluster-level exposure caps (capacitors leak); daily loss budget with absorbing breaker |
@@ -177,13 +191,25 @@ arms anything by itself. This is the platform's answer to "the operator's taste 
 best-measured signal": measure the taste, then let it parameterize the machine through a
 typed, audited channel instead of through vibes at 2am.
 
+**The hunch is the minute-scale species of the same object, and it is already live in v1.**
+A one-click `[wiggle]`/`[down]`/`[watch]` on a coin card is an
+`Expectation { claim: Wiggle | Activity, horizon: minutes }` that additionally carries an
+immediate `PositionProposal` — paper by default, live only inside an armed scalp playbook's
+pre-authorized budget (§4, ceremony placement). Hunches are scored by the **position
+outcome**, not Brier-on-drift, and land on their own scorecard section (the two scoring
+regimes are never summed). The **zap** — one-keystroke exit on every operator position —
+records the full tape-state at the moment of exit; the accumulated (state, exit) pairs are
+the training set for the reactive-exit-policy search. The v1 live build delivering this loop
+is a port candidate, not a prototype (§8 organ table).
+
 ### 3.2 PLAYBOOK — the operator's program-synthesis background, given a substrate
 
 A playbook is a typed program over commands: gates (preconditions over `View t` — the
 causally-restricted history type, so lookahead is unwritable), a trigger, an action template,
 a sizing rule, an exit rule, and a **population scope**. Examples the measured record already
-wrote: the ghost-town wiggle scalp (5-minute clock exit; every hold past 5 min went 1/20,
-−$61), the unlock ladder (~14 daily clips at random minutes: 10.9% dispersion vs 46.8% for
+wrote: the ghost-town wiggle scalp (reactive exit with a 5-minute clock **backstop** — the
+clock is not the policy, see §3.3; the measured record behind the backstop: every hold past
+5 min went 1/20, −$61), the unlock ladder (~14 daily clips at random minutes: 10.9% dispersion vs 46.8% for
 one clip; whole-tranche tilt when spot is within 2.71% above a fee rung), the model-death
 exit (rung 0).
 
@@ -210,8 +236,12 @@ stream** written to the journal as it predicts. An e-CUSUM monitor (validated ag
 shifts before it is trusted — both-controls-always) turns the residual stream into health:
 `fitted → live → degraded → dead`. `MODEL_DIED` is an event; positions and playbooks
 subscribe to it. This is the operator's sentence — *"exit once the model is no longer
-predictive"* — made mechanical, and it subsumes the wiggle clock, the deterioration stack,
-and the "it'll come back" safety rail in one construct.
+predictive"* — made mechanical, and it subsumes the deterioration stack and the "it'll come
+back" safety rail in one construct. One correction sharpens it: the operator's real exits
+are **reactive** — *"hold duration was never my policy"* — and the 5-minute wiggle clock was
+an *outcome miscast as a rule*. So the reactive exit **is** the model-health exit: the
+zap-recorded (state, exit) pairs are what the rung-0 exit policy is fitted to, and the clock
+survives only as a backstop gate that fires when the fitted policy has nothing to say.
 
 ---
 
@@ -230,12 +260,14 @@ cannot drift past it.
 2. **Builder-level instruction allowlists.** lpexec cannot construct a swap — not "doesn't,"
    *cannot*: the discriminator isn't in the data. `transaction.py` treats Jupiter's output as
    hostile bytes. Both organs port verbatim into `joshi-signer` (§7) with their tests. The
-   allowlists remain **data**, reviewed as code; adding a program, pool, or destination is a
-   commit, never a runtime action, never a glass affordance.
+   allowlists remain **data**, reviewed as code, and are **per-wallet**: the LP key's
+   allowlist carries no swap discriminator, the trading key's no DLMM instructions — a key
+   can only do its role's job. Adding a program, pool, or destination is a commit, never a
+   runtime action, never a glass affordance.
 3. **No broadcast path by default.** The domain core has no RPC send capability at all —
    `joshid` can plan and simulate but the only process that can submit is the signer daemon,
-   which holds the only key and lives on the operator's box. A compromised or merely buggy
-   domain core can propose garbage forever and move nothing.
+   which holds the only keys (one spool per key, §7) and lives on the operator's box. A
+   compromised or merely buggy domain core can propose garbage forever and move nothing.
 4. **Caps as arithmetic the envelope proves.** Per-trade size as both bankroll fraction and
    pool-impact cap (ρ = B/Y ≤ θ); cluster-level aggregate exposure; per-day loss budget with
    the absorbing breaker (once tripped, `run` is the identity for any learner — already
@@ -248,6 +280,17 @@ cannot drift past it.
    transfer destination is ever accepted from transaction history or free text; destinations
    come only from the attested address book. The glass renders history addresses
    non-copyable (design/glass.md).
+
+**Ceremony placement (proposed-normative, pending the operator's explicit confirmation).**
+Per-order ceremony — the typed size confirmation — is right for the **Quality** population
+and impossible for **Scalp**, where the click must *be* the entry or the trade does not
+exist. Resolution: **the ceremony moves to playbook-arm time for Scalp.** The scalp playbook
+is armed once, with budget and caps, through the full three-gate ceremony; thereafter each
+click spends pre-authorized budget inside it, and the three gates remain *structurally* in
+force at the process level — what relocates is the human ceremony, not the gates. Disarm and
+zap are one keystroke, always, for both populations: **exits never have ceremony.** The
+operator has signaled the direction (*"hold duration was never my policy; my exits are
+reactive"*) but has not confirmed this placement; until they do, it is a proposal, marked.
 
 ---
 
@@ -364,7 +407,7 @@ Every journal event:
 
 ```
 event_id      ulid            unique, sortable
-stream        string          "journal" | "signer" (one writer per stream)
+stream        string          "journal" | "signer/<key>" (one writer per stream; one spool per key)
 seq           u64             monotone per stream
 schema        string          "expectation.recorded@1"
 t_event       rfc3339         when it happened (chain/world clock) — never fabricated
@@ -393,9 +436,10 @@ persvati (24c/83G, never sleeps)          Mac (operator present)             hbo
 │   intel → TAPE (JSONL)      │     │   ▼ command proposals        │   │  (Py + Lean oracle, │
 │ joshid  (C#, NativeAOT)     │◄────┤                              │   │   Rust fast path    │
 │   JOURNAL authority         │ tls │ joshi-signer (ported organs) │   │   later)            │
-│   projections, playbooks,   │────►│   THE ONLY KEY-HOLDER        │   │ swarm-build, small  │
-│   expectation compiler,     │     │   re-verifies gates itself   │   │ waves, spare codex  │
-│   model monitors, alerts    │     │   → signer spool → journal   │   └─────────────────────┘
+│   projections, playbooks,   │────►│   THE ONLY KEY-HOLDING PROC  │   │ swarm-build, small  │
+│   expectation compiler,     │     │   N keys, 1 spool per key    │   │ waves, spare codex  │
+│   model monitors, alerts,   │     │   per-wallet allowlists      │   └─────────────────────┘
+│   reconciler (5 wallets)    │     │   re-verifies gates itself   │
 │ watchdog (exists, extended) │     │   Jito/MEV-protected submit  │
 │ Lean oracle (joshi-oracle)  │     └──────────────────────────────┘
 └─────────────────────────────┘
@@ -412,8 +456,12 @@ Placement arguments:
   *anywhere in the topology*, which upgrades v1's "no-broadcast-by-default" from a flag to a
   physical arrangement. The signer daemon is the ported `transaction.py` + lpexec
   guard/signer organs behind one narrow socket, re-validating everything (it treats joshid
-  exactly as v1's guard treats the Meteora sidecar: as hostile bytes). Its spool is its own
-  journal stream, merged by the reconciler, so a signed-send survives any link drop —
+  exactly as v1's guard treats the Meteora sidecar: as hostile bytes). It is **multi-key**:
+  the desk runs five wallets with different roles and at least two live keys
+  (`~/.shitcoims-wallet` trading, `~/.thafunds-wallet` LP) — each key gets its own spool
+  stream and its own per-wallet allowlist (§4 item 2), merged into the journal by the
+  **reconciler** (design/reconciler.md), which tracks all five wallets and is the only
+  tape→journal bridge. One spool per key means a signed-send survives any link drop —
   reconciliation-first, because ambiguous submission was the double-submit scar.
 - **Moving the signer to persvati is a named future decision** with its own review, required
   only if truly-unattended execution (e.g. LP rebalance while asleep) ever earns it. It is
@@ -440,12 +488,17 @@ tape) and lift them into journal events. Nothing depends on the journal yet.
 *Exit criterion:* journal replay reproduces v1 state snapshots (positions, LP book, toll
 claims) with zero divergence over 7 days.
 
-**M1 — expectations + the read-only glass.**
-The glass connects to joshid projections; v1's dashboard keeps running; views retire one at
-a time only when the projection matches the old view in parallel-run. **Expectations ship
-here, first** — purely additive, no money path, and every week not recording the operator's
-beliefs is data lost forever (the same argument that made the tape recorder do-first).
-*Exit criterion:* operator stops opening the v1 dashboard for a week without noticing.
+**M1 — the pump-parity surfaces + the gesture layer (read-first).**
+Per the product definition (§0): the parity surfaces are the spine of this phase — the
+trenches/new-coins feed, boards/trending, the coin page, the callout stream, and the
+creator/fee view, read-only, from our tapes with the instrument disciplines. The glass
+connects to joshid projections; v1's dashboard keeps running; views retire one at a time
+only when the projection matches the old view in parallel-run. The **hunch loop and zap**
+are absorbed here from the live v1 build (below), and **expectations ship here** — purely
+additive, no money path, and every week not recording the operator's beliefs is data lost
+forever (the same argument that made the tape recorder do-first).
+*Exit criterion:* the operator's daily pump.fun browsing happens in the glass for a week;
+the v1 dashboard goes unopened for the same week without being missed.
 
 > **Shipped early, in v1 form, 2026-08-15 — because "every week not recording the operator's
 > beliefs is data lost forever" argued for its own schedule.** `state/hunches.jsonl` is an
@@ -481,8 +534,10 @@ deleted with its end date honored.
 Paperdesk policies and the probe become Lean DSL terms; simulate on the replay harness
 (exact kernel fills, purged walk-forward, grammar-counted trials); shadow via the paperdesk
 pattern (propensity-logged, no money); per-playbook arming with size caps only after shadow
-clears its own pre-registered bar. Model monitors (rung 0) attach to the wiggle clock and OU
-ratios first — the easy models, per the operator's tooling principle.
+clears its own pre-registered bar. Model monitors (rung 0) attach first to the reactive-exit
+policy — fitted to the zap-recorded (state, exit) pairs, with the 5-minute clock as its
+backstop, per §3.3 — and to OU on cluster ratios: the easy models, per the operator's
+tooling principle.
 *Exit criterion:* is per-playbook, forever — a playbook is armed only while its shadow and
 live attribution agree within stated bounds.
 
@@ -497,6 +552,7 @@ live attribution agree within stated bounds.
 | `scripts/watchdog.py` | **port**, extended to joshid/journal freshness | immediately, it's additive |
 | `shitcoims_replay`, `ope.py`, `trials.py`, `split.py` | **stay Python**, research side | never — they are the harness |
 | `app/` components (`figure`, `instrument`, `Measured<T>`) | **port** as the glass's core | M1 per-view criterion |
+| hunch loop (`app/views/explorer.tsx`, `shitcoims_paperdesk.glass`, `state/hunches.jsonl`) | **port** as M1's seed; the hunches tape is the import source (row shape is the `Expectation` record's, deliberately) | joshid's expectation store replays the tape exactly, then the v1 endpoint dies |
 | sentinel `engine.py` (policy semantics) | **reference-only** | M2+M3 subsume manual paths; automated selling stays dead by choice until the operator lifts the ban — v2 does not resurrect it |
 | paperdesk (books/policy/toll) | **reference-only** (its propensity pattern is already promoted into the envelope) | M4 |
 | dashboard `server.py`, per-view API | **dies** | M1 per-view |
@@ -534,6 +590,7 @@ ships, that is a defect in v2:
 | 8 | **Hardcoded constants wearing fact costumes** (SOL=$150 in our own tree; 500k-lamport priority 4×-oversizing a shadow run; 20-bps incident) | constants scattered per package | one versioned friction artifact stamped into every Plan; hardcode-audit `--check` stays a CI gate in v2 |
 | 9 | **Vendor ceilings** (32-address simulation ceiling: past it *every* live sell fails) | cap in one file, limit in another | vendor limits live in the schema registry beside the client that owns them; plans validate against them |
 | 10 | **Green ≠ verified** (25/60 mutations survived; the money printer replay; `P → P` theorems) | build gate mistaken for audit | scheduled adversarial audits; mutation runs clear `__pycache__`; parity-test skips are gate failures |
+| 11 | **Reconciler misclassification** (every error in a night of forensics was a labelling error; two this week: the 757-SOL fee label, the fabricated addresses) | ad-hoc classification folded residuals into the nearest bucket | the reconciler is its own designed, audited component (design/reconciler.md): deterministic classification battery, `Unclassified` a rendered state never a retry loop, planted-world controls, scheduled adversarial audit |
 
 ### 9.3 Scope creep — the no-list
 
@@ -555,7 +612,19 @@ platform that competes with the desk for the operator's attention is a cost cent
 asset's costume. The v1.5 SUBSTRATE wave (§10) is deliberately sequenced first because it
 pays for itself inside the existing workload.
 
-### 9.5 When v2 replaces each v1 organ — the general criterion
+### 9.5 Denomination risk
+
+**Obligations are USD; the book and the income are SOL.** Rent is dollars on the 1st, the AI
+bill is dollars on the 28th, and the toll streams pay in SOL whose dollar value moved this
+desk's own accounting by double-digit percents inside single weeks. So `Obligation` is
+denominated in fiat in the domain model, `CoverageReading` carries the SOL/USD conversion
+exposure explicitly (days-covered is a function of a rate that moves, and the glass shows
+the sensitivity, not just the point estimate), and the default mitigation is the boring one:
+**a scheduled USDC conversion sized to ~30 days of obligations**, executed as ordinary
+orders through the pipeline. Everything above the buffer stays SOL — the book is capital and
+is never dismantled for the calendar; the buffer is what makes that rule survivable.
+
+### 9.6 When v2 replaces each v1 organ — the general criterion
 
 An organ is replaced only when **all four** hold: (1) the organ's own adversarial test suite
 ports and is green in the new home; (2) parallel-run divergence is zero over the organ's

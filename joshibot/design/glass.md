@@ -1,14 +1,31 @@
-# JOSHI glass — the one-glass UI
+# JOSHI glass — the operator's personal pump app
 
 Companion to `JOSHI.md` §0/§5/§7. The glass is a TypeScript app (kept, per the language cut)
 speaking schema-generated types to `joshid` over an authenticated local socket, browser-first
 with a thin desktop shell only when window management earns it. It runs where the operator
 is: the Mac.
 
-**The premise:** the operator currently runs the desk across four browser tabs owned by other
-people, none of which knows about basis provenance, censoring, expectations, or the journal.
-The glass replaces the *reading and deciding* on all four immediately, and the *acting* on
-each only as the order pipeline earns it (JOSHI.md §8, phases M1→M3).
+**The organizing principle, operator verbatim: *"basically JOSHI is turning into my personal
+copy of the pump app."*** That is the product. JOSHI-glass is pump.fun rebuilt for one
+operator — the same daily surfaces, in the same reach-for-it-without-thinking positions,
+served from **our** tapes with the instrument disciplines (provenance, n, four-state data)
+and the operator-native gestures (hunch, zap, expectation, duel) woven into them. Three
+layers, built in this order:
+
+1. **Parity surfaces** — the pump.fun daily loop, cloned: trenches/new-coins, callouts,
+   boards/trending, the coin page, the quick-trade panel, the creator/fee view. The spine;
+   ships first (M1).
+2. **Superpowers** — what pump.fun cannot do because it doesn't know the operator: hunch
+   cards, zap, expectation cones, the duel view, drawdown-split boards, basis provenance,
+   the scorecard.
+3. **Engine room** — journal, playbooks, models, reconciler state, underneath and always one
+   click down.
+
+The other three tabs — trade.padre.gg, jup.ag, app.meteora.ag — fold in as panels of the
+same app (§2). The one thing the frame excludes cleanly: JOSHI clones the **consumer**
+surface the operator lives in; the **creator** side — launching — stays on the real
+pump.fun, manual forever, because the renewable asset is the launch capability, not a
+button.
 
 ---
 
@@ -37,109 +54,133 @@ defects:
    operator with leading-and-trailing vanity matches. History rows render addresses as
    labeled, truncated, *non-copyable* text; the only copyable addresses in the entire glass
    live in the attested address book.
+9. **Exits never have ceremony.** The zap is one keystroke, per position, from anywhere,
+   always. Entry may carry ceremony — placed per population (§4) — but nothing may ever
+   stand between the operator and an exit. The asymmetry is the design.
 
 ---
 
-## 1. The surfaces it replaces
+## 1. The pump.fun parity map — the spine
 
-For each: what it is actually used for today, what replaces it, and what deliberately stays.
+For each surface of the real app: what the operator actually uses it for, and what the
+personal copy renders instead. Parity means the *daily loop* works here; every cell also
+carries the instrument disciplines the real app structurally cannot have.
 
-### 1.1 trade.padre.gg
+| pump.fun surface | used for | the personal copy |
+|---|---|---|
+| **trenches / new-coins feed** | ambient watching of fresh launches | the live launch feed from our own boards/firehose tape, age and vSol curve position on every card, watch-window gaps rendered as gaps; **hunch buttons on every card** (§3) |
+| **boards / trending** | what's moving, what has attention | the boards view with the **drawdown split rendered** — the one measured board structure (shallow-drawdown entries +5.73% median at 2h, p(up) 76%, vs deep −0.45%) colors the cards; null-arm baseline shown beside it |
+| **callouts** | the social feed beside the coins | the callout stream overlaid as a **volatility locator, never a direction signal** (its measured verdict: direction is an anti-signal; streams mark two-sided flow), with `x_mint_mention` latency badges (p50 209 s — the only social source inside the decision window) |
+| **coin page** | the look before a trade: chart, socials, holders | the mint card: candles from reserve readings at **executable-exit valuation** (bounce-free by construction), tri-state socials (unobserved is null, never false), bundle-adjusted holder deltas where measured, the anti-signal list rendered *as* anti-signals; expectations and past hunches on this mint overlaid |
+| **quick trade panel** | the buy/sell click | the hunch card (Scalp: click spends pre-authorized playbook budget) or the order ticket (Quality: full lifecycle, §4) — same position on screen as the real app's panel, because muscle memory is the interface |
+| **creator / fee view** | claiming DREGG creator fees, watching the vault | the Toll view: vault balance, claim as a one-click `TollClaim` command through the allowlisted claim path, run-rate and decay t½ with CI, **coverage trigger** vs USD obligations with the SOL/USD exposure shown (JOSHI.md §9.5), and the fee-rung readout — distance to the nearest 5-bps rung (25 rungs, mcap-in-SOL, spot per swap) with the one surviving tilt surfaced: within 2.71% *above* a rung, the unlock tranche ships whole |
+| **any coin by address** | pasting a mint to look at it | same paste box; an unwatched mint renders honestly as **not-watching** (four-state, never fabricated) with a one-click **Watch** command that starts collection — the personal copy's universe is the collected universe, and it says so |
+| **launching** | the creator side | **stays on the real pump.fun, manual, forever** — out of the clone by definition |
+
+The parity constraint cuts the other way too: the trenches feed only works if the collectors
+are treated as **product infrastructure, not research plumbing** — feed staleness is a
+product defect the moment the glass is the daily surface. The watchdog's freshness targets
+become product SLOs, rendered as staleness badges, never silently stale (§7).
+
+---
+
+## 2. The other three tabs — folded into the same app
+
+### 2.1 trade.padre.gg
 
 | used for | replacement |
 |---|---|
-| fast candles on watched mints | chart from our own tape — reserve-derived, **executable-exit valuation** (the price you could actually get for your size), not last-trade prints; bounce-free by construction |
-| buy/sell with presets | the order ticket → command pipeline (§3): intent → plan → simulate → arm → send, every step visible, every refusal explained |
+| fast candles on watched mints | the coin page chart (§1) — our tape, executable-exit valuation |
+| buy/sell with presets | hunch card (Scalp) or order ticket (Quality), §3/§4 |
 | wallet PnL | Positions projection with **basis provenance badges** (chain / attested / unknown-rug-only) and reconciliation rows — a PnL number traces to fills on hover |
-| token safety glance | the mint card: holder/bundle deltas where measured, tri-state where not; the anti-signal list (locker contracts, raw top-10) rendered as anti-signals |
+| token safety glance | the mint card's measured columns; tri-state everywhere |
 
 Stays on padre: nothing, once M3 lands — padre's venue coverage beyond our allowlists was
 never used with size, and adding a venue is a code-reviewed allowlist change, not a UI
 feature.
 
-### 1.2 jup.ag
+### 2.2 jup.ag
 
 | used for | replacement |
 |---|---|
 | quotes/routing | the plan step *is* the quote — Jupiter's API remains the execution rail (keep the rail, drop the site); the plan shows route provenance, computed `minOut` vs quoted, and the friction line items (priority at measured levels, rent, impact ρ) |
-| ad-hoc swaps between majors | same ticket, `OrderKind.Swap`; simulation binding shown before arm |
+| ad-hoc swaps between majors | same ticket, `OrderKind.Swap`; simulation binding shown before arm — including the scheduled USDC obligation-buffer conversions (JOSHI.md §9.5), which are ordinary orders |
 
 Stays on jup.ag: truly novel one-off swaps in tokens outside our allowlists — deliberately,
 because extending the allowlist is a commit with review, and that friction is the feature.
 
-### 1.3 app.meteora.ag
+### 2.3 app.meteora.ag
 
 | used for | replacement |
 |---|---|
 | DLMM position monitoring | the LP book view: bins vs spot rendered live, **duty-cycle meter** per position (the 49.4%-vs-99.4% scar — an out-of-range DLMM is an open circuit and the glass makes that state loud), fees harvested with n and window |
 | deciding width/fee/rebalance | per-pool **η vs VR(T) readout** (LP is +EV ⟺ η > VR; measured η printed with its CI, and "no data" on VR rendered as such — the reversion premise is provisional) |
-| open/close/claim/rebalance | commands through the pipeline to the ported lpexec organs; a rebalance proposal renders as a diff (bins pulled, bins placed, rent delta, expected duty-cycle change) |
-| pool discovery | deliberately weakened: a watchlist fed by the cluster tape, not a browse-everything surface — pool entry is a decision, not a scroll |
+| open/close/claim/rebalance | commands through the pipeline to the ported lpexec organs, from the LP wallet with the LP key's allowlist; a rebalance proposal renders as a diff (bins pulled, bins placed, rent delta, expected duty-cycle change) |
+| pool discovery | deliberately weakened: a watchlist fed by the cluster tape, not a browse-everything surface — pool entry is a decision, not a scroll. (The browse-freely inversion of §1 applies to the *pump* surfaces, where browsing is the product; it does not extend to opening pools.) |
 
 Stays on app.meteora.ag: nothing for the existing book; browsing for exotic new pools stays
 manual and rare, and adding one to the allowlist is a commit.
 
-### 1.4 pump.fun
+---
 
-| used for | replacement |
-|---|---|
-| watching boards/trenches | the boards view from our own boards tape, with the **drawdown split rendered** (shallow-drawdown entries +5.73% median at 2h vs deep −0.45% — the one measured board structure) and the callout stream overlaid as a *volatility locator*, never a direction signal (its measured verdict) |
-| coin pages (socials, holders) | the mint card, with tri-state socials (a flag not observed is null, never false) and `x_mint_mention` latency badges (p50 209s — the only social source inside the decision window) |
-| claiming creator fees | Toll view: vault balance, claim as a `TollClaim` command through the allowlisted claim path; run-rate, decay t½ with CI, **coverage trigger** vs obligations (obligations attach to streams, structurally never the book) |
-| the fee-rung readout | spot distance to the nearest 5-bps rung (25 rungs, mcap-in-SOL, evaluated spot per swap) — with the one surviving tilt surfaced: within 2.71% *above* a rung, the unlock tranche ships whole |
-| launching coins | **stays manual, on pump.fun, forever in this design** — the renewable asset is the launch capability, and it is creative work, not desk plumbing |
+## 3. The hunch loop — the superpower on every card
+
+Live in v1 already (`app/views/explorer.tsx` → `state/hunches.jsonl`); this is its v2 form.
+Every coin card — trenches, boards, coin page — carries the hunch buttons:
+
+- **[wiggle]** — "this will oscillate tradably": records the hunch (claim `Wiggle`, horizon
+  minutes, confidence one tap) and opens an **instant paper position** in the wiggle book —
+  or a live one, iff the Scalp playbook is armed and has budget (§4). The click *is* the
+  entry; there is nothing else to do.
+- **[down]** / **[up]** — a directional minute-scale claim: scored at horizon with a
+  falsifier line on the card's sparkline.
+- **[watch]** — starts collection and a watch window; the card joins the operator's feed.
+
+**Instrument readback, immediately:** the card flips to show what the instruments know about
+this mint — flow, age, vSol position, drawdown percentile, crime-score percentile (as an
+avoid-filter, its measured verdict), each four-state, each with n. The hunch was recorded
+*before* the readback flip, deliberately: the belief is captured pre-instrument, so the
+scorecard can later measure what the operator's eye adds over the instruments — that
+comparison is the whole point of recording hunches at all.
+
+**The zap** sits on every operator position, everywhere it appears — one keystroke, no
+confirmation, no ceremony (principle 9). Each zap writes a `ZapRecord` with the **full
+tape-state at exit**; the (state, exit) pairs are the training set for the reactive-exit
+policy search — the operator's exits are reactive, hold-duration was never the policy, and
+this is how the reaction gets learned instead of miscast as a clock. The 5-minute clock
+survives only as the backstop on paper positions the operator walked away from.
+
+Hunches score by **position outcome** on their own scorecard section; expectation Briers on
+theirs; the two are never summed.
 
 ---
 
-## 2. Layout
+## 4. Entry — the ticket, and where the ceremony lives
 
-Three panes, information-dense, keyboard-first:
+Every chain-touching act walks the same visible lifecycle: **intent → plan → simulate → arm
+→ send → landed/failed/unresolved**, with the plan showing its route provenance, computed
+`minOut`, priority at measured levels, rent itemized, impact ρ against the envelope cap, the
+friction-artifact version, and the acting **wallet** (whose per-wallet allowlist scopes what
+the ticket can even propose). Refusals render with reasons. `Unresolved` pins itself to the
+right pane until the reconciler resolves it — the glass shows, and never guesses.
 
-- **Left rail — the objects.** Book · Positions · LP · Tolls · Expectations · Playbooks ·
-  Models · Boards · Journal. Each with a health glyph (projection lag, watch coverage,
-  breaker state). The daily-loss breaker, when tripped, colors the entire rail: the
-  absorbing state is not a notification, it is the room's lighting.
-- **Center — the stage.** Charts and object detail. Every chart is a tape view: candles from
-  reserve readings, our own fills overlaid with actor badges (operator / playbook@version),
-  expectations overlaid as translucent cones (see §4), watch-window gaps rendered as gaps —
-  never interpolated.
-- **Right — provenance and pending.** The hover-provenance pane (pinned version of the
-  hover), pending command proposals awaiting approval, and unresolved orders — which sit at
-  the top in a state that refuses to be ignored, because `Unresolved` is the state whose
-  neglect costs money.
+**Ceremony placement is per population** (proposed-normative pending the operator's
+explicit confirmation — JOSHI.md §4):
 
-The Journal view is the desk's own history rendered raw: filterable events, refusals
-included, each row expandable to its envelope. It is the debugging surface and the audit
-surface, and its existence is the point of the architecture.
-
----
-
-## 3. The order ticket — investigation to signature
-
-Every chain-touching act walks the same visible lifecycle. No express path.
-
-1. **Intent** — from a chart, a position, a proposal. Records provenance (which
-   expectation/playbook/gesture caused it).
-2. **Plan** — the priced form: route provenance, computed `minOut`, priority fee (measured
-   constant, version-stamped), rent itemized, pool impact ρ against the envelope cap,
-   friction-artifact version. A plan that can't show a line item doesn't render an arm
-   button.
-3. **Simulate** — the sim report and what it *binds*: expected balance changes, the
-   remainder check. Divergence between plan and sim is shown, not smoothed.
-4. **Arm** — the ceremony, deliberately heavier than a click: the three-gate state is
-   displayed (config / process / arm-file binding), and arming requires a typed confirmation
-   naming the size ("sell 2.1 SOL of nosis"). Muscle memory is the enemy at this step;
-   typing the amount defeats it.
-5. **Send → Landed/Failed/Unresolved** — signature shown the instant it exists locally;
-   reconciliation row appears when the chain answers, divergence classified. `Unresolved`
-   pins itself to the right pane until the reconciler resolves it.
-
-**Disarm is one keystroke, always, from anywhere.** Arming is ceremony; stopping is instant.
-The asymmetry is the design.
+- **Quality** — ceremony per order: the arm step requires a typed confirmation naming the
+  size ("sell 2.1 SOL of nosis"). Muscle memory is the enemy at this step; typing the
+  amount defeats it.
+- **Scalp** — ceremony at playbook-arm time: the scalp playbook is armed once, with budget
+  and caps, through the full three-gate ceremony; thereafter the hunch click **is** the
+  entry, spending pre-authorized budget inside the playbook. A scalp that waits for a typed
+  confirmation does not exist as a trade. The three gates remain structurally in force at
+  the process level; what moves is the human ceremony.
+- **Both populations** — disarm and zap are one keystroke, always, from anywhere
+  (principle 9). Arming is ceremony; stopping is instant.
 
 ---
 
-## 4. The expectation gesture
+## 5. The expectation gesture
 
 The requirement, verbatim: *"semivisually record things like 'idk i think this is gonna keep
 goin down' on nosis."* The gesture, on any chart or object:
@@ -163,14 +204,27 @@ The expectation then lives on the chart as a translucent cone until resolution; 
 falsifier level is a visible line. When price exits the cone early, the glass prompts —
 re-affirm, revise (a new version, old one scored as withdrawn-at-level), or withdraw.
 
-**The scorecard** is a first-class view: calibration curve of the operator's declared
-confidence vs realized outcomes, split by scope × horizon × population, n beside every
-point, censored expectations counted and shown. This is the desk instrumenting its
-best-measured signal. It is never a leaderboard; there is exactly one operator.
+**The scorecard** is a first-class view: calibration of the operator's declared confidence
+vs realized outcomes — Brier for expectations, position outcome for hunches, in separate
+sections — split by scope × horizon × population, n beside every point, censored counted
+and shown. This is the desk instrumenting its best-measured signal. It is never a
+leaderboard; there is exactly one operator.
 
 ---
 
-## 5. The playbook review/arm flow
+## 6. The duel view — imitation families, side by side
+
+When a symbol spawns a family — the original and its imitators sharing a name — the duel
+view renders the family **side-by-side on one clock**: each member's flow, holders, board
+presence, and reserve path, plus the **drain direction** — which member is bleeding wallets
+and SOL to which, read from the cross-member flow the tape already carries. This is a
+surface pump.fun structurally cannot offer (it shows each coin alone; the family is the
+object here), and it feeds the same gestures: hunch buttons per member, an expectation cone
+over the family (`Relative` claims: "the original outlives the clone").
+
+---
+
+## 7. The playbook review/arm flow
 
 A playbook's page is its whole case file, three records that are **never summed**:
 
@@ -180,46 +234,53 @@ A playbook's page is its whole case file, three records that are **never summed*
 | simulation | replay results on pinned tape: purged walk-forward cells, deflated Sharpe with the counted N, the permuted-worlds gate result (a lineage that wins on permuted worlds is discarded regardless of backtest) |
 | shadow | paperdesk-pattern record: propensity-logged decisions, would-have fills, attribution split (selection / timing / interaction — reported, not allocated) |
 | live | reconciled fills only, same attribution columns, divergence classes |
-| bindings | which expectations currently parameterize it; which model healths gate it |
+| bindings | which expectations currently parameterize it; which model healths gate it; for Scalp: remaining pre-authorized budget, rendered where the operator can see it drain |
 
 **Arming**: per-playbook, with its own size cap and daily budget slice, through the same
 three-gate ceremony as an order — plus one extra: the arm dialog displays the playbook's
 shadow-vs-live divergence and refuses if the shadow record is younger than its
-pre-registered minimum. **Suspension is automatic** on: expectation compilation (§4), model
-death for subscribed models, population-discipline violation, or envelope breaker. Suspended
-playbooks render with the reason, in the operator's face, until acknowledged.
+pre-registered minimum. For Scalp playbooks this arm ceremony is *the* ceremony (§4).
+**Suspension is automatic** on: expectation compilation (§5), model death for subscribed
+models, population-discipline violation, or envelope breaker. Suspended playbooks render
+with the reason, in the operator's face, until acknowledged.
 
 ---
 
-## 6. Deliberately manual — the list
+## 8. Deliberately manual — the list
 
 Things the glass will never automate, each with its reason:
 
-1. **Launching coins** — creative work; the renewable asset is the capability, not a button.
+1. **Launching coins** — the creator side of the app is not cloned; the renewable asset is
+   the capability, and it stays on the real pump.fun.
 2. **Paying people** — the largest historical outflow category, targeted by a live
    poisoning campaign; stays in wallet software, by hand, from the attested address book.
-3. **Adding a venue, program, pool, or destination to an allowlist** — a reviewed commit.
-   The friction is the security model.
+3. **Adding a venue, program, pool, wallet, or destination to an allowlist** — a reviewed
+   commit. The friction is the security model.
 4. **Basis attestation** — typing a cost basis is a signed statement with a confidence, its
    own small ceremony; it is never prefilled from anything (the mechanism behind the worst
    loss this desk has taken was a prefill).
 5. **Restarting the sentinel** — dead by choice; the ban is the operator's, and lifting it
    happens in conversation, not in a UI.
 6. **Overriding a breaker** — the absorbing state absorbs. It resets on its own schedule.
-7. **Resolving `Unresolved` orders** — only the chain reconciler resolves them; the glass
-   shows, and refuses to guess.
+7. **Resolving `Unresolved` orders or `Unclassified` reconciliations** — only the
+   reconciler resolves the first on chain evidence; only an operator attestation resolves
+   the second. The glass shows, and refuses to guess (design/reconciler.md).
 
 ---
 
-## 7. Build notes (constraints, not implementation)
+## 9. Build notes (constraints, not implementation)
 
 - Ships against `joshid` projections over WebSocket/SSE; types generated from the schema
   registry — the glass compiles against the same contract the journal validates.
 - Local-first: the Mac keeps follower copies of journal + tape; the glass renders from local
   state and degrades visibly (staleness badges, never silent) when persvati is unreachable.
+- **Collectors are product infrastructure now.** The parity frame promotes the boards/
+  firehose/callout collectors' freshness from research nicety to product SLO: the watchdog's
+  targets surface in the glass as feed-health badges, and a stale trenches feed is a defect
+  with an owner, not a shrug.
 - The v1 components port as the foundation: `Measured<T>`/`figure.tsx` (four-state
-  rendering, provenance hover), `instrument.tsx`, `pricechart.tsx`, and
-  `rendered-html.test.mjs`'s scar pins move with them.
+  rendering, provenance hover), `instrument.tsx`, `pricechart.tsx`, the v1 explorer/hunch
+  views, and `rendered-html.test.mjs`'s scar pins move with them.
 - Charting stays in the web ecosystem (the deciding argument for keeping TS); dataviz
   discipline per house rules.
 - No public listener, ever. Loopback + authenticated tunnel (the v1 posture, kept).
