@@ -196,6 +196,31 @@ external:
        For contrast the real jackduvalcalls follows NOBODY (following: 0), so 'follows a roster of
        big callers' is itself a discriminator between the impersonator and the impersonated."}
 
+  # Three wallets that appear to exist only to trade alongside jackduvalcalls. Found by the
+  # temporal join in studies/jackduval_workup.py and kept because the EVIDENCE IS BREADTH,
+  # not timing: each trades ~99% of its coins in common with him, while a universal launch
+  # sniper touching 17,908 coins (FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, the control
+  # that makes this mean anything) answers 1.4%. All on-curve; none has a pump.fun profile.
+  #
+  # WHAT THIS IS NOT: it is NOT established that these are his own wallets. A copy bot that
+  # follows only him produces the same 99%. Two shape facts narrow it without closing it --
+  # the slot-offset profile against his buys is SYMMETRIC (d=-1 ~ d=+1), which a lagging
+  # copier would not produce, and same-slot tx_index offsets are spread over +/-1..3 rather
+  # than consecutive, so this is not one atomic Jito bundle either. Co-scheduled, not chained.
+  #
+  # DO NOT read same-slot co-occurrence as the evidence. The 1.4% control ALSO sits at 42.7%
+  # same-slot, because everyone racing a new launch lands in the same few slots. Same-slot
+  # measures sniping; breadth measures coordination. See studies/RESULT_jackduval_workup.md
+  # section 5.7.1.
+  - {address: 6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB, label: jackduval_coordinated_a, kind: coordinated_set, confidence: inferred,
+     note: "355 pump coins in 10 days, 352 of them (99.2%) also traded by jackduvalcalls; 925 same-slot with his buys, 0 same-transaction. First seen slot 437325417, identical to _b."}
+  - {address: DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT, label: jackduval_coordinated_b, kind: coordinated_set, confidence: inferred,
+     note: "342 pump coins in 10 days, 338 of them (98.8%) also traded by jackduvalcalls; 892 same-slot with his buys, 0 same-transaction. First seen slot 437325417, identical to _a -- co-birth is its own linkage channel."}
+  - {address: D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42, label: jackduval_coordinated_c, kind: coordinated_set, confidence: inferred,
+     note: "276 pump coins in 10 days, 275 of them (99.6%) also traded by jackduvalcalls; 656 same-slot with his buys, 0 same-transaction."}
+  - {address: FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, label: universal_launch_sniper, kind: control, confidence: inferred,
+     note: "NOT a coordinated wallet -- this is the NEGATIVE CONTROL that gives the three above their meaning. Touches 17,908 pump coins in ten days and shares only 247 (1.4%) with jackduvalcalls, yet still sits at 42.7% same-slot with his buys. Kept in this file so nobody re-derives it and so no future study mistakes same-slot co-occurrence for coordination."}
+
 # The namespace census behind the imposter entry above, so the hazard's SHAPE is recorded
 # and not re-derived. `/users/search?searchTerm=jackduval` returns THIRTEEN profiles, all
 # on-curve. Only one matters: the real caller holds 17,468 of the namespace's 17,529
