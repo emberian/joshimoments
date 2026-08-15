@@ -1059,6 +1059,134 @@ def _census_row(c: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------------------
+# retro census: a complete launch tape for a past day, from the bulk pull + batch metadata
+# --------------------------------------------------------------------------------------
+
+BULK_PUMP = STATE / "bulk_pump" / "raw"
+
+#: ``POST /coins/mints`` with a JSON body ``{"mints": [...]}`` returns full metadata for a
+#: list of mints. Measured 2026-08-15: 500 mints in 0.86 s, and 1000 is a 400. This is the
+#: endpoint that makes a retrospective imitation study possible at all — the paged
+#: ``GET /coins`` list walls out at ``offset≈2000``, about 1.9 h of history.
+BATCH_MINTS_URL = f"{PUMP_API}/coins/mints"
+BATCH_SIZE = 500
+
+
+def bulk_pump_mints(day: str, limit_files: int | None = None) -> set[str]:
+    """Every pump mint that appears in a day of the bulk pull.
+
+    The bulk parquet is balance deltas — ``signature``, ``block_time``, and pre/post token
+    balances — and carries **no token metadata at all**, which is exactly the field an
+    imitation study runs on. So this is used only to *enumerate* candidate mints; name,
+    symbol, image and the authoritative ``created_timestamp`` come from the batch endpoint
+    afterwards. Enumerating a day costs ~1.5 minutes.
+    """
+    import pyarrow.parquet as pq
+
+    root = BULK_PUMP / f"day={day}"
+    files = sorted(root.glob("*.parquet"))
+    if limit_files:
+        files = files[:limit_files]
+    mints: set[str] = set()
+    for i, f in enumerate(files):
+        try:
+            table = pq.read_table(f, columns=["post"])
+        except Exception:  # noqa: BLE001 - a partial download must not kill the scan
+            continue
+        for lst in table.column("post"):
+            for st in lst:
+                m = st["mint"].as_py()
+                if m:
+                    mints.add(m)
+        if i % 500 == 0 and i:
+            print(f"  [retro] {i}/{len(files)} files, {len(mints)} mints", file=sys.stderr)
+    return mints
+
+
+def batch_metadata(mints: Sequence[str], pause: float = 0.25) -> Iterator[dict[str, Any]]:
+    """Metadata for an arbitrary list of mints, 500 at a time."""
+    for i in range(0, len(mints), BATCH_SIZE):
+        chunk = list(mints[i : i + BATCH_SIZE])
+        body = json.dumps({"mints": chunk}).encode()
+        req = urllib.request.Request(
+            BATCH_MINTS_URL,
+            data=body,
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        )
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    out = json.loads(resp.read())
+                break
+            except Exception:  # noqa: BLE001
+                time.sleep(1.5 * (attempt + 1))
+        else:
+            continue
+        if isinstance(out, list):
+            yield from out
+        time.sleep(pause)
+
+
+def retro_census(day: str, out_path: Path, *, limit_files: int | None = None) -> dict[str, Any]:
+    """Write a complete ``census_coin`` tape for one past UTC day.
+
+    Complete in a sense the live socket tape never is: the bulk pull sees every transaction,
+    so every mint that traded that day is enumerated, and the metadata call then supplies the
+    authoritative creation time. A coin is kept when *pump.fun's own* ``created_timestamp``
+    falls inside the day — not when it first appears in the parquet, which would misdate every
+    coin created earlier and traded that day.
+    """
+    t0 = time.time()
+    day_start = dt.datetime.fromisoformat(f"{day}T00:00:00+00:00").timestamp()
+    day_end = day_start + 86400.0
+    mints = sorted(bulk_pump_mints(day, limit_files))
+    print(f"  [retro] {len(mints)} distinct mints enumerated in {time.time()-t0:.0f}s", file=sys.stderr)
+
+    kept = 0
+    seen = 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w") as fh:
+        for coin in batch_metadata(mints):
+            seen += 1
+            created = coin.get("created_timestamp")
+            if not created:
+                continue
+            if not (day_start <= _ms_or_s(created) < day_end):
+                continue
+            row = _census_row(coin)
+            row["provenance"] = "bulk_pump_enumeration+pump_rest_batch"
+            fh.write(json.dumps(row) + "\n")
+            kept += 1
+            if kept % 5000 == 0:
+                print(f"  [retro] {kept} launches kept", file=sys.stderr)
+        fh.write(
+            json.dumps(
+                {
+                    "kind": "heartbeat",
+                    "t_ingest": _iso(time.time()),
+                    "t_event": None,
+                    "t_event_source": "absent:local_row_has_no_vendor_clock",
+                    "day": day,
+                    "mints_enumerated": len(mints),
+                    "metadata_returned": seen,
+                    "launches_kept": kept,
+                    "elapsed_s": round(time.time() - t0, 1),
+                }
+            )
+            + "\n"
+        )
+    stats = {
+        "day": day,
+        "mints_enumerated": len(mints),
+        "metadata_returned": seen,
+        "launches_kept": kept,
+        "elapsed_s": round(time.time() - t0, 1),
+    }
+    print(f"  [retro] {stats}", file=sys.stderr)
+    return stats
+
+
 def load_known(paths: Iterable[Path]) -> set[str]:
     known: set[str] = set()
     for row in read_census(paths):
@@ -1096,6 +1224,13 @@ def cmd_census(args: argparse.Namespace) -> int:
         if not args.loop:
             return 0
         time.sleep(args.interval)
+
+
+def cmd_retro(args: argparse.Namespace) -> int:
+    SWARMS.mkdir(parents=True, exist_ok=True)
+    stats = retro_census(args.day, SWARMS / f"retro-{args.day}.jsonl", limit_files=args.limit_files)
+    print(json.dumps(stats))
+    return 0
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -1185,6 +1320,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     c.add_argument("--loop", action="store_true")
     c.add_argument("--interval", type=float, default=300.0)
     c.set_defaults(fn=cmd_census)
+
+    t = sub.add_parser("retro", help="build a complete launch tape for a past day")
+    t.add_argument("--day", required=True, help="UTC day, YYYY-MM-DD")
+    t.add_argument("--limit-files", type=int, default=None)
+    t.set_defaults(fn=cmd_retro)
 
     r = sub.add_parser("replay", help="deterministic offline detection over the tapes")
     r.add_argument("--firehose", nargs="*", default=None)

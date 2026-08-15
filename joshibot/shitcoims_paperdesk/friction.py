@@ -63,14 +63,23 @@ __all__ = [
     "round_trip_friction",
 ]
 
-#: Measured by ``scripts/sim2real.py`` against the cluster tape, 2026-08-14. Median of the
-#: constant-product shortfall per pool label. DLMM pools are absent by construction: a
-#: bin-walk fill is not a function of vault totals, so constant product cannot predict it.
+#: CORRECTED 2026-08-15 per studies/RESULT_dregg_boundary.md. The prior values (20 bps for
+#: DREGG/SOL and SOLVE/SOL) came from sim2real's VAULT-SHORTFALL measurement, which on
+#: PumpSwap recovers only the LP leg — the protocol and creator legs move from the *user's*
+#: account, not the vault, so the shortfall method structurally cannot see them. A real
+#: taker pays LP 20 + protocol ~5 + creator ~80 (the live 25-rung schedule read from the fee
+#: program's own FeeConfig) ≈ 105 bps. The old constants made every simulated PumpSwap fill
+#: ~85 bps too generous ON BOTH LEGS. nosis/weave were measured through boosted-pool pricing
+#: and carry their own distortions; until re-measured leg-complete, they keep the shortfall
+#: value as a FLOOR with the taker legs added.
+#: (Note for a future DREGG-desk book, NOT this paper desk: the operator is the creator, so
+#: the creator leg returns to them and their own effective take on DREGG is ~25 bps. The
+#: paper desk models an ordinary taker and must pay all 105.)
 EFFECTIVE_TAKE_BPS: Final[dict[str, int]] = {
-    "DREGG/SOL": 20,
-    "SOLVE/SOL": 20,
-    "nosis/SOL": 407,
-    "weave/SOL": 909,
+    "DREGG/SOL": 105,
+    "SOLVE/SOL": 105,
+    "nosis/SOL": 407 + 85,
+    "weave/SOL": 909 + 85,
 }
 
 #: pump.fun bonding curve, pre-graduation. The published 1%.

@@ -332,8 +332,17 @@ def test_every_book_has_a_policy() -> None:
 def test_friction_uses_measured_constants_and_never_a_free_venue() -> None:
     friction = Friction()
     assert friction.priority_fee_lamports == PRIORITY_FEE_LAMPORTS == 35_000
-    assert friction.take_bps_for("DREGG/SOL") == EFFECTIVE_TAKE_BPS["DREGG/SOL"] == 20
-    assert friction.take_bps_for("weave/SOL") == 909
+    # A PumpSwap taker pays ALL THREE legs (LP + protocol + creator). The old 20 bps
+    # constant was the vault-shortfall measurement, which structurally sees only the LP
+    # leg — the other two move from the user's account, not the vault. Every PumpSwap
+    # take must therefore be at least LP(20) + protocol(~5) + creator floor: a value
+    # below 100 bps on a PumpSwap pool means the vault-shortfall bug is back.
+    # (studies/RESULT_dregg_boundary.md; the operator's own ~25 bps DREGG take exists
+    # because the creator leg returns to them — that belongs to a future DREGG book,
+    # never to this desk's ordinary-taker model.)
+    for label in ("DREGG/SOL", "SOLVE/SOL", "nosis/SOL", "weave/SOL"):
+        assert friction.take_bps_for(label) == EFFECTIVE_TAKE_BPS[label] >= 100
+    assert friction.take_bps_for("weave/SOL") > friction.take_bps_for("DREGG/SOL")
     # An unknown venue costs the curve rate, never zero: a free venue is where a paper
     # desk "discovers" an edge that is really a missing cost.
     assert friction.take_bps_for("who/knows") == BONDING_CURVE_TAKE_BPS

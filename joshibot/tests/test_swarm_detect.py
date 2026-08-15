@@ -528,3 +528,52 @@ def test_left_censoring_restarts_after_a_hole_in_the_tape():
     det.push(mk("n1", 13100, "OTHER", "D4", name="eggplant"))
     ev2 = det.push(mk("n2", 13160, "OTHER", "D5", name="eggplant"))
     assert ev2[0]["host_left_censored"] is False
+
+
+# ---------------------------------------------------------------------------
+# retro census
+# ---------------------------------------------------------------------------
+
+
+def test_retro_census_dates_a_coin_by_the_vendor_clock_not_by_the_parquet(tmp_path, monkeypatch):
+    """The bulk pull enumerates; pump.fun dates.
+
+    A mint appears in a day's parquet whenever it *traded* that day, which for a memecoin
+    tape is mostly the day it was born but emphatically not always. Dating a launch by its
+    first appearance in the scan would silently relabel every coin created earlier and still
+    trading — and since those are exactly the survivors, it would inject a survivorship
+    gradient into the launch census itself.
+    """
+    from shitcoims_scalper import swarm_detect as sd
+
+    day = "2026-08-14"
+    born = 1786708800000     # 2026-08-14T12:00:00Z, in ms
+    earlier = 1786363200000  # 2026-08-10T12:00:00Z, four days before
+
+    monkeypatch.setattr(sd, "bulk_pump_mints", lambda d, limit_files=None: {"new", "old"})
+    monkeypatch.setattr(
+        sd,
+        "batch_metadata",
+        lambda mints, pause=0.0: iter(
+            [
+                {"mint": "new", "created_timestamp": born, "name": "N", "symbol": "N",
+                 "creator": "D1", "image_uri": "i", "metadata_uri": "m"},
+                {"mint": "old", "created_timestamp": earlier, "name": "O", "symbol": "O",
+                 "creator": "D2", "image_uri": "i", "metadata_uri": "m"},
+                {"mint": "nodate", "name": "X", "symbol": "X"},
+            ]
+        ),
+    )
+    out = tmp_path / "retro.jsonl"
+    stats = sd.retro_census(day, out)
+    rows = [json.loads(l) for l in out.read_text().splitlines()]
+    coins = [r for r in rows if r["kind"] == "census_coin"]
+    assert [c["mint"] for c in coins] == ["new"]
+    assert stats["launches_kept"] == 1
+    assert stats["mints_enumerated"] == 2
+    # a coin with no vendor clock is dropped rather than guessed at
+    assert all(c["t_event"] for c in coins)
+    assert coins[0]["t_event_source"] == "vendor:created_timestamp"
+    # and the heartbeat records the funnel, so a silent collapse is impossible
+    hb = [r for r in rows if r["kind"] == "heartbeat"]
+    assert hb and hb[0]["metadata_returned"] == 3

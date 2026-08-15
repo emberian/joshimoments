@@ -1174,28 +1174,35 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     as_json: bool = False,
     emit_candidates: bool = True,
     days: int = 3,
+    tape_end_pin: float | None = None,
+    retro_day: str | None = None,
 ) -> dict[str, Any]:
     out = sys.stderr if as_json else sys.stdout
     store = CandleStore()
     result: dict[str, Any] = {"config": {"k": k, "window_s": window_s, "horizon": horizon, "seed": seed}}
 
-    fh, led, cen = _default_paths("new_token", days), _default_paths("ledger", days), _census_paths(days)
-    intervals = listening_intervals(led)
-    launches, stats = build_stream(fh, cen, intervals)
+    launches, stats, intervals = load_stream(days, retro_day)
+    if tape_end_pin is not None:
+        # The collectors are live, so every extra minute of tape makes one more row
+        # horizon-eligible and moves every number. Pinning the end is what makes a reported
+        # run reproducible from the same tapes -- the same discipline RESULT_callout_edge.md
+        # used for exactly this reason.
+        launches = [l for l in launches if l.t <= tape_end_pin]
+        stats["pinned_tape_end"] = tape_end_pin
     if not launches:
         print("no launches in stream", file=out)
         return result
-    tape_end = max(l.t for l in launches)
+    tape_end = tape_end_pin if tape_end_pin is not None else max(l.t for l in launches)
     result["stream"] = {**stats, "tape_end": tape_end}
 
     print("=" * 92, file=out)
     print("IMITATION SIGNAL — does a swarm of clones say anything about the host?", file=out)
     print("=" * 92, file=out)
     span_h = (launches[-1].t - launches[0].t) / 3600
-    listen_h = sum(b - a for a, b in intervals) / 3600
+    listen_h = sum(b - a for a, b in intervals) / 3600 if intervals else span_h
     print(
-        f"\nstream: {len(launches)} launches over {span_h:.2f} h of tape "
-        f"({listen_h:.2f} h demonstrably listening, {len(intervals)} windows), "
+        f"\nstream [{stats.get('source','?')}]: {len(launches)} launches over {span_h:.2f} h of tape "
+        f"({listen_h:.2f} h demonstrably listening, {len(intervals) if intervals else 1} windows), "
         f"{stats['vendor_clock']} on the vendor clock, {stats.get('census_only',0)} REST-only, "
         f"{stats.get('firehose_dupe',0)} socket duplicates dropped",
         file=out,
@@ -1950,15 +1957,67 @@ def write_candidates(
 # ---------------------------------------------------------------------------
 
 
+def load_stream(
+    days: int = 3, retro_day: str | None = None
+) -> tuple[list[Launch], dict[str, Any], list[tuple[float, float]] | None]:
+    """The launch stream, from either the live socket window or a retro day.
+
+    The two are never pooled. The live window is a socket tape with holes, restricted to the
+    ledger's demonstrated listening intervals; the retro day is a *census* built from the
+    bulk pull, complete by construction, and restricting it to socket windows would throw
+    away the entire point of it. They are separate cohorts and separate reported runs — a
+    replication, not extra n.
+    """
+    if retro_day:
+        path = SWARMS / f"retro-{retro_day}.jsonl"
+        launches, stats = build_stream([], [path], None)
+        stats["source"] = f"retro:{retro_day}"
+        return launches, stats, None
+    fh, led, cen = (
+        _default_paths("new_token", days),
+        _default_paths("ledger", days),
+        _census_paths(days),
+    )
+    intervals = listening_intervals(led)
+    launches, stats = build_stream(fh, cen, intervals)
+    stats["source"] = "live_socket_window"
+    return launches, stats, intervals
+
+
+def retro_fetch_set(
+    launches: Sequence[Launch], k: int, window_s: float, sample: int, seed: int
+) -> list[str]:
+    """Which mints a retro day actually needs candles for.
+
+    A full day is ~30k launches and pricing all of them is hours of polite fetching for no
+    gain. Two sets are needed and no more: every member of a family that reached onset size
+    (the treated rows, and the traction probe reads every member), plus a **random** sample
+    of everything else to serve as the control pool. Random is load-bearing — a control pool
+    chosen by any property of the coin would confound the very comparison it exists for.
+    """
+    _onsets, det = run_detector(launches, None, k=k, window_s=window_s)
+    need: set[str] = set()
+    for fam in det.families():
+        if len(fam.members) >= k:
+            need.update(m.mint for m in fam.members)
+    rest = [l.mint for l in launches if l.mint not in need]
+    rng = random.Random(seed)
+    rng.shuffle(rest)
+    return sorted(need) + rest[:sample]
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
     store = CandleStore()
-    fh, led, cen = (
-        _default_paths("new_token", args.days),
-        _default_paths("ledger", args.days),
-        _census_paths(args.days),
-    )
-    launches, stats = build_stream(fh, cen, listening_intervals(led))
-    mints = [l.mint for l in launches]
+    launches, stats, _iv = load_stream(args.days, args.retro_day)
+    if args.retro_day:
+        mints = retro_fetch_set(launches, args.k, args.window, args.sample, args.seed)
+        print(
+            f"[fetch] retro {args.retro_day}: {len(launches)} launches -> {len(mints)} mints "
+            f"to price (family members at k>={args.k}, plus {args.sample} random controls)",
+            file=sys.stderr,
+        )
+    else:
+        mints = [l.mint for l in launches]
     print(f"[fetch] {len(mints)} mints in stream ({stats})", file=sys.stderr)
     t0 = time.time()
     got = fetch_all(
@@ -1983,6 +2042,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--horizon", type=int, default=3600)
     ap.add_argument("--days", type=int, default=3)
     ap.add_argument("--seed", type=int, default=20260815)
+    ap.add_argument("--tape-end", type=float, default=None,
+                    help="pin the analysis window end (epoch seconds); required for a "
+                         "reproducible reported run while the collectors are live")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--pause", type=float, default=0.6)
     ap.add_argument("--loop", type=float, default=0.0, help="repeat --fetch every N seconds")
@@ -1993,6 +2055,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="refresh EVERY mint regardless of staleness; required before a "
                          "reported run so no row is admin-censored by a stale cache")
     ap.add_argument("--no-candidates", action="store_true")
+    ap.add_argument("--retro-day", default=None,
+                    help="analyse a past UTC day from state/swarms/retro-<day>.jsonl instead "
+                         "of the live socket window; never pooled with it")
+    ap.add_argument("--sample", type=int, default=12000,
+                    help="retro only: size of the random control pool to price")
     args = ap.parse_args(argv)
 
     if args.fetch:
@@ -2010,6 +2077,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             as_json=args.json,
             emit_candidates=not args.no_candidates,
             days=args.days,
+            tape_end_pin=args.tape_end,
+            retro_day=args.retro_day,
         )
     return 0
 
