@@ -315,6 +315,17 @@ If a call goes out between his buy and his sell, his followers are his exit liqu
 needs the X census joined to these trade times — for each call, the signed offset from buy to
 tweet and from tweet to sell. Pending.
 
+**That arm is blocked on an identification question, and it must be settled first.** Everything
+above is keyed on a **wallet**, so none of it depends on which X handle he posts under. The call
+census does. `jackduvalcalls` is his **pump.fun username**; the only third-party references found
+anywhere in this session spell the X handle **`@jackduval`** (§3.2). A `from:` census run against
+the wrong string would return somebody else's calls, and forward returns computed on them would
+be meaningless while looking perfectly well-formed.
+
+The ground-truth check is cheap and was specified in advance: the operator named **fatdogwithhat**
+and **calico** as calls they acted on. If those two do not appear in the collected history, the
+handle is wrong and the arm is unvalidated — that is a stop condition, not a null to report.
+
 Also pending: whether `BAr5csYt…` is his *only* wallet (temporal join against a time-matched
 null, per `RESULT_caller_wallets.md` §3 — and note §4's lesson that the one link that survived
 there turned out to be a 161-wallet crowd, not a person).
