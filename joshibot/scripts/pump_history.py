@@ -189,6 +189,68 @@ def repack(root: Path, *, force: bool = False) -> int:
     return 0
 
 
+def fetch(root: Path, bucket: str, days: list[str], *, passes: int = 4) -> int:
+    """Download the export from GCS, reconciling per object until every day is exact.
+
+    Written down because doing it by hand cost five rounds of churn, and every round of it
+    was the same two mistakes:
+
+    **Never run two ``gcloud storage`` transfers against the same destination directory.**
+    gcloud downloads to ``NAME_.gstmp`` and renames. Two processes pointed at one directory
+    clobber each other's scratch, and the result is not a failure — it is *files silently
+    absent afterwards*. A day went 3,119 -> 3,055 -> 3,110 -> 3,118 shards across successive
+    "repairs" because a background sweep and a foreground fetch were racing. This fetches
+    serially, on purpose.
+
+    **A size match is not integrity, and a whole-prefix rsync is not a transfer.** ``gcloud
+    storage rsync`` over 34,000 objects died in its listing phase twice. Per-object
+    reconciliation against a manifest is slower to write and the only thing that converged.
+
+    Egress is billable, so only objects whose local size does not match GCS exactly are
+    fetched. Run :func:`check_shards` afterwards: this function cannot see a file that is the
+    right length and internally corrupt.
+    """
+
+    import subprocess
+
+    total_fetched = 0
+    for attempt in range(1, passes + 1):
+        outstanding = 0
+        for day in days:
+            listing = subprocess.run(
+                ["gcloud", "storage", "ls", "-l", f"{bucket}/day={day}/*.parquet"],
+                capture_output=True, text=True, check=False,
+            )
+            want: dict[str, int] = {}
+            for line in listing.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[-1].endswith(".parquet"):
+                    want[parts[-1].rsplit("/", 1)[-1]] = int(parts[0])
+            day_dir = root / "raw" / f"day={day}"
+            day_dir.mkdir(parents=True, exist_ok=True)
+            need = [
+                name for name, size in want.items()
+                if not (day_dir / name).exists() or (day_dir / name).stat().st_size != size
+            ]
+            for name in need:
+                subprocess.run(
+                    ["gcloud", "storage", "cp", f"{bucket}/day={day}/{name}", str(day_dir / name)],
+                    capture_output=True, text=True, check=False,
+                )
+            for stale in day_dir.glob("*.gstmp"):
+                stale.unlink(missing_ok=True)
+            outstanding += len(need)
+            total_fetched += len(need)
+            if need:
+                print(f"  pass {attempt} {day}: fetched {len(need)}", file=sys.stderr)
+        if outstanding == 0:
+            print(f"all {len(days)} day(s) exact after {attempt} pass(es), "
+                  f"{total_fetched} object(s) fetched", file=sys.stderr)
+            return 0
+    print(f"still incomplete after {passes} passes", file=sys.stderr)
+    return 1
+
+
 def check_shards(root: Path, *, manifest: Path | None = None) -> int:
     """Read every downloaded shard and list the ones that are corrupt.
 
@@ -356,6 +418,11 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("repack", help="fold the export shards into one file per UTC day")
     rp.add_argument("--force", action="store_true")
     sub.add_parser("summary", help="rows, bytes and distinct pump mints per day")
+    ft = sub.add_parser("fetch", help="download the export from GCS, reconciling per object")
+    ft.add_argument("--bucket", default="gs://joshibot-pump-history/pump/v1")
+    ft.add_argument("--day", action="append", required=True,
+                    help="UTC day to fetch, YYYY-MM-DD; repeatable")
+    ft.add_argument("--passes", type=int, default=4)
     ck = sub.add_parser("check", help="read every shard and list the corrupt ones")
     ck.add_argument("--manifest", type=Path, default=None)
     vf = sub.add_parser("verify", help="compare the overlap against the live cluster tape")
@@ -363,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "repack":
         return repack(args.root, force=args.force)
+    if args.cmd == "fetch":
+        return fetch(args.root, args.bucket, args.day, passes=args.passes)
     if args.cmd == "check":
         return check_shards(args.root, manifest=args.manifest)
     if args.cmd == "summary":
