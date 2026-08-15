@@ -16,6 +16,7 @@ uv run --group research python -m studies.operator_crime verify    # falsify the
 uv run --group research python -m studies.operator_crime labels
 uv run --group research python -m studies.operator_crime graph  --n-null 100 --max-deployers 400
 uv run --group research python -m studies.operator_crime predict
+uv run --group research python -m studies.operator_crime risks
 uv run --group research python -m studies.operator_crime screen
 ```
 
@@ -31,11 +32,14 @@ operator's critique — that the blind zone was an artifact of treating the COIN
 when crime is a repeated game by persistent operators — motivated this study. Ten days of
 full pump.fun flow says:
 
-1. **The blind zone was a DATA problem, not a unit problem.** The prior study was blind at
-   t=0 because its instrument was hourly price history, which by construction has nothing at
-   hour zero. The birth slot itself is enormously informative and needs no history at all:
+1. **The blind zone was a DATA problem, not a unit problem — and it is far narrower than
+   45 hours.** Cause-specific cumulative incidence says **96–99% of a coin's lifetime rip
+   risk has already been realised one hour after it exists.** The prior study was blind there
+   because its instrument was hourly price history, which by construction has nothing at hour
+   zero. The birth slot itself is enormously informative and needs no history at all:
    coin-intrinsic birth features alone score **AUPRC 0.0274, 4.93× the base rate**, against
-   an EdgeBank-style memorisation baseline at 1.13×.
+   an EdgeBank-style memorisation baseline at 1.13×. Bundled-at-birth coins rip at
+   **1.598%** against **0.070%** for unbundled — a **23×** separation from one slot of data.
 2. **There IS a persistent actor, and it is not the deployer.** Same-deployer coins share
    birth-slot sniper wallets at mean Jaccard **0.2834** against **0.0014** for day-matched
    different-deployer pairs, and **51.2× a degree-preserving (curveball) null** at
@@ -296,6 +300,42 @@ gain. The **sniper crew's** past adds a real +13.7%.
 
 This is consistent with §6.2: crews are reused 51× above a degree-preserving null, whereas
 the deployer wallet is cheap to rotate and evidently is rotated.
+
+### 5.5 Competing risks — and the blind zone is even worse than the prior study found
+
+AUPRC answers "does it rip" and not "when", and it treats a coin that **graduated** as a
+non-event when graduation is a competing outcome that removes the coin from risk on the curve
+entirely. Cause-specific cumulative incidence is the right object. Censoring is clock-based
+(PROGRAM.md §3.8): a coin still trading at the window edge is censored there.
+
+218,652 coins — **1,203 RIP**, **6,380 GRADUATED**, 211,069 censored.
+
+**P(RIP by t), cause-specific, in the presence of graduation:**
+
+| stratum | 1 h | 6 h | 24 h | 72 h |
+|---|---:|---:|---:|---:|
+| operator has never ripped (`prior_rips = 0`) | 0.477% | 0.482% | 0.485% | 0.486% |
+| operator has ripped 1–2 before | 0.709% | 0.730% | 0.730% | 0.730% |
+| operator has ripped 3+ before | **1.233%** | 1.233% | 1.243% | 1.243% |
+| **no bundle at birth** (`n_snipers ≤ 1`) | **0.066%** | 0.067% | 0.069% | 0.070% |
+| **bundled at birth** (`n_snipers ≥ 5`) | **1.572%** | 1.594% | 1.596% | 1.598% |
+
+Two readings, and the first is the more important finding in this section:
+
+* **Essentially every rip has already happened by hour one.** Across every stratum, the
+  cumulative incidence at 1 hour is 96–99% of its value at 72 hours. `RESULT_crime_signatures.md`
+  put 16 of 23 cliffs in the pool's first 0–45 *hours* and called that a blind zone for a
+  48-hour feature window. At the scale of a full corpus it is far sharper than that: **the
+  window in which a rug can be predicted at all closes about sixty minutes after the coin
+  exists.** No price-history detector of any window length can operate there. A birth-slot
+  detector can, which is why §7 is the shippable part of this study.
+* **The birth slot separates 23×; the operator's record separates 2.6×.** `n_snipers ≤ 1` vs
+  `≥ 5` is 0.070% vs 1.598%. Prior rips 0 vs 3+ is 0.486% vs 1.243%. Both are real and monotone;
+  they are not the same size, and the bigger one needs no history at all.
+
+*(Aalen–Johansen refuses exact ties and `block_time` is 1-second resolution, so lifelines
+jitters tied event times. The estimator warns about it on every stratum; the effect at these
+separations is immaterial and the warning is left visible rather than silenced.)*
 
 ---
 

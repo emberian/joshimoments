@@ -1344,6 +1344,89 @@ def cmd_predict(seed: int = 20260815, n_null: int = 50, split_day: int = 5) -> i
 
 
 # --------------------------------------------------------------------------------------
+# stage 8b -- competing risks, because a coin does not have one way to end
+# --------------------------------------------------------------------------------------
+#
+# AUPRC answers "does it rip"; it does not answer "when", and it silently treats a coin that
+# GRADUATED as a non-event when graduation is a competing outcome that removes the coin from
+# risk of ripping on the curve entirely. Cause-specific cumulative incidence is the right
+# object: for each cause, the probability of having failed that way by time t, in the presence
+# of the other cause.
+#
+# Censoring is CLOCK-based, never displacement-based (PROGRAM.md §3.8): a coin still trading
+# at the end of the window is censored at the window edge, and a coin born on day 9 is
+# censored at hours, which is why the cumulative incidence curves are read at fixed horizons
+# rather than compared at their right-hand ends.
+
+
+def cmd_risks(horizons=(3600, 6 * 3600, 24 * 3600, 72 * 3600)) -> int:
+    import numpy as np
+    import pandas as pd
+
+    df = pd.read_parquet(OUT / "panel.parquet")
+    df = df[df["deployer"].notna()].copy()
+    t_end = int(df["birth_time"].max()) + 1
+    # cause 1 = RIP at t_dump; cause 2 = GRADUATED at migration; else censored at window edge
+    t_rip = df["t_dump"].where(df["is_rip"], np.nan)
+    t_grad = df["t_last"].where(df["graduated"], np.nan)
+    dur = np.minimum(
+        np.nan_to_num(t_rip - df["birth_time"], nan=np.inf),
+        np.nan_to_num(t_grad - df["birth_time"], nan=np.inf),
+    )
+    cause = np.where(
+        np.nan_to_num(t_rip - df["birth_time"], nan=np.inf)
+        <= np.nan_to_num(t_grad - df["birth_time"], nan=np.inf),
+        1, 2,
+    )
+    cens = t_end - df["birth_time"]
+    cause = np.where(np.isinf(dur), 0, cause)
+    dur = np.where(np.isinf(dur), cens, dur)
+    dur = np.maximum(dur, 1)
+    df["dur"], df["cause"] = dur, cause
+    print("\n=== 8b competing risks, cause-specific cumulative incidence ===")
+    print(f"  coins {len(df):,}   RIP {int((cause == 1).sum()):,}   "
+          f"GRADUATED {int((cause == 2).sum()):,}   censored {int((cause == 0).sum()):,}")
+
+    try:
+        from lifelines import AalenJohansenFitter
+    except ImportError:
+        print("  lifelines missing; install the research group")
+        return 1
+
+    strata = {
+        "operator has never ripped (prior_rips = 0)": df["prior_rips"] == 0,
+        "operator has ripped 1-2 before": df["prior_rips"].between(1, 2),
+        "operator has ripped 3+ before": df["prior_rips"] >= 3,
+        "no bundle at birth (n_snipers <= 1)": df["n_snipers"] <= 1,
+        "bundled at birth (n_snipers >= 5)": df["n_snipers"] >= 5,
+    }
+    hdr = "".join(f"{h // 3600:>10}h" for h in horizons)
+    print(f"\n  P(RIP by t), cause-specific{'':<22}{hdr}")
+    print("  " + "-" * (52 + 11 * len(horizons)))
+    out: dict = {}
+    for name, m in strata.items():
+        g = df[m]
+        if len(g) < 100:
+            continue
+        ajf = AalenJohansenFitter(calculate_variance=False, seed=0)
+        # jitter: AJ refuses exact ties between event times, and block_time is 1 s resolution
+        ajf.fit(g["dur"].to_numpy(), g["cause"].to_numpy(), event_of_interest=1)
+        ci = ajf.cumulative_density_
+        vals = []
+        for h in horizons:
+            idx = ci.index[ci.index <= h]
+            vals.append(float(ci.loc[idx[-1]].iloc[0]) if len(idx) else 0.0)
+        out[name] = vals
+        print(f"  {name:<49}" + "".join(f"{v:>10.3%} " for v in vals))
+    (OUT / "risks.json").write_text(json.dumps(
+        {"horizons_s": list(horizons), "cumulative_incidence_rip": out,
+         "n": int(len(df)), "n_rip": int((cause == 1).sum()),
+         "n_grad": int((cause == 2).sum())}, indent=2))
+    print(f"\n  -> {OUT / 'risks.json'}")
+    return 0
+
+
+# --------------------------------------------------------------------------------------
 # stage 9 -- the product inversion: a birth-time CLEAN screen
 # --------------------------------------------------------------------------------------
 #
@@ -1538,6 +1621,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=20260815)
     p.add_argument("--n-null", type=int, default=50)
     p.add_argument("--split-day", type=int, default=5)
+    sub.add_parser("risks", help="cause-specific cumulative incidence: rip vs graduation")
     sub.add_parser("screen", help="the birth-time CLEAN screen and its operating point")
     p = sub.add_parser("verify", help="falsify the curve price identity against the boards tape")
     p.add_argument("--day", default="20260814")
@@ -1569,6 +1653,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "predict":
         return cmd_predict(seed=args.seed, n_null=args.n_null, split_day=args.split_day)
+    if args.cmd == "risks":
+        return cmd_risks()
     if args.cmd == "screen":
         return cmd_screen()
     if args.cmd == "verify":
