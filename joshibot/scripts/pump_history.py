@@ -55,13 +55,35 @@ column                   note
                          which ``getTransaction`` cannot give you
 ``fee_lamports``         **string**
 ``err``                  **string, and EMPTY STRING means success — never NULL.**
-                         ``WHERE err IS NULL`` matches nothing, ever. Use ``err = ''``.
+                         ``WHERE err IS NULL`` matches nothing, ever. And in this export
+                         ``err`` is **CONSTANT**: see "THERE ARE NO FAILURES HERE" below.
 ``compute_units``        **string**
 ``pre`` / ``post``       list<struct<owner, mint, amount, decimals, account_index>>,
                          ``amount`` a **string**
 ``schema_version``       ``bulk_pump.v1``
 ``provenance_*``         source, extraction time, sha256 of the exact query text
 ======================== ============================================================
+
+THERE ARE NO FAILURES HERE. ``err`` IS A CONSTANT.
+---------------------------------------------------
+Measured over the whole export, 2026-08-15 (``studies/failure_stream.py``, and the reason
+that study exists in the shape it does)::
+
+    SELECT COUNT(*), SUM(CASE WHEN err <> '' THEN 1 ELSE 0 END)
+    FROM read_parquet('state/bulk_pump/daily/*.parquet')
+    -->  106,639,238        0
+
+Zero on every one of the ten days. This is not a bug in the export, it is a consequence of
+its own design colliding with the SVM's: the query keeps a transaction only when a pump-mint
+balance **changed**, and a reverted transaction's balances **roll back**, so ``pre == post``
+and the row is filtered out before ``err`` is ever consulted. The column is present, typed
+and non-null — and it cannot vary.
+
+So **no study of failed transactions can be built on this corpus.** Reverts on our own pools
+live in ``state/bulk_history/`` instead, which carries 922,430 of them with ``fee_lamports``,
+``compute_units`` and ``tx_index`` attached. Restoring failures here would mean relaxing the
+``pre != post`` predicate, which is the ~40x output reduction this export depends on — so it
+is a different extraction, not a flag.
 
 **Every raw amount is a string.** Same rule as ``shitcoims_cluster.tape``: a 1e9-supply
 6-decimal token is 1e15 raw units, already inside one order of magnitude of the 2**53 float
