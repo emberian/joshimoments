@@ -107,6 +107,7 @@ COMMANDS
 ``flow``     per-(mint, wallet, tx) trade legs with exact SOL, cohort coins        (~15 min)
 ``basis``    the average-cost trajectory; ``--check`` brute-forces FIFO vs avgcost
 ``holders``  supply-weighted basis distribution snapshots per coin
+``describe`` the realization distribution, the standing book, and the round-number test
 ``hazard``   P(sell in the next minute | unrealized PnL), on a real risk set
 ``q1``       basis-density modes vs price reversals, against a rotation null
 ``q2``       realization-policy embedding, clustering, tooling-vs-actor controls
@@ -1191,6 +1192,142 @@ def cmd_q1(args: argparse.Namespace) -> int:
     }
     (_out() / "q1_reversal.json").write_text(json.dumps(res, indent=2))
     print(f"[q1] -> {_out() / 'q1_reversal.json'}  ({time.time() - t0w:.0f}s)", flush=True)
+    return 0
+
+
+# =====================================================================================
+# describe -- the distribution the operator asked about, and a real test of the confound
+# =====================================================================================
+
+#: The preset levels a take-profit / stop-loss menu offers. Break-even is included because it
+#: turns out to be the only one that exists.
+ROUND_LEVELS = (-0.75, -0.5, -0.4, -0.3, -0.25, -0.2, -0.15, -0.1, 0.0,
+                0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 9.0)
+
+
+def cmd_describe(args: argparse.Namespace) -> int:
+    """The unrealized-PnL distribution itself, plus the round-number confound MEASURED.
+
+    Three objects:
+
+    1. **The realization distribution** -- where sells happen in unrealized-PnL space -- and
+       **the standing book**, the unrealized PnL of every live position at the corpus edge.
+       The second is the one nobody looks at and it is the more sobering of the two.
+
+    2. **A real test for preset clustering.** ``q2`` reports the share of sells inside a
+       tolerance band of a round level, and that number is uninterpretable alone: nineteen
+       levels at a +/-2% relative band cover roughly half this distribution's support by
+       chance. The test that means something is EXCESS OVER A SMOOTH BASELINE -- a wide moving
+       median that a narrow spike cannot drag upward. Run that way, the answer is that the
+       confound the whole of §2 was designed around **does not exist in this market**: every
+       classic take-profit and stop-loss level sits within a few percent of its own baseline.
+       Exactly one level is a real spike, and it is break-even.
+
+    3. **What that spike is made of** -- how much of it is a same-slot round trip rather than a
+       decision, since half of all sells in this corpus happen in the same slot as the buy.
+    """
+    import numpy as np
+
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _out() / "basis.parquet"
+    ok = (
+        "upnl_at_action IS NOT NULL AND upnl_at_action > -0.999 AND upnl_at_action < 1000 "
+        "AND log_a_min >= -300 AND qty_before_raw > 0"
+    )
+
+    res: dict[str, object] = {}
+    res["realization_distribution"] = con.execute(
+        f"""SELECT count(*) n,
+              quantile_cont(upnl_at_action,0.01) p01, quantile_cont(upnl_at_action,0.05) p05,
+              quantile_cont(upnl_at_action,0.10) p10, quantile_cont(upnl_at_action,0.25) p25,
+              median(upnl_at_action) p50, quantile_cont(upnl_at_action,0.75) p75,
+              quantile_cont(upnl_at_action,0.90) p90, quantile_cont(upnl_at_action,0.95) p95,
+              quantile_cont(upnl_at_action,0.99) p99,
+              avg((upnl_at_action>0)::int) frac_in_profit
+            FROM read_parquet('{basis}') WHERE delta_raw < 0 AND {ok}"""
+    ).fetchdf().to_dict("records")[0]
+
+    res["action_asymmetry"] = con.execute(
+        f"""SELECT sum((delta_raw>0)::int) n_buys, sum((delta_raw<0)::int) n_sells,
+              avg(CASE WHEN delta_raw>0 THEN (upnl_at_action<0)::int END) frac_adds_while_red,
+              avg(CASE WHEN delta_raw<0 THEN (upnl_at_action<0)::int END) frac_sells_while_red
+            FROM read_parquet('{basis}') WHERE {ok}"""
+    ).fetchdf().to_dict("records")[0]
+
+    res["standing_book"] = con.execute(
+        f"""WITH last AS (
+              SELECT mint, owner, qty_after qty, basis_after basis FROM (
+                SELECT mint, owner, qty_after, basis_after,
+                  row_number() OVER (PARTITION BY mint,owner
+                                     ORDER BY block_slot DESC,tx_index DESC) rk
+                FROM read_parquet('{basis}')) WHERE rk=1 AND qty_after>{DUST_RAW}
+                                                    AND basis_after>0),
+            spot AS (SELECT mint, arg_max(mark_after, block_slot*1000000+tx_index) spot
+                     FROM read_parquet('{basis}')
+                     WHERE mark_after>0 AND abs(sol)>={args.min_sol} GROUP BY 1)
+            SELECT count(*) n_positions,
+              quantile_cont(s.spot/l.basis-1, 0.05) p05,
+              quantile_cont(s.spot/l.basis-1, 0.25) p25,
+              median(s.spot/l.basis-1) p50,
+              quantile_cont(s.spot/l.basis-1, 0.75) p75,
+              quantile_cont(s.spot/l.basis-1, 0.95) p95,
+              avg((s.spot>l.basis)::int) frac_positions_in_profit,
+              sum(CASE WHEN s.spot>l.basis THEN l.qty ELSE 0 END)/sum(l.qty)
+                  supply_share_in_profit
+            FROM last l JOIN spot s USING (mint)"""
+    ).fetchdf().to_dict("records")[0]
+
+    # --- the round-number test, against a smooth baseline ---------------------------------
+    u = con.execute(
+        f"""SELECT upnl_at_action u FROM read_parquet('{basis}')
+            WHERE delta_raw < 0 AND {ok} AND upnl_at_action BETWEEN -0.98 AND 10"""
+    ).fetchdf()["u"].to_numpy()
+    bw = 0.002
+    edges = np.arange(-0.98, 10.0 + bw, bw)
+    h, _ = np.histogram(u, bins=edges)
+    centers = (edges[:-1] + edges[1:]) / 2
+    K = 201  # a +/-0.2 window; wide enough that a one-bin spike cannot move the median
+    pad = np.pad(h.astype(float), K // 2, mode="edge")
+    base = np.array([np.median(pad[i : i + K]) for i in range(h.size)])
+    res["round_number_test"] = {
+        "n_sells": int(u.size),
+        "bin_width": bw,
+        "baseline_window": K * bw,
+        "levels": [
+            {
+                "level": lv,
+                "observed": float(h[np.abs(centers - lv) <= bw].sum()),
+                "smooth_baseline": float(base[np.abs(centers - lv) <= bw].sum()),
+                "excess_ratio": round(
+                    float(h[np.abs(centers - lv) <= bw].sum())
+                    / max(float(base[np.abs(centers - lv) <= bw].sum()), 1e-9),
+                    3,
+                ),
+            }
+            for lv in ROUND_LEVELS
+        ],
+    }
+
+    # --- what the break-even spike is made of ----------------------------------------------
+    res["breakeven_mechanism"] = con.execute(
+        f"""WITH s AS (
+              SELECT upnl_at_action u, delta_raw, block_time, block_slot, qty_after,
+                     min(block_time) OVER w AS t_open, min(block_slot) OVER w AS slot_open
+              FROM read_parquet('{basis}') WHERE {ok}
+              WINDOW w AS (PARTITION BY mint, owner, episode))
+            SELECT CASE WHEN abs(u) <= 0.002 THEN 'at_breakeven'
+                        WHEN abs(u) <= 0.05  THEN 'near_breakeven'
+                        ELSE 'away' END AS band,
+                   count(*) n, median(block_time - t_open) med_hold_s,
+                   avg((block_slot = slot_open)::int) frac_same_slot_as_open,
+                   avg((qty_after <= {DUST_RAW})::int) frac_full_exit
+            FROM s WHERE delta_raw < 0 GROUP BY 1 ORDER BY 2 DESC"""
+    ).fetchdf().to_dict("records")
+
+    print(json.dumps(res, indent=2, default=str)[:4000], flush=True)
+    (_out() / "describe.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"[describe] -> {_out() / 'describe.json'}  ({time.time() - t0:.0f}s)", flush=True)
     return 0
 
 
@@ -2374,6 +2511,10 @@ def main(argv: list[str] | None = None) -> int:
     q2.add_argument("--crew-alpha", type=float, default=0.01)
     q2.add_argument("--seed", type=int, default=20260815)
     q2.set_defaults(fn=cmd_q2)
+
+    de = common(sub.add_parser("describe", help="the distribution, and the round-number test"))
+    de.add_argument("--min-sol", type=float, default=0.01)
+    de.set_defaults(fn=cmd_describe)
 
     hz = common(sub.add_parser("hazard", help="P(sell next tick | unrealized PnL), with a risk set"))
     hz.add_argument("--tick", type=int, default=60)
