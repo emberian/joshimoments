@@ -61,7 +61,7 @@ full pump.fun flow says:
    in collapse rate at the cost of looking at one coin in twenty.
 6. **One gate points the opposite way from intuition and it matters for the product.**
    "This deployer has never dumped before" is a **RISK** factor, not a safety factor: those
-   coins collapse at **1.77×** the base rate. A clean record is mostly indistinguishable from
+   coins collapse at **1.71×** the base rate. A clean record is mostly indistinguishable from
    no record, and no record means a first-timer.
 
 **What this does not do: it does not give an exit signal, and it does not predict which
@@ -451,19 +451,36 @@ who sold.
 | no bundle at birth (`n_snipers ≤ 1`) | 51,889 | 99.8863% | **0.16×** |
 | dev buy under 2% of supply | 46,599 | 99.7704% | **0.33×** |
 | no recidivist sniper (`sniper_prior_max = 0`) | 9,904 | 99.4043% | 0.86× |
-| deployer has never ripped | 90,900 | 99.3630% | 0.92× |
-| **deployer has never dumped** | 32,582 | 98.7785% | **1.77×** |
-| **ALL GATES — the CLEAN screen** | **5,311** | **99.9623%** | **0.05×** |
+| deployer has never ripped | 90,904 | 99.3631% | 0.92× |
+| **deployer has never dumped** | 33,574 | 98.8146% | **1.71×** |
+| **ALL GATES — the CLEAN screen** | **5,322** | **99.9624%** | **0.05×** |
 
 **Operating point: the screen admits 4.8% of new coins and is clean 99.96% of the time,
 letting through 2 of 771 collapses.** Against the insider-mechanical `is_rip` label it admits
 0 of 621, but that number is partly definitional and the 99.96% is the one to quote.
 
+### 7.1 It is not a censoring artifact
+
+A coin born on the last day of the window has hours in which to collapse, so a screen
+evaluated on the whole test half could be flattered by coins that simply have not died yet.
+Requiring a minimum observation window:
+
+| minimum observation | test coins | passing the screen | collapse base | P(clean) | lift |
+|---|---:|---:|---:|---:|---:|
+| 0 h | 111,450 | 5,322 | 0.6918% | 99.9624% | 0.05× |
+| 1 h | 110,693 | 5,188 | 0.6911% | 99.9614% | 0.06× |
+| 6 h | 105,364 | 4,946 | 0.6881% | 99.9596% | 0.06× |
+| 24 h | 90,430 | 4,351 | 0.7033% | 99.9540% | 0.07× |
+| 48 h | 68,134 | 3,560 | 0.7148% | 99.9719% | 0.04× |
+
+Flat. Which §5.5 predicts: if essentially all the risk is realised in the first hour, then
+observing a coin for two days rather than one hour cannot reveal much more of it.
+
 Three things a reader should take from the gate table rather than from the bottom line:
 
 1. **The bundle gate does nearly all the work** (0.16×), and it is available in the coin's
    first slot. Dev-buy size is second (0.33×).
-2. **"This deployer has never dumped" is a RISK factor at 1.77×.** A clean record is mostly
+2. **"This deployer has never dumped" is a RISK factor at 1.71×.** A clean record is mostly
    indistinguishable from *no* record, and no record means a first-time deployer. The absence
    of history is not evidence of innocence — this inverts the most natural manual heuristic
    and is the single most actionable line in the document.
@@ -594,7 +611,7 @@ instrument is a constant and every headline built on it is meaningless.
 1. **Ship the CLEAN screen as birth-time triage for the $40 bets**, at the stated operating
    point: 4.8% coverage, 99.96% clean, 2 of 771 collapses admitted. It needs one slot of chain
    data per coin and no history at all.
-2. **Stop treating a clean deployer record as reassurance.** It reads 1.77× *worse* than base.
+2. **Stop treating a clean deployer record as reassurance.** It reads 1.71× *worse* than base.
    If a history gate is used at all, it should be "this deployer has a *long* clean record",
    which the 610 deployers with ≥50 coins make measurable and which this study did not test.
 3. **Re-pull the corpus with signers and fee payers.** Two of this study's three dead ends
