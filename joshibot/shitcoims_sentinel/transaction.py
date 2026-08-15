@@ -32,11 +32,46 @@ class TransactionRejected(RuntimeError):
     pass
 
 
+DEFAULT_COMPUTE_UNIT_LIMIT = 200_000
+
+# studies/RESULT_execution_landing.md §4: Jupiter-routed transactions land 29.6% below
+# 50,000 microlamports/CU and 97.2% at or above it. One number, a 3x effect on whether an
+# exit reaches the chain at all. We do not BUILD this transaction -- Jupiter does, and the
+# order endpoint sets its own ComputeBudget instructions -- so the bid is observed here and
+# alarmed on rather than chosen. It is deliberately NOT a rejection: this is a sell-only
+# safety system, and refusing to sell because the fee looks cheap converts a price risk into
+# a total-loss risk on a bag that may be rugging.
+LANDING_BID_FLOOR_MICRO_LAMPORTS = 50_000
+
+# Solana's per-account cost tracker charges every writable account the REQUESTED compute
+# units against a 40M/block budget, so an over-generous request throttles the very pool we
+# are trying to exit -- and the fee is paid on the limit, not on consumption. Measured swap
+# consumption is 123,615 median / 339,095 p90 (RESULT_execution_landing.md §8), and the
+# recommended sizing is simulated consumption x 1.15. This multiple is the alarm threshold,
+# not the sizing rule: well clear of 1.15 so it fires on a genuinely wasteful request.
+COMPUTE_UNIT_LIMIT_ALARM_MULTIPLE = 2
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedTransaction:
     transaction: VersionedTransaction
     top_level_programs: tuple[str, ...]
     priority_fee_lamports: int
+    # What we are actually bidding to land. Recorded on every send: the tape can never
+    # supply these, only our own submissions can.
+    compute_unit_limit: int = DEFAULT_COMPUTE_UNIT_LIMIT
+    compute_unit_price_micro_lamports: int = 0
+
+    @property
+    def bid_below_landing_floor(self) -> bool:
+        return self.compute_unit_price_micro_lamports < LANDING_BID_FLOOR_MICRO_LAMPORTS
+
+    def limit_is_oversized_against(self, units_consumed: int | None) -> bool:
+        """Did we ask for far more compute than the simulation actually used?"""
+
+        if units_consumed is None or units_consumed <= 0:
+            return False
+        return self.compute_unit_limit > units_consumed * COMPUTE_UNIT_LIMIT_ALARM_MULTIPLE
 
 
 def _decode_transaction(encoded: str) -> VersionedTransaction:
@@ -105,8 +140,16 @@ def _validate_associated_token_instruction(
         raise TransactionRejected("associated-token account must be created for shitcoims")
 
 
-def _compute_budget_fee(instructions: list[tuple[str, bytes]], max_lamports: int) -> int:
-    unit_limit = 200_000
+def _compute_budget(
+    instructions: list[tuple[str, bytes]], max_lamports: int
+) -> tuple[int, int, int]:
+    """``(priority_fee_lamports, unit_limit, unit_price_micro_lamports)``.
+
+    The limit defaults to the runtime's own 200,000 when no SetComputeUnitLimit is present,
+    which is what the chain will charge against the block's per-account budget.
+    """
+
+    unit_limit = DEFAULT_COMPUTE_UNIT_LIMIT
     unit_price = 0
     for program, data in instructions:
         if program != COMPUTE_BUDGET_PROGRAM or not data:
@@ -118,7 +161,7 @@ def _compute_budget_fee(instructions: list[tuple[str, bytes]], max_lamports: int
     fee = (unit_limit * unit_price + 999_999) // 1_000_000
     if fee > max_lamports:
         raise TransactionRejected(f"priority fee {fee} exceeds configured cap {max_lamports}")
-    return fee
+    return fee, unit_limit, unit_price
 
 
 async def validate_jupiter_exit_transaction(
@@ -160,8 +203,16 @@ async def validate_jupiter_exit_transaction(
             saw_jupiter = True
     if not saw_jupiter:
         raise TransactionRejected("transaction contains no Jupiter swap instruction")
-    fee = _compute_budget_fee(decoded_instructions, max_priority_fee_lamports)
-    return ValidatedTransaction(tx, tuple(program for program, _ in decoded_instructions), fee)
+    fee, unit_limit, unit_price = _compute_budget(
+        decoded_instructions, max_priority_fee_lamports
+    )
+    return ValidatedTransaction(
+        tx,
+        tuple(program for program, _ in decoded_instructions),
+        fee,
+        compute_unit_limit=unit_limit,
+        compute_unit_price_micro_lamports=unit_price,
+    )
 
 
 def sign_validated_transaction(validated: ValidatedTransaction, keypair: Keypair) -> str:

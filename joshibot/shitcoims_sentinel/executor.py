@@ -23,7 +23,9 @@ from .notifier import Notifier
 from .secrets import read_secret_file
 from .storage import StateStore
 from .transaction import (
+    LANDING_BID_FLOOR_MICRO_LAMPORTS,
     TransactionRejected,
+    ValidatedTransaction,
     sign_validated_transaction,
     validate_jupiter_exit_transaction,
     validate_simulated_exit,
@@ -441,7 +443,16 @@ class SellExecutor:
         pre_sol_lamports: int,
         minimum_output_lamports: int,
         expected_remaining: int,
-    ) -> None:
+    ) -> int | None:
+        """Validate the signed exit against simulation. Returns compute units consumed.
+
+        The consumption figure is the only measurement of how much compute this swap really
+        needs. It was discarded before; it is returned now because the requested LIMIT is
+        charged to every writable account against the block budget whether or not it is used,
+        so a request far above consumption throttles the pool we are exiting and is paid for
+        in fees on top.
+        """
+
         chunks = self._simulation_chunks(holdings, target_mint)
         wallet = str(self.keypair.pubkey())
         address_sets = [
@@ -455,6 +466,7 @@ class SellExecutor:
                 return await self.rpc.simulate_transaction_accounts(signed, addresses)
 
         simulations = await asyncio.gather(*(simulate(addresses) for addresses in address_sets))
+        consumed: list[int] = []
         for chunk, simulation in zip(chunks, simulations, strict=True):
             validate_simulated_exit(
                 simulation=simulation,
@@ -464,6 +476,79 @@ class SellExecutor:
                 minimum_output_lamports=minimum_output_lamports,
                 max_sol_cost_lamports=self.config.execution.max_sol_cost_lamports,
                 expected_remaining=expected_remaining,
+            )
+            units = simulation.get("units_consumed")
+            if isinstance(units, int) and not isinstance(units, bool) and units > 0:
+                consumed.append(units)
+        return max(consumed) if consumed else None
+
+    async def _record_landing_bid(
+        self,
+        *,
+        mint: str,
+        name: str,
+        validated: ValidatedTransaction,
+        units_consumed: int | None,
+        signature: str,
+    ) -> None:
+        """Instrument the bid on every send, and alarm when it sits under the landing cliff.
+
+        Measured, not assumed: Jupiter-routed transactions land 29.6% below 50,000
+        microlamports/CU and 97.2% at or above it (studies/RESULT_execution_landing.md §4).
+        We do not build this transaction, so the bid is Jupiter's choice; what we own is
+        knowing what was bid and saying so out loud. Never blocks the sale -- an unsent exit
+        on a rugging bag is the worse failure, and this is a sell-only system.
+        """
+
+        context = {
+            "mint": mint,
+            "signature": signature,
+            "compute_unit_price_micro_lamports": validated.compute_unit_price_micro_lamports,
+            "compute_unit_limit": validated.compute_unit_limit,
+            "simulated_units_consumed": units_consumed,
+            "priority_fee_lamports": validated.priority_fee_lamports,
+            "landing_bid_floor_micro_lamports": LANDING_BID_FLOOR_MICRO_LAMPORTS,
+            "auto_action": False,
+        }
+        if validated.bid_below_landing_floor:
+            await self.notifier.send(
+                severity="critical",
+                category="execution",
+                message=(
+                    f"LOW LANDING BID on {name}: "
+                    f"{validated.compute_unit_price_micro_lamports} microlamports/CU is below "
+                    f"the measured {LANDING_BID_FLOOR_MICRO_LAMPORTS} cliff "
+                    "(29.6% vs 97.2% landing). Submitting anyway."
+                ),
+                context=context,
+                dedup_key=f"low-bid:{mint}",
+                dedup_seconds=300,
+            )
+        elif validated.limit_is_oversized_against(units_consumed):
+            await self.notifier.send(
+                severity="warning",
+                category="execution",
+                message=(
+                    f"OVERSIZED COMPUTE REQUEST on {name}: asked for "
+                    f"{validated.compute_unit_limit} CU against {units_consumed} simulated. "
+                    "The block cost tracker charges the request to every writable account, "
+                    "so this throttles the pool we are exiting and is paid for in fee."
+                ),
+                context=context,
+                dedup_key=f"oversized-cu:{mint}",
+                dedup_seconds=3600,
+            )
+        else:
+            await self.notifier.send(
+                severity="info",
+                category="execution",
+                message=(
+                    f"bid {validated.compute_unit_price_micro_lamports} microlamports/CU "
+                    f"x {validated.compute_unit_limit} CU for {name}"
+                ),
+                context=context,
+                dedup_key=f"bid:{mint}:{signature}",
+                dedup_seconds=0,
             )
 
     # ------------------------------------------------------------------
@@ -623,13 +708,20 @@ class SellExecutor:
                 recent_blockhash = str(validated.transaction.message.recent_blockhash)
                 all_holdings = await self._holdings()
                 pre_sol_lamports = await self.rpc.sol_balance(str(self.keypair.pubkey()))
-                await self._simulate_exit(
+                units_consumed = await self._simulate_exit(
                     signed=signed,
                     holdings=all_holdings,
                     target_mint=mint,
                     pre_sol_lamports=pre_sol_lamports,
                     minimum_output_lamports=int(order.get("otherAmountThreshold") or 0),
                     expected_remaining=expected_remaining,
+                )
+                await self._record_landing_bid(
+                    mint=mint,
+                    name=name,
+                    validated=validated,
+                    units_consumed=units_consumed,
+                    signature=derived_signature,
                 )
                 pending_signature = derived_signature
                 pending_blockhash = recent_blockhash

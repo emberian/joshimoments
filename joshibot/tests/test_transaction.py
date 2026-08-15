@@ -14,7 +14,9 @@ from shitcoims_sentinel.domain import TokenHolding
 from shitcoims_sentinel.transaction import (
     ASSOCIATED_TOKEN_PROGRAM,
     COMPUTE_BUDGET_PROGRAM,
+    DEFAULT_COMPUTE_UNIT_LIMIT,
     JUPITER_V6_PROGRAM,
+    LANDING_BID_FLOOR_MICRO_LAMPORTS,
     TransactionRejected,
     sign_validated_transaction,
     validate_jupiter_exit_transaction,
@@ -53,6 +55,81 @@ async def test_validates_and_signs_narrow_jupiter_transaction() -> None:
     encoded = sign_validated_transaction(validated, shitcoims)
     signed = VersionedTransaction.from_bytes(base64.b64decode(encoded))
     assert signed.verify_with_results() == [True]
+
+
+async def _validated(shitcoims: Keypair, *, limit: int | None, price: int | None):
+    instructions = []
+    if limit is not None:
+        instructions.append(
+            Instruction(
+                Pubkey.from_string(COMPUTE_BUDGET_PROGRAM), bytes([2]) + struct.pack("<I", limit), []
+            )
+        )
+    if price is not None:
+        instructions.append(
+            Instruction(
+                Pubkey.from_string(COMPUTE_BUDGET_PROGRAM), bytes([3]) + struct.pack("<Q", price), []
+            )
+        )
+    instructions.append(Instruction(Pubkey.from_string(JUPITER_V6_PROGRAM), b"swap", []))
+    return await validate_jupiter_exit_transaction(
+        encoded=encoded_transaction(shitcoims, instructions),
+        shitcoims_pubkey=shitcoims.pubkey(),
+        rpc=NoLookupRpc(),
+        max_priority_fee_lamports=5_000_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_bid_we_are_about_to_send_is_readable_and_checked_against_the_cliff() -> None:
+    """We do not build this transaction, so the only lever on landing is knowing the bid.
+
+    Measured: Jupiter-routed sends land 29.6% below 50,000 microlamports/CU and 97.2% at or
+    above it. A bid we cannot see is a 3x landing difference nobody can act on.
+    """
+
+    shitcoims = Keypair()
+    cheap = await _validated(shitcoims, limit=400_000, price=LANDING_BID_FLOOR_MICRO_LAMPORTS - 1)
+    assert cheap.compute_unit_price_micro_lamports == LANDING_BID_FLOOR_MICRO_LAMPORTS - 1
+    assert cheap.compute_unit_limit == 400_000
+    assert cheap.bid_below_landing_floor is True
+
+    at_floor = await _validated(shitcoims, limit=160_000, price=LANDING_BID_FLOOR_MICRO_LAMPORTS)
+    assert at_floor.bid_below_landing_floor is False
+
+
+@pytest.mark.asyncio
+async def test_an_absent_compute_budget_reads_as_the_runtime_default_not_as_zero() -> None:
+    """No SetComputeUnitLimit means the chain charges 200,000 per writable account anyway.
+
+    Reporting 0 there would understate what we cost the pools we trade, and reporting no bid
+    as "fine" would hide the worst case: price 0 is the bottom of the landing distribution.
+    """
+
+    shitcoims = Keypair()
+    bare = await _validated(shitcoims, limit=None, price=None)
+    assert bare.compute_unit_limit == DEFAULT_COMPUTE_UNIT_LIMIT
+    assert bare.compute_unit_price_micro_lamports == 0
+    assert bare.bid_below_landing_floor is True
+
+
+@pytest.mark.asyncio
+async def test_a_compute_request_far_above_measured_consumption_is_flagged() -> None:
+    """The limit is charged to every writable account against a 40M/block budget.
+
+    An over-generous request rate-limits the pool we are exiting, and the priority fee is
+    paid on the limit rather than on consumption.
+    """
+
+    shitcoims = Keypair()
+    generous = await _validated(shitcoims, limit=400_000, price=100_000)
+    assert generous.limit_is_oversized_against(123_615) is True
+    # Sized off simulated consumption (x1.15) it is not flagged.
+    sized = await _validated(shitcoims, limit=142_157, price=100_000)
+    assert sized.limit_is_oversized_against(123_615) is False
+    # And an unmeasurable simulation never produces a false alarm.
+    assert sized.limit_is_oversized_against(None) is False
+    assert sized.limit_is_oversized_against(0) is False
 
 
 @pytest.mark.asyncio

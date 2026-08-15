@@ -32,7 +32,11 @@ from shitcoims_sentinel.config import AppConfig, load_config
 from shitcoims_sentinel.domain import WSOL_MINT, TokenHolding
 from shitcoims_sentinel.executor import ExecutionGate, SellExecutor
 from shitcoims_sentinel.storage import StateStore
-from shitcoims_sentinel.transaction import JUPITER_V6_PROGRAM
+from shitcoims_sentinel.transaction import (
+    COMPUTE_BUDGET_PROGRAM,
+    JUPITER_V6_PROGRAM,
+    LANDING_BID_FLOOR_MICRO_LAMPORTS,
+)
 
 WALLET_SOL = 1_000_000_000
 OUT_AMOUNT = 500_000_000
@@ -64,9 +68,18 @@ positions: []
     return load_config(config_path)
 
 
-def unsigned_jupiter_transaction(payer: Keypair) -> str:
+def unsigned_jupiter_transaction(
+    payer: Keypair, *, compute_unit_price: int | None = None, compute_unit_limit: int | None = None
+) -> str:
+    budget = Pubkey.from_string(COMPUTE_BUDGET_PROGRAM)
+    instructions = []
+    if compute_unit_limit is not None:
+        instructions.append(Instruction(budget, bytes([2]) + struct.pack("<I", compute_unit_limit), []))
+    if compute_unit_price is not None:
+        instructions.append(Instruction(budget, bytes([3]) + struct.pack("<Q", compute_unit_price), []))
     swap = Instruction(Pubkey.from_string(JUPITER_V6_PROGRAM), b"swap", [])
-    message = MessageV0.try_compile(payer.pubkey(), [swap], [], Hash.new_unique())
+    instructions.append(swap)
+    message = MessageV0.try_compile(payer.pubkey(), instructions, [], Hash.new_unique())
     unsigned = VersionedTransaction.populate(message, [Signature.default()])
     return base64.b64encode(bytes(unsigned)).decode("ascii")
 
@@ -130,8 +143,12 @@ class FakeJupiter:
         threshold: int | None = None,
         responses: list[dict[str, Any]] | None = None,
         signature_override: str | None = None,
+        compute_unit_price: int | None = None,
+        compute_unit_limit: int | None = None,
     ) -> None:
         self.ready = ready
+        self.compute_unit_price = compute_unit_price
+        self.compute_unit_limit = compute_unit_limit
         self._payer = payer
         self.out_amount = out_amount
         self.threshold = out_amount - 1 if threshold is None else threshold
@@ -152,7 +169,11 @@ class FakeJupiter:
         return {
             # A fresh order carries a fresh blockhash, so every re-quote is a
             # different transaction with a different signature.
-            "transaction": unsigned_jupiter_transaction(self._payer),
+            "transaction": unsigned_jupiter_transaction(
+                self._payer,
+                compute_unit_price=self.compute_unit_price,
+                compute_unit_limit=self.compute_unit_limit,
+            ),
             "requestId": f"request-{len(self.order_calls)}",
             "inputMint": mint,
             "outputMint": WSOL_MINT,
@@ -195,7 +216,9 @@ class FakeRpc:
         post_token_amounts: dict[str, int] | None = None,
         blockhash_valid_value: bool = True,
         simulate_error: Exception | None = None,
+        units_consumed: int = 123_615,
     ) -> None:
+        self.units_consumed = units_consumed
         self.holdings = list(holdings)
         self.post_fill_holdings = post_fill_holdings
         self.sol_lamports = sol_lamports
@@ -242,7 +265,10 @@ class FakeRpc:
             accounts.append(
                 token_account_blob(self.post_token_amounts.get(address, current.get(address, 0)))
             )
-        return {"accounts": accounts, "units_consumed": 1234}
+        # The measured median compute consumption of a real swap (238 sampled swaps,
+        # studies/RESULT_execution_landing.md §8). A toy number here would make every
+        # compute-limit assertion in this file meaningless.
+        return {"accounts": accounts, "units_consumed": self.units_consumed}
 
     async def signature_status(self, signature: str) -> str:
         self.signature_status_calls.append(signature)
@@ -325,6 +351,8 @@ def make_harness(
     armed: bool = True,
     max_attempts: int = 3,
     post_sol_lamports: int | None = None,
+    compute_unit_price: int | None = None,
+    compute_unit_limit: int | None = None,
 ) -> Harness:
     keypair = Keypair()
     config = build_config(tmp_path, enabled=enabled, max_attempts=max_attempts)
@@ -346,6 +374,8 @@ def make_harness(
         threshold=threshold,
         responses=responses,
         signature_override=signature_override,
+        compute_unit_price=compute_unit_price,
+        compute_unit_limit=compute_unit_limit,
     )
     harness = Harness(config, keypair, rpc, jupiter)
     harness.gate.cli_live = cli_live
@@ -476,6 +506,93 @@ async def test_confirmed_live_exit_clears_pending_state_and_appends_one_trade_ro
     assert rows[0]["output_lamports"] == str(OUT_AMOUNT)
     assert rows[0]["signature"] == result.signature
     assert "EXIT CONFIRMED" in result.message
+
+
+async def test_a_bid_under_the_landing_cliff_alarms_but_never_blocks_the_sale(
+    tmp_path: Path,
+) -> None:
+    """The 3x lever we do not own, made visible without becoming a new way to not sell.
+
+    Jupiter builds this transaction and chooses its own ComputeBudget instructions. Measured
+    landing is 29.6% below 50,000 microlamports/CU against 97.2% at or above it, so a cheap
+    bid is worth shouting about — but refusing to submit would turn a price problem into a
+    total-loss problem on a bag that may be rugging. This is a sell-only system.
+    """
+
+    target = holding("target", 1_000)
+    harness = make_harness(
+        tmp_path,
+        post_token_amounts={"target-account": 0},
+        compute_unit_price=LANDING_BID_FLOOR_MICRO_LAMPORTS - 1,
+        compute_unit_limit=160_000,
+    )
+
+    result = await harness.executor.sell(
+        mint="target", name="TGT", reason="exit_rug", observed_holding=target
+    )
+
+    assert result.status == "success"
+    assert harness.jupiter.execute_calls  # it was submitted
+    alarms = [item for item in harness.notifier.sent if "LOW LANDING BID" in item["message"]]
+    assert alarms, harness.notifier.messages()
+    alarm = alarms[0]
+    assert alarm["severity"] == "critical"
+    assert alarm["context"]["compute_unit_price_micro_lamports"] == (
+        LANDING_BID_FLOOR_MICRO_LAMPORTS - 1
+    )
+    assert alarm["context"]["compute_unit_limit"] == 160_000
+    assert alarm["context"]["auto_action"] is False
+
+
+async def test_every_send_records_the_bid_and_what_the_swap_actually_consumed(
+    tmp_path: Path,
+) -> None:
+    """The tape cannot supply these; only our own sends can. So they are recorded on all of them."""
+
+    target = holding("target", 1_000)
+    harness = make_harness(
+        tmp_path,
+        post_token_amounts={"target-account": 0},
+        compute_unit_price=120_000,
+        compute_unit_limit=160_000,
+    )
+
+    await harness.executor.sell(
+        mint="target", name="TGT", reason="exit_stop", observed_holding=target
+    )
+
+    records = [item for item in harness.notifier.sent if item["message"].startswith("bid ")]
+    assert records, harness.notifier.messages()
+    recorded = records[0]
+    assert recorded["severity"] == "info"
+    assert recorded["context"]["compute_unit_price_micro_lamports"] == 120_000
+    assert recorded["context"]["compute_unit_limit"] == 160_000
+    # Read back from our own simulateTransaction rather than assumed.
+    assert recorded["context"]["simulated_units_consumed"] == 123_615
+    assert not any("LOW LANDING BID" in item["message"] for item in harness.notifier.sent)
+
+
+async def test_a_compute_request_far_above_consumption_is_reported(tmp_path: Path) -> None:
+    target = holding("target", 1_000)
+    harness = make_harness(
+        tmp_path,
+        post_token_amounts={"target-account": 0},
+        compute_unit_price=120_000,
+        compute_unit_limit=1_000_000,
+    )
+
+    result = await harness.executor.sell(
+        mint="target", name="TGT", reason="exit_stop", observed_holding=target
+    )
+
+    assert result.status == "success"
+    warnings = [
+        item for item in harness.notifier.sent if "OVERSIZED COMPUTE REQUEST" in item["message"]
+    ]
+    assert warnings, harness.notifier.messages()
+    warning = warnings[0]
+    assert warning["severity"] == "warning"
+    assert warning["context"]["simulated_units_consumed"] == 123_615
 
 
 async def test_pending_exit_walks_intent_then_submitting_then_deletion(tmp_path: Path) -> None:
