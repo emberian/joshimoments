@@ -24,7 +24,7 @@ Run 2026-08-15 against the ten-day all-pump.fun corpus (2026-08-05 .. 2026-08-14
 | 4 | Rug-fuel gauge on the operator's four coins | **weave 17.9% at the 99.2nd percentile**; nosis second; SOLVE and DREGG carry none. DREGG's 30.9% is free supply, and it is two wallets, not the airdrop |
 | + | Is unrealized PnL a live state variable at all? | **Yes, per wallet.** Sell hazard peaks at break-even and falls **4–7×** in both directions, surviving a volatility control |
 | + | Does that aggregate into coin-level **excitability** (the operator's actual hypothesis)? | **Not established.** Five specifications; the only one that rejected was the coarsest, and it fails at block resolution with real arrivals. §7.3 |
-| + | **The reframe:** is basis just a re-encoding of the price path? | **At the coin level, yes** — which explains every null above at once. **Within (coin, instant), no**: the wallet that sells sits above the median of that moment's PnL distribution, p = 0.005, and it is not age. §7.4 |
+| + | **The reframe:** is basis just a re-encoding of the price path? | **At the coin level, yes** — which explains every null above at once. **Within (coin, instant), no** — and the sign flips with position age: young positions sell from above the median (profit-taking), old ones from below it (capitulation), both at p = 0.005 against an exact null. §7.4 |
 
 **The one-paragraph answer.** Cost basis is now computable for every wallet on every coin, and it
 is a real behavioural state: a wallet's probability of selling in the next minute peaks sharply at
@@ -36,8 +36,9 @@ same-crew wallets look like strangers, and not because they share a bot preset, 
 clustering exists here at all. And it does not aggregate into a coin-level excitability state once
 the test is run in event time at block resolution. What it does buy is a gauge — `weave` is currently carrying 17.9% of its
 observed supply at under a tenth of spot, in a population where 97.6% of coins carry none — and
-one identified behavioural fact: **among wallets holding the same coin at the same instant, the
-one that sells is drawn from above the median of that moment's cost-basis distribution** (§7.4).
+one identified behavioural fact: **among wallets holding the same coin at the same instant, which
+one sells depends on its own basis — young positions sell from above the median, old ones from
+below** (§7.4).
 That is the only result here with the price path fully conditioned out, and it is the reason the
 aggregate nulls are informative rather than merely disappointing: at the coin level basis is a
 lossy re-encoding of the price path, and it stops being redundant only in the cross-section.
@@ -968,36 +969,51 @@ tercile of the same stratum, holds age fixed.
 
 ### 7.4.2 Result
 
-1,500 coins, a 95.6M-row risk set.
+1,500 coins, a 95.6M-row risk set, 180,148 strata.
 
-| position age | strata | sellers | mean seller PnL-rank | t | p (perm) | seller age-rank | age-conditioned null | p |
+| position age | strata | sellers | mean seller PnL-rank | clustered t | p (perm) | seller age-rank | age-conditioned null | p |
 |---|---|---|---|---|---|---|---|---|
 | 1–60 s | 17,263 | 159,549 | **0.5129** | +6.57 | **0.005** | 0.4835 | 0.5049 | **0.005** |
 | 60–600 s | 40,577 | 294,579 | **0.5134** | +5.41 | **0.005** | 0.4655 | 0.5056 | **0.005** |
+| > 600 s | 122,308 | 427,962 | **0.4935** | −1.58 | **0.005** | 0.4600 | 0.5135 | **0.005** |
 
-**Among wallets looking at the same coin at the same instant, the one that sells sits above the
-median of that moment's cost-basis-relative PnL distribution.** The effect is small — a ~1.3
-point shift in rank — but it is measured against an exact null with the entire price path
-conditioned out, on 40,000+ strata, clustered on coin.
+**The sign flips with position age, and that is the finding.**
 
-**And it is not age.** Sellers are, if anything, *younger* than the median holder in their
-stratum (age-rank 0.466–0.484), so age pushes the opposite way. Conditioning on age moves the
-null from 0.500 to only 0.505 — that 0.005 is the entire age contribution — and the observed
-0.513 clears it at the permutation floor.
+* **Young positions (under ten minutes) sell from ABOVE the median** — the wallet that acts is
+  the one further ahead of its neighbours. Profit-taking.
+* **Old positions (over ten minutes) sell from BELOW it** — the wallet that acts is the one
+  further behind. Capitulation.
+
+Both directions clear the exact permutation null, and both clear the age-conditioned one. In the
+old stratum age *does* carry information on its own (the age-conditioned null sits at 0.5135, well
+off 0.5), and the observed 0.4935 is far below even that — so conditioning on age makes the
+reversal *stronger*, not weaker.
+
+**One honesty note on the old stratum.** Its coin-clustered t is only −1.58, against +6.57 and
++5.41 for the two young strata. The permutation null and the clustered SE disagree because they
+answer different questions — the permutation conditions on the strata and is exact, the clustered
+SE allows whole coins to covary — and the conservative reading is the clustered one. So: the
+profit-taking direction in young positions is solidly established; **the capitulation reversal in
+old positions is clearly non-null under permutation but should be called suggestive until it is
+reproduced on more coins.**
 
 ### 7.4.3 What this changes
 
-**It is the only result in this study that isolates basis from the price path, and it is
-positive.** It also corrects §7.1. The pooled hazard curve peaks at *break-even*; this says
-sellers are drawn from *above* the median. Those are different claims, and the cross-section is
-the one with the price path removed — so the break-even peak in §7.1 is at least partly the
-composition artifact §7.4 was built to expose. **Read §7.1 as descriptive and §7.4 as the
-identified estimate.**
+**It is the only result in this study that isolates basis from the price path, and it is not
+null.** It also corrects §7.1 twice over. The pooled hazard curve peaks at *break-even* and is
+reported as a single shape; the identified cross-section says the direction is **not one shape at
+all** — it is positive for young positions and negative for old ones, and pooling them averages a
+sign flip into a hump. That is exactly the composition failure §7.4 was built to expose, and it
+is the second time in this study that pooling two populations produced a misleading average (the
+first being round-trippers vs holders). **Read §7.1 as descriptive and §7.4 as the identified
+estimate.**
 
-The honest size of the claim: cost basis carries real, independent information about *which* of
-several holders acts next, and essentially none about *when* a coin moves or *where* it turns.
-That is a much narrower object than the brief hoped for — but it is the object that survives
-having the price path taken away from it, and it is the one worth building on.
+The honest size of the claim: cost basis carries real, independent information about **which of
+several holders acts next**, with a sign that depends on how long they have held — and
+essentially none about *when* a coin moves or *where* it turns. That is far narrower than the
+brief hoped for. But it is the one object that survives having the price path taken away from it,
+and the sign flip is a mechanism worth having: the same state variable means "take the profit" to
+a fresh position and "cut the loss" to a stale one.
 
 ---
 
