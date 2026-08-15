@@ -218,6 +218,14 @@ external:
      note: "342 pump coins in 10 days, 338 of them (98.8%) also traded by jackduvalcalls; 892 same-slot with his buys, 0 same-transaction. First seen slot 437325417, identical to _a -- co-birth is its own linkage channel."}
   - {address: D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42, label: jackduval_coordinated_c, kind: coordinated_set, confidence: inferred,
      note: "276 pump coins in 10 days, 275 of them (99.6%) also traded by jackduvalcalls; 656 same-slot with his buys, 0 same-transaction."}
+  # PROPOSED fourth member, surfaced by studies/bundle_hypothesizer.py on its own initiative
+  # rather than by hand: 53 coins, 96.2% contained in the fleet's book, top-5 under both nulls.
+  # PROPOSED, NOT ATTESTED -- it has not been seen firing with the others. Added to the live
+  # accountTrade watch precisely so that forward tape can confirm or refute it, which is how the
+  # first three stopped being a correlation and became an observation.
+  - {address: 7uyGRgoCRKfynPbB35kWQwEGz9pmRvUyNFunV939mXpN, label: jackduval_coordinated_d_proposed, kind: coordinated_set, confidence: inferred,
+     note: "53 pump coins, 96.2% of them inside the fleet's book; top-5 candidate under both structure-preserving nulls. Far smaller book than _a/_b/_c (355/342/276), which fits the NESTED tier structure the fleet already shows rather than contradicting it. Unconfirmed until observed firing in the same window as the others."}
+
   - {address: FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, label: universal_launch_sniper, kind: control, confidence: inferred,
      note: "NOT a coordinated wallet -- this is the NEGATIVE CONTROL that gives the three above their meaning.
        CORRECTED 2026-08-15: first recorded as touching 17,908 coins and sharing 1.4%. 15,671 of those mints it

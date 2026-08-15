@@ -42,8 +42,13 @@
          together, which is the question the ten-day corpus cannot answer because it has
          no sub-slot ordering we trust. Costs ~600 metered events/day on top of ~5,200,
          so the funded key's 10k allowance goes from ~46h to ~41h; the metered_stale alarm
-         is what catches the far side of that. -->
-    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP,6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB,DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT,D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42</string>
+         is what catches the far side of that.
+         7uyGRgo = a PROPOSED fourth member the hypothesizer surfaced on its own (53 coins,
+         96.2% contained). Watched to CONFIRM OR REFUTE it: if it fires inside the same
+         sub-second window as the other three it is a member, and if it never does, it is
+         a correlation that forward tape refused. That is the same test that turned the
+         first three from a 99% statistic into an observation. -->
+    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP,6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB,DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT,D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42,7uyGRgoCRKfynPbB35kWQwEGz9pmRvUyNFunV939mXpN</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOUR_USERNAME/dev/joshibot</string>
