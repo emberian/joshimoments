@@ -493,6 +493,24 @@ def _wiggle(rows: Rows) -> list[str]:
     out.append("  exits    " + ", ".join(f"{k}={v}" for k, v in mix.most_common()))
     if refusals:
         out += [f"  refused: {k} x{v}" for k, v in refusals.most_common()]
+    censored = sum(1 for c in closes if c.get("censored"))
+    out.append(
+        f"  censored: {censored} of {len(closes)}"
+        f" ({censored / len(closes) * 100:.0f}%) — the clock is why"
+    )
+    out.append(
+        "  A book that always exits on a clock cannot leave observation holding anything,"
+    )
+    out.append(
+        "  so its marked and pessimistic returns AGREE by construction. That is the"
+    )
+    out.append(
+        "  +21.77% -> -12.24% correction made structurally impossible rather than merely"
+    )
+    out.append(
+        "  priced, and it is the one column where this book is not comparable to the others"
+    )
+    out.append("  -- they carry an assumption in that gap and this one has no gap to carry.")
     out.append(
         "  The operator's own 36 h reconstruction: 7/13 and +$3.09 under five minutes,"
     )

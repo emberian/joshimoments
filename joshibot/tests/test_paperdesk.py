@@ -1374,3 +1374,24 @@ def test_observation_cadence_is_measured_over_the_watchs_own_span() -> None:
         watch.observe(1.0 + 0.001 * i, T0 + 30.0 * i)
     # Ten intervals of 30 s = two observations a minute.
     assert watch.observations_per_minute() == pytest.approx(2.0)
+
+
+def test_the_clock_makes_censoring_structurally_impossible(tmp_path: Path) -> None:
+    """A book that always exits on a clock cannot leave observation holding anything.
+
+    Its marked and pessimistic returns therefore agree by construction, which is the
+    +21.77% -> -12.24% correction made impossible rather than merely priced. The report
+    says so, because it is the one column where this book is not comparable to the others.
+    """
+    book = make_wiggle(tmp_path)
+    book.observe(observation(T0), source_stale=False)
+    book.consider(observation(T0))
+    book.observe(observation(T0 + 5), source_stale=False)
+    book.observe(observation(T0 + 310), source_stale=False)
+    book.observe(observation(T0 + 320), source_stale=False)
+    closes = rows_of(tmp_path, "close")
+    assert len(closes) == 1
+    assert closes[0]["censored"] is False
+    assert closes[0]["pnl_lamports"] == closes[0]["pnl_pessimistic_lamports"]
+    rendered = render(read_ledger(tmp_path))
+    assert "the clock is why" in rendered
