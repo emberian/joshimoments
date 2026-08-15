@@ -24,6 +24,7 @@ disconnect rate measured on the live collector, a 60-minute window intersecting 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -105,6 +106,47 @@ class PoolWatch:
             "gap_factor": self.gap_factor,
             "window": self.window().to_json(),
         }
+
+    def heartbeat_row(self, now: datetime, *, watched: Sequence[str] = ()) -> dict[str, Any]:
+        """A row that says "the observer was here and saw nothing", on a fixed clock.
+
+        The gap rows above are *exception* rows: they appear only when the observer was late,
+        failed or absent. That leaves the healthy-and-quiet case writing nothing at all, so a
+        wedged process and a dead-quiet pool produce identical tapes — the same conflation this
+        module's docstring exists to refuse, one level up. This row closes it: inside a watch
+        window, a heartbeat beside no swaps is positive evidence of zero flow, and a missing
+        heartbeat is positive evidence of no observer.
+
+        ``watched`` records which addresses the poll actually covered, so a tape reader can
+        tell a pool-address-only sweep from one that also swept the vaults.
+        """
+
+        return {
+            "kind": "heartbeat",
+            "pool": self.pool,
+            "at": _iso(now),
+            "polls": self.polls,
+            "gaps": len(self.gaps),
+            "poll_interval_seconds": self.poll_interval,
+            "watched_addresses": list(watched),
+        }
+
+    def renew(self, now: datetime, horizon: timedelta) -> None:
+        """Start a fresh window at ``now``. The caller closes the old one first.
+
+        A watch window is a claim bounded by a real clock deadline. A daemon that outlives its
+        deadline would otherwise keep polling under a window whose ``closed_at`` lands *after*
+        its own ``deadline`` — a window that never expired and never renewed, which is
+        precisely the displacement-censoring shape ``WatchWindow`` was built to make
+        impossible. Renewal keeps the claim honest across an arbitrarily long run.
+        """
+
+        self.opened_at = now
+        self.deadline = now + horizon
+        self.closed_at = None
+        self.close_reason = None
+        self.polls = 0
+        self.gaps = []
 
     def note_poll(self, now: datetime) -> Gap | None:
         """Record a successful poll; return a :class:`Gap` when the previous one was too old.

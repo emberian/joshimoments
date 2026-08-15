@@ -47,8 +47,16 @@ READ_METHODS: Final[frozenset[str]] = frozenset(
         "getBlockTime",
         "getSlot",
         "getHealth",
+        "getTokenAccountsByOwner",
     }
 )
+
+#: The SPL Token program. ``getTokenAccountsByOwner`` requires a filter and this is the one
+#: that means "every token account this address owns", which is exactly what a pool's vault
+#: set is (``shitcoims_cluster.pools``: vaults are the token accounts owned by the pool).
+TOKEN_PROGRAM: Final[str] = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+#: Token-2022. A pool can hold a leg in either program, so both are asked for.
+TOKEN_2022_PROGRAM: Final[str] = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
 #: Helius caps ``getSignaturesForAddress`` at 1000 per call.
 MAX_SIGNATURE_LIMIT: Final[int] = 1000
@@ -272,6 +280,51 @@ class HeliusRpc:
         if not isinstance(result, list):
             raise RpcError("getSignaturesForAddress returned a non-array result")
         return [item for item in result if isinstance(item, dict)]
+
+    def token_accounts_by_owner(self, owner: str) -> list[dict[str, Any]]:
+        """Every SPL token account owned by ``owner``, across both token programs.
+
+        This is how a pool's vault addresses are *discovered* rather than tabulated.
+        ``pools.py`` is deliberate that "a pool's vaults are exactly the token accounts whose
+        owner is the pool address", and states that a hard-coded per-DEX vault table would be
+        a second source of truth that drifts. This asks the chain the same question the
+        parser asks of each transaction, so the two cannot disagree.
+
+        Returns one dict per account with ``account``, ``mint``, ``amount`` (raw, as a decimal
+        string — never a float) and ``decimals``.
+        """
+
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for program in (TOKEN_PROGRAM, TOKEN_2022_PROGRAM):
+            result = self.call(
+                "getTokenAccountsByOwner",
+                [owner, {"programId": program}, {"encoding": "jsonParsed", "commitment": self._commitment}],
+            )
+            value = result.get("value") if isinstance(result, dict) else None
+            if not isinstance(value, list):
+                raise RpcError("getTokenAccountsByOwner returned no account array")
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                account = str(item.get("pubkey", ""))
+                info = (
+                    ((item.get("account") or {}).get("data") or {}).get("parsed") or {}
+                ).get("info") or {}
+                amount = (info.get("tokenAmount") or {}).get("amount")
+                if not account or account in seen or not isinstance(info.get("mint"), str):
+                    continue
+                seen.add(account)
+                found.append(
+                    {
+                        "account": account,
+                        "mint": str(info["mint"]),
+                        "amount": str(amount) if amount is not None else None,
+                        "decimals": (info.get("tokenAmount") or {}).get("decimals"),
+                        "token_program": program,
+                    }
+                )
+        return sorted(found, key=lambda a: a["account"])
 
     def transactions(self, signatures: Sequence[str]) -> list[dict[str, Any] | None]:
         """Fetch transactions in one batched call. ``None`` where the node had nothing."""

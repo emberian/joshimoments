@@ -172,6 +172,33 @@ class ClusterTape:
         except OSError as exc:
             raise TapeWriteError(f"cannot persist cursors to {self.cursor_path}") from exc
 
+    # -- process liveness ------------------------------------------------------------
+
+    @property
+    def heartbeat_path(self) -> Path:
+        return self._root / "heartbeat.json"
+
+    def touch_heartbeat(self, payload: Mapping[str, Any]) -> None:
+        """Stamp "this process is alive and working", independent of any pool's progress.
+
+        ``cursors.json`` advances per *pool*, which is the wrong clock for a supervisor: one
+        pool catching up from a day-old cursor holds the loop for minutes, so a per-pool clock
+        reads as death during exactly the recovery a supervisor must not interrupt. This is
+        written at every batch boundary instead, so it ticks on work rather than on
+        completion, and a restart-happy watchdog cannot amputate a backfill.
+
+        Best-effort by design: a recorder must never die because its liveness file could not
+        be written.
+        """
+
+        try:
+            self._root.mkdir(parents=True, exist_ok=True)
+            temp = self.heartbeat_path.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(dict(payload), sort_keys=True), encoding="utf-8")
+            temp.replace(self.heartbeat_path)
+        except OSError:  # pragma: no cover - a full disk is the tape's problem, not this file's
+            pass
+
     # -- lifecycle -------------------------------------------------------------------
 
     def flush(self) -> None:
