@@ -183,6 +183,12 @@ class Desk:
 
     def open_windows(self, now: float) -> None:
         for source in self.sources:
+            # The window's clock is the DESK's clock. Source.__init__ stamps wall time,
+            # which under simulated time makes seconds_since_event negative — a source
+            # that can never go stale. (The daemon's `now` is wall time, so production
+            # never saw it; the test that caught it rotted as real time passed its fixed
+            # T0.) Two clocks, never mixed — including our own.
+            source.opened_at_unix = now
             self._window_open[source.name] = now
             self._window_events[source.name] = source.events
             self.ledger.watch_open(
