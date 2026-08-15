@@ -83,7 +83,7 @@ The day-normalised profiles (1.000 = that day's own mean):
 Two clocks, not one, and they are 4 hours apart. **Fees peak at 15:00 UTC; activity and
 compute peak at 19:00 UTC.** The fee peak lands on the US equities open (11:00 ET) and the
 activity peak on the US afternoon. The quiet window is unambiguous and wide: **06:00–10:00
-UTC**, where the p90 fee runs 14–23% below the day's own mean and activity 16–19% below.
+UTC**, where the p90 fee runs 14–23% below the day's own mean and activity 14–17% below.
 
 That fee/activity split is not a curiosity, it is the operationally useful part. The cheapest
 hour to transact is *not* the quietest hour for volume — 03:00 UTC has 7% above-average
@@ -175,7 +175,8 @@ every rule inside it.
 Depth is the spread here, and that is not a substitution — there is no order book on an AMM
 and no quoted spread; what a taker pays above mid is entirely price impact, and impact is a
 function of the quote reserve. So the quote vault *is* the spread series, and it has no clock
-at all (p = 0.72, amplitude 0.026 — the profile is flat to within ±3%).
+at all (p = 0.72, amplitude 0.026 — the profile spans 0.955 to 1.031, i.e. flat to within
+about ±4%).
 
 The failure share is the near-miss: 16:00 UTC runs +5.6 points and 03:00 −5.1 points against
 the day's own mean, at p = 0.033, which does not clear BY-FDR across eleven hypotheses. Note
@@ -278,7 +279,7 @@ and it is the most useful thing here, because it says where **not** to spend eff
 
 | when (UTC) | what is true | what to do with it |
 |---|---|---|
-| **06:00–10:00** | chain quietest: p90 fee 14–23% below the day's mean, activity 16–19% below, launches at 0.70× | **do discretionary chain work here** — claims, rebalances, position moves, anything that pays gas but is not time-critical |
+| **06:00–10:00** | chain quietest: p90 fee 14–23% below the day's mean, activity 14–17% below, launches at 0.70× | **do discretionary chain work here** — claims, rebalances, position moves, anything that pays gas but is not time-critical |
 | **14:00** | DREGG fee accrual peaks at **1.68×**; second peak 17:00 at 1.57× | expect income; do **not** infer a trading window from it |
 | **15:00** | chain fees peak, median +32% and p90 +27% | **avoid non-urgent sends**; if we must send, expect to clear a materially higher bid (see `RESULT_failure_stream.md` §5.2 for what actually clears) |
 | **19:00–20:00** | activity and compute peak (1.23×), launches peak (1.36×) | most new coins to look at, most competition for blockspace |
