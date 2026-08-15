@@ -38,6 +38,12 @@ The costly-signal mechanism is refuted in its own strongest form — the correla
 number of *independent payers* collapses from ρ = −0.165…−0.224 (p < 0.001) to
 **−0.007…−0.088 (all p > 0.06)** once the free columns are removed.
 
+Replicated end to end on an independent **24 h census of 33,202 launches** (§6): the survival
+gap, the onset lag and the collision-floor excess reproduce almost exactly; the matched-control
+null reproduces with the median difference again **+0.00%** at every horizon and a trimmed mean
+difference of **−0.5%**; and with four times the power the costly-signal dose-response is
+measurable, **negative**, and worth ρ ≈ −0.08.
+
 Two things did survive, and both are real:
 
 * **Swarmed hosts live much longer.** Median survival from onset is **10.7 min vs 1.0 min** for
@@ -127,7 +133,35 @@ study still reports `live` (did anything trade in the window) beside every retur
 "attainable" is not "attained", and it reports the two halves separately (§5.3) because that
 distinction turns out to decide the whole clone-arm result.
 
-### 2.3 What counts as an imitation
+### 2.3 The retrospective census, and the endpoint that unlocked it
+
+The paged `GET /coins` list walls out at `offset≈2000` — about 1.9 h of history — which is why
+the first version of this study could only watch forward. Two things removed that limit:
+
+* **`state/bulk_pump/`** — a 10-day, 25 GB pull of every balance-changing transaction on every
+  pump-suffixed mint. It carries `signature`, `block_time` and pre/post token balances and
+  **no token metadata whatsoever**, so on its own it cannot support an imitation study at all:
+  imitation is a name-and-image phenomenon and names are exactly what it lacks. What it gives
+  is *enumeration* — every mint that traded on a given day, in ~70 s of parquet scan.
+* **`POST /coins/mints`** with a JSON body `{"mints": [...]}` returns full metadata for a list.
+  Measured: **500 mints in 0.86 s**, 1000 is a 400. This is the piece that makes a
+  retrospective test possible.
+
+Together: bulk enumerates, pump.fun names and dates. For 2026-08-14 that is 74,046 mints
+enumerated → 33,202 created that day, in **218 s and $0.00**.
+
+**A coin is dated by pump.fun's `created_timestamp`, never by its first appearance in the
+parquet.** A mint shows up on any day it *traded*; dating by that would relabel every coin
+created earlier and still alive as a launch — and since those are precisely the survivors, it
+would inject a survivorship gradient into the launch census itself.
+
+Prices for a retro day come from the same candle endpoint, but only for the mints the study
+actually needs: the members present **at onset** (exactly k of them — that is the entire set
+the traction probe reads and the only set a host can be drawn from) plus a **random** sample
+for the control pool. That is 9,763 mints rather than 20,901, and random is load-bearing — a
+control pool chosen by any property of the coin would confound the comparison it exists for.
+
+### 2.4 What counts as an imitation
 
 Launches are clustered by five links, strongest first, and every family records which fired:
 
@@ -139,7 +173,7 @@ Launches are clustered by five links, strongest first, and every family records 
 | `symbol_squashed` | identical after collapsing character runs: `READ` ≡ `READDDDDDDDDD`. Known cost: also merges `BULL` with `BUL`, so it is its own kind and never folded into `symbol` |
 | `name_near` | normalised edit distance ≥ 0.82 on the folded name, trigram-blocked |
 
-### 2.4 The host is an observable, not a guess
+### 2.5 The host is an observable, not a guess
 
 "Earliest member" is the right prior — an imitation postdates its target — but it is wrong
 exactly when it matters, because if the original launched before we were listening then the
@@ -150,7 +184,7 @@ cannot see the future the study then measures. Every event row records which rul
 families whose earliest member sits within one matching window of the stream's own start are
 flagged `host_left_censored` and excluded from the cohort.
 
-### 2.5 The taxonomy that must never be pooled
+### 2.6 The taxonomy that must never be pooled
 
 `traderPublicKey` splits the phenomenon in two:
 
@@ -434,7 +468,7 @@ curve at the sizing `studies/exploration_map.py` derives. There is no trade here
 The live window is one socket tape with holes over one 9.8 h regime. The strongest available
 check is a different day, measured a different way — so the study was re-run end to end on a
 **complete 24 h census of 2026-08-14**, built from the bulk pump pull plus the batch metadata
-endpoint (§2.5 of the code docstring; `swarm_detect retro --day 2026-08-14`). 74,046 mints
+endpoint (§2.3 above; `swarm_detect retro --day 2026-08-14`). 74,046 mints
 enumerated, 33,202 of them created that day, in 218 s and $0.
 
 ```
