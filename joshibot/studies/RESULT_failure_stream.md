@@ -18,7 +18,14 @@ their exact fee bids, and separates the ones racing us from the ones aborting on
 clock. What the *aggregate minute-by-minute count* does not do is forecast price: 21
 pre-registered tests, one survivor, wrong sign.
 
-**Read that null narrowly, because it is a narrow result.** What was tested is whether a
+**§8 then ran the properly-specified replacement, and it changes the picture without
+clearing the bar:** re-cut by slot and by *named machine*, fill probability moves **+25% to
++73%** where the aggregate found ±0.1%. One of 30 tests survives multiplicity — the machine
+with the highest in-block contention, exactly as predicted in advance. And §9 measures that
+the roster itself has a two-day half-life, which downgrades the specific names in §3.2 while
+leaving the method intact.
+
+**Read the §4 null narrowly, because it is a narrow result.** What was tested is whether a
 per-minute failure COUNT predicts a pool's forward return — a public statistic used as a
 price oracle. That is nobody's strategy, including the strategies visibly making money here.
 An arbitrageur does not forecast price; it races for a fill it can already see. The
@@ -555,3 +562,170 @@ composition does not.
   and `SetComputeUnitPrice` are decoded from the base58 instruction data directly, which is
   where the exact bid comes from — `fee_lamports` alone cannot separate the priority price from
   the signature count.
+
+---
+
+## Appendix B: paste-ready labels for the machines
+
+`wallet_labels.yaml` is being actively committed to by another lane, so these are **not**
+written into it here — a mid-flight edit to a shared config that has its own parse test is a
+bad trade. This block is ready to paste under `external:` when that lane is quiet. Every
+address is a full 44-character key read from `getTransaction`, never a prefix completed by
+search, so the file's resolution rule (an address-poisoning campaign makes prefix-matching
+resolve to the attacker by construction) is satisfied by construction here.
+
+```yaml
+  # Competitor bots on the cluster pools, 2026-08-15, from studies/failure_stream.py §3.
+  # DERIVED, never attested: each is the fee payer behind >=99% of one behavioural
+  # fingerprint cell in a 2,266-transaction getTransaction sample. `program` is the program
+  # at the failing instruction index. See RESULT_failure_stream.md §3.2 for the profile.
+  # NOTE the half-life: §6 measures 56% error-code-mix overlap across a two-day gap, so
+  # re-run `failure_stream.py refresh` before trusting this roster's currency.
+  - {address: FUJKrQhxWYu4z59G6JGVfZstjQKi1fY1BZNwoekgs9vL, label: arb_bot_3yGCLwQ, kind: bot, confidence: inferred,
+     note: "program 3yGCLwQWdeS6jQvPgPYb7eDW1TQ9otWnuyyZFRC9K6K6; 100% of that program's sampled failures; self-aborter (beaten 16%, uses 8% of requested compute, bids 2,768 ulamports/CU)"}
+  - {address: XUrKb2aK4jBm77q75EemchVUNRTJyeFQ5KebTJygPhF,  label: arb_bot_CZr8VacF, kind: bot, confidence: inferred,
+     note: "program CZr8VacFkAVKXYgiB5VFmZWE42Bi7XTkNmsMwN5EyzhP; 100% of sampled failures; uses 73% of requested compute, bids 10,489"}
+  - {address: Bu79TNqnLb5Pgbn4JA2L5k6sXmmgie5cXyCXi4w5X9RY, label: arb_bot_DF3Ljmyz, kind: bot, confidence: inferred,
+     note: "program DF3LjmyzuMApbw55YeC52JJArKgQjygKWZFUB9TNqLWn; 100% of sampled failures; error i3:0x3 with an interquartile compute range of TWO units (1,637-1,639); bids a flat 40,000"}
+  - {address: 6WJfN1fqrEEMSVKnzZkR4vJTMTxBaqvka2KA7aQHJMfF, label: arb_bot_2VSNUquk, kind: bot, confidence: inferred,
+     note: "program 2VSNUquk7FqkbS27WJpm6J1175EhoLcGtxuExu3wrzVz; 100% of sampled failures; the router RESULT_execution_landing.md saw succeed 77% of the time while filling elsewhere"}
+  - {address: 4NHYHfeMKKWa77v9hSo7k4FxhGopGmwosxsC1baLsoAk, label: arb_bot_31KJbyd5, kind: bot, confidence: inferred,
+     note: "program 31KJbyd5umqKQ9a3NuFWuhV1MLUQkg3FBrn3vE7L9R1t; 100% of sampled failures; lowest bidder on the board at 537 ulamports/CU"}
+  - {address: 8TPWakvWw4xQbk7uAYdNjZiDKKHgv9GE5GebzsbtUaHr, label: arb_bot_6MWVTis8, kind: bot, confidence: inferred,
+     note: "program 6MWVTis8rmmk6Vt9zmAJJbmb3VuLpzoQ1aHH4N6wQEGh; 99% of sampled failures; bids 924"}
+  - {address: VLXFRyxhAndY21gS4ys6ZWyJKHeP9DQgoqHhq3ARs2H,  label: arb_bot_VeLoXemE, kind: bot, confidence: inferred,
+     note: "program VeLoXemE5sA5Co5NnQM2SKYW5ovddcYrCytHX5gWDyV; 63% of sampled failures; vanity address matching its own program prefix"}
+  - {address: 9DnwXX7kQWkk3EsTDRvJc5GYutEeaJv3WuWFC4uyjPER, label: arb_bot_i3_0x1798, kind: bot, confidence: inferred,
+     note: "fails inside PumpSwap AMM itself with i3:0x1798; the most contested machine on the board (beaten in-block 54%) and the ONLY exposure whose effect survives the pre-registered §8 test"}
+```
+
+---
+
+## 8. The machine-conditioned test — pre-registered, then run
+
+§4.1 argued the aggregate test was mis-specified in three ways, and §7.4 wrote down the
+replacement *before it was run*. This is that test, executed exactly as registered.
+
+- **unit** — the (pool, slot), not the pool-minute. 446,160 pool-slots.
+- **exposure** — one *named machine* per test: the fingerprint cells the RPC sample resolved
+  to a single fee payer. Selection is on **exposure purity only**, never on any outcome.
+- **outcome** — the fill: `p(a swap lands on this pool within 5 slots)`, the fee that cleared,
+  and the taker impact of that fill.
+- **null** — the same rotation, at slot resolution, ≥ 1,000 slots, within pool.
+- **family** — 10 machines × 3 outcomes = 30 tests, BY-FDR at q = 0.10, separate from §4's 21.
+
+The ten machines, with the `beaten` rate that the registered prediction keys on:
+
+| # | cell | purity | wallet | beaten |
+|---|---|---|---|---|
+| 0 | `i3:0x1770 \| cu17.5 \| f13.0` | 100% | (see §3.2) | 12% |
+| 2 | `i3:0x3 \| cu10.5 \| f13.0` | 100% | `Bu79TNqn…` | 36% |
+| 3 | `i4:0x1780 \| cu14.5 \| f12.5` | 100% | `FUJKrQhx…` | 15% |
+| 4 | `i4:0x1780 \| cu15.0 \| f12.5` | 100% | `FUJKrQhx…` | 21% |
+| 5 | `i3:0x1770 \| cu17.5 \| f12.5` | 96% | `XUrKb2aK…` | 8% |
+| 6 | `i3:0x1770 \| cu18.0 \| f12.5` | 76% | `4NHYHfeM…` | 22% |
+| **7** | `i3:0x1798 \| cu16.5 \| f13.0` | 66% | `9DnwXX7k…` | **54%** |
+| 8 | `i5:0x3c \| cu17.0 \| f12.5` | 62% | `DSUwBG99…` | 21% |
+| 9 | `i3:0x3c \| cu16.5 \| f12.5` | 56% | `6Q8Qv5CS…` | 28% |
+
+### 8.1 The result
+
+| # | outcome | fires | baseline | effect | rel | t | p (rotation) | BY |
+|---|---|---|---|---|---|---|---|---|
+| 6 | p(fill ≤ 5 slots) | 6,321 | 0.305 | **+0.222** | **+73%** | 40.4 | 0.0108 | . |
+| 2 | p(fill ≤ 5 slots) | 3,908 | 0.304 | +0.191 | +63% | 26.3 | 0.1160 | . |
+| 0 | p(fill ≤ 5 slots) | 10,167 | 0.303 | +0.134 | +44% | 29.7 | 0.0118 | . |
+| 5 | p(fill ≤ 5 slots) | 7,609 | 0.305 | +0.111 | +36% | 21.3 | 0.0112 | . |
+| 3 | p(fill ≤ 5 slots) | 9,287 | 0.306 | +0.076 | +25% | 16.6 | 0.0288 | . |
+| **7** | **taker impact of the fill** | 1,813 | 0.0057 | **−0.0037** | **−65%** | −6.3 | **<1e-4** | **yes** |
+| 9 | taker impact | 2,713 | 0.0057 | +0.0010 | +18% | 1.9 | 0.0203 | . |
+| 8 | taker impact | 1,453 | 0.0057 | +0.0012 | +21% | 1.8 | 0.0300 | . |
+| *(22 further rows, p from 0.09 to 0.998)* | | | | | | | | . |
+
+**One of 30 survives — and it is machine 7, the one with the highest in-block contention on
+the board.** When `9DnwXX7k…` fires, the fills that land in the next five slots carry **65%
+less taker impact**, controlled for how busy that very slot already is. That machine is the
+one failing *inside PumpSwap itself*, beaten in-block 54% of the time.
+
+### 8.2 What changed, and what did not
+
+**The reframe changes the picture qualitatively.** §4 found essentially nothing: coefficients
+of ±0.001–0.004 log units. Here the same data, re-cut by slot and by named machine, produces
+effects of **+25% to +73% on fill probability**. The information is unmistakably there. The
+design was wrong before, exactly as the operator argued.
+
+**And it still does not clear the bar.** Under the same discipline applied to §4 — one
+rotation null, one FDR budget — five large fill effects land at p ≈ 0.011–0.029 and none
+survives BY across 30 tests.
+
+**Why, and this is the most transferable thing in the study: the naive t is catastrophically
+overconfident here.** Machine 6's fill effect has **t = 40.4 and a rotation p of 0.011**. A
+t of 40 corresponds to a textbook p below 1e-300. The gap is four hundred orders of
+magnitude, and it is not a bug in either number — it is what happens when 446,160 rows are
+not 446,160 independent observations. These machines fire in **bursts**, and fills cluster in
+the same bursts, so a rotation that happens to drop a burst onto a busy stretch reproduces
+|t| ≥ 40 about one time in a hundred. **The effective sample size is the number of independent
+bursts, not the number of slots**, and it is small. Any study on this data that reports a
+clustered or robust t without a rotation null is reporting a number that is wrong by
+hundreds of orders of magnitude.
+
+**Three guards were added mid-flight, and each one moved the answer:**
+
+1. **Same-slot activity control.** A machine only fires in a slot where something happened, and
+   such slots have more fills. Adding `here_swap` and `here_fail` barely moved the *point
+   estimates* (+47% → +44%, +40% → +36%), which is itself the finding — the effect is not a
+   busy-slot artefact — but it is the control that makes the claim defensible.
+2. **Monte Carlo resolution.** BY with 30 hypotheses demands p ≤ 0.00083 at rank 1 and 0.0017
+   at rank 2, and **500 rotations cannot resolve a p below 0.002 at all**. The first run was
+   rejecting on lack of draws, not lack of signal. Refining to 6,000 draws where the answer
+   depends on it moved the fill p's from ~0.004–0.006 to ~0.011, i.e. it made the result
+   **more** conservative — the early small p's were Monte-Carlo noise at the resolution floor.
+3. **Scoring the registered prediction rather than restating it.** Registered: *fires for the
+   racers, not the self-aborters*. Scored: **racers (beaten ≥ 25%) 1/9 tests survive;
+   self-aborters (beaten < 25%) 0/21.** Directionally exactly right, and it rests on a single
+   surviving test, so it is weak evidence for a correct prior rather than a confirmation.
+
+### 8.3 What to do with it
+
+Do **not** trade this. One survivor of 30 on 9 pools is a lead. What it does establish is that
+the machine-conditioned, slot-resolution, fill-outcome design is the right instrument — it
+sees things the aggregate design cannot — and the honest next step is more independent bursts,
+not more hypotheses: the same test on a pool set that is not 82% nosis/SOL, where the effective
+sample size can actually grow.
+
+---
+
+## 9. The roster is perishable — measured, and worse than §3 implied
+
+§7.1 recommended collecting identity continuously. `failure_stream.py refresh` samples the
+**live** tape's last 24 h and resolves it over RPC (1,056 failures resolved, read-only), which
+makes the decay measurable rather than asserted.
+
+**The program mix over a two-day gap: 25.4% total-variation overlap.** Nine programs at ≥ 2%
+of current failures were under 0.5% in the training window; three that were ≥ 2% are gone. The
+two busiest programs on our pools right now — `FfnGymSB…` at 15.5% and `8ekjJydp…` at 13.8% —
+were **entirely absent** two days earlier. `NA247a7Y…` fell 21.8% → 5.3%; `3yGCLwQ…` fell
+9.2% → 2.2%.
+
+I had guessed the opposite. The code comment I wrote before running it said that if the
+program mix were more stable than the code mix, the machines would be persistent and only
+their tactics would churn — "a better world to be in". So I measured all three layers:
+
+| identity layer | overlap, then vs now | set retention |
+|---|---|---|
+| error codes (§6) | **56.0%** | — |
+| programs | 25.4% | 55% |
+| fee payers | **23.8%** | 37% |
+
+**It is the other way round.** The *tactics* (error codes) are the most durable layer at 56%;
+the *identities* churn hardest, with only 37% of fee payers still present. Exactly one wallet
+reappeared under a different program id (`XUrKb2aK…`, which had been `CZr8VacF…`'s sole
+operator) — so redeployment happens, but it is rare and it is not what explains the turnover.
+The population genuinely rotates.
+
+**Consequence, and it downgrades §3.2.** A named roster of competitors is a *photograph with a
+two-day shutter*. §3's method — fingerprint, validate, name — is sound and reproducible on
+demand; §3.2's specific list is already stale. Anything built on it must call `refresh` first,
+and Appendix B's labels carry that warning inline. What generalises is the *tactic* layer:
+the error-code taxonomy of §1 and the racer/self-aborter split of §2 are the parts with a
+56% half-life, and they are what a durable model should be built on.

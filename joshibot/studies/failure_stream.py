@@ -1343,6 +1343,475 @@ def holdout(frame: Any, *, echo: Callable[[str], None] = print) -> dict[str, Any
     return {"overlap": overlap, "rho": rho}
 
 
+# ============================================== 8. the machine-conditioned test (§7.4)
+#
+# PRE-REGISTERED IN RESULT_failure_stream.md §7.4 BEFORE BEING RUN. The specification below
+# is a transcription of that section, and nothing in it was chosen after seeing a result.
+#
+# WHY IT EXISTS. §5 asked whether an AGGREGATE failure count at MINUTE resolution predicts
+# forward PRICE, and found one survivor of 21 with the wrong sign. The operator's objection
+# to reading that as "no information" is correct: these strategies visibly make money for the
+# people running them, so a null means the wrong things were compared. Three specific
+# mis-specifications, each fixed here:
+#
+#   unit         minute -> SLOT. A minute averages ~150 slots and a race is decided inside
+#                one. `tx_index` gives position within the block and almost nobody has it.
+#   exposure     pooled count -> ONE NAMED MACHINE. §3.1 validated fingerprint cells against
+#                true fee payers; several are a single wallet at 100%. A rival conditions on
+#                a specific trigger, not on "failures went up", and pooling a dozen unrelated
+#                machines dilutes any one of them towards zero by construction.
+#   outcome      forward return -> THE FILL. Their outcome is whether they got the trade at
+#                a price, not whether the price later moved.
+#
+# REGISTERED PREDICTION (written before the run): this fires for the machines with high
+# `beaten` and high `pre5` -- the racers -- and not for the self-aborters, because only the
+# racers are conditioning on the same state we would be.
+
+FILL_WINDOW_SLOTS: Final[int] = 5  # ~2 s. Fixed in advance; not tuned.
+
+# THE DISCRIMINATING CONTROL, and the reason this test is not just an activity detector.
+# A machine only fires in a slot where something happened, and slots where something happened
+# are slots where a fill is more likely. Without `here_swap`/`here_fail` the coefficient would
+# be measuring "this slot is busy" -- true, mechanical, and worthless. With them, the question
+# becomes the one worth asking: GIVEN a slot this busy, does THIS machine's presence still
+# move the odds? The first run of this section omitted them and every large effect it found is
+# reported alongside the controlled version, because the difference between the two numbers is
+# the entire finding.
+CONTROLS: Final[list[str]] = ["const", "prior_swaps", "prior_move", "log_depth", "here_swap", "here_fail"]
+MIN_ROTATION_SLOTS: Final[int] = 1000
+MACHINE_PURITY_MIN: Final[float] = 0.50
+MACHINE_SAMPLE_MIN: Final[int] = 20
+N_MACHINES: Final[int] = 10
+MACHINE_ROTATIONS_FINE: Final[int] = 6000
+
+
+def named_machines(frame: Any, *, echo: Callable[[str], None] = print) -> list[dict[str, Any]]:
+    """The cells the RPC sample resolved to (near-)one fee payer. Selection is on EXPOSURE
+    purity only -- never on any outcome -- so it cannot bias the tests that follow."""
+    import pandas as pd
+
+    path = DATA / "rpc_sample.jsonl"
+    if not path.exists():
+        raise SystemExit("run `failure_stream.py rpc --n 2500` first: this needs the ground truth")
+    recs = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    sample = pd.DataFrame(recs)
+    cols = [c for c in ("cell", "kind", "sig", "beaten", "pre5") if c in frame.columns]
+    join = frame.set_index("signature")[cols]
+    sample = sample.join(join, on="signature").drop_duplicates("signature")
+    failed = sample[sample["kind"] == "failed"]
+    out = []
+    for cell, sub in failed.groupby("cell"):
+        if len(sub) < MACHINE_SAMPLE_MIN or not cell:
+            continue
+        vc = sub["fee_payer"].value_counts()
+        purity = float(vc.iloc[0] / len(sub))
+        if purity < MACHINE_PURITY_MIN:
+            continue
+        prog = sub["fail_program"].value_counts()
+        out.append(
+            dict(
+                cell=str(cell),
+                payer=str(vc.index[0]),
+                purity=purity,
+                sampled=len(sub),
+                program=str(prog.index[0]) if len(prog) else "",
+                beaten=float(sub["beaten"].mean()) if "beaten" in sub else float("nan"),
+            )
+        )
+    out.sort(key=lambda r: (-r["purity"], -r["sampled"]))
+    return out[:N_MACHINES]
+
+
+def slot_panel(frame: Any, machines: list[dict[str, Any]], *, echo: Callable[[str], None] = print) -> Any:
+    """(pool, slot) -> machine firings, the fill outcomes, and the controls.
+
+    The forward window is ``FILL_WINDOW_SLOTS`` **slot numbers**, not rows: a pool's slots are
+    sparse and irregular, so "the next 5 rows" would silently mean five minutes on a quiet
+    pool and 30 ms on a busy one. ``searchsorted`` on the real slot numbers keeps the window a
+    fixed amount of chain time everywhere.
+    """
+    import numpy as np
+    import pandas as pd
+
+    # Only the columns this needs. `frame.copy()` duplicated a 2.5 GB panel and took the
+    # process to 7.0 GB of RSS, over the machine ceiling, for no reason: the slot panel uses
+    # ten columns of thirty.
+    need = ["pool", "slot", "tx_index", "kind", "failed", "cell", "logp", "logp_pre",
+            "quote_pre", "fee"]
+    f = frame[need].copy()
+    cells = {m["cell"]: i for i, m in enumerate(machines)}
+    f["m_idx"] = f["cell"].map(cells)
+
+    # The taker's own impact: how far the fill moved the pool, |log(post/pre)| across the
+    # swap. On a constant-product pool this is mechanically positive and grows with size, so
+    # it is a COST measure (size, and the fee inside it) rather than an adverse-selection
+    # measure. Labelled that way wherever it is reported.
+    swaps = f["kind"] == "swap"
+    f["swap_impact"] = np.where(swaps, np.abs(f["logp"] - f["logp_pre"]), np.nan)
+
+    rows = []
+    for pool, g in f.groupby("pool", sort=False):
+        g = g.sort_values(["slot", "tx_index"])
+        agg = g.groupby("slot").agg(
+            n_swap=("kind", lambda s: int((s == "swap").sum())),
+            n_fail=("failed", "sum"),
+            logp=("logp", "last"),
+            logp_pre=("logp_pre", "first"),
+            depth=("quote_pre", "last"),
+            fee_swap=("fee", "max"),
+            impact=("swap_impact", "mean"),
+        )
+        swap_fee = g[g["kind"] == "swap"].groupby("slot")["fee"].median()
+        agg["fee_swap"] = swap_fee.reindex(agg.index)
+        agg["here_swap"] = agg["n_swap"]
+        agg["here_fail"] = agg["n_fail"]
+        for cell, i in cells.items():
+            fired = g[g["cell"] == cell].groupby("slot").size()
+            agg[f"m{i}"] = fired.reindex(agg.index).fillna(0).gt(0).astype(float)
+        agg = agg.reset_index()
+        agg["pool"] = pool
+        rows.append(agg)
+    panel = pd.concat(rows, ignore_index=True)
+
+    # forward window, per pool, on real slot numbers
+    outs = []
+    for _pool, g in panel.groupby("pool", sort=False):
+        g = g.sort_values("slot").reset_index(drop=True)
+        s = g["slot"].to_numpy()
+        j = np.searchsorted(s, s + FILL_WINDOW_SLOTS, side="right")
+        i1 = np.minimum(np.arange(len(s)) + 1, len(s))
+        cum_sw = np.r_[0, np.cumsum(g["n_swap"].to_numpy())]
+        g["fwd_swaps"] = cum_sw[j] - cum_sw[i1]
+        g["fill"] = (g["fwd_swaps"] > 0).astype(float)
+        fee = g["fee_swap"].to_numpy()
+        imp = g["impact"].to_numpy()
+        fwd_fee = np.full(len(s), np.nan)
+        fwd_imp = np.full(len(s), np.nan)
+        for k in range(len(s)):
+            lo, hi = i1[k], j[k]
+            if hi > lo:
+                w = fee[lo:hi]
+                w = w[np.isfinite(w)]
+                if w.size:
+                    fwd_fee[k] = float(np.median(w))
+                v = imp[lo:hi]
+                v = v[np.isfinite(v)]
+                if v.size:
+                    fwd_imp[k] = float(np.mean(v))
+        g["fwd_fee"] = fwd_fee
+        g["fwd_impact"] = fwd_imp
+        # controls: the pool's own recent state, 20 slots back
+        jb = np.searchsorted(s, s - 20, side="left")
+        cum_all = np.r_[0, np.cumsum(g["n_swap"].to_numpy())]
+        g["prior_swaps"] = cum_all[np.arange(len(s))] - cum_all[jb]
+        lp = g["logp"].ffill().to_numpy()
+        g["prior_move"] = np.abs(lp - lp[np.maximum(jb - 1, 0)])
+        g["log_depth"] = np.log(np.clip(g["depth"].ffill().to_numpy(), 1, None))
+        outs.append(g)
+    panel = pd.concat(outs, ignore_index=True)
+    echo(f"   slot panel: {len(panel):,} pool-slots over {panel['pool'].nunique()} pools")
+    return panel
+
+
+def machines_test(frame: Any, *, echo: Callable[[str], None] = print) -> dict[str, Any]:
+    import numpy as np
+    import pandas as pd
+
+    echo("")
+    echo("=" * 100)
+    echo("8. THE MACHINE-CONDITIONED TEST -- pre-registered in RESULT §7.4, slot resolution")
+    echo("=" * 100)
+
+    machines = named_machines(frame, echo=echo)
+    echo(f"   {len(machines)} machines, selected on EXPOSURE purity alone (never on an outcome):")
+    echo(f"   {'#':<3}{'cell':<40}{'purity':>8}{'n':>6}{'beaten':>8}  wallet")
+    for i, m in enumerate(machines):
+        echo(
+            f"   {i:<3}{m['cell'][:38]:<40}{100 * m['purity']:>7.0f}%{m['sampled']:>6}"
+            f"{100 * m['beaten']:>7.0f}%  {m['payer'][:44]}"
+        )
+
+    panel = slot_panel(frame, machines, echo=echo)
+    outcomes = [
+        ("fill", "p(fill within 5 slots)"),
+        ("fwd_fee", "fee that cleared (lamports)"),
+        ("fwd_impact", "taker impact of the fill"),
+    ]
+    dummies = pd.get_dummies(panel["pool"], prefix="p", drop_first=True).astype(float)
+    rng = np.random.default_rng(19)
+    results: list[dict[str, Any]] = []
+    for i, m in enumerate(machines):
+        x = f"m{i}"
+        if panel[x].sum() < 200:
+            continue
+        for yname, ylabel in outcomes:
+            ok = np.isfinite(panel[yname]) & np.isfinite(panel["prior_move"])
+            for c in CONTROLS:
+                if c != "const":
+                    ok &= np.isfinite(panel[c])
+            sub = panel[ok]
+            if len(sub) < 1000 or sub[x].sum() < 100:
+                continue
+            X = pd.concat(
+                [
+                    sub[[c for c in CONTROLS if c != "const"] + [x]].reset_index(drop=True),
+                    dummies.loc[sub.index].reset_index(drop=True),
+                ],
+                axis=1,
+            )
+
+            X.insert(0, "const", 1.0)
+            y = sub[yname].to_numpy(dtype=float)
+            ctrl = [c for c in X.columns if c != x]
+            Q, _ = np.linalg.qr(X[ctrl].to_numpy(dtype=float))
+            y_res = y - Q @ (Q.T @ y)
+            dof = len(y) - X.shape[1]
+
+            def _t(xv: Any, y_res: Any = y_res, Q: Any = Q, dof: int = dof) -> tuple[float, float]:
+                xr = xv - Q @ (Q.T @ xv)
+                den = float(xr @ xr)
+                if den <= 0:
+                    return 0.0, 0.0
+                b = float(xr @ y_res) / den
+                r = y_res - b * xr
+                se = math.sqrt((float(r @ r) / max(dof, 1)) / den)
+                return b, (b / se if se > 0 else 0.0)
+
+            xraw = sub[x].to_numpy(dtype=float)
+            beta, tstat = _t(xraw)
+            groups = [g.index.to_numpy() for _p, g in sub.reset_index(drop=True).groupby("pool", sort=False)]
+
+            def _rotate(n_draws: int, xraw: Any = xraw, groups: Any = groups, _t: Any = _t) -> Any:
+                out = np.empty(n_draws)
+                for r in range(n_draws):
+                    xn = xraw.copy()
+                    for gi in groups:
+                        if len(gi) <= MIN_ROTATION_SLOTS + 1:
+                            continue
+                        xn[gi] = np.roll(xn[gi], int(rng.integers(MIN_ROTATION_SLOTS, len(gi))))
+                    out[r] = abs(_t(xn)[1])
+                return out
+
+            # MONTE CARLO RESOLUTION, and this had to be fixed before any of it could be read.
+            # BY with 30 hypotheses demands p <= 0.00083 at rank 1 and 0.0017 at rank 2, while
+            # 500 rotations cannot resolve a p below 0.002 at all -- so the first run of this
+            # section was rejecting true effects for lack of draws, not for lack of signal.
+            # Resolution is refined only where the answer depends on it. Refining the number
+            # of Monte Carlo draws is not changing the test; the statistic and the null are
+            # untouched, and every test still gets the same >= 500 draws.
+            null = _rotate(ROTATIONS)
+            hits = int((null >= abs(tstat)).sum())
+            n_draws = ROTATIONS
+            if hits <= 0.05 * ROTATIONS:
+                null = np.r_[null, _rotate(MACHINE_ROTATIONS_FINE - ROTATIONS)]
+                hits = int((null >= abs(tstat)).sum())
+                n_draws = MACHINE_ROTATIONS_FINE
+            p = hits / n_draws
+            base = float(np.nanmean(sub.loc[sub[x] == 0, yname]))
+            results.append(
+                dict(
+                    machine=i,
+                    cell=m["cell"],
+                    beaten=m["beaten"],
+                    outcome=ylabel,
+                    n_fire=int(sub[x].sum()),
+                    beta=beta,
+                    base=base,
+                    t=tstat,
+                    p=p,
+                    draws=n_draws,
+                )
+            )
+    keep = by_fdr([r["p"] for r in results], FDR_Q)
+    echo("")
+    echo(
+        f"   {len(results)} tests ({len({r['machine'] for r in results})} machines x "
+        f"{len(outcomes)} outcomes), BY-FDR at q = {FDR_Q}"
+    )
+    echo("")
+    echo(
+        f"   {'#':<3}{'outcome':<28}{'fires':>8}{'baseline':>12}{'effect':>12}"
+        f"{'rel':>8}{'t':>8}{'p rot':>9}{'BY':>4}"
+    )
+    for r, k in zip(results, keep, strict=False):
+        r["by"] = bool(k)
+        rel = r["beta"] / r["base"] if r["base"] else float("nan")
+        echo(
+            f"   {r['machine']:<3}{r['outcome']:<28}{r['n_fire']:>8,}{r['base']:>12,.4f}"
+            f"{r['beta']:>+12,.4f}{100 * rel:>+7.0f}%{r['t']:>8.1f}{fmt_p(r['p']):>9}"
+            f"{'yes' if k else '.':>4}"
+        )
+
+    echo("")
+    echo("   THE REGISTERED PREDICTION was: this fires for the racers (high `beaten`) and not")
+    echo("   for the self-aborters. Scored against the outcome, not re-stated after it:")
+    surv = [r for r in results if r["by"]]
+    if surv:
+        hi = [r for r in results if r["beaten"] >= 0.25]
+        lo = [r for r in results if r["beaten"] < 0.25]
+        sh_hi = sum(1 for r in hi if r["by"]) / len(hi) if hi else float("nan")
+        sh_lo = sum(1 for r in lo if r["by"]) / len(lo) if lo else float("nan")
+        echo(
+            f"     racers (beaten >= 25%):      {sum(1 for r in hi if r['by'])}/{len(hi)} "
+            f"tests survive ({100 * sh_hi:.0f}%)"
+        )
+        echo(
+            f"     self-aborters (beaten < 25%): {sum(1 for r in lo if r['by'])}/{len(lo)} "
+            f"tests survive ({100 * sh_lo:.0f}%)"
+        )
+    else:
+        echo("     nothing survived, so the prediction is unscored and the answer is still no.")
+    return {"machines": machines, "rows": results}
+
+
+# ================================================== 9. keeping the roster alive (§7.1, §7.6)
+
+
+def refresh(*, n: int = 600, workers: int = 4, echo: Callable[[str], None] = print) -> dict[str, Any]:
+    """Re-census the machines from the LIVE tape, because the roster has a half-life of days.
+
+    §6 measured 56% total-variation overlap between the error-code mix of the training window
+    and a window two days later. A machine census is therefore perishable: §3's roster is a
+    photograph, and acting on a photograph of a population that turns over in days is how a
+    stale competitor map gets mistaken for a current one.
+
+    The live tape's ``attempt`` rows carry no signer by design (they exist to avoid exactly the
+    ``getTransaction`` a signer needs), so a refresh costs one RPC call per sampled attempt.
+    This is the cheap standing version of §7.1's recommendation: instead of changing the live
+    collector -- which runs unattended against real money and should not grow an RPC dependency
+    on this study's account -- sample the tape after the fact, here, offline, on demand.
+
+    Read-only. Nothing signed, nothing sent.
+    """
+    import pandas as pd
+
+    echo("")
+    echo("=" * 100)
+    echo("9. ROSTER REFRESH -- who is on our pools NOW, from the live tape")
+    echo("=" * 100)
+    tape = load_tape_attempts(echo=echo)
+    att = tape[tape["kind"] == "attempt"].copy()
+    if att.empty:
+        echo("   no attempts on the live tape")
+        return {}
+    sigs = []
+    for e in att["error"]:
+        m = TAPE_ERR.search(str(e))
+        sigs.append(f"i{m.group(1)}:0x{int(m.group(2)):x}" if m else "")
+    att["sig"] = sigs
+    cutoff = int(att["block_time"].max()) - 86_400
+    recent = att[att["block_time"] >= cutoff]
+    echo(
+        f"   {len(recent):,} attempts in the last 24 h of tape "
+        f"({pd.to_datetime(cutoff, unit='s')} .. {pd.to_datetime(att['block_time'].max(), unit='s')} UTC)"
+    )
+
+    out = DATA / "refresh_sample.jsonl"
+    seen: set[str] = set()
+    if out.exists():
+        for line in out.read_text().splitlines():
+            with contextlib.suppress(json.JSONDecodeError):
+                seen.add(json.loads(line)["signature"])
+    take = recent.sample(n=min(n * 2, len(recent)), random_state=13)
+    todo = [s for s in take["signature"].astype(str) if s not in seen][:n]
+    echo(f"   {len(seen):,} cached; fetching {len(todo):,} at {workers} concurrent (read-only)")
+    if todo:
+        url = _helius_url()
+
+        def work(sig: str) -> str | None:
+            res = _get_transaction(url, sig)
+            if not res:
+                return None
+            rec = summarise_tx(res)
+            rec["signature"] = sig
+            return json.dumps(rec)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool, out.open("a") as fh:
+            for line in pool.map(work, todo):
+                if line:
+                    fh.write(line + "\n")
+    recs = [json.loads(x) for x in out.read_text().splitlines() if x.strip()] if out.exists() else []
+    if not recs:
+        return {}
+    now = pd.DataFrame(recs).drop_duplicates("signature")
+    now = now.merge(att[["signature", "sig", "label"]], on="signature", how="left")
+    echo("")
+    echo(f"   {len(now):,} live failures resolved to a program and a payer")
+    echo("")
+    echo(f"   {'program':<46}{'now':>8}{'then':>8}{'delta':>9}  top payer")
+
+    old = {}
+    hist = DATA / "rpc_sample.jsonl"
+    if hist.exists():
+        oldrecs = [json.loads(x) for x in hist.read_text().splitlines() if x.strip()]
+        of = pd.DataFrame(oldrecs).drop_duplicates("signature")
+        of = of[of["fail_program"].notna()]
+        old = (of["fail_program"].value_counts(normalize=True) * 100).to_dict()
+    share = now["fail_program"].value_counts(normalize=True) * 100
+    rows = []
+    for prog, pct in share.head(14).items():
+        was = old.get(prog, 0.0)
+        payer = now[now["fail_program"] == prog]["fee_payer"].value_counts()
+        tag = KNOWN_PROGRAMS.get(str(prog), str(prog))[:44]
+        rows.append(dict(program=str(prog), now=float(pct), then=float(was)))
+        echo(
+            f"   {tag:<46}{pct:>7.1f}%{was:>7.1f}%{pct - was:>+8.1f}  "
+            f"{str(payer.index[0])[:44] if len(payer) else ''}"
+        )
+    gone = [p for p, v in old.items() if v >= 2.0 and p not in set(share.index)]
+    fresh = [str(p) for p in share.index[:14] if old.get(p, 0.0) < 0.5 and share[p] >= 2.0]
+    echo("")
+    echo(f"   NEW since the training window (>=2% now, <0.5% then): {len(fresh)}")
+    for p in fresh:
+        echo(f"     + {p}")
+    echo(f"   GONE (>=2% then, absent now): {len(gone)}")
+    for p in gone:
+        echo(f"     - {p}")
+    tv = float(sum(min(share.get(k, 0.0), old.get(k, 0.0)) for k in set(share.index) | set(old)) / 100)
+
+    # WHICH LAYER OF IDENTITY IS DURABLE? Three nested identities describe the same failures --
+    # the error code, the program, and the fee payer -- and they need not churn together. A
+    # wallet that redeploys under a new program id is the SAME adversary in a new coat: total
+    # turnover at the program layer, none at the layer that matters. Measured rather than
+    # assumed, because the first version of this section assumed and assumed wrong.
+    old_pay: dict[str, float] = {}
+    old_pp: set[tuple[Any, Any]] = set()
+    if hist.exists():
+        op = of[of["fee_payer"].notna()]
+        old_pay = (op["fee_payer"].value_counts(normalize=True) * 100).to_dict()
+        old_pp = set(zip(of["fee_payer"], of["fail_program"], strict=False))
+    pay = now["fee_payer"].value_counts(normalize=True) * 100
+    tv_pay = float(
+        sum(min(pay.get(k, 0.0), old_pay.get(k, 0.0)) for k in set(pay.index) | set(old_pay)) / 100
+    )
+    prog_keep = len(set(share.index) & set(old)) / max(len(set(old)), 1)
+    pay_keep = len(set(pay.index) & set(old_pay)) / max(len(set(old_pay)), 1)
+    now_pp = set(zip(now["fee_payer"], now["fail_program"], strict=False))
+    seen_pairs = {(w, p) for w, p in now_pp if (w, p) in old_pp}
+    redeployed = sorted(
+        ({w for w, _p in now_pp} & {w for w, _p in old_pp}) - {w for w, _p in seen_pairs}
+    )
+    echo("")
+    echo("   WHICH LAYER OF IDENTITY IS DURABLE? (total-variation overlap of the mix, then vs now)")
+    echo(f"     error codes  {56.0:>5.1f}%   (§6, over the same kind of gap)")
+    echo(f"     programs     {100 * tv:>5.1f}%   set retention {100 * prog_keep:.0f}%")
+    echo(f"     fee payers   {100 * tv_pay:>5.1f}%   set retention {100 * pay_keep:.0f}%")
+    echo(f"   wallets that reappear under a DIFFERENT program (redeployed): {len(redeployed)}")
+    for w in redeployed[:8]:
+        echo(f"     ~ {w}")
+    return {
+        "n": len(now),
+        "overlap_program": tv,
+        "overlap_payer": tv_pay,
+        "prog_keep": prog_keep,
+        "pay_keep": pay_keep,
+        "redeployed": redeployed,
+        "new": fresh,
+        "gone": gone,
+        "rows": rows,
+    }
+
+
 # ================================================================================== main
 
 
@@ -1367,11 +1836,18 @@ def run(sections: Sequence[str], *, rpc_n: int = 0, echo: Callable[[str], None] 
         state["practical"] = practical(frame, echo=echo)
     if "holdout" in sections:
         state["holdout"] = holdout(frame, echo=echo)
+    if "machines" in sections:
+        state["machines"] = machines_test(frame, echo=echo)
+    if "refresh" in sections:
+        state["refresh"] = refresh(echo=echo)
     DATA.mkdir(parents=True, exist_ok=True)
     (DATA / "state.json").write_text(json.dumps(state, indent=1, default=str))
 
 
-ALL: Final[tuple[str, ...]] = ("taxonomy", "race", "fingerprint", "rpc", "surge", "practical", "holdout")
+ALL: Final[tuple[str, ...]] = (
+    "taxonomy", "race", "fingerprint", "rpc", "surge", "practical", "holdout", "machines",
+)
+# ``refresh`` is not in ALL: it makes network calls. Run it explicitly.
 
 
 def main(argv: list[str] | None = None) -> int:
