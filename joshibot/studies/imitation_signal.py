@@ -236,9 +236,10 @@ def fetch_all(
     mints: Sequence[str],
     store: CandleStore,
     *,
-    workers: int = 4,
-    pause: float = 0.4,
+    workers: int = 3,
+    pause: float = 0.6,
     refresh_older_than: float = 900.0,
+    dead_after: float = 2400.0,
     verbose: bool = True,
 ) -> dict[str, int]:
     """Fill the cache. Re-fetches a mint whose cache is stale enough to be missing candles.
@@ -249,10 +250,25 @@ def fetch_all(
     refuses any horizon running past the series' own fetch time.
     """
     now = time.time()
-    todo = [
-        m for m in mints if not store.has(m) or store.fetched_at(m) < now - refresh_older_than
-    ]
-    stats = Counter({"total": len(mints), "todo": len(todo)})
+    todo = []
+    stats = Counter({"total": len(mints)})
+    for m in mints:
+        if not store.has(m):
+            todo.append(m)
+            continue
+        if store.fetched_at(m) >= now - refresh_older_than:
+            stats["fresh"] += 1
+            continue
+        # A coin that had already stopped trading when we cached it cannot acquire new
+        # candles in the past, and on this market most coins are in that state within
+        # minutes. Skipping them is not a heuristic — the series is closed — and it is what
+        # makes a periodic refresh loop cost minutes instead of hours.
+        series = store.get(m)
+        if series and store.fetched_at(m) - series[-1][0] > dead_after:
+            stats["settled"] += 1
+            continue
+        todo.append(m)
+    stats["todo"] = len(todo)
     if not todo:
         return dict(stats)
     lock = threading.Lock()
@@ -498,6 +514,146 @@ def build_cohort(
         rows.append(add_features(pr))
     rows.sort(key=lambda r: r["t_post"])
     return rows, dict(drops)
+
+
+def build_clone_cohort(
+    launches: Sequence[Launch],
+    onsets: Sequence[dict[str, Any]],
+    det: SwarmDetector,
+    store: CandleStore,
+    tape_end: float,
+) -> list[dict[str, Any]]:
+    """The other reading of the hypothesis: buy the *imitators*, at their own launch.
+
+    "Positions that will massively gain from them when they are even slightly legitimate"
+    parses at least as naturally as *buy the clones* as it does *buy the host* — a clone
+    launched into a live attention wave is the cheapest possible way to be long that wave,
+    and unlike the host it can be entered at its own launch price with no chase.
+
+    A row exists only for a clone that launched **at or after** its family's onset, because
+    only then did a detector know the swarm existed; a clone that launched before the third
+    member is not a decision anybody could have made. Entry is the clone's own launch minute,
+    which is the first price a taker could pay.
+    """
+    by_mint = {l.mint: l for l in launches}
+    # Join event -> family by HOST MINT, never by family id: a merge renames the family, so
+    # the id on an already-emitted onset row can refer to a lineage that no longer exists.
+    onset_by_host: dict[str, dict[str, Any]] = {}
+    for ev in onsets:
+        prev = onset_by_host.get(ev["host_mint"])
+        if prev is None or ev["onset_t"] < prev["onset_t"]:
+            onset_by_host[ev["host_mint"]] = ev
+
+    rows: list[dict[str, Any]] = []
+    for fam in det.families():
+        if len(fam.members) < 2:
+            continue
+        candidates = [onset_by_host[m.mint] for m in fam.members if m.mint in onset_by_host]
+        if not candidates:
+            continue
+        ev = min(candidates, key=lambda e: e["onset_t"])
+        t_onset = _epoch(ev["onset_t"])
+        host_mint = ev["host_mint"]
+        ordered = sorted(fam.members, key=lambda m: m.t)
+        for i, m in enumerate(ordered):
+            if m.mint == host_mint or m.t < t_onset:
+                continue
+            ln = by_mint.get(m.mint)
+            if ln is None:
+                continue
+            pr = price_row(m.mint, m.t, store, ln, tape_end)
+            if pr is None:
+                continue
+            host_series = store.get(host_mint)
+            host_mcap = (mark_at(host_series, m.t) or 0.0) * PUMP_SUPPLY if host_series else 0.0
+            pr.update(
+                {
+                    "family": fam.fid,
+                    "treated": 1,
+                    "taxonomy": ev["taxonomy"],
+                    "clone_index": float(i),
+                    "log_since_host_s": math.log(max(m.t - _epoch(ev["host_t"]), 1.0)),
+                    "log_since_onset_s": math.log(max(m.t - t_onset, 1.0)),
+                    "log_host_mcap_now": math.log(max(host_mcap, 1e-9)),
+                    "swarm_size_at_launch": float(sum(1 for o in ordered if o.t <= m.t)),
+                }
+            )
+            rows.append(add_features(pr))
+    rows.sort(key=lambda r: r["t_post"])
+    return rows
+
+
+def build_launch_controls(
+    treated: Sequence[dict[str, Any]],
+    launches: Sequence[Launch],
+    excluded: set[str],
+    store: CandleStore,
+    tape_end: float,
+    *,
+    ratio: int = 2,
+    caliper: float = 0.35,
+    seed: int = 20260815,
+) -> list[dict[str, Any]]:
+    """Controls for the clone arm: ordinary launches, entered at *their* launch minute.
+
+    The relevant covariates collapse to two here, because at launch every coin has the same
+    age (zero) and the same trading history (none): the dev buy and the resulting market cap.
+    Calendar proximity is enforced separately — a control must launch within ten minutes of
+    its treated clone, so both are entered into the same market.
+    """
+    import numpy as np
+
+    rng = random.Random(seed)
+    pool = [ln for ln in launches if ln.mint not in excluded and store.get(ln.mint)]
+    pool.sort(key=lambda l: l.t)
+    pool_t = [l.t for l in pool]
+    feats = ("log_dev_buy_sol", "log_mcap_at_onset")
+    tmat = np.nan_to_num(
+        np.array([[r[f] for f in feats] for r in treated], dtype=float), nan=0.0
+    )
+    mu, sd = tmat.mean(axis=0), tmat.std(axis=0)
+    sd[sd == 0] = 1.0
+
+    used: set[str] = set()
+    out: list[dict[str, Any]] = []
+    order = list(range(len(treated)))
+    rng.shuffle(order)
+    for idx in order:
+        tr = treated[idx]
+        t0 = tr["t_post"]
+        lo = bisect.bisect_left(pool_t, t0 - 600.0)
+        hi = bisect.bisect_right(pool_t, t0 + 600.0)
+        target = (np.array([tr[f] for f in feats], dtype=float) - mu) / sd
+        cands = []
+        for ln in pool[lo:hi]:
+            if ln.mint in used or ln.mint == tr["mint"]:
+                continue
+            pr = price_row(ln.mint, ln.t, store, ln, tape_end)
+            if pr is None:
+                continue
+            pr = add_features(pr)
+            v = (np.array([pr[f] for f in feats], dtype=float) - mu) / sd
+            if not np.all(np.isfinite(v)):
+                continue
+            dist = float(np.sqrt(((v - target) ** 2).sum()))
+            if dist > caliper * math.sqrt(len(feats)):
+                continue
+            cands.append((dist, pr))
+        cands.sort(key=lambda x: x[0])
+        for dist, pr in cands[:ratio]:
+            used.add(pr["mint"])
+            pr.update(
+                {
+                    "family": f"ctl:{tr['family']}",
+                    "treated": 0,
+                    "taxonomy": "control",
+                    "matched_to": tr["mint"],
+                    "match_distance": dist,
+                }
+            )
+            out.append(pr)
+    out.sort(key=lambda r: r["t_post"])
+    return out
 
 
 def swarmed_mints(det: SwarmDetector, min_size: int = 2) -> set[str]:
@@ -870,6 +1026,122 @@ def summarise(rows: Sequence[dict[str, Any]], h: int, label: str, out=sys.stdout
     return stat
 
 
+def decompose(
+    treated: Sequence[dict[str, Any]],
+    controls: Sequence[dict[str, Any]],
+    h: int,
+    out=sys.stdout,
+) -> dict[str, Any]:
+    """Split every arm into rows that traded inside the window and rows that did not.
+
+    This is the diagnostic that decides whether a return difference is information or
+    bookkeeping. A coin with no trade after entry is marked at its last close, so its return
+    is **exactly 0.00%** — and an arm made mostly of such coins will "beat" an arm of live
+    coins that are merely falling, without a single tradeable cent changing hands.
+
+    Both halves are printed because neither alone is honest: the live-only half is the
+    survivorship-biased number the callout study showed flipping −14.6% to +25%, and the
+    all-rows half is the one that hides a composition difference. If the two arms differ only
+    in the *dead* fraction, the headline is an artifact and the report says so.
+    """
+    import numpy as np
+
+    res: dict[str, Any] = {}
+    for name, rows in (("treated", treated), ("control", controls)):
+        usable = [r for r in rows if not r[f"admin{h}"]]
+        if not usable:
+            continue
+        live = [r for r in usable if r[f"live{h}"]]
+        dead = [r for r in usable if not r[f"live{h}"]]
+        lr = np.array([r[f"r{h}"] for r in live], dtype=float) if live else np.array([])
+        dr = np.array([r[f"r{h}"] for r in dead], dtype=float) if dead else np.array([])
+        res[name] = {
+            "n": len(usable),
+            "p_dead": len(dead) / len(usable),
+            "mean_live": float(lr.mean()) if len(lr) else float("nan"),
+            "median_live": float(np.median(lr)) if len(lr) else float("nan"),
+            "mean_dead": float(dr.mean()) if len(dr) else float("nan"),
+        }
+        print(
+            f"    {name:<9} n={len(usable):<5} no-trade-in-window={res[name]['p_dead']:5.1%} "
+            f"(their mean return {res[name]['mean_dead']:+7.2%}, ~0 by construction) | "
+            f"TRADED rows n={len(lr):<5} mean={res[name]['mean_live']:+8.2%} "
+            f"med={res[name]['median_live']:+8.2%}",
+            file=out,
+        )
+    if "treated" in res and "control" in res:
+        a = [r[f"r{h}"] for r in treated if not r[f"admin{h}"] and r[f"live{h}"]]
+        b = [r[f"r{h}"] for r in controls if not r[f"admin{h}"] and r[f"live{h}"]]
+        _u, p = mannwhitney(a, b)
+        res["live_only_p"] = p
+        res["live_only_diff"] = res["treated"]["mean_live"] - res["control"]["mean_live"]
+        print(
+            f"    -> TRADED-ONLY difference {res['live_only_diff']:+.2%} mean, "
+            f"Mann-Whitney p={p:.4f}   "
+            f"(dead-fraction gap {res['treated']['p_dead'] - res['control']['p_dead']:+.1%})",
+            file=out,
+        )
+    return res
+
+
+def mde(
+    treated: Sequence[dict[str, Any]],
+    controls: Sequence[dict[str, Any]],
+    h: int,
+    *,
+    seed: int = 20260815,
+    draws: int = 300,
+    power: float = 0.80,
+    alpha: float = 0.05,
+    out=sys.stdout,
+) -> dict[str, Any]:
+    """Smallest multiplicative return shift this cohort could have detected.
+
+    A null without a power floor is not a finding, it is a shrug. This resamples the two
+    observed arms with replacement, multiplies every treated return by ``(1+δ)``, and finds
+    the smallest δ at which a two-sided Mann-Whitney rejects at ``alpha`` in ``power`` of
+    draws. The answer is a statement about what the study *could* have seen, and it is the
+    number that decides whether "no effect" means "no effect" or "no telescope".
+
+    Multiplicative rather than additive because these are prices: adding 10 points to a coin
+    that fell 90% is not a thing that can happen to a position.
+    """
+    import numpy as np
+
+    a0 = np.array([r[f"r{h}"] for r in treated if not r[f"admin{h}"]], dtype=float)
+    b0 = np.array([r[f"r{h}"] for r in controls if not r[f"admin{h}"]], dtype=float)
+    if len(a0) < 8 or len(b0) < 8:
+        return {"h": h, "mde": None, "reason": "too few rows"}
+    from scipy.stats import mannwhitneyu
+
+    rng = np.random.default_rng(seed)
+    for delta in (0.05, 0.10, 0.15, 0.25, 0.40, 0.60, 1.00, 1.50, 2.50):
+        hits = 0
+        for _ in range(draws):
+            a = rng.choice(a0, size=len(a0), replace=True)
+            b = rng.choice(b0, size=len(b0), replace=True)
+            shifted = (1.0 + a) * (1.0 + delta) - 1.0
+            try:
+                p = mannwhitneyu(shifted, b, alternative="two-sided").pvalue
+            except ValueError:
+                continue
+            hits += p < alpha
+        if hits / draws >= power:
+            print(
+                f"  MDE at {h//60}m (n={len(a0)} vs {len(b0)}): a multiplicative shift of "
+                f"{delta:+.0%} would be detected at {power:.0%} power / α={alpha:.2f}. "
+                f"Smaller effects are invisible to this cohort.",
+                file=out,
+            )
+            return {"h": h, "n_treated": len(a0), "n_control": len(b0), "mde": delta}
+    print(
+        f"  MDE at {h//60}m (n={len(a0)} vs {len(b0)}): even a +250% shift is NOT reliably "
+        f"detected. This cohort cannot answer the question at this horizon.",
+        file=out,
+    )
+    return {"h": h, "n_treated": len(a0), "n_control": len(b0), "mde": None}
+
+
 def mannwhitney(a: Sequence[float], b: Sequence[float]) -> tuple[float, float]:
     from scipy.stats import mannwhitneyu
 
@@ -1015,6 +1287,53 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         lag_rows.append({"lo": lo, "hi": hi, "n": len(r), "mean": float(r.mean()), "p_up": float((r > 0).mean())})
     result["by_lag"] = lag_rows
 
+    # ---- 2b. the other reading: buy the clones ---------------------------
+    print(
+        f"\n--- 2b. THE CLONE ARM — buying the imitators at their own launch ---", file=out
+    )
+    print(
+        '  "positions that will massively gain from THEM" reads as easily as buy-the-clones\n'
+        "  as it does buy-the-host, and a clone is the cheaper entry: its own launch minute,\n"
+        "  no chase. Only clones that launched AT OR AFTER their family's onset are counted —\n"
+        "  a clone that arrived before the third member was not a decision anyone could make.",
+        file=out,
+    )
+    clones = build_clone_cohort(launches, onsets, det, store, tape_end)
+    clone_ctl = build_launch_controls(
+        clones, launches, swarmed_mints(det, min_size=k), store, tape_end, seed=seed
+    )
+    print(f"  clone rows: {len(clones)}   matched launch controls: {len(clone_ctl)}", file=out)
+    clone_out: dict[str, Any] = {"n": len(clones), "n_control": len(clone_ctl)}
+    if len(clones) >= 12:
+        cbal = balance_table(clones, clone_ctl, ("log_dev_buy_sol", "log_mcap_at_onset")) if clone_ctl else []
+        for b in cbal:
+            print(
+                f"    balance {b['column']:<22} treated={b['treated_mean']:+8.3f} "
+                f"control={b['control_mean']:+8.3f} smd={b['smd']:+.3f}",
+                file=out,
+            )
+        clone_out["balance"] = cbal
+        cdiffs = []
+        for h in HORIZONS_S:
+            ts = summarise(clones, h, f"clones ({h//60}m)", out)
+            if clone_ctl:
+                cs = summarise(clone_ctl, h, f"launch controls ({h//60}m)", out)
+                if ts["n"] and cs["n"]:
+                    a = [r[f"r{h}"] for r in clones if not r[f"admin{h}"]]
+                    b2 = [r[f"r{h}"] for r in clone_ctl if not r[f"admin{h}"]]
+                    _u, p = mannwhitney(a, b2)
+                    print(
+                        f"    -> difference {ts['mean']-cs['mean']:+.2%} mean, "
+                        f"{ts['median']-cs['median']:+.2%} median, Mann-Whitney p={p:.4f}",
+                        file=out,
+                    )
+                    cdiffs.append({"h": h, "diff_mean": ts["mean"] - cs["mean"], "p": p})
+                    clone_out.setdefault("decompose", {})[h] = decompose(clones, clone_ctl, h, out)
+        clone_out["diffs"] = cdiffs
+        print(f"\n  POWER FLOOR for the clone arm:", file=out)
+        clone_out["mde"] = [mde(clones, clone_ctl, h, seed=seed, out=out) for h in HORIZONS_S]
+    result["clone_arm"] = clone_out
+
     # ---- 3. matched controls ---------------------------------------------
     print(f"\n--- 3. CONTROL ARM — matched, never-swarmed hosts at the same instant ---", file=out)
     # A coin excluded from the control pool is one that reached ONSET size, not merely one
@@ -1067,6 +1386,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                     f"{ts['p_up']-cs['p_up']:+.1%} p(up), Mann-Whitney p={p:.4f}",
                     file=out,
                 )
+                result.setdefault("decompose", {})[h] = decompose(treated_m, controls, h, out)
                 diffs.append(
                     {
                         "h": h,
@@ -1077,6 +1397,8 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                     }
                 )
         result["control_diffs"] = diffs
+        print(f"\n  POWER FLOOR — what this cohort could have detected:", file=out)
+        result["mde"] = [mde(treated_m, controls, h, seed=seed, out=out) for h in HORIZONS_S]
 
         # The hypothesis names PARASITES specifically. A farm's forty clones are one wallet's
         # inventory and say nothing about a host; pooling the two arms would let the farm
@@ -1530,14 +1852,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--horizon", type=int, default=3600)
     ap.add_argument("--days", type=int, default=3)
     ap.add_argument("--seed", type=int, default=20260815)
-    ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--pause", type=float, default=0.4)
+    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--pause", type=float, default=0.6)
+    ap.add_argument("--loop", type=float, default=0.0, help="repeat --fetch every N seconds")
     ap.add_argument("--refresh-older-than", type=float, default=900.0)
     ap.add_argument("--no-candidates", action="store_true")
     args = ap.parse_args(argv)
 
     if args.fetch:
-        cmd_fetch(args)
+        while True:
+            cmd_fetch(args)
+            if not args.loop:
+                break
+            time.sleep(args.loop)
     if args.report or not args.fetch:
         report(
             k=args.k,
