@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.cluster</string>
+  <!-- The cluster tape is the replay-grade record of the four-token cluster, and it is the
+       ONLY collector here that spends Helius credits. It had no supervisor at all: it was
+       started by hand, the laptop slept, and the tape sat ~24 hours stale while every study
+       that reads it kept reporting as if it were current.
+
+       Credit gentleness is structural, not remembered: --poll-seconds stays at the recorder's
+       default of 20, the vault sweep runs every 6th tick (--vault-poll-factor), and the
+       recorder takes an exclusive lock on its own tape root so a launchd start landing on top
+       of a manual run refuses rather than doubling every row. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_cluster.record</string>
+    <string>--minutes</string>
+    <string>0</string>
+    <string>--poll-seconds</string>
+    <string>20</string>
+    <!-- A KeepAlive respawn can land while the predecessor is still draining its pass, so
+         the successor waits for the tape lock instead of exiting 1 and being throttled. -->
+    <string>--lock-wait</string>
+    <string>300</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- Longer than the others: a restart re-lists every pool from its cursor, so a tight
+       respawn loop would burn credits on repeated backfills rather than on new flow. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/cluster.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/cluster.err.log</string>
+</dict>
+</plist>
