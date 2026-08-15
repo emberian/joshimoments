@@ -43,6 +43,7 @@ research = [
   "lifelines>=0.30,<1",     # survival + competing risks, censoring-explicit by construction
   "scikit-learn>=1.5,<2",
   "pyarrow>=17,<22",        # parquet, for the BigQuery bulk-history path
+  "duckdb>=1.1,<2",
 ]
 
 [tool.pytest.ini_options]

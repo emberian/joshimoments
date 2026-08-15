@@ -1,0 +1,569 @@
+# RESULT: operator crime — the blind zone was never about the unit of analysis
+
+*Study code: `studies/operator_crime.py`. Controls: `tests/test_operator_crime.py`.
+Artifacts: `studies/data/operator_crime/` (gitignored). Corpus: `state/bulk_pump/raw/`,
+2026-08-05 .. 2026-08-14. Run 2026-08-15. **Spend: $0.00** — no BigQuery, no vendor API, no
+Helius calls; every number below comes from parquet already on disk.*
+
+Reproduce:
+
+```
+uv run --group research python -m studies.operator_crime ledger    # ~15 min, 28 GB in
+uv run --group research python -m studies.operator_crime census    # ~10 min
+uv run --group research python -m studies.operator_crime coins
+uv run --group research python -m studies.operator_crime panel
+uv run --group research python -m studies.operator_crime verify    # falsify the price identity
+uv run --group research python -m studies.operator_crime labels
+uv run --group research python -m studies.operator_crime graph  --n-null 100 --max-deployers 400
+uv run --group research python -m studies.operator_crime predict
+uv run --group research python -m studies.operator_crime screen
+```
+
+---
+
+## 0. The answer
+
+**The operator reframe is half right, and the half that is wrong is the interesting half.**
+
+`RESULT_crime_signatures.md` found that 16 of 23 mechanical cliffs complete inside a pool's
+first 0–45 hours and concluded the detector was structurally blind where the money is. The
+operator's critique — that the blind zone was an artifact of treating the COIN as the unit,
+when crime is a repeated game by persistent operators — motivated this study. Ten days of
+full pump.fun flow says:
+
+1. **The blind zone was a DATA problem, not a unit problem.** The prior study was blind at
+   t=0 because its instrument was hourly price history, which by construction has nothing at
+   hour zero. The birth slot itself is enormously informative and needs no history at all:
+   coin-intrinsic birth features alone score **AUPRC 0.0274, 4.93× the base rate**, against
+   an EdgeBank-style memorisation baseline at 1.13×.
+2. **There IS a persistent actor, and it is not the deployer.** Same-deployer coins share
+   birth-slot sniper wallets at mean Jaccard **0.2834** against **0.0014** for day-matched
+   different-deployer pairs, and **51.2× a degree-preserving (curveball) null** at
+   p < 0.01. The bot crews are reused. Crew history adds a real **+13.7%** to the birth-slot
+   features.
+3. **The DEPLOYER's own history predicts, but adds nothing you did not already have.** Arm B
+   (deployer history only) scores 0.0127 = 2.28× base and beats its rotation null decisively
+   (p_rot < 0.01) — so the signal is real, not an artifact. But adding it to the birth-slot
+   features **does not improve them** (0.0312 → 0.0278). Everything the deployer's past knows
+   is already legible in the coin's first slot.
+4. **The mechanical label works, and it is 180× the prior study's evidence base.**
+   **1,271 rips** in ten days with timestamps and named perpetrator wallets, against the
+   prior study's 7 scorable cliffs. 4,053 distinct perpetrator wallets; the busiest single
+   wallet dumped on **55** different coins, and thirteen wallets dumped on 51 each.
+5. **The product works, and it is the most shippable thing here.** A birth-time CLEAN screen
+   — no bundle, small dev buy, no recidivist sniper, no prior operator dump — admits **4.8%**
+   of new coins and, on a **price-only outcome the screen's gates do not construct**, is
+   clean **99.96%** of the time: it admits **2 of 771** collapses. That is a **20× reduction**
+   in collapse rate at the cost of looking at one coin in twenty.
+6. **One gate points the opposite way from intuition and it matters for the product.**
+   "This deployer has never dumped before" is a **RISK** factor, not a safety factor: those
+   coins collapse at **1.77×** the base rate. A clean record is mostly indistinguishable from
+   no record, and no record means a first-timer.
+
+**What this does not do: it does not give an exit signal, and it does not predict which
+coins go up.** Everything here is birth-time triage.
+
+---
+
+## 1. The corpus, and three things the brief got wrong about it
+
+Ten days of every balance-changing transaction touching a pump-suffixed mint.
+
+| | |
+|---|---:|
+| raw transactions | **106,639,238** |
+| distinct signatures | 106,639,200 |
+| rows with `err = ''` (success) | **106,639,238** |
+| derived ledger rows (signed balance changes) | **301,592,622** |
+| mints appearing at all | 449,727 |
+| **pump.fun creates in-window** | **266,928** |
+
+Three corrections, each established by reading all ten days rather than the docstring:
+
+* **There is no signer column and no fee-payer column.** The schema is exactly `signature,
+  block_slot, block_time, tx_index, fee_lamports, err, compute_units, pre, post` plus
+  provenance. Identity in this corpus is the token-account **owner** — the beneficial holder,
+  not the signer. This kills the fee-payer fingerprint outright: the prior "10 fee payers =
+  46.6% of failures" result (`RESULT_execution_landing.md`) **cannot be extended here**, and
+  every wallet named in this document is an owner.
+* **Every row is a success.** `err = ''` on 106,639,238 of 106,639,238. The export dropped
+  reverts, so failure-rate fingerprints are unavailable too. Both are limitations of the
+  *pull*, not of the chain; a re-pull recovers them and would be worth doing.
+* **38 duplicate signatures** exist (106,639,238 rows, 106,639,200 distinct). Immaterial at
+  this scale, recorded so the next study does not treat `signature` as a primary key.
+
+The corpus also has no SOL transfers (it is filtered to pump-mint balance changes), so
+**funding lineage is not available** and no claim below rests on it. §6.3 is what replaced it.
+
+---
+
+## 2. The instrument: pricing 266,928 coins from the curve alone, and falsifying it
+
+This is the enabling result and it is worth more than any single number in §5.
+
+A pump.fun bonding curve holds *native* SOL in a PDA, which is not a token balance, so this
+corpus never shows the SOL leg of a pre-migration trade. That looks fatal for pricing and is
+not, because a bonding curve is constant-product against virtual reserves:
+
+> `p = sol/tok` and `sol · tok = k`  ⟹  **`log p = log k − 2 log(v_tok)`**
+
+so **log price is an exact affine function of the curve's own token balance**. The constants
+are recovered from data already on disk rather than from folklore: `state/boards/` carries
+`virtual_sol_reserves × virtual_token_reserves = 3.219e25` on every standard row, and
+`state/firehose/new_token/` confirms the split independently (a create with `initialBuy =
+17,376,518.132293` leaves `vTokens = 1,055,623,481.867707`, summing to 1,073,000,000.000000
+exactly; `vSol = 30.493827158 − 0.493827158 = 30.0` exactly). Hence
+
+```
+v_tok = curve_token_balance + 7.3e13          k = 3.219e25
+mcap_lamports = k · 1e15 / v_tok²
+```
+
+### 2.1 Two independent checks, one of which we could have failed
+
+**Internal.** The curve stops selling when its *tradeable* reserve is gone, not when its
+balance is gone — 206.9M of the 1e9 supply is held back for the migration LP. So graduation
+must occur at `v_tok = 2.799e14`, i.e. **411 SOL**. Observed median peak over 6,549 graduated
+coins: **410.9 SOL**. (Reading the peak at `bal = 0` instead gives a nonsense 6,040 SOL,
+identical for every graduated coin — §9 trap 3.)
+
+**External, and genuinely independent.** `state/boards/` is a vendor feed we did not derive.
+Comparing its `virtual_token_reserves` against ours at the same wall-clock second:
+
+| | |
+|---|---:|
+| on-curve board snapshots (`complete = false`) | 12,541 |
+| carrying the standard `k = 3.219e25` (to 0.1%) | **69.13%** |
+| standard-curve probes joined to our path | 6,583 |
+| median \|ours − vendor\| / vendor, all | 0.13% |
+| ... restricted to snapshots ≤ 60 s stale (n = 6,137) | **0.118%**, p90 3.663% |
+
+**The staleness split is itself the result.** The vendor's board clock is an *ingest* time,
+not a chain time — the two-clock rule again — and a coin that traded 300 times since the
+snapshot has genuinely moved. Conditioned on the snapshot being current, our curve balance
+reproduces a number we never saw to within **0.12%**.
+
+### 2.2 The honest limit
+
+**31% of on-curve coins run a non-standard curve** (pump.fun's boosted / "mayhem mode"
+launches), where `k ≠ 3.219e25`. Their market caps here are approximate. Market cap enters
+this study only as a *materiality screen* (`peak ≥ 100 SOL`) and never as a fitted quantity,
+so the cost is cohort membership rather than a biased estimate — but a study that wanted
+market cap as an outcome would have to solve this first.
+
+---
+
+## 3. Membership: what counts as a coin
+
+A mint is **born in-window** iff the net token supply created at its first observed
+transaction is exactly the pump.fun supply. Supply is minted from nothing, so a create is the
+one transaction whose token legs do not sum to zero — and it does so by exactly 1e15 raw.
+
+This replaced a first version that asked "was the curve funded with a lot", which mis-sorts
+every coin with a large dev buy (the curve's seed leg is `1e15 − dev_buy`, so a creator who
+bought 20% of his own coin looked like a smaller launch). On 2026-08-05, of 66,316 mints that
+traded:
+
+| first-transaction net | mints | reading |
+|---|---:|---|
+| **exactly 1e15** | **25,510** | a pump.fun create, in-window |
+| zero | 25,581 | ordinary trade; the coin predates the window |
+| negative | 6,479 | likewise |
+| other positive | 8,746 | mostly 1e18 single-leg seeds — a 9-decimal token wearing the `pump` suffix. Excluded and counted, not rescaled |
+
+---
+
+## 4. The labels: 1,271 rips, with names
+
+The brief asked how many labelled events ten days contain. The honest answer is a **ladder**,
+because "an insider dumped" on its own is close to universal and says nothing. Each rung adds
+one materiality condition.
+
+| label | coins | share |
+|---|---:|---:|
+| coins born in-window | 266,928 | 100.00% |
+| with an identified deployer | 218,652 | 81.91% |
+| graduated (curve emptied to the pool) | 6,549 | 2.45% |
+| **bundled at birth (≥2 birth-slot buyers)** | **116,266** | **43.56%** |
+| no birth-slot buyer at all | 46,468 | 17.41% |
+| insider set disposed ≥80% of its peak | 167,662 | 62.81% |
+| … and held ≥2% of supply | 119,220 | 44.66% |
+| … and held ≥5% of supply | 103,629 | 38.82% |
+| … and held ≥10% of supply | 85,706 | 32.11% |
+| … and held ≥20% of supply | 55,430 | 20.77% |
+| … ≥5% of supply and peak ≥ 50 SOL | 54,001 | 20.23% |
+| … ≥5% of supply and peak ≥ 100 SOL | 16,517 | 6.19% |
+| … ≥5% of supply and peak ≥ 200 SOL | 6,747 | 2.53% |
+| **RIP (all four conditions)** | **1,271** | **0.48%** |
+
+`RIP` is pre-registered as the conjunction: the insider set disposed ≥80% of its own peak
+holding; that holding was ≥5% of supply; the coin's peak market cap was ≥100 SOL; and the
+price fell ≥90% from its peak.
+
+Two facts worth reading off this table before any model:
+
+* **43.56% of new pump.fun coins are bundled at birth** — two or more wallets buying in the
+  same slot as the create, which cannot happen organically because the mint did not exist one
+  slot earlier. This is the on-chain bundle shape, and it needs no Jito bundle id (which is
+  not on chain at all). It is in the right neighbourhood of MELT's 36.5%-of-supply-in-
+  coordinated-hands prior, derived completely differently.
+* **Only 1,271 of 16,517 material insider dumps (7.7%) also cratered the price ≥90%.**
+  Insiders dumping a ≥5%-of-supply position on a ≥100 SOL coin usually does *not* kill it.
+  "Insider sold" and "coin died" are much less coupled than the folk model assumes.
+
+### 4.1 The perpetrators, and their recidivism
+
+| | |
+|---|---:|
+| (coin, wallet) disposals inside a rip window | 6,688 |
+| ripped coins | 1,271 |
+| distinct perpetrator wallets | 4,053 |
+
+| coins ripped by one wallet | wallets |
+|---:|---:|
+| 55 | 1 |
+| 51 | 13 |
+| 49 | 1 |
+| 47 | 1 |
+| 41 | 2 |
+| 36 | 1 |
+
+**Thirteen wallets each dumped on 51 different coins in ten days.** That is the "reusable
+infrastructure" claim, visible without any clustering at all.
+
+---
+
+## 5. The predictive test
+
+Temporal split on birth time: train = days 0–4, test = days 5–9. Every history feature is
+computed over events whose own timestamp precedes the coin's birth (§9 trap 4). Entity =
+deployer; 52.3% of test coins have a deployer seen in training, which is the mechanism, not a
+leak.
+
+| | train | test |
+|---|---:|---:|
+| coins (with a deployer) | 107,202 | 111,450 |
+| rips | 582 (0.5429%) | 621 (0.5572%) |
+
+### 5.1 Baselines first
+
+| baseline | AUPRC | × base rate |
+|---|---:|---:|
+| EdgeBank-style memorisation (this deployer's train rip count) | 0.0063 | 1.13× |
+| decayed popularity (this deployer's launch count) | 0.0053 | 0.95× |
+| random | 0.0056 | 1.00× |
+
+**The naive operator prior does essentially nothing.** "This deployer rugged before, so he
+will rug again" is worth 1.13× the base rate. If the study had stopped at the obvious version
+of its own hypothesis, the answer would have been a null.
+
+### 5.2 The arms
+
+| arm | features | AUPRC | × base | P@100 | P@1000 |
+|---|---|---:|---:|---:|---:|
+| **A0** coin-intrinsic | `n_snipers`, `dev_buy_share` | **0.0274** | **4.93×** | 0.060 | 0.046 |
+| **A1** sniper-crew history | `sniper_recidivism`, `sniper_prior_max` | 0.0205 | 3.68× | **0.090** | 0.044 |
+| **A** both of the above | | **0.0312** | **5.60×** | 0.060 | **0.059** |
+| **B** deployer history | `prior_launches/rips/dumps/grads`, rates, recency | 0.0127 | 2.28× | 0.040 | 0.023 |
+| **C** everything | | 0.0278 | 4.99× | 0.070 | 0.040 |
+
+### 5.3 The null: give this coin somebody else's operator
+
+The history block is permuted across test coins, **stratified on `prior_launches`**, so every
+coin keeps a history of exactly the right *size* and loses only whose it was. The model is
+refit on the untouched training half and re-scored, so the comparison is like-for-like.
+
+| arm | observed | null mean | null p95 | p_rot | beats null |
+|---|---:|---:|---:|---:|---|
+| B deployer history | 0.0127 | 0.0083 | 0.0085 | **< 0.01** | **YES** |
+| C everything | 0.0278 | 0.0244 | 0.0254 | **< 0.01** | **YES** |
+
+**So operator history is real.** It is not an artifact of some operators launching more coins.
+
+### 5.4 …and it is redundant
+
+| comparison | Δ AUPRC | ratio |
+|---|---:|---:|
+| C (everything) − A (birth slot) | **−0.0034** | **0.891×** |
+| A (birth slot) − A0 (coin intrinsic) | **+0.0038** | **1.137×** |
+
+Read together, these two lines are the study's verdict. The **deployer's** past adds nothing
+once the birth slot is known — the point estimate falls, and while a fall of that size is
+within what adding seven features to a fixed sample can do by itself, there is certainly no
+gain. The **sniper crew's** past adds a real +13.7%.
+
+> **The persistent actor that predicts a rug is the bot crew, not the creator.**
+
+This is consistent with §6.2: crews are reused 51× above a degree-preserving null, whereas
+the deployer wallet is cheap to rotate and evidently is rotated.
+
+---
+
+## 6. The operator graph
+
+### 6.1 Deployers
+
+| | |
+|---|---:|
+| coins with a deployer | 218,652 |
+| distinct deployers | 53,335 |
+| deployers with >1 coin | 12,141 (**66.5% of all coins**) |
+| with ≥5 / ≥10 / ≥50 coins | 4,733 / 2,518 / 610 |
+| busiest deployer | **1,563 coins in ten days** |
+
+Two thirds of pump.fun's output comes from repeat launchers. The unit-of-analysis critique was
+right about *that* much: these are not i.i.d. coins.
+
+### 6.2 Sniper reuse — the one big positive
+
+Arm: top 400 deployers by launch count, capped at 25 coins each (same-deployer pairs are
+quadratic in a deployer's coin count, and one operator with 1,563 coins would contribute 1.2M
+pairs and dominate the mean). 9,999 coins, 1,519 distinct snipers, 19,111 edges.
+
+| | mean Jaccard |
+|---|---:|
+| same-deployer pairs (n = 119,976) | **0.2834** |
+| day-matched different-deployer pairs (n = 119,976) | 0.0014 |
+| **ratio** | **203×** |
+| degree-preserving (curveball) null, n = 100 | mean 0.0055, p95 0.0057, max 0.0059 |
+| **effect over the null** | **51.2×**, p_curveball < 0.01 |
+
+**The deployer is excluded from its own coins' sniper sets and that is not a detail.** A create
+carries the dev buy, so the deployer is a birth-slot buyer of every coin it launches — it is
+in all 25 of its own sniper sets *by construction*. Left in, the same statistic reads
+**0.7754** instead of 0.2834. The inflated number is printed beside the real one by the code
+so the size of the artifact is visible rather than argued about; this is the same failure that
+built a 138-wallet mega-entity in `RESULT_copytrading.md` §3.
+
+The comparison arm is **day-matched** for the same reason: two coins born the same day draw
+snipers from the same ambient pool of bots, so an all-time random pair would measure the
+calendar.
+
+### 6.3 Custody transfers — an honest negative
+
+The corpus has no SOL transfers, so `RESULT_entity_resolution.md`'s typed funding edge ("a
+native SOL transfer that is the account's first inbound SOL") is unavailable. The substitute
+is **token custody**: a transaction moving one pump mint between exactly two accounts, equal
+and opposite, with the curve absent and **no WSOL leg at all** — nobody was paid, so it is
+custody-shaped rather than co-timing-shaped, and therefore admissible as ground truth for a
+clustering that a temporal test will use.
+
+| | |
+|---|---:|
+| direct token transfers | 904,574 |
+| distinct wallets | 208,096 |
+| connected components | 9,907 |
+| **giant_component_share** | **0.452** |
+
+**This does not work as entity resolution, and the diagnostic is exactly the one the label
+file warns about.** Union-find over custody transfers collapses 45% of all wallets into one
+component, and **FOMO's relayer sits inside that 94,004-wallet blob** — an infrastructure hub
+absorbed into a single "entity", which is the documented failure mode. Reported as a negative;
+no clustering downstream of it is used anywhere in this study.
+
+### 6.4 Known-entity validation
+
+| wallet | in ten days of corpus |
+|---|---|
+| `shitcoims` | PRESENT — 287 changes over 112 mints |
+| `tha_funds` | PRESENT — 229 changes over 12 mints |
+| `pumpfun_main` | **ABSENT** |
+| `ember_dev` | PRESENT — 5 changes over 1 mint |
+| `og_shitcoims` | PRESENT — 11 changes over 5 mints |
+| `fomo_family_relayer` | PRESENT — 58,270 changes over 11 mints |
+
+**The "the operator's five wallets must cluster together" validation is NOT TESTABLE in this
+corpus, and saying so is the result.** Only two of the five appear in any direct custody
+transfer at all: these wallets *trade*, they do not hand pump tokens to each other. There is
+no edge on which to test whether they cluster. The FOMO check *is* testable and it **fails**
+(§6.3).
+
+### 6.5 A label-file bug found and fixed on the way
+
+`wallet_labels.yaml` recorded FOMO's relayer as `AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c`.
+Its own cited source, `RESULT_copytrading.md` line 24, and the code that produced it,
+`studies/copytrading.py` line 164, both say `AgmLJBMDCqWynYnQiPCuj9ewsNNsBJXyzoUhD9LJzN51` —
+sharing only the first **eight** characters. Both decode to valid 32-byte pubkeys, so nothing
+syntactic catches it. Only `...CqWyn...` appears on chain (58,270 balance changes); the
+`...wDrsy...` string appears nowhere else on disk and nowhere in 106M transactions. Given the
+`address_poisoning` block in that same file, a prefix-matching lookalike sitting *in the label
+file* is precisely the failure the file exists to prevent. **Corrected**, with the old value
+retained as `superseded_address`.
+
+---
+
+## 7. The product: a birth-time CLEAN screen
+
+The operator's use case is a $40 taste bet, so the asymmetry is explicit: **a false CLEAN is
+worse than a false DIRTY**, and the operating point is chosen for *precision of CLEAN*.
+Recall is reported but is not the target — there are 25,000 new coins a day.
+
+Test half only: 111,450 coins. **Two outcomes are scored, and the second is the honest one.**
+`is_rip` is built from the insider set and three of the five gates are also built from the
+insider set, so a perfect score against it would be substantially *definitional*. `collapse`
+is a ≥90% fall from a ≥100 SOL peak computed from the **curve alone**, with no reference to
+who sold.
+
+### Outcome: `collapse` (price only) — base rate 0.6918%
+
+| gate | passes | P(clean) | collapse lift |
+|---|---:|---:|---:|
+| no bundle at birth (`n_snipers ≤ 1`) | 51,889 | 99.8863% | **0.16×** |
+| dev buy under 2% of supply | 46,599 | 99.7704% | **0.33×** |
+| no recidivist sniper (`sniper_prior_max = 0`) | 9,904 | 99.4043% | 0.86× |
+| deployer has never ripped | 90,900 | 99.3630% | 0.92× |
+| **deployer has never dumped** | 32,582 | 98.7785% | **1.77×** |
+| **ALL GATES — the CLEAN screen** | **5,311** | **99.9623%** | **0.05×** |
+
+**Operating point: the screen admits 4.8% of new coins and is clean 99.96% of the time,
+letting through 2 of 771 collapses.** Against the insider-mechanical `is_rip` label it admits
+0 of 621, but that number is partly definitional and the 99.96% is the one to quote.
+
+Three things a reader should take from the gate table rather than from the bottom line:
+
+1. **The bundle gate does nearly all the work** (0.16×), and it is available in the coin's
+   first slot. Dev-buy size is second (0.33×).
+2. **"This deployer has never dumped" is a RISK factor at 1.77×.** A clean record is mostly
+   indistinguishable from *no* record, and no record means a first-time deployer. The absence
+   of history is not evidence of innocence — this inverts the most natural manual heuristic
+   and is the single most actionable line in the document.
+3. The screen is **not** an edge. It says nothing about which of the 5,311 admitted coins goes
+   up; it says that if you are going to make twenty $40 bets, these are the ones where the
+   money is lost to the market rather than to a bundle.
+
+---
+
+## 8. Trials counted
+
+| family | cells |
+|---|---:|
+| label ladder rungs (descriptive, no test) | 14 |
+| predictive arms × 1 label × 1 split | 5 |
+| baselines | 3 |
+| rotation nulls (arms with history features) | 3 |
+| sniper-reuse: 1 statistic × 1 null | 1 |
+| screen gates × 2 outcomes | 12 |
+| **substantive configurations** | **~24** |
+
+PROGRAM.md §3.9's rule — past ~7 configurations an in-sample Sharpe of 1 is an out-of-sample
+zero — argues for the nulls, and the nulls are the load-bearing part of §5 and §6.2. The two
+claims this document rests on are each backed by a null the naive version fails: sniper reuse
+against a **degree-preserving** null (51.2×, where the *inflated* self-inclusion version reads
+2.7× higher and would have been wrong), and operator history against a **stratified
+permutation** null (2.28× observed vs 1.49× null mean).
+
+**No fixed-percentage drawdown claim is made without its mechanical companion.** The `collapse`
+label in §7 is a fixed −90%, so per `RESULT_crime_signatures.md` §5.5 it must be treated as
+volatility-suspect: it is used only as an *independent check* on a screen built from other
+quantities, never as the thing being optimised, and the primary label `is_rip` is mechanical
+(who moved what supply) rather than a drawdown.
+
+---
+
+## 9. Method notes: five traps, paid for
+
+Each produced a wrong number first and would have been invisible in the output.
+
+**1. A CTE referenced twice materialises 10M rows of nested lists — 25 GB of spill per day,
+before a single output row.** The ledger explode is a per-row operation: `account_index` is
+unique within each of `pre` and `post`, so netting is a join of two short lists *inside* a
+row. The second attempt kept one scan but netted with `GROUP BY block_slot, tx_index, owner,
+mint` — a near-unique-key aggregate over 28M rows/day that reduces nothing and still spilled
+4 GB. Row-local netting streams with an empty spill directory.
+
+**2. HUGEINT silently becomes DOUBLE on parquet.** Parquet has no 128-bit integer. Every
+value here is bounded by the 1e15 supply and *happens* to be exactly representable, but a
+`sum()` over a coin's 400,000 trades is 4e17 — past 2⁵³ — and the total would quietly stop
+being the total. Cast to `BIGINT`. This is the corpus docstring's "cast int, never float" rule
+biting in a place the docstring did not name.
+
+**3. The migration transaction poisons the peak price by 15×.** At migration the curve hands
+its *entire* balance to the pool and goes to zero, but it stopped *selling* with 206.9M tokens
+still in the account. Reading the peak at `bal = 0` gives `v_tok = 7.3e13` and a nonsense
+6,040 SOL — identical for every graduated coin, which is what made it visible. `min_bal_live`
+excludes it and the median lands on 410.9 SOL against 411 predicted.
+
+**4. Birth order is not information order, and the leak points at the hypothesis.** The
+obvious history frame — `PARTITION BY deployer ORDER BY birth_time ROWS UNBOUNDED PRECEDING
+AND 1 PRECEDING` — looks strictly causal and is not: a deployer's previous coin is born an
+hour earlier and rips five days *later*, and the frame credits this coin with `prior_rips = 1`
+for a rug that had not happened. Fixed by aggregating over **events** whose own timestamp
+precedes the birth. Two features (`prior_mean_ins_share`, `prior_best_mcap`) were **deleted
+rather than fixed** because they are maxima over a prior coin's whole life and have no
+leak-free form at this cost.
+
+**5. A "custody transfer" that is really a trade.** The first transfer detector asked only for
+two equal-and-opposite pump legs with the curve absent, and returned **18,195,092** transfers
+in four days — because that is exactly the shape of a PumpSwap trade after migration, where
+the pool takes one side and the pool is not the curve. Requiring the transaction to have moved
+**no WSOL at all** drops it to 904,574 in ten days. A payment is not a custody link.
+
+**And one that is not a trap but a fact worth carrying forward:** the deployer is a birth-slot
+buyer of its own coin, so any statistic over "the wallets that bought at birth" is
+self-inflated for the operator unless the deployer is removed. It was worth 2.7× here.
+
+---
+
+## 10. Controls
+
+`tests/test_operator_crime.py`, six tests, all green. PROGRAM.md §3.12 — *both controls,
+always* — is the rule they exist for, because the SVN study's z-score bug passed its
+zero-coordination control perfectly (an estimator that detects nothing always does) and only
+the planted-recovery test caught it.
+
+| test | world | asserts |
+|---|---|---|
+| `test_independent_wallets_yield_no_validated_edges` | no shared crews | observed Jaccard **inside** the curveball p95 |
+| `test_planted_clusters_are_recovered` | each deployer reuses half its crew | observed **above** p95, and > 3× null mean |
+| `test_curveball_preserves_both_degrees` | — | every coin's sniper count and every wallet's coin count unchanged |
+| `test_curveball_actually_randomises` | — | the null moves (a no-op is degree-preserving too) |
+| `test_the_verdict_flips_with_the_world` (×2) | both | one statistic, two worlds, **opposite** verdicts |
+
+The last one is the important one: if that parametrisation ever agrees on both rows, the
+instrument is a constant and every headline built on it is meaningless.
+
+---
+
+## 11. What this does NOT establish
+
+1. **No funding lineage.** The corpus has no SOL transfers. Every "operator" here is a
+   deployer wallet or a sniper wallet, never a funding-tree entity. Sybil wallets are free, so
+   53,335 distinct deployers is an **upper bound** on the number of operators.
+2. **16.5% of coins have no identifiable deployer** — no dev buy, so no wallet appears in the
+   create at all. They are not excluded from the label ladder but they are absent from every
+   deployer-keyed analysis.
+3. **No entity resolution succeeded.** §6.3 is a negative. Nothing downstream clusters wallets,
+   and the §5 test is at deployer-wallet level with that stated as a limitation, not solved.
+4. **Ten days is ten days**, and coins born on day 9 are heavily right-censored. The temporal
+   split mitigates the comparison but not the base rates: a coin born on the last day has
+   hours, not days, in which to rip.
+5. **`is_rip` is a definition, not a court verdict.** It says a set of birth-slot wallets
+   disposed of a material position before a collapse. It does not establish intent, and some
+   fraction of these are honest early buyers taking profit into a coin that was dying anyway.
+6. **The screen is evaluated on the same ten days it was designed on.** The gates were fixed
+   from the mechanism before the numbers were read, and the split is temporal — but the *set*
+   of gates was chosen by a person who had already seen §4. Forward evaluation is the only
+   thing that settles it.
+7. **31% of coins are priced approximately** (§2.2).
+8. **This is not an exit signal and not an entry edge** (§0).
+
+---
+
+## 12. What to do with this
+
+1. **Ship the CLEAN screen as birth-time triage for the $40 bets**, at the stated operating
+   point: 4.8% coverage, 99.96% clean, 2 of 771 collapses admitted. It needs one slot of chain
+   data per coin and no history at all.
+2. **Stop treating a clean deployer record as reassurance.** It reads 1.77× *worse* than base.
+   If a history gate is used at all, it should be "this deployer has a *long* clean record",
+   which the 610 deployers with ≥50 coins make measurable and which this study did not test.
+3. **Re-pull the corpus with signers and fee payers.** Two of this study's three dead ends
+   (fee-payer fingerprints, failure-rate fingerprints) are limitations of the *export*, not of
+   the chain, and the pull is the same bytes.
+4. **The next real experiment is the crew, not the creator.** §5.4 and §6.2 both point there:
+   sniper crews are reused 51× above a degree-preserving null and their history is the only
+   history that adds anything. A crew-keyed panel — cluster birth-slot wallets by co-appearance
+   across coins, *validated on held-out coins rather than on the co-appearance that built it* —
+   is the follow-up with the most support behind it.
+5. **Carry `verify` forward.** A price identity that reproduces an independent vendor's number
+   to 0.12% is reusable by every future study on this corpus, and it costs nothing.
