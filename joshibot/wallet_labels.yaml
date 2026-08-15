@@ -1,0 +1,42 @@
+# Operator-attested wallet labels — the ground truth no instrument can produce.
+#
+# HANDOFF.md's process lesson: "measurement was complete and meaningless until a human
+# said 'that address is mine' or 'that one is a scammer'. Make it cheap to attach a
+# label, and record its confidence alongside it." This file is that mechanism.
+#
+# Provenance: operator statements in session 6afafeaf (the accounting fork,
+# messages ~1866-1878, 2026-08-14) and session 59905ce5. The fork displayed most
+# addresses truncated; entries with `address: null` carry the operator's prefix and
+# need resolution against the five-wallet counterparty set (see
+# studies/position_history.py). DO NOT guess a full address from a prefix — resolve
+# it from the ledger or leave it null.
+#
+# confidence: attested = operator said it outright; probable = operator said
+# "pretty sure"; inferred = derived by an instrument, never overrides attested.
+
+own_wallets:
+  - {address: Sh1WNJ8g68rXJGyDjVPcfxWN1WbMrLsgdXmSb6cccuE, label: shitcoims,      note: live trading wallet}
+  - {address: Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ, label: tha_funds,      note: Meteora DLMM LP wallet}
+  - {address: PmpDh2BQCMMseKYPxseWTSoX3aAouHE4sWyFWTdkqYE, label: pumpfun_main,   note: creator-fee withdrawal target; nets to ~zero (pass-through)}
+  - {address: Dev2GmPW2Jv28KW8D7DLqh7TM9hRf8adTDF5p6Jk3CHc, label: ember_dev,      note: DREGG unlock deposits (Streamflow escrow releases)}
+  - {address: PrvpTgcuAzN337qSmmKizTMSmhpLPJmZ5Vt8WKCzagf, label: og_shitcoims,   note: pre-migration Phantom wallet}
+
+external:
+  - {address: Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh, label: coinbase_receiving, kind: exchange, confidence: attested,
+     note: "operator's Coinbase Solana receiving address; Coinbase also SENDS to the own-wallets from rotating addresses — inbound from Coinbase is a transfer, not income"}
+  - {address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6, label: payroll, kind: payee, confidence: attested}
+  - {address: null, prefix: "9gy",  label: payroll,               kind: payee,   confidence: attested}
+  - {address: null, prefix: "7tvm", label: payroll,               kind: payee,   confidence: attested,
+     note: "operator initially recalled as KOL, then corrected: 'was actually payroll i realized'"}
+  - {address: null, prefix: "3CP",  label: payroll,               kind: payee,   confidence: probable}
+  - {address: null, prefix: "C7",   label: payroll,               kind: payee,   confidence: probable}
+  - {address: null, prefix: "EBF",  label: marketing_kol,         kind: payee,   confidence: attested}
+  - {address: null, prefix: "Fu5RB", label: scammer,              kind: adversary, confidence: attested,
+     note: "funds sent here are a loss, not payroll and not marketing"}
+  - {address: AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c, label: fomo_family_relayer, kind: infrastructure, confidence: inferred,
+     note: "gas-sponsors 22.5% of distinct traders on cluster pools; identified three ways in RESULT_copytrading.md; verify full address against that study before use"}
+
+categories:
+  # Operator's own classification from the fork: "let's call this all payroll
+  # 'marketing/community' tbh" — payroll and marketing_kol both roll up here.
+  marketing_community: [payroll, marketing_kol]
