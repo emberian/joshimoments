@@ -329,6 +329,7 @@ class SwarmDetector:
         self._launch: dict[str, Launch] = {}
         self._seq = 0
         self._t0: float | None = None
+        self._last_t: float | None = None
         #: launches per deployer seen SO FAR. Distinct-deployer count is only an upper bound
         #: on independence — sybil wallets are free, and MELT puts 36.5% of supply in
         #: coordinated hands — so the cheap discriminator recorded alongside it is how much
@@ -364,8 +365,14 @@ class SwarmDetector:
     def push(self, ln: Launch) -> list[dict[str, Any]]:
         """Absorb one launch; return any events it triggered."""
         events: list[dict[str, Any]] = []
-        if self._t0 is None:
+        # The observation start is not the start of the tape — it restarts after any hole
+        # longer than the matching window. A launch that arrives right after a 172-minute
+        # socket outage (there is one in the real tape) has exactly as little visible history
+        # as the very first launch does, and calling it uncensored would let a clone of a
+        # coin launched inside the hole be nominated as a host.
+        if self._t0 is None or (self._last_t is not None and ln.t - self._last_t > self.window_s):
             self._t0 = ln.t
+        self._last_t = ln.t
         self._evict(ln.t)
         self._launch[ln.mint] = ln
         self._seq += 1

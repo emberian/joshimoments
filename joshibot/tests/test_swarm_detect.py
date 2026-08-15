@@ -247,10 +247,12 @@ def test_left_censoring_is_flagged_not_hidden():
     # original may predate our listening
     assert ev[0]["host_left_censored"] is True
 
+    # once a full window of CONTINUOUS tape sits behind the host, censoring lifts
     det2 = SwarmDetector(k=2, window_s=600)
-    det2.push(mk("a", 0, "OTHER", "DX"))
-    det2.push(mk("m1", 5000, "SAME", "D0"))
-    ev2 = det2.push(mk("m2", 5100, "SAME", "D1"))
+    for i in range(20):
+        det2.push(mk(f"bg{i}", i * 50.0, f"BG{i}", f"DX{i}", name=f"background {i}"))
+    det2.push(mk("m1", 1000, "SAME", "D0"))
+    ev2 = det2.push(mk("m2", 1100, "SAME", "D1"))
     assert ev2[0]["host_left_censored"] is False
 
 
@@ -503,3 +505,26 @@ def test_shuffle_preserves_marginals_but_scatters_a_burst():
     assert sorted(l.symbol for l in shuffled) == sorted(l.symbol for l in stream)
     null = SwarmDetector(k=3, window_s=600)
     assert len([e for ln in shuffled for e in null.push(ln)]) == 0
+
+
+def test_left_censoring_restarts_after_a_hole_in_the_tape():
+    """A 172-minute socket outage exists in the real tape; it must reset the horizon.
+
+    Without this, a coin launched two minutes after the socket came back is called
+    "uncensored" even though every possible parent inside the outage is invisible — and it
+    would then be nominated as a host and traded as an original.
+    """
+    det = SwarmDetector(k=2, window_s=1800)
+    det.push(mk("a", 0, "AAA", "D0", name="aardvark"))
+    det.push(mk("b", 100, "BBB", "D1", name="bicycle"))
+    # ... 3 hours of nothing: we were not listening ...
+    det.push(mk("m1", 11000, "SAME", "D2", name="cinnamon"))
+    ev = det.push(mk("m2", 11100, "SAME", "D3", name="cinnamon"))
+    assert ev[0]["host_left_censored"] is True, "post-hole hosts have no visible history"
+
+    # and once enough CONTINUOUS post-hole tape has accumulated, censoring lifts again
+    for i in range(30):
+        det.push(mk(f"bg{i}", 11200 + i * 60.0, f"BG{i}", f"D{100+i}", name=f"background {i}"))
+    det.push(mk("n1", 13100, "OTHER", "D4", name="eggplant"))
+    ev2 = det.push(mk("n2", 13160, "OTHER", "D5", name="eggplant"))
+    assert ev2[0]["host_left_censored"] is False
