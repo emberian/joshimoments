@@ -121,7 +121,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from shitcoims_cluster.pools import KNOWN_DISCRIMINATORS, WSOL_MINT, PoolSpec
+from shitcoims_cluster.pools import (
+    KNOWN_DISCRIMINATORS,
+    PUMPSWAP_PROGRAM,
+    WSOL_MINT,
+    PoolSpec,
+)
+from shitcoims_cluster.pumpswap import (
+    ANCHOR_CPI_EVENT_TAG,
+    EventDecodeError,
+    SwapEvent,
+    decode_swap_event,
+)
 from shitcoims_tape.schema import Chainstamp, Provenance, Reserves, Side, Trade
 
 SOURCE: Final[str] = "shitcoims_cluster.record"
@@ -241,15 +252,44 @@ class PoolReserves:
     pool: str
     dex: str
     vaults: tuple[VaultState, ...]
+    #: The pool's TYPE admits exact replay (constant product). Necessary, not sufficient —
+    #: see :attr:`replay_exact`.
     replay_sufficient: bool
+    #: The reserves the program itself priced against, when it told us. ``None`` means the
+    #: vault balances are all we have.
+    curve: SwapEvent | None = None
+
+    @property
+    def replay_exact(self) -> bool:
+        """Whether these numbers are enough to reproduce the fill. The honest flag.
+
+        ``replay_sufficient`` used to carry this claim on its own and it was WRONG for two of
+        the four PumpSwap pools: a boosted pool prices against
+        ``pool_quote + virtual_quote_reserves``, and the vault holds only the first term (see
+        :mod:`shitcoims_cluster.pumpswap`). On nosis/SOL and weave/SOL that is a 4.6% and 9.6%
+        error, large enough to invert the sign of a fitted fee. So a constant-product pool is
+        replayable only when the curve reserves were actually READ, and a row that lacks the
+        event says so instead of asserting from the pool's type.
+        """
+
+        if not self.replay_sufficient:
+            return False
+        if self.dex != "pumpswap":
+            return True
+        return self.curve is not None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "pool": self.pool,
             "dex": self.dex,
-            "replay_sufficient": self.replay_sufficient,
+            "replay_sufficient": self.replay_exact,
+            "replay_sufficient_by_type": self.replay_sufficient,
             "vaults": [v.to_json() for v in self.vaults],
         }
+        # `curve` is the reserve pair the AMM used. It is emitted whenever it was read, even
+        # when it equals the vault balances, so a consumer never has to infer which case it is.
+        out["curve"] = self.curve.to_json() if self.curve is not None else {"source": "absent"}
+        return out
 
     def vault_for(self, mint: str) -> VaultState | None:
         for vault in self.vaults:
@@ -371,12 +411,22 @@ class ClusterSwap:
     def as_tape_reserves(self) -> Reserves | None:
         """A real :class:`~shitcoims_tape.schema.Reserves`, post-state, or ``None``.
 
-        Only for a SOL-quoted constant-product pool. ``virtual_sol``/``virtual_tokens`` are
-        ``0`` because a constant-product pool *has* no virtual component — that is an exact
-        statement about the AMM, not an unfilled field.
+        Only for a SOL-quoted constant-product pool whose CURVE reserves were read.
+
+        This used to fill ``virtual_sol=0`` with the comment "a constant-product pool *has* no
+        virtual component — that is an exact statement about the AMM, not an unfilled field".
+        The statement was false. A boosted PumpSwap pool carries a nonzero
+        ``virtual_quote_reserves`` and prices against ``pool_quote + virtual`` (17.58 SOL on
+        both nosis/SOL and weave/SOL, 0 on DREGG/SOL and SOLVE/SOL), so the zero was not exact
+        — it was the "a zero there reads as measured" failure ``RESULT_bulk_history.md``
+        warns about, asserted in a docstring. It now carries the value the program reported.
+
+        ``virtual_tokens`` stays 0, and *that* one is structural: the event layout has no
+        base-side virtual field at all.
         """
 
-        if not self.reserves.replay_sufficient or not self.is_sol_quoted:
+        curve = self.reserves.curve
+        if not self.reserves.replay_exact or not self.is_sol_quoted:
             return None
         sol_leg = self.reserves.vault_for(WSOL_MINT)
         token_vault = next((v for v in self.reserves.vaults if v.mint != WSOL_MINT), None)
@@ -384,7 +434,7 @@ class ClusterSwap:
             return None
         return Reserves(
             pool=self.pool,
-            virtual_sol=0,
+            virtual_sol=0 if curve is None else curve.virtual_quote_raw,
             virtual_tokens=0,
             real_sol=sol_leg.post_raw,
             real_tokens=token_vault.post_raw,
@@ -557,9 +607,46 @@ def _pool_legs(tx: Mapping[str, Any], spec: PoolSpec) -> tuple[tuple[str, ...], 
         disc = discriminator_of(str(ins.get("data", "")))
         if not disc:
             continue
+        if disc == ANCHOR_CPI_EVENT_TAG.hex():
+            # An emitted event is a self-CPI back into the same program. It is a REPORT of the
+            # swap, not a second swap, and counting it would double `swap_legs` and read a
+            # single fill as a multi-leg route.
+            continue
         discriminators.append(disc)
         names.append(KNOWN_DISCRIMINATORS.get(disc, ""))
     return tuple(discriminators), tuple(names)
+
+
+def _pool_swap_event(tx: Mapping[str, Any], spec: PoolSpec) -> SwapEvent | None:
+    """The PumpSwap swap event emitted FOR THIS POOL, or ``None`` if there is not exactly one.
+
+    The pool filter is not optional. A routed transaction emits one event per pool it crosses,
+    and taking the first would attribute another pool's reserves to this one — the first
+    version of this lookup did exactly that and read a 25 SOL reserve onto a 173 SOL pool.
+
+    More than one event for the same pool in one transaction means the pool was crossed twice
+    (a sandwich or a cycle), and the reserves then have no single value for the row: that
+    returns ``None`` rather than silently picking a side.
+    """
+
+    if spec.program != PUMPSWAP_PROGRAM:
+        return None
+    found: list[SwapEvent] = []
+    for ins in _all_instructions(tx):
+        if ins.get("programId") != spec.program:
+            continue
+        raw = _b58_decode(str(ins.get("data", "")))
+        if not raw:
+            continue
+        try:
+            event = decode_swap_event(raw)
+        except EventDecodeError:
+            # The bytes announced themselves as a swap event and did not parse. That is an
+            # IDL drift, not a routing detail, and it must not read as "no event".
+            return None
+        if event is not None and event.pool == spec.address:
+            found.append(event)
+    return found[0] if len(found) == 1 else None
 
 
 def _counterparty(
@@ -725,6 +812,7 @@ def parse_transaction(
         dex=spec.dex,
         vaults=tuple(vaults),
         replay_sufficient=spec.replay_sufficient_reserves,
+        curve=_pool_swap_event(tx, spec),
     )
 
     inflows = [v for v in vaults if v.delta_raw > 0]

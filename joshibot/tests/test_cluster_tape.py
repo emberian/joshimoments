@@ -34,6 +34,7 @@ from shitcoims_cluster.parse import (
     PoolReserves,
     RowKind,
     VaultState,
+    _b58_decode,
     discriminator_of,
     listing_is_usable,
     parse_failed_signature,
@@ -51,6 +52,12 @@ from shitcoims_cluster.pools import (
     WEAVE,
     WSOL_MINT,
     pool_for,
+)
+from shitcoims_cluster.pumpswap import (
+    ANCHOR_CPI_EVENT_TAG,
+    SELL_EVENT,
+    EventDecodeError,
+    decode_swap_event,
 )
 from shitcoims_cluster.record import Collector
 from shitcoims_cluster.rpc import READ_METHODS, HeliusRpc, RpcError, read_secret_file
@@ -73,6 +80,9 @@ WEAVE_SOL = "GA1nQL5RLBYUkLfBRrTPxhiSaPYnanJwteMGa3jPRjEn"
 NOSIS_SOL = "7nv2RtGXXVDEgT9sWB3EjT8MQbMuA6CTMiuBGvEwmZSc"
 WEAVE_NOSIS = "QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD"
 DREGG_NOSIS = "FNxnyS3hkVJDUvQmP9LYGLUg9icvc7n4ZwTTQ3R1vtJD"
+DREGG_SOL = "2XHrhkxfXweUpNRZAaS6tBAGUGVa6vTEyi4nPXUi8sfU"
+#: PumpSwap's `__event_authority` PDA — the sole account of an emitted-event self-CPI.
+EVENT_AUTHORITY = "GS4CU59F31iL7aR2Q8zVS8DRrcRnXX1yjQ66TqNVQnaR"
 
 TRADER = "hnu5iBK8UoHb51UFsH1RYTUAYdrhjHvV5YMTf9T1CYN"
 SPONSOR = "HxjwdF326ZunmUwC1iXhfgL3ku78YsksN6n7Rfxzwr6b"
@@ -98,6 +108,65 @@ def b58_encode(raw: bytes) -> str:
 def anchor_data(name: str, payload: bytes = b"\x00" * 16) -> str:
     disc = hashlib.sha256(f"global:{name}".encode()).digest()[:8]
     return b58_encode(disc + payload)
+
+
+def _b58_pubkey_bytes(address: str) -> bytes:
+    total = 0
+    for ch in address:
+        total = total * 58 + _B58.index(ch)
+    raw = total.to_bytes((total.bit_length() + 7) // 8, "big")
+    return raw.rjust(32, b"\x00")
+
+
+def pumpswap_sell_event(
+    *,
+    pool: str,
+    pool_base_raw: int,
+    pool_quote_raw: int,
+    virtual_quote_raw: int,
+    can_boost: bool = True,
+) -> str:
+    """Encode a PumpSwap ``SellEvent`` the way the program emits it (anchor self-CPI).
+
+    Built field by field from the same layout the decoder reads, so a layout change breaks
+    this fixture rather than silently producing a plausible-looking wrong number.
+    """
+
+    import struct
+
+    body = b"".join([
+        struct.pack("<q", 1786579476),            # timestamp
+        struct.pack("<Q", 24463717163),           # base_amount_in
+        struct.pack("<Q", 0),                     # min_quote_amount_out
+        struct.pack("<Q", 0),                     # user_base_token_reserves
+        struct.pack("<Q", 0),                     # user_quote_token_reserves
+        struct.pack("<Q", pool_base_raw),         # pool_base_token_reserves
+        struct.pack("<Q", pool_quote_raw),        # pool_quote_token_reserves
+        struct.pack("<Q", 75666317),              # quote_amount_out
+        struct.pack("<Q", 20),                    # lp_fee_basis_points
+        struct.pack("<Q", 0),                     # lp_fee
+        struct.pack("<Q", 5),                     # protocol_fee_basis_points
+        struct.pack("<Q", 0),                     # protocol_fee
+        struct.pack("<Q", 0),                     # quote_amount_out_without_lp_fee
+        struct.pack("<Q", 74983955),              # user_quote_amount_out
+        _b58_pubkey_bytes(pool),                  # pool
+        b"\x01" * 32,                             # user
+        b"\x02" * 32,                             # user_base_token_account
+        b"\x03" * 32,                             # user_quote_token_account
+        b"\x04" * 32,                             # protocol_fee_recipient
+        b"\x05" * 32,                             # protocol_fee_recipient_token_account
+        b"\x06" * 32,                             # coin_creator
+        struct.pack("<Q", 85),                    # coin_creator_fee_basis_points
+        struct.pack("<Q", 0),                     # coin_creator_fee
+        struct.pack("<Q", 0),                     # cashback_fee_basis_points
+        struct.pack("<Q", 0),                     # cashback
+        struct.pack("<Q", 0),                     # buyback_fee_basis_points
+        struct.pack("<Q", 0),                     # buyback_fee
+        int(virtual_quote_raw).to_bytes(16, "little", signed=True),  # virtual_quote_reserves
+        b"\x01" if can_boost else b"\x00",        # can_boost
+        struct.pack("<Q", 1_000_000_000_000_000),  # base_supply
+    ])
+    return b58_encode(ANCHOR_CPI_EVENT_TAG + SELL_EVENT + body)
 
 
 def sig(seed: str) -> str:
@@ -233,6 +302,20 @@ def pumpswap_sell_tx(signature: str = SELL_SIGNATURE, **overrides: Any) -> dict[
                 "accounts": [NOSIS_SOL, TRADER, POOL_SOL_VAULT, POOL_TOKEN_VAULT],
                 "data": anchor_data("sell"),
                 "stackHeight": None,
+            },
+            # The self-CPI event the program emits alongside the swap. nosis/SOL is a BOOSTED
+            # pool, so the curve prices against pool_quote + 17,584,505,383 lamports and the
+            # vault balance alone is 4.6% short of it.
+            {
+                "programId": PUMPSWAP_PROGRAM,
+                "accounts": [EVENT_AUTHORITY],
+                "data": pumpswap_sell_event(
+                    pool=NOSIS_SOL,
+                    pool_base_raw=97854868653957,
+                    pool_quote_raw=285763126530,
+                    virtual_quote_raw=17584505383,
+                ),
+                "stackHeight": 2,
             },
         ),
     }
@@ -606,8 +689,12 @@ def test_constant_product_reserves_project_onto_the_real_reserves_type() -> None
     assert reserves.pool == NOSIS_SOL
     assert reserves.real_sol == 285687460213
     assert reserves.real_tokens == 97879332371120
-    # Zero virtuals are the exact algebra of a constant-product pool, not a missing value.
-    assert reserves.virtual_sol == 0
+    # `virtual_sol == 0` used to be asserted here as "the exact algebra of a constant-product
+    # pool, not a missing value". It was neither: nosis/SOL is a BOOSTED PumpSwap pool and the
+    # program prices against pool_quote + virtual_quote_reserves. The value now comes from the
+    # swap event rather than from an assumption about the AMM.
+    assert reserves.virtual_sol == 17584505383
+    # This one really is structural: the event layout has no base-side virtual field.
     assert reserves.virtual_tokens == 0
 
 
@@ -917,11 +1004,21 @@ def test_cursors_round_trip(tmp_path: Path) -> None:
 class FakeRpc:
     """Canned responses. No socket is opened anywhere in this file."""
 
-    def __init__(self, listings: dict[str, list[dict[str, Any]]], txs: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        listings: dict[str, list[dict[str, Any]]],
+        txs: dict[str, Any],
+        vaults: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
         self.listings = listings
         self.txs = txs
+        self.vaults = vaults if vaults is not None else {}
         self.calls: list[tuple[str, Any]] = []
         self.batch_sizes: list[int] = []
+
+    def token_accounts_by_owner(self, owner: str) -> list[dict[str, Any]]:
+        self.calls.append(("token_accounts", owner))
+        return list(self.vaults.get(owner, []))
 
     def signatures_for_address(
         self, address: str, *, limit: int = 1000, before: str | None = None, until: str | None = None
@@ -1089,7 +1186,9 @@ def test_one_pass_writes_swaps_attempts_and_defects_to_the_right_streams(tmp_pat
         json.loads(line)
         for line in (tmp_path / "watch" / f"{NOSIS_SOL}-20260813.jsonl").read_text().strip().splitlines()
     ]
-    assert [row["kind"] for row in watch_lines] == ["watch_open", "watch_close"]
+    # The heartbeat sits between them: one liveness row per pool per pass, which is what makes
+    # a quiet pool's tape distinguishable from a stopped recorder's.
+    assert [row["kind"] for row in watch_lines] == ["watch_open", "heartbeat", "watch_close"]
     assert watch_lines[-1]["window"]["close_reason"] == "deadline"
     assert tape.load_cursors()[NOSIS_SOL]["last_signature"] == good
 
@@ -1194,3 +1293,131 @@ def test_summary_reports_per_pool_counts(tmp_path: Path) -> None:
     assert summary["pools"]["nosis/SOL"]["swaps"] == 1
     assert summary["pools"]["nosis/SOL"]["address"] == NOSIS_SOL
     assert summary["per_stream"]["swaps"] == 1
+
+
+# ---------------------------------------------------------------------------------------
+# the PumpSwap swap event — the reserve the CURVE uses, not the one the vault holds
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_boosted_pool_prices_against_more_than_its_vault_holds() -> None:
+    """The defect RESULT_copytrading.md §9(b) measured, at its source.
+
+    Fitting a token-side haircut against raw vault balances returned an implied g ABOVE 1 on
+    nosis/SOL and weave/SOL — impossible for a real curve. The cause is a quote-side virtual
+    reserve that the vault does not hold and the event reports directly.
+    """
+
+    raw = _b58_decode(pumpswap_sell_event(
+        pool=NOSIS_SOL,
+        pool_base_raw=97854868653957,
+        pool_quote_raw=285763126530,
+        virtual_quote_raw=17584505383,
+    ))
+    event = decode_swap_event(raw)
+    assert event is not None
+    assert event.side == "sell"
+    assert event.pool == NOSIS_SOL
+    assert event.pool_quote_raw == 285763126530
+    assert event.virtual_quote_raw == 17584505383
+    assert event.can_boost is True
+    # The whole point: the curve reserve is the SUM, and it is 6.2% above the vault.
+    assert event.curve_quote_raw == 285763126530 + 17584505383
+    assert event.lp_fee_bps == 20 and event.coin_creator_fee_bps == 85
+
+
+def test_an_unboosted_pool_reports_a_virtual_reserve_of_exactly_zero() -> None:
+    """DREGG/SOL and SOLVE/SOL fitted to exactly 0 because the field really IS 0."""
+
+    raw = _b58_decode(pumpswap_sell_event(
+        pool=DREGG_SOL, pool_base_raw=1, pool_quote_raw=376508701781,
+        virtual_quote_raw=0, can_boost=False,
+    ))
+    event = decode_swap_event(raw)
+    assert event is not None
+    assert event.virtual_quote_raw == 0
+    assert event.can_boost is False
+    assert event.curve_quote_raw == event.pool_quote_raw
+
+
+def test_a_row_without_the_event_refuses_to_claim_it_is_replayable() -> None:
+    """The honest demotion: pool TYPE admits replay, this ROW does not carry the numbers."""
+
+    tx = pumpswap_sell_tx()
+    tx["transaction"]["message"]["instructions"] = [
+        i for i in tx["transaction"]["message"]["instructions"]
+        if not _b58_decode(str(i.get("data", ""))).startswith(ANCHOR_CPI_EVENT_TAG)
+    ]
+    row = parse_transaction(tx, pool_for(NOSIS_SOL), signature=sig("no-event"), t_ingest=NOW)
+    assert isinstance(row, ClusterSwap)
+    assert row.reserves.curve is None
+    # The pool type still says constant product...
+    assert row.reserves.replay_sufficient is True
+    # ...but the row does not pretend it can be replayed from what it has.
+    assert row.reserves.replay_exact is False
+    assert row.as_tape_reserves() is None
+    assert row.to_json()["reserves"]["replay_sufficient"] is False
+    assert row.to_json()["reserves"]["curve"] == {"source": "absent"}
+
+
+def test_an_event_for_a_different_pool_is_never_attributed_to_this_one() -> None:
+    """A routed transaction emits one event per pool it crosses.
+
+    Taking the first one read a 25 SOL reserve onto a 173 SOL pool the first time this was
+    written, which is a 7x error presented as an exact measurement.
+    """
+
+    tx = pumpswap_sell_tx(signature=sig("routed-event"))
+    foreign = {
+        "programId": PUMPSWAP_PROGRAM,
+        "accounts": [EVENT_AUTHORITY],
+        "data": pumpswap_sell_event(
+            pool=WEAVE_SOL, pool_base_raw=1, pool_quote_raw=25236270595,
+            virtual_quote_raw=17584505468,
+        ),
+        "stackHeight": 2,
+    }
+    tx["transaction"]["message"]["instructions"] = [
+        *tx["transaction"]["message"]["instructions"], foreign
+    ]
+    row = parse_transaction(tx, pool_for(NOSIS_SOL), signature=sig("routed-event"), t_ingest=NOW)
+    assert isinstance(row, ClusterSwap)
+    assert row.reserves.curve is not None
+    assert row.reserves.curve.pool_quote_raw == 285763126530  # nosis, not weave
+    # And the foreign event did not become a second swap leg.
+    assert row.swap_legs == 1
+
+
+def test_two_events_for_the_same_pool_refuse_to_pick_a_side() -> None:
+    """A pool crossed twice in one transaction has no single reserve value for the row."""
+
+    tx = pumpswap_sell_tx(signature=sig("crossed-twice"))
+    second = {
+        "programId": PUMPSWAP_PROGRAM,
+        "accounts": [EVENT_AUTHORITY],
+        "data": pumpswap_sell_event(
+            pool=NOSIS_SOL, pool_base_raw=2, pool_quote_raw=999,
+            virtual_quote_raw=17584505383,
+        ),
+        "stackHeight": 2,
+    }
+    tx["transaction"]["message"]["instructions"] = [
+        *tx["transaction"]["message"]["instructions"], second
+    ]
+    row = parse_transaction(tx, pool_for(NOSIS_SOL), signature=sig("crossed-twice"), t_ingest=NOW)
+    assert isinstance(row, ClusterSwap)
+    assert row.reserves.curve is None
+    assert row.reserves.replay_exact is False
+
+
+def test_bytes_that_are_not_an_event_return_none_and_do_not_raise() -> None:
+    assert decode_swap_event(b"") is None
+    assert decode_swap_event(_b58_decode(anchor_data("sell"))) is None
+    assert decode_swap_event(ANCHOR_CPI_EVENT_TAG + b"\x00" * 24) is None
+
+
+def test_a_truncated_event_is_a_defect_not_a_silent_zero() -> None:
+    """"It announced itself as a swap event" and "it parsed" are different facts."""
+
+    with pytest.raises(EventDecodeError):
+        decode_swap_event(ANCHOR_CPI_EVENT_TAG + SELL_EVENT + b"\x01" * 12)
