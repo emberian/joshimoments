@@ -10,6 +10,33 @@ Status of each claim is marked. Nothing here is a recommendation to trade.
 
 ---
 
+## 0. The one-paragraph answer
+
+**He is being watched, and he turned out to be a sub-minute sniper rather than a caller who
+holds.** `BAr5csYt…` is now live on `accountTrade` — which required fixing a defect that sent one
+key list to both trade feeds (wallets offered as coins, answered with permanent silence) and a
+second where the free `newToken` feed masked the metered feeds dying. **Contrary to the prior
+from `RESULT_caller_wallets.md` §1**, his pump.fun profile wallet *is* his trading wallet:
+**2,637 transactions over ten days across 494 coins, median hold 45 seconds**, 53.5% of positions
+closed inside a minute and 90.9% inside an hour. Ninety seconds after the subscription went up it
+caught a whole round trip — into a coin **14 seconds after it was created**, out 58 seconds later,
+2.596 SOL in and 3.025 out, reconciling to the decimal.
+
+Three things the operator should take from that. **He never touches your coins** — nosis, weave,
+DREGG and SOLVE appear zero times in 106M transactions, and he has never posted about them
+either; the only trace in either direction is two strangers pitching `$nosis` *at* him. **The
+horizon is wrong everywhere else**: any 1 h / 8 h framing of his calls measures something he has
+already exited many times over. And **the homoglyph is an identity attack, not a trading one** —
+it follows a roster of eight big callers, picked him on 2026-08-04 and renamed itself on
+2026-08-09, but its median hold is 46 minutes against his 45 seconds and their four shared coins
+are hours to days apart, which is nowhere near close enough to be trading against him.
+
+One correction worth carrying: **his X handle is `@jackduval`, not `@jackduvalcalls`** — the
+latter is only his pump.fun username. Anything keyed on the handle rather than the wallet has to
+use the right one, and §5 has the proof.
+
+---
+
 ## 1. The instrument, and the two ways it was lying
 
 ### 1.1 One key list for two different kinds of address
