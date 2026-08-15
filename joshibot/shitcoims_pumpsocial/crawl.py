@@ -152,12 +152,18 @@ def crawl_thread(
     max_pages: int = 20,
     report: CrawlReport | None = None,
 ) -> tuple[list[Post], CrawlReport]:
-    """Every comment, reply and callout on one coin.
+    """Every comment and callout on one coin, plus whatever reply tail is readable.
 
-    Replies are fetched only for parents whose `replyCount` is a positive number — a
-    tri-state read, so a parent whose count is ABSENT is treated as unknown and asked
-    about, while one whose count is a measured zero is skipped. Confusing those two is
-    how a thread crawl quietly loses the replies on every post the API declined to count.
+    The reply tail is ASYMMETRIC and the asymmetry is the API's, not ours: callout
+    replies are public, comment replies are a measured 404 (see
+    `endpoints.message_replies_public`). So replies are FETCHED under callouts and
+    COUNTED under comments, and the uncollectable half lands in `report.censored_replies`
+    rather than vanishing — a thread that looks short because the API would not serve its
+    replies is a different fact from a thread with no replies.
+
+    Parents are selected on `reply_count != 0`, a tri-state read: a count that is ABSENT
+    is unknown and gets asked about, while a measured zero is skipped. Collapsing those
+    two is how a crawl quietly loses the replies on every post the API declined to count.
     """
 
     report = report or CrawlReport(kind="thread", t_start=_now())
