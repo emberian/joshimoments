@@ -287,7 +287,17 @@ def check_shards(root: Path, *, manifest: Path | None = None) -> int:
 
 
 def summarise(root: Path) -> int:
-    ds, _ = _pyarrow()
+    """Rows, bytes and the distinct pump-mint universe per day.
+
+    The mint count is done ENTIRELY IN ARROW and only the per-batch unique set — a few
+    thousand strings — is ever converted to Python. The obvious spelling, ``to_pylist()`` on
+    the ``post`` column and a nested loop, materialises about 750 million dicts across the
+    window and does not finish in any useful time. `unique` before `to_pylist`, not after.
+    """
+
+    ds, pq = _pyarrow()
+    import pyarrow.compute as pc
+
     total_rows = 0
     total_bytes = 0
     all_mints: set[str] = set()
@@ -295,15 +305,15 @@ def summarise(root: Path) -> int:
     for path in sorted((root / "daily").glob("*.parquet")):
         dataset = ds.dataset(path, format="parquet")
         mints: set[str] = set()
-        rows = 0
-        # Streamed for the same reason repack is: a day does not fit in memory.
-        for batch in dataset.to_batches(columns=["post"], batch_size=100_000):
-            rows += batch.num_rows
-            for legs in batch.column("post").to_pylist():
-                for leg in legs or []:
-                    mint = leg.get("mint") or ""
-                    if mint.endswith("pump"):
-                        mints.add(mint)
+        rows = pq.ParquetFile(path).metadata.num_rows
+        for batch in dataset.to_batches(columns=["post"], batch_size=200_000):
+            legs = pc.list_flatten(batch.column("post"))
+            if len(legs) == 0:
+                continue
+            unique = pc.unique(legs.field("mint"))
+            mints.update(
+                m for m in unique.to_pylist() if m is not None and m.endswith("pump")
+            )
         size = path.stat().st_size
         total_rows += rows
         total_bytes += size
