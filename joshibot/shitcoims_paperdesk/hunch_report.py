@@ -437,9 +437,13 @@ def _scorecard(rows: Any) -> list[str]:
 
 
 def _tape_health(tape: list[Any], rows: Any) -> list[str]:
-    from shitcoims_paperdesk.hunch import read_tape
+    from shitcoims_paperdesk.hunch import read_tape, read_zaps
 
-    _, retractions, zaps = read_tape()
+    # ``read_tape`` is the auditor's view and includes retracted rows; the CORPUS is the
+    # live view, because a gesture taken back is not a training pair. Retractions are
+    # counted separately below rather than folded into either number.
+    _, retractions, all_zaps = read_tape()
+    zaps = read_zaps()
     kinds = Counter(h.kind for h in tape)
     mints = len({h.mint for h in tape})
     words = sum(1 for h in tape if h.utterance.strip())
@@ -452,7 +456,8 @@ def _tape_health(tape: list[Any], rows: Any) -> list[str]:
         + ", ".join(f"{k}={v}" for k, v in kinds.most_common()),
         f"  {words} of {len(tape)} carry words; the rest are clicks, which is a valid gesture and",
         "  is stored as an empty utterance rather than as a fabricated one.",
-        f"  {len(zaps)} zaps, {with_state} carrying instrument state, {zap_words} with words.",
+        f"  {len(zaps)} zaps, {with_state} carrying instrument state, {zap_words} with words"
+        + (f" ({len(all_zaps) - len(zaps)} retracted, excluded)." if len(all_zaps) != len(zaps) else "."),
         "  The zaps are the (state, exit) corpus for the reactive-exit-policy search -- the one",
         "  that supersedes the wiggle book's five-minute clock rather than tuning it. A zap",
         "  without state is half a training pair, so that count is the number that matters.",
