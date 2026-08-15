@@ -10,8 +10,6 @@
 
 export type Severity = "info" | "warning" | "critical";
 
-export type ExitStyle = "runner" | "fixed_trail";
-
 /** `shitcoims_sentinel/engine.py::_operational_sections` */
 export type CapabilityState = "ready" | "blocked" | "degraded" | "disabled";
 
@@ -96,11 +94,14 @@ export type SignalRow = {
   provenance: SignalProvenance[];
 };
 
+/**
+ * `null` is a rule, not missing data: the exit never fires. Rendering it as a number is
+ * how a bag that is meant to be held reads as a bag with a stop.
+ */
 export type PositionThresholds = {
-  stop_loss_pct: string;
-  take_profit_pct: string;
-  trailing_stop_pct: string;
-  exit_style?: ExitStyle | string;
+  stop_loss_pct: string | null;
+  take_profit_pct: string | null;
+  runner_tightness: string | null;
   floor_confirm_quotes?: number;
   hold_trail_until_graduated?: boolean;
 };
@@ -214,12 +215,13 @@ export type Policy = {
   name: string;
   cost_basis_sol?: number | null;
   buy_price_sol?: number | null;
-  stop_loss_pct: number;
-  take_profit_pct: number;
-  trailing_stop_pct: number;
+  /** null means this exit NEVER fires. Absence of a rule, not a very deep threshold. */
+  stop_loss_pct: number | null;
+  take_profit_pct: number | null;
+  /** Tightness knob on the lock-rung table; null means no trailing behaviour at all. */
+  runner_tightness: number | null;
   rug_exit: boolean;
   dispose_after_break_even: boolean;
-  exit_style?: ExitStyle;
   floor_confirm_quotes?: number;
   hold_trail_until_graduated?: boolean;
 };
@@ -229,11 +231,10 @@ export type ProtectUnmonitoredRequest = {
   // quote made PnL start at 0% regardless of what was paid. The server rejects
   // it; keeping it out of the type makes reintroducing it a compile error.
   mode: "rug_only";
-  stop_loss_pct?: number;
-  take_profit_pct?: number;
-  trailing_stop_pct?: number;
+  stop_loss_pct?: number | null;
+  take_profit_pct?: number | null;
+  runner_tightness?: number | null;
   rug_exit?: boolean;
-  exit_style?: ExitStyle;
 };
 
 export type ProtectUnmonitoredResult = {

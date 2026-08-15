@@ -11,14 +11,6 @@ import type {
   UnmonitoredRow,
 } from "./types";
 
-const YAML_ONLY_THRESHOLDS = {
-  stop_loss_pct: -30,
-  take_profit_pct: 100,
-  trailing_stop_pct: 20,
-  rug_exit: true,
-  exit_style: "runner" as const,
-};
-
 /**
  * Every read carries the browser's own ingest clock and the endpoint it came
  * from, so a figure can name its producer and when THIS page learned it. The
@@ -112,7 +104,13 @@ async function policyError(response: Response, fallback: string) {
  * on its own cycle and decides for itself. No key, no signature, no submission
  * ever crosses into this process.
  */
-export async function savePolicy(mint: string, body: Omit<Policy, "mint">) {
+export type PolicyWrite = Partial<Omit<Policy, "mint">> & { name: string };
+
+/**
+ * A field left out is a field the sentinel fills in from its own PolicyDefaults; a field
+ * sent as `null` is an exit switched off. Both are deliberate, and they are different.
+ */
+export async function savePolicy(mint: string, body: PolicyWrite) {
   const response = await fetch(`/api/policies/${mint}`, {
     method: "PUT",
     credentials: "same-origin",
@@ -127,14 +125,18 @@ export async function protectUnmonitored(
   body: ProtectUnmonitoredRequest,
   fallbackRows: UnmonitoredRow[] = [],
 ): Promise<ProtectUnmonitoredResult> {
-  const payload = {
-    mode: body.mode,
-    stop_loss_pct: body.stop_loss_pct ?? YAML_ONLY_THRESHOLDS.stop_loss_pct,
-    take_profit_pct: body.take_profit_pct ?? YAML_ONLY_THRESHOLDS.take_profit_pct,
-    trailing_stop_pct: body.trailing_stop_pct ?? YAML_ONLY_THRESHOLDS.trailing_stop_pct,
-    rug_exit: body.rug_exit ?? YAML_ONLY_THRESHOLDS.rug_exit,
-    exit_style: body.exit_style ?? YAML_ONLY_THRESHOLDS.exit_style,
-  };
+  // Only what the operator actually chose. A threshold the browser leaves out is filled in
+  // by the sentinel's PolicyDefaults -- the browser used to carry its own copy of -30/100/20,
+  // which is one of the six places this project wrote the same rule down differently.
+  const payload: Record<string, unknown> = { mode: body.mode };
+  for (const key of [
+    "stop_loss_pct",
+    "take_profit_pct",
+    "runner_tightness",
+    "rug_exit",
+  ] as const) {
+    if (key in body) payload[key] = body[key];
+  }
   const response = await fetch("/api/policies/protect-unmonitored", {
     method: "post",
     credentials: "same-origin",
@@ -149,13 +151,7 @@ export async function protectUnmonitored(
 }
 
 async function protectUnmonitoredFallback(
-  body: {
-    stop_loss_pct: number;
-    take_profit_pct: number;
-    trailing_stop_pct: number;
-    rug_exit: boolean;
-    exit_style: "runner" | "fixed_trail";
-  },
+  body: Record<string, unknown>,
   rows: UnmonitoredRow[],
 ): Promise<ProtectUnmonitoredResult> {
   const created: string[] = [];
@@ -166,15 +162,9 @@ async function protectUnmonitoredFallback(
     // start at 0% regardless of what was paid, so every stop fired below the
     // coin's already-fallen price. The policy is created without a basis and is
     // rug-only until the engine reconstructs the real one from observed buys.
-    const saved = await savePolicy(row.mint, {
-      name: row.name,
-      stop_loss_pct: body.stop_loss_pct,
-      take_profit_pct: body.take_profit_pct,
-      trailing_stop_pct: body.trailing_stop_pct,
-      rug_exit: body.rug_exit,
-      dispose_after_break_even: false,
-      exit_style: body.exit_style,
-    });
+    const thresholds = { ...body };
+    delete thresholds.mode;
+    const saved = await savePolicy(row.mint, { name: row.name, ...thresholds });
     created.push(row.mint);
     items = saved.items;
   }

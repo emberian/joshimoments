@@ -72,7 +72,7 @@ def test_dashboard_policy_payload_round_trips_to_api_item() -> None:
         "cost_basis_sol": 1.25,
         "stop_loss_pct": -30,
         "take_profit_pct": 100,
-        "trailing_stop_pct": 20,
+        "runner_tightness": 20,
         "rug_exit": True,
         "dispose_after_break_even": False,
     }
@@ -83,7 +83,7 @@ def test_dashboard_policy_payload_round_trips_to_api_item() -> None:
     assert "buy_price_sol" not in item
     assert item["stop_loss_pct"] == -30.0
     assert item["take_profit_pct"] == 100.0
-    assert item["trailing_stop_pct"] == 20.0
+    assert item["runner_tightness"] == 20.0
     assert item["rug_exit"] is True
     assert item["dispose_after_break_even"] is False
 

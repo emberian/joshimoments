@@ -19,7 +19,6 @@ import { loadNetmap, type NetMapLoad } from "./netmap";
 import { clockOf, type Clock, type Origin } from "./measure";
 import type {
   EventRow,
-  ExitStyle,
   IntelligenceSnapshot,
   Performance,
   Policy,
@@ -239,15 +238,6 @@ export function policiesOf(loaded: Loaded<{ items: Policy[]; can_execute: false 
   return loaded.state === "ok" ? loaded.fetched.data.items : [];
 }
 
-export function isFixedTrail(style: string | null | undefined): boolean {
-  return style === "fixed_trail";
-}
-
-export function exitStyleOf(value: string | null | undefined): ExitStyle | null {
-  if (value === "fixed_trail" || value === "runner") return value;
-  return null;
-}
-
 /**
  * Entry unit price from a policy, or null.
  *
@@ -275,10 +265,15 @@ export function entryUnitPrice(
   return null;
 }
 
+/**
+ * A switched-off exit reads as a rule ("no SL"), never as a blank or a zero. The operator
+ * has to be able to see at a glance that a bag is meant to be held.
+ */
 export function policyRuleLabel(policy: Policy | undefined): string {
   if (!policy) return "observe-only";
-  if (isFixedTrail(policy.exit_style)) {
-    return `SL ${policy.stop_loss_pct}% · TP ${policy.take_profit_pct}% · trail ${policy.trailing_stop_pct}%`;
-  }
-  return `SL ${policy.stop_loss_pct}% · arm +${policy.take_profit_pct}% · trail ${policy.trailing_stop_pct}%`;
+  const stop = policy.stop_loss_pct == null ? "no SL" : `SL ${policy.stop_loss_pct}%`;
+  const take = policy.take_profit_pct == null ? "no TP" : `arm +${policy.take_profit_pct}%`;
+  const runner =
+    policy.runner_tightness == null ? "no runner" : `runner ${policy.runner_tightness}`;
+  return `${stop} · ${take} · ${runner}`;
 }

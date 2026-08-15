@@ -10,8 +10,12 @@ from typing import Any
 # different rule depending on which surface protected it. A field the operator has not
 # chosen is now OMITTED from the request body and the sentinel — the one validator, next to
 # the money — fills it in.
-SL_PRESETS = (-20, -35, -50, -80)
-TP_PRESETS = (30, 80, 120)
+# `OFF` clears a threshold instead of setting a number. The desk could previously only
+# ever tighten or loosen a stop, never remove one, which is the rule the operator actually
+# wants on a memecoin bag.
+OFF = "off"
+SL_PRESETS = (OFF, -35, -50, -80)
+TP_PRESETS = (100, 200, 400)
 TRAIL_PRESETS = (10, 20, 30)
 
 
@@ -23,10 +27,9 @@ class BagView:
     kind: str
     stop_loss_pct: float | None
     take_profit_pct: float | None
-    trailing_stop_pct: float | None
+    runner_tightness: float | None
     rug_exit: bool | None
     auto_note: str | None
-    exit_style: str | None
     floor_multiple: str | None
     peak: str | None
     scale_rungs_fired: tuple[str, ...]
@@ -42,15 +45,7 @@ def bags_from_snapshot(snapshot: dict[str, Any], policies: list[dict[str, Any]])
             continue
         mint = str(raw["mint"])
         policy = by_mint.get(mint)
-        thresholds = raw.get("thresholds") if isinstance(raw.get("thresholds"), dict) else {}
         runner = raw.get("runner") if isinstance(raw.get("runner"), dict) else {}
-        style = None
-        if isinstance(policy, dict):
-            style = policy.get("exit_style") or thresholds.get("exit_style")
-        elif thresholds.get("exit_style"):
-            style = thresholds.get("exit_style")
-        if policy and style not in {"runner", "fixed_trail"}:
-            style = "runner"
         rungs = runner.get("scale_rungs_fired")
         scale = tuple(str(item) for item in rungs) if isinstance(rungs, list) else ()
         floor = runner.get("floor_multiple")
@@ -62,14 +57,11 @@ def bags_from_snapshot(snapshot: dict[str, Any], policies: list[dict[str, Any]])
                 kind="protected" if policy else "observe",
                 stop_loss_pct=_num(policy.get("stop_loss_pct") if policy else None),
                 take_profit_pct=_num(policy.get("take_profit_pct") if policy else None),
-                trailing_stop_pct=_num(policy.get("trailing_stop_pct") if policy else None),
+                runner_tightness=_num(policy.get("runner_tightness") if policy else None),
                 rug_exit=None if policy is None else bool(policy.get("rug_exit", True)),
-                auto_note=(
-                    None
-                    if policy
-                    else "default SL -35 / arm +80 / runner after 10m; SL waits another 10m"
-                ),
-                exit_style=str(style) if style in {"runner", "fixed_trail"} else None,
+                # Deliberately does not name thresholds. The desk stating a number it does
+                # not own is how it came to disagree with the sentinel about the rule.
+                auto_note=(None if policy else "default rule applies in 10m; rug-only until then"),
                 floor_multiple=None if floor in (None, "") else str(floor),
                 peak=_peak_multiple(raw),
                 scale_rungs_fired=scale,
@@ -139,12 +131,10 @@ def default_policy_body(bag: BagView) -> dict[str, Any]:
         body["stop_loss_pct"] = bag.stop_loss_pct
     if bag.take_profit_pct is not None:
         body["take_profit_pct"] = bag.take_profit_pct
-    if bag.trailing_stop_pct is not None:
-        body["trailing_stop_pct"] = bag.trailing_stop_pct
+    if bag.runner_tightness is not None:
+        body["runner_tightness"] = bag.runner_tightness
     if bag.rug_exit is not None:
         body["rug_exit"] = bag.rug_exit
-    if bag.exit_style in {"runner", "fixed_trail"}:
-        body["exit_style"] = bag.exit_style
     if bag.exit_sol:
         try:
             basis = float(bag.exit_sol)
@@ -238,23 +228,19 @@ def _peak_multiple(raw: dict[str, Any]) -> str | None:
 
 
 def _rule_line(bag: BagView, *, compact: bool) -> str:
-    sl = _fmt_signed(bag.stop_loss_pct)
-    if bag.exit_style == "fixed_trail":
-        tp = _fmt_signed(bag.take_profit_pct)
-        trail = _fmt_signed(bag.trailing_stop_pct)
-        if compact:
-            return f"SL {sl} / TP {tp} / trail {trail}%"
-        return f"SL {sl} · TP {tp} · trail {trail}% · rug {bag.rug_exit}"
-    arm = _fmt_arm(bag.take_profit_pct)
+    # "no stop" is a rule, and rendering it as "SL ?" reads like missing data. The whole
+    # point of the optional threshold is that its absence is legible.
+    sl = "no SL" if bag.stop_loss_pct is None else f"SL {_fmt_signed(bag.stop_loss_pct)}"
+    arm = "no TP" if bag.take_profit_pct is None else f"arm {_fmt_arm(bag.take_profit_pct)}"
     floor = _fmt_x(bag.floor_multiple)
-    runner = f"runner floor {floor}" if floor else "runner"
+    runner = "no runner" if bag.runner_tightness is None else (f"runner floor {floor}" if floor else "runner")
     if compact:
-        return f"SL {sl} / arm {arm} / {runner}"
-    return f"SL {sl} · arm {arm} · {runner} · rug {bag.rug_exit}"
+        return f"{sl} / {arm} / {runner}"
+    return f"{sl} · {arm} · {runner} · rug {bag.rug_exit}"
 
 
 def _runner_tape(bag: BagView) -> str | None:
-    if bag.exit_style == "fixed_trail":
+    if bag.runner_tightness is None:
         return None
     parts: list[str] = []
     peak = _fmt_x(bag.peak)

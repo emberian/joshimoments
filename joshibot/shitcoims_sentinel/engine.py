@@ -300,6 +300,26 @@ async def reconstruct_observed_basis(
     )
 
 
+def _optional_str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _default_rule_text() -> str:
+    """Describe the auto-protect rule from the rule itself, not from a remembered copy."""
+
+    parts = [
+        "no stop" if DEFAULTS.stop_loss_pct is None else f"SL {DEFAULTS.stop_loss_pct}%",
+        (
+            "no take profit"
+            if DEFAULTS.take_profit_pct is None
+            else f"arm +{DEFAULTS.take_profit_pct}%"
+        ),
+        "no runner" if DEFAULTS.runner_tightness is None else "runner",
+        "rug exit on" if DEFAULTS.rug_exit else "rug exit OFF",
+    ]
+    return ", ".join(parts)
+
+
 def _basis_needs_observation(lot: Any, policy: Any) -> bool:
     """Is this lot's PnL reference still missing an on-chain origin?
 
@@ -1169,9 +1189,15 @@ class SentinelEngine:
         if dispose_enabled and confirmed_slot is None:
             errors.append("dispose check blocked: confirmed slot unavailable")
         pump_complete = metadata.complete if metadata is not None else None
-        stop_enabled = sl_is_live(lot)
+        # The post-discovery grace is expressed as a policy WITHOUT a stop rather than as a
+        # flag beside one. A stop that is held off and a stop that does not exist are the
+        # same thing to the decision, and saying it two ways is how they drift apart.
+        stop_live = sl_is_live(lot)
+        effective_policy = (
+            policy if stop_live else dataclasses.replace(policy, stop_loss_pct=None)
+        )
         decision = evaluate_position(
-            policy=policy,
+            policy=effective_policy,
             holding=holding,
             quote=quote,
             state=prior_state,
@@ -1179,7 +1205,6 @@ class SentinelEngine:
             confirmed_slot=confirmed_slot,
             dispose_enabled=dispose_enabled,
             pump_complete=pump_complete,
-            stop_enabled=stop_enabled,
         )
         self._persist_position_state(holding.mint, decision.next_state)
 
@@ -1214,7 +1239,11 @@ class SentinelEngine:
                 context={
                     "mint": holding.mint,
                     "pnl_pct": decision.pnl_pct,
-                    "exit_style": policy.exit_style,
+                    "runner_tightness": (
+                        str(policy.runner_tightness)
+                        if policy.runner_tightness is not None
+                        else None
+                    ),
                 },
                 dedup_key=f"trail-activate:{holding.mint}",
                 dedup_seconds=86_400,
@@ -1296,11 +1325,12 @@ class SentinelEngine:
                 else None
             ),
             "confirmed_slot": confirmed_slot,
+            # None is rendered as null, never as a number. A dashboard that shows "0" for
+            # an absent stop is showing a stop.
             "thresholds": {
-                "stop_loss_pct": str(policy.stop_loss_pct),
-                "take_profit_pct": str(policy.take_profit_pct),
-                "trailing_stop_pct": str(policy.trailing_stop_pct),
-                "exit_style": policy.exit_style,
+                "stop_loss_pct": _optional_str(policy.stop_loss_pct),
+                "take_profit_pct": _optional_str(policy.take_profit_pct),
+                "runner_tightness": _optional_str(policy.runner_tightness),
                 "floor_confirm_quotes": policy.floor_confirm_quotes,
                 "hold_trail_until_graduated": policy.hold_trail_until_graduated,
             },
@@ -1316,7 +1346,9 @@ class SentinelEngine:
                 "original_amount": decision.next_state.original_amount,
                 "sell_amount": decision.sell_amount,
             },
-            "stop_live": stop_enabled,
+            # "a stop would fire now", not "a stop exists": a bag with no stop at all and a
+            # bag still inside its basis grace are both not stopping out.
+            "stop_live": stop_live and policy.stop_loss_pct is not None,
             "sl_live_after": lot.sl_live_after,
             "rug": to_jsonable(rug),
             "pool": to_jsonable(pool) if pool else None,
@@ -1639,7 +1671,7 @@ class SentinelEngine:
     async def cycle(self) -> dict[str, Any]:
         # One lock hold covers read, widen and write, so a dashboard edit landing
         # mid-cycle cannot be reverted by a stale copy of the policy list.
-        await self.mutate_positions(self._policies_with_widened_default_stops)
+        await self.mutate_positions(self._policies_relaxed_to_default_stop)
         async with self._policy_lock:
             policies = tuple(self.config.positions)
         if not self._telegram_probe_attempted:
@@ -1838,28 +1870,40 @@ class SentinelEngine:
             next_policies.append(policy)
         return next_policies if changed else None
 
-    def _policies_with_widened_default_stops(
+    def _policies_relaxed_to_default_stop(
         self, policies: tuple[Any, ...]
     ) -> list[Any] | None:
-        """Lift leftover -10 scalp defaults. Operator YAML is untouched."""
+        """Bring sentinel-authored bags to the current default stop. Operator YAML is not touched.
 
+        Direction matters and is enforced below: this only ever LOOSENS. It lifted leftover
+        -10 scalp stops back when the default was -35, and now that the default is no stop
+        at all it removes the stop from bags the sentinel protected for itself. It can never
+        add a stop to a bag or tighten one, whatever the default becomes.
+        """
+
+        default_stop = DEFAULTS.stop_loss_pct
         next_policies: list[Any] = []
-        changed = False
+        relaxed: list[str] = []
         for policy in policies:
             lot = self._lot(policy.mint)
             if (
                 lot.origin == ORIGIN_DEFAULT
-                and policy.stop_loss_pct > DEFAULTS.stop_loss_pct
+                and policy.stop_loss_pct is not None
+                and (default_stop is None or policy.stop_loss_pct > default_stop)
             ):
-                next_policies.append(
-                    dataclasses.replace(
-                        policy, stop_loss_pct=DEFAULTS.stop_loss_pct
-                    )
-                )
-                changed = True
+                next_policies.append(dataclasses.replace(policy, stop_loss_pct=default_stop))
+                relaxed.append(policy.mint)
                 continue
             next_policies.append(policy)
-        return next_policies if changed else None
+        if not relaxed:
+            return None
+        log.warning(
+            "relaxed the auto-protect stop to %s on %d bag(s): %s",
+            "none" if default_stop is None else f"{default_stop}%",
+            len(relaxed),
+            ", ".join(relaxed),
+        )
+        return next_policies
 
     async def _maybe_heartbeat(self, snapshot: dict[str, Any]) -> None:
         import datetime as dt
@@ -2022,10 +2066,9 @@ class SentinelEngine:
                     severity="warning",
                     category="discovery",
                     message=(
-                        f"NEW BAG {row.get('name') or mint[:8]}: default SL "
-                        f"{DEFAULTS.stop_loss_pct}% / arm "
-                        f"+{DEFAULTS.take_profit_pct}% in {int(delay / 60)}m "
-                        f"(SL itself waits another 10m; rug-only until then)"
+                        f"NEW BAG {row.get('name') or mint[:8]}: default rule "
+                        f"({_default_rule_text()}) in {int(delay / 60)}m; "
+                        f"rug-only until then"
                     ),
                     context={"mint": mint, "auto_action": False},
                     dedup_key=f"new-bag:{mint}:{record.generation}",
@@ -2092,8 +2135,7 @@ class SentinelEngine:
             category="policy",
             message=(
                 f"Auto-protected {len(created)} bag(s): {len(observed)} with an observed "
-                f"on-chain cost basis (SL {DEFAULTS.stop_loss_pct}% / arm "
-                f"+{DEFAULTS.take_profit_pct}%, SL live in 10m), "
+                f"on-chain cost basis ({_default_rule_text()}), "
                 f"{len(rug_only)} rug-only until a basis can be read"
             ),
             context={

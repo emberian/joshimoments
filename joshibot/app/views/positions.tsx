@@ -14,10 +14,9 @@ import {
   Th,
 } from "@/components/instrument";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { deletePolicy, savePolicy, type Loaded } from "@/lib/api";
+import { deletePolicy, savePolicy, type Loaded, type PolicyWrite } from "@/lib/api";
 import {
   entryUnitPrice,
-  isFixedTrail,
   originOf,
   policiesOf,
   policyRuleLabel,
@@ -26,7 +25,7 @@ import {
 } from "@/lib/desk";
 import { cn, decimals, shortAddress, sol } from "@/lib/format";
 import { clockOf, fromDecimalString, unobserved, type Measured } from "@/lib/measure";
-import type { ExitStyle, Policy, PositionRow, Snapshot } from "@/lib/types";
+import type { Policy, PositionRow, Snapshot } from "@/lib/types";
 import { UnmonitoredBanner } from "@/views/overview";
 
 /**
@@ -50,14 +49,20 @@ import { UnmonitoredBanner } from "@/views/overview";
  */
 type RuleDraft = {
   name: string;
-  stop_loss_pct: number;
-  take_profit_pct: number;
-  trailing_stop_pct: number;
-  rug_exit: boolean;
-  dispose_after_break_even: boolean;
-  exit_style: ExitStyle;
-  floor_confirm_quotes: number;
-  hold_trail_until_graduated: boolean;
+  /**
+   * Three states, and they are all different rules:
+   *   `undefined` — not stated. The field is omitted from the PUT and the sentinel's own
+   *                 PolicyDefaults decide. The browser holds NO copy of those numbers.
+   *   `null`      — switched off. This exit never fires, at any price.
+   *   a number    — this threshold.
+   */
+  stop_loss_pct?: number | null;
+  take_profit_pct?: number | null;
+  runner_tightness?: number | null;
+  rug_exit?: boolean;
+  dispose_after_break_even?: boolean;
+  floor_confirm_quotes?: number;
+  hold_trail_until_graduated?: boolean;
 };
 
 /**
@@ -72,17 +77,13 @@ type Basis =
   /** An override a human typed into an empty field, on purpose. */
   | { kind: "operator"; text: string };
 
-const DEFAULT_DRAFT: Omit<RuleDraft, "name"> = {
-  // Policy constants, not measurements. None of these derive from a quote.
-  stop_loss_pct: -30,
-  take_profit_pct: 100,
-  trailing_stop_pct: 20,
-  rug_exit: true,
-  dispose_after_break_even: false,
-  exit_style: "runner",
-  floor_confirm_quotes: 2,
-  hold_trail_until_graduated: true,
-};
+/**
+ * A new rule states NOTHING. Every threshold is left out of the request and filled in by the
+ * sentinel, which is the only place a policy default is written down. The browser used to
+ * carry its own -30/100/20 here; that was one of six copies of the same rule in this repo,
+ * and they had already drifted apart.
+ */
+const DEFAULT_DRAFT: Omit<RuleDraft, "name"> = {};
 
 type Editing = {
   mint: string;
@@ -132,12 +133,11 @@ export function Positions({
           name: existing.name,
           stop_loss_pct: existing.stop_loss_pct,
           take_profit_pct: existing.take_profit_pct,
-          trailing_stop_pct: existing.trailing_stop_pct,
+          runner_tightness: existing.runner_tightness,
           rug_exit: existing.rug_exit,
           dispose_after_break_even: existing.dispose_after_break_even,
-          exit_style: existing.exit_style ?? "runner",
-          floor_confirm_quotes: existing.floor_confirm_quotes ?? 2,
-          hold_trail_until_graduated: existing.hold_trail_until_graduated ?? true,
+          floor_confirm_quotes: existing.floor_confirm_quotes,
+          hold_trail_until_graduated: existing.hold_trail_until_graduated,
         },
         // Round-trip the engine's own basis verbatim. Omitting it on a PUT would
         // null an observed basis, which is its own kind of damage.
@@ -162,7 +162,9 @@ export function Positions({
     setSaving(true);
     setError(null);
     try {
-      const body: Omit<Policy, "mint"> = { ...editing.draft };
+      // `undefined` entries are dropped by JSON.stringify, which is exactly the "let the
+      // sentinel decide" semantics. `null` survives and means the exit is switched off.
+      const body: PolicyWrite = { ...editing.draft };
       const basis = editing.basis;
       if (basis.kind === "engine") {
         // Exactly one of the two may be set; the server rejects both.
@@ -414,11 +416,6 @@ function PositionTableRow({
       </Td>
       <Td>
         <span className="font-mono text-[10px] text-muted-foreground">{policyRuleLabel(policy)}</span>
-        {policy && (
-          <div className="font-mono text-[10px] text-muted-foreground">
-            {isFixedTrail(policy.exit_style) ? "fixed_trail" : "runner"}
-          </div>
-        )}
       </Td>
       <Td>
         <div className="flex flex-wrap gap-1">
@@ -472,7 +469,7 @@ function NumberField({
   hint,
 }: {
   label: string;
-  value: number;
+  value: number | undefined;
   onChange: (value: number) => void;
   step?: number;
   hint?: string;
@@ -482,10 +479,60 @@ function NumberField({
       <input
         type="number"
         step={step}
-        value={value}
+        value={value ?? ""}
+        placeholder="default"
         onChange={(event) => onChange(Number(event.target.value))}
         className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
       />
+    </Field>
+  );
+}
+
+type ThresholdState = "default" | "off" | "set";
+
+/**
+ * A price threshold that can be absent, switched OFF, or set.
+ *
+ * "off" is a rule, not a missing value, and it is deliberately not reachable by typing a
+ * very large negative number: the sentinel treats -95 as a stop that still fires at -96.
+ */
+function ThresholdField({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: number | null | undefined;
+  onChange: (value: number | null | undefined) => void;
+  hint?: string;
+}) {
+  const state: ThresholdState = value === undefined ? "default" : value === null ? "off" : "set";
+  return (
+    <Field label={label} hint={hint}>
+      <div className="flex gap-1">
+        <select
+          value={state}
+          onChange={(event) => {
+            const next = event.target.value as ThresholdState;
+            onChange(next === "default" ? undefined : next === "off" ? null : (value ?? 0));
+          }}
+          className="rounded border bg-background px-2 py-1 font-mono text-xs"
+        >
+          <option value="default">default</option>
+          <option value="off">off</option>
+          <option value="set">set</option>
+        </select>
+        {state === "set" && (
+          <input
+            type="number"
+            step={1}
+            value={value ?? 0}
+            onChange={(event) => onChange(Number(event.target.value))}
+            className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
+          />
+        )}
+      </div>
     </Field>
   );
 }
@@ -541,55 +588,46 @@ function RuleEditor({
           thresholds
         </p>
         <FieldGrid columns={3}>
-          <NumberField
+          <ThresholdField
             label="stop loss %"
             value={draft.stop_loss_pct}
             onChange={(value) => set({ stop_loss_pct: value })}
-            hint="Negative. Measured against the observed basis — with no basis the rule is rug-only."
+            hint="Negative, or off. Off means this bag is never sold for falling — the measured variance ratios say a price stop on these pools is negative-expectation."
           />
-          <NumberField
+          <ThresholdField
             label="take profit %"
             value={draft.take_profit_pct}
             onChange={(value) => set({ take_profit_pct: value })}
-            hint="For the runner style this arms the trail rather than selling outright."
+            hint="With a runner this ARMS the lock-in floors. With the runner off it sells outright."
           />
-          <NumberField
-            label="trailing %"
-            value={draft.trailing_stop_pct}
-            onChange={(value) => set({ trailing_stop_pct: value })}
+          <ThresholdField
+            label="runner tightness"
+            value={draft.runner_tightness}
+            onChange={(value) => set({ runner_tightness: value })}
+            hint="Knob on the lock-rung table (20 = canonical), NOT a percent off the peak. Off means no trailing behaviour at all."
           />
           <NumberField
             label="floor confirm quotes"
             value={draft.floor_confirm_quotes}
             onChange={(value) => set({ floor_confirm_quotes: value })}
-            hint="Consecutive quotes below the floor before the runner exits. Guards against a single bad quote."
+            hint="Consecutive quotes past the threshold before it fires, on both sides. Guards against a single bad quote."
           />
-          <Field label="exit style">
-            <select
-              value={draft.exit_style}
-              onChange={(event) => set({ exit_style: event.target.value as ExitStyle })}
-              className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
-            >
-              <option value="runner">runner</option>
-              <option value="fixed_trail">fixed_trail</option>
-            </select>
-          </Field>
         </FieldGrid>
         <FieldGrid columns={3} className="border-t border-border/70">
           <Toggle
             label="rug exit"
-            checked={draft.rug_exit}
+            checked={draft.rug_exit ?? true}
             onChange={(value) => set({ rug_exit: value })}
             hint="Exit on a detected liquidity collapse. Works without a cost basis."
           />
           <Toggle
             label="dispose after break-even"
-            checked={draft.dispose_after_break_even}
+            checked={draft.dispose_after_break_even ?? false}
             onChange={(value) => set({ dispose_after_break_even: value })}
           />
           <Toggle
             label="hold trail until graduated"
-            checked={draft.hold_trail_until_graduated}
+            checked={draft.hold_trail_until_graduated ?? true}
             onChange={(value) => set({ hold_trail_until_graduated: value })}
           />
         </FieldGrid>

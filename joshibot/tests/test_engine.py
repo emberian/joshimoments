@@ -242,8 +242,7 @@ def default_policy(mint: str, **overrides: Any) -> dict[str, Any]:
         "name": "SULLY",
         "stop_loss_pct": -35,
         "take_profit_pct": 80,
-        "trailing_stop_pct": 20,
-        "exit_style": "fixed_trail",
+        "runner_tightness": 20,
         "floor_confirm_quotes": 1,
     }
     payload.update(overrides)

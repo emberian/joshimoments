@@ -66,16 +66,26 @@ auto_discover: true
 positions:
   # buy_price_sol is SOL per whole token. cost_basis_sol (total paid) is also
   # supported; set exactly one of the two.
+  #
+  # EVERY PRICE-BASED EXIT IS OPTIONAL. `null` means that exit never fires, and an omitted
+  # key takes the default in `shitcoims_sentinel/domain.py::PolicyDefaults` (no stop, take
+  # profit 100%, rug exit on). Absence is absence: do not write a very deep number to mean
+  # "no stop" -- -95 is a stop that still fires at -96.
+  #
   # - mint: "TOKEN_MINT_ADDRESS"
   #   name: "EXAMPLE"
   #   cost_basis_sol: 0.5
-  #   stop_loss_pct: -30
-  #   take_profit_pct: 80          # arms the runner; does not sell
-  #   trailing_stop_pct: 20        # tightness knob (20 = canonical floors), not a % leash
-  #   exit_style: runner           # runner (default) or fixed_trail (legacy % of peak)
-  #   floor_confirm_quotes: 2      # wick grace before a floor break sells
+  #   stop_loss_pct: null          # null = never sold for falling. Rug exit still applies.
+  #   take_profit_pct: 100         # arms the runner; with runner_tightness null it SELLS
+  #   runner_tightness: 20         # tightness knob (20 = canonical lock floors), not a leash
+  #   floor_confirm_quotes: 2      # consecutive quotes past a threshold before it fires
   #   hold_trail_until_graduated: true
-  #   rug_exit: true
+  #   rug_exit: true               # asset death is not a price move; on by default
+  #
+  # MIGRATION from the pre-2026-08-15 shape: `exit_style: runner` plus `trailing_stop_pct: N`
+  # is read as `runner_tightness: N` and logged. `exit_style: fixed_trail` is REFUSED at load
+  # with the edit to make -- its N meant "sell at N% off the print high", which has no
+  # faithful equivalent in the lock-rung runner.
   #   # Durable sell-only policy: after an observed full-balance exit quote
   #   # crosses from PnL <= 0 to PnL > 0, wait for the next confirmed slot,
   #   # then sell the full balance (subject to all three live-execution gates).

@@ -9,6 +9,7 @@ from dataclasses import replace
 from .commands import ParsedCommand, parse_command
 from .config import ScoutConfig
 from .desk import (
+    OFF,
     SL_PRESETS,
     TP_PRESETS,
     TRAIL_PRESETS,
@@ -25,6 +26,10 @@ from .telegram import Telegram, TelegramError
 log = logging.getLogger(__name__)
 
 CALLBACK_DATA = re.compile(r"scout:([A-Za-z0-9_-]{20,40})\Z")
+
+
+def _preset_label(prefix: str, value: object) -> str:
+    return f"{prefix} off" if value == OFF else f"{prefix} {value}%"
 
 
 class ScoutGateway:
@@ -219,11 +224,17 @@ class ScoutGateway:
 
     def _bag_keyboard(self, bag) -> dict:
         rows = [
-            [self._btn(f"SL {value}%", "sl", {"mint": bag.mint, "value": value}) for value in SL_PRESETS],
-            [self._btn(f"TP {value}%", "tp", {"mint": bag.mint, "value": value}) for value in TP_PRESETS],
+            [
+                self._btn(_preset_label("SL", value), "sl", {"mint": bag.mint, "value": value})
+                for value in SL_PRESETS
+            ],
+            [
+                self._btn(_preset_label("TP", value), "tp", {"mint": bag.mint, "value": value})
+                for value in TP_PRESETS
+            ],
             [
                 self._btn(
-                    f"Trail {value}%" if bag.exit_style == "fixed_trail" else f"Tight {value}",
+                    _preset_label("Tight", value),
                     "trail",
                     {"mint": bag.mint, "value": value},
                 )
@@ -318,11 +329,13 @@ class ScoutGateway:
         # A preset button carries its own number. When it does not, the field is left out
         # of the body entirely rather than being back-filled from a desk-local constant.
         pressed = callback.parameters.get("value")
-        field = {"sl": "stop_loss_pct", "tp": "take_profit_pct", "trail": "trailing_stop_pct"}.get(
+        field = {"sl": "stop_loss_pct", "tp": "take_profit_pct", "trail": "runner_tightness"}.get(
             callback.action
         )
         if field is not None and pressed is not None:
-            body[field] = pressed
+            # OFF is not a number: it writes null, which is the rule "this exit never
+            # fires" rather than a very deep threshold that still fires at the bottom.
+            body[field] = None if pressed == OFF else pressed
         elif callback.action == "rug":
             body["rug_exit"] = not bool(bag.rug_exit)
         try:

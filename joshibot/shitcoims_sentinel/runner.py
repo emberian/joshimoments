@@ -12,22 +12,25 @@ that floor", not "N% off the print high". The gap between peak and
 floor *widens* as the multiple grows, which is the opposite of a
 constant-% trail.
 
-``trailing_stop_pct`` is a tightness knob around the canonical table,
+``runner_tightness`` is a tightness knob around the canonical table,
 not the sale trigger. 20 is the table as written. 10 pulls floors
 toward the peak. 40 pushes them down. It is not "trail 10% / 40%".
+None is not a number at all: it means this bag has no trailing
+behaviour of any kind.
 
 Scale-out rungs are fractions of the *original* lot. They bank cost
 so one later rug cannot unwind the book. The residual rides the floor.
+
+The old ``fixed_trail`` style -- sell at N% off the print high -- is
+gone, along with the ``exit_style`` field that selected it. One field
+meaning a peak leash under one style and a tightness knob under the
+other is how a rule stops being reasonable-about.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
 from typing import Sequence
-
-EXIT_STYLE_FIXED = "fixed_trail"
-EXIT_STYLE_RUNNER = "runner"
-EXIT_STYLES = frozenset({EXIT_STYLE_FIXED, EXIT_STYLE_RUNNER})
 
 CANONICAL_TIGHTNESS = Decimal("20")
 

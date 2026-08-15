@@ -40,7 +40,7 @@ def test_desk_render_lists_observe_and_protected() -> None:
             "mint": "EaPk9U9Das8EdWyDGV7NaNTcVZv3LQMAHwG63L4qpump",
             "stop_loss_pct": -10,
             "take_profit_pct": 80,
-            "trailing_stop_pct": 20,
+            "runner_tightness": 20,
         }
     ]
     text = render_desk(snapshot, policies)
@@ -60,7 +60,7 @@ def test_desk_render_lists_observe_and_protected() -> None:
     # own copy is how the same bag came to be protected under two different rules.
     assert "stop_loss_pct" not in body
     assert "take_profit_pct" not in body
-    assert "trailing_stop_pct" not in body
+    assert "runner_tightness" not in body
     assert "exit_style" not in body
     assert body["cost_basis_sol"] == 0.1
     assert body.get("execution") is None
@@ -69,6 +69,7 @@ def test_desk_render_lists_observe_and_protected() -> None:
     omg = next(bag for bag in bags if bag.name == "OMG")
     assert default_policy_body(omg)["stop_loss_pct"] == -10
     assert default_policy_body(omg)["take_profit_pct"] == 80
+    assert default_policy_body(omg)["runner_tightness"] == 20
 
 
 def test_desk_render_runner_floor_not_percent_leash() -> None:
@@ -88,8 +89,7 @@ def test_desk_render_runner_floor_not_percent_leash() -> None:
                 "thresholds": {
                     "stop_loss_pct": "-10",
                     "take_profit_pct": "80",
-                    "trailing_stop_pct": "20",
-                    "exit_style": "runner",
+                    "runner_tightness": "20",
                 },
                 "runner": {
                     "floor_multiple": "2.20",
@@ -107,8 +107,7 @@ def test_desk_render_runner_floor_not_percent_leash() -> None:
             "mint": mint,
             "stop_loss_pct": -10,
             "take_profit_pct": 80,
-            "trailing_stop_pct": 20,
-            "exit_style": "runner",
+            "runner_tightness": 20,
             "rug_exit": True,
         }
     ]
@@ -117,7 +116,7 @@ def test_desk_render_runner_floor_not_percent_leash() -> None:
     assert "trail 20%" not in text
     bags = bags_from_snapshot(snapshot, policies)
     bag = bags[0]
-    assert bag.exit_style == "runner"
+    assert bag.runner_tightness == 20
     assert bag.floor_multiple == "2.20"
     assert bag.peak == "5.1"
     detail = render_bag(bag)
@@ -125,33 +124,33 @@ def test_desk_render_runner_floor_not_percent_leash() -> None:
     assert "peak 5.1x · floor 2.2x" in detail
     assert "scaled 2" in detail
     assert "trail 20%" not in detail
-    assert default_policy_body(bag)["exit_style"] == "runner"
+    assert default_policy_body(bag)["runner_tightness"] == 20
 
 
-def test_desk_render_fixed_trail_keeps_percent_leash() -> None:
+def test_desk_renders_switched_off_rules_as_rules_not_as_missing_data() -> None:
+    """A bag held unless it rugs must not read like a bag whose numbers failed to load."""
+
     mint = "EaPk9U9Das8EdWyDGV7NaNTcVZv3LQMAHwG63L4qpump"
     snapshot = {
         "system": {"mode": "dry-run", "protection_state": "DRY_RUN"},
         "wallet": {"sol": "1", "portfolio_exit_sol": "0.2"},
-        "positions": [{"mint": mint, "name": "OLD", "exit_sol": "0.2"}],
+        "positions": [{"mint": mint, "name": "HODL", "exit_sol": "0.2"}],
         "unmonitored": [],
     }
     policies = [
         {
             "mint": mint,
-            "stop_loss_pct": -10,
-            "take_profit_pct": 80,
-            "trailing_stop_pct": 20,
-            "exit_style": "fixed_trail",
+            "stop_loss_pct": None,
+            "take_profit_pct": None,
+            "runner_tightness": None,
             "rug_exit": True,
         }
     ]
     text = render_desk(snapshot, policies)
-    assert "SL -10 / TP 80 / trail 20%" in text
-    assert "runner floor" not in text
+    assert "no SL / no TP / no runner" in text
+    assert "?" not in text.split("HODL")[1].splitlines()[0]
     detail = render_bag(bags_from_snapshot(snapshot, policies)[0])
-    assert "trail 20%" in detail
-    assert "arm +80" not in detail
+    assert "no SL · no TP · no runner · rug True" in detail
 
 
 def test_render_bag_badges_bonding_wait() -> None:
@@ -165,7 +164,7 @@ def test_render_bag_badges_bonding_wait() -> None:
                 "name": "PUMP",
                 "exit_sol": "0.1",
                 "decision_reason": "bonding curve: runner waits for graduation",
-                "thresholds": {"exit_style": "runner"},
+                "thresholds": {"runner_tightness": "20"},
                 "runner": {"floor_multiple": None, "scale_rungs_fired": []},
             }
         ],
@@ -176,8 +175,7 @@ def test_render_bag_badges_bonding_wait() -> None:
             "mint": mint,
             "stop_loss_pct": -10,
             "take_profit_pct": 80,
-            "trailing_stop_pct": 20,
-            "exit_style": "runner",
+            "runner_tightness": 20,
             "rug_exit": True,
         }
     ]

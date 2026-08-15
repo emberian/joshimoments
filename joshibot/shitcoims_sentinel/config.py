@@ -216,7 +216,9 @@ def load_config(path: str | Path) -> AppConfig:
         # could still be loaded from YAML — and a typo'd key was silently ignored here,
         # which is how a position ends up running on defaults nobody chose.
         try:
-            positions.append(policy_from_payload(mint, pos))
+            positions.append(
+                policy_from_payload(mint, pos, source=f"{config_path}:positions[{index}]")
+            )
         except PolicyError as exc:
             raise ConfigError(f"positions[{index}]: {exc}") from exc
 

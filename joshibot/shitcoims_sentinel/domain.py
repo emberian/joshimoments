@@ -7,7 +7,6 @@ from enum import StrEnum
 from typing import Any
 
 from .runner import (
-    EXIT_STYLE_RUNNER,
     SCALE_RUNGS,
     lock_floor_multiple,
     next_scale_fraction,
@@ -46,14 +45,20 @@ class PolicyDefaults:
     `lots.py` disagreed with the other four, so the same bag got a different rule depending
     on whether the engine discovered it or the dashboard created it. Every default now
     comes from here, including the field defaults of `PositionPolicy` itself.
+
+    The default bag has NO STOP. Kaminski & Lo show a price stop is negative-expectation
+    under a random walk, and the bounce-free variance ratios measured on this desk's own
+    pools read 0.80-1.01 on four of four — a random walk. The 7.47 SOL this desk lost in one
+    window was stops firing on noise. Death is handled by `rug_exit`, which is not a price
+    move; the upside is handled by the runner, which widens its give-back as the multiple
+    grows. A stop is now something the operator asks for, one bag at a time.
     """
 
-    stop_loss_pct: Decimal = Decimal("-35")
-    take_profit_pct: Decimal = Decimal("100")
-    trailing_stop_pct: Decimal = Decimal("20")
+    stop_loss_pct: Decimal | None = None
+    take_profit_pct: Decimal | None = Decimal("100")
+    runner_tightness: Decimal | None = Decimal("20")
     rug_exit: bool = True
     dispose_after_break_even: bool = False
-    exit_style: str = EXIT_STYLE_RUNNER
     floor_confirm_quotes: int = 2
     hold_trail_until_graduated: bool = True
 
@@ -63,18 +68,35 @@ DEFAULTS = PolicyDefaults()
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class PositionPolicy:
+    """A sell rule for one bag. Every price-based exit is optional.
+
+    `stop_loss_pct=None` and `take_profit_pct=None` mean that exit NEVER fires — absence,
+    not a deep sentinel like -95 that still leaves a price rule armed at the bottom of the
+    chart. `runner_tightness=None` means no trailing behaviour of any kind: the lock-rung
+    machinery is not consulted and no peak is tracked.
+
+    So "hold unless it doubles or rugs" is `stop_loss_pct=None, take_profit_pct=100,
+    rug_exit=True`, and "hold until it dies" is all three price fields None. Neither was
+    expressible before: `stop_loss_pct` was mandatory and validation forced it negative.
+    """
+
     mint: str
     name: str
     buy_price_sol: Decimal | None = None
     cost_basis_sol: Decimal | None = None
-    stop_loss_pct: Decimal = DEFAULTS.stop_loss_pct
-    take_profit_pct: Decimal = DEFAULTS.take_profit_pct
-    trailing_stop_pct: Decimal = DEFAULTS.trailing_stop_pct
+    stop_loss_pct: Decimal | None = DEFAULTS.stop_loss_pct
+    take_profit_pct: Decimal | None = DEFAULTS.take_profit_pct
+    runner_tightness: Decimal | None = DEFAULTS.runner_tightness
     rug_exit: bool = DEFAULTS.rug_exit
     dispose_after_break_even: bool = DEFAULTS.dispose_after_break_even
-    exit_style: str = DEFAULTS.exit_style
     floor_confirm_quotes: int = DEFAULTS.floor_confirm_quotes
     hold_trail_until_graduated: bool = DEFAULTS.hold_trail_until_graduated
+
+    @property
+    def runs(self) -> bool:
+        """Does this bag have trailing behaviour at all?"""
+
+        return self.runner_tightness is not None
 
     def entry_unit_price(self, holding: TokenHolding) -> Decimal | None:
         if self.buy_price_sol is not None:
@@ -180,6 +202,7 @@ class DecisionKind(StrEnum):
     EXIT_SCALE = "exit_scale"
     EXIT_RUG = "exit_rug"
     EXIT_DISPOSE = "exit_dispose"
+    EXIT_TAKE_PROFIT = "exit_take_profit"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -212,6 +235,7 @@ class Decision:
             DecisionKind.EXIT_TRAIL,
             DecisionKind.EXIT_SCALE,
             DecisionKind.EXIT_DISPOSE,
+            DecisionKind.EXIT_TAKE_PROFIT,
         }
 
     @property
@@ -229,9 +253,14 @@ def evaluate_position(
     confirmed_slot: int | None = None,
     dispose_enabled: bool | None = None,
     pump_complete: bool | None = None,
-    stop_enabled: bool = True,
 ) -> Decision:
-    """Pure policy function. Rug exit precedence is deliberate and testable."""
+    """Pure policy function. Rug exit precedence is deliberate and testable.
+
+    A price rule that is None does not fire. There is no `stop_enabled` flag any more: a
+    caller that wants the stop held off (the engine, during a new lot's basis grace) passes
+    a policy whose `stop_loss_pct` is None. One concept, one representation — three ways to
+    say "no stop" is how behaviour stops being reasonable-about.
+    """
     unit_price = quote.unit_price_sol(holding) if quote is not None else None
     entry = policy.entry_unit_price(holding)
     pnl = None
@@ -254,36 +283,27 @@ def evaluate_position(
     if quote is None or unit_price is None:
         return Decision(DecisionKind.HOLD, "no executable quote", pnl, unit_price, state)
 
-    if pnl is not None and pnl <= policy.stop_loss_pct:
-        if not stop_enabled:
-            state = dataclasses.replace(state, below_stop_streak=0)
-        else:
-            needed = max(1, int(policy.floor_confirm_quotes))
-            streak = state.below_stop_streak + 1
-            next_state = dataclasses.replace(state, below_stop_streak=streak)
-            if streak >= needed:
-                return Decision(
-                    DecisionKind.EXIT_STOP,
-                    (
-                        f"PnL {pnl:.2f}% <= stop {policy.stop_loss_pct:.2f}% "
-                        f"for {streak} quote(s)"
-                    ),
-                    pnl,
-                    unit_price,
-                    next_state,
-                )
+    stop = policy.stop_loss_pct
+    if stop is not None and pnl is not None and pnl <= stop:
+        needed = max(1, int(policy.floor_confirm_quotes))
+        streak = state.below_stop_streak + 1
+        next_state = dataclasses.replace(state, below_stop_streak=streak)
+        if streak >= needed:
             return Decision(
-                DecisionKind.HOLD,
-                (
-                    f"stop {policy.stop_loss_pct:.2f}% waiting confirm "
-                    f"({streak}/{needed}; PnL {pnl:.2f}%)"
-                ),
+                DecisionKind.EXIT_STOP,
+                f"PnL {pnl:.2f}% <= stop {stop:.2f}% for {streak} quote(s)",
                 pnl,
                 unit_price,
                 next_state,
             )
-    else:
-        state = dataclasses.replace(state, below_stop_streak=0)
+        return Decision(
+            DecisionKind.HOLD,
+            f"stop {stop:.2f}% waiting confirm ({streak}/{needed}; PnL {pnl:.2f}%)",
+            pnl,
+            unit_price,
+            next_state,
+        )
+    state = dataclasses.replace(state, below_stop_streak=0)
 
     disposal_is_enabled = (
         policy.dispose_after_break_even if dispose_enabled is None else dispose_enabled
@@ -346,16 +366,8 @@ def evaluate_position(
                 disposal_state,
             )
 
-    runner_mode = policy.exit_style == EXIT_STYLE_RUNNER
-    bonding_blocks_arm = (
-        runner_mode
-        and policy.hold_trail_until_graduated
-        and pump_complete is False
-        and not disposal_state.trailing_active
-    )
-
     if disposal_state.trailing_active:
-        if runner_mode:
+        if policy.runs:
             return _evaluate_runner(
                 policy=policy,
                 holding=holding,
@@ -364,25 +376,18 @@ def evaluate_position(
                 pnl=pnl,
                 state=disposal_state,
             )
-        peak = disposal_state.trailing_peak_unit_price_sol or unit_price
-        new_peak = max(peak, unit_price)
-        drop_pct = (unit_price / new_peak - 1) * 100
-        next_state = dataclasses.replace(
-            disposal_state,
-            trailing_active=True,
-            trailing_peak_unit_price_sol=new_peak,
+        # The runner was switched off under an armed bag. There is nothing left to trail
+        # with, so the arm is dropped rather than reinterpreted, and the take-profit rule
+        # below decides on its own terms.
+        disposal_state = dataclasses.replace(
+            disposal_state, trailing_active=False, trailing_peak_unit_price_sol=None
         )
-        if drop_pct <= -policy.trailing_stop_pct:
-            return Decision(
-                DecisionKind.EXIT_TRAIL,
-                f"price {drop_pct:.2f}% below trailing peak",
-                pnl,
-                unit_price,
-                next_state,
-            )
-        return Decision(DecisionKind.HOLD, "trailing", pnl, unit_price, next_state)
 
-    if bonding_blocks_arm:
+    if (
+        policy.runs
+        and policy.hold_trail_until_graduated
+        and pump_complete is False
+    ):
         return Decision(
             DecisionKind.HOLD,
             "bonding curve: runner waits for graduation",
@@ -391,7 +396,18 @@ def evaluate_position(
             disposal_state,
         )
 
-    if pnl is not None and pnl >= policy.take_profit_pct:
+    take_profit = policy.take_profit_pct
+    if take_profit is not None and pnl is not None and pnl >= take_profit:
+        if not policy.runs:
+            # No runner configured: the take-profit IS the exit. This is the literal
+            # "hold unless it doubles" bag.
+            return Decision(
+                DecisionKind.EXIT_TAKE_PROFIT,
+                f"PnL {pnl:.2f}% >= take profit {take_profit:.2f}% and no runner is configured",
+                pnl,
+                unit_price,
+                disposal_state,
+            )
         armed = dataclasses.replace(
             disposal_state,
             trailing_active=True,
@@ -400,17 +416,12 @@ def evaluate_position(
             original_amount=disposal_state.original_amount or holding.amount,
             runner_floor_multiple=None,
         )
-        reason = (
-            f"PnL {pnl:.2f}% >= take profit {policy.take_profit_pct:.2f}%"
-            if not runner_mode
-            else (
-                f"runner armed at {pnl:.2f}% "
-                f"(lock-in floors, not a {policy.trailing_stop_pct:.0f}% peak leash)"
-            )
-        )
         return Decision(
             DecisionKind.ACTIVATE_TRAIL,
-            reason,
+            (
+                f"runner armed at {pnl:.2f}% "
+                f"(lock-in floors, not a {policy.runner_tightness:.0f}% peak leash)"
+            ),
             pnl,
             unit_price,
             armed,
@@ -457,7 +468,10 @@ def _evaluate_runner(
 
     peak_multiple = new_peak / entry
     current_multiple = unit_price / entry
-    floor = lock_floor_multiple(peak_multiple, tightness=policy.trailing_stop_pct)
+    tightness = policy.runner_tightness
+    if tightness is None:  # pragma: no cover - the caller checks `policy.runs` first
+        raise ValueError("runner evaluated for a policy with no runner_tightness")
+    floor = lock_floor_multiple(peak_multiple, tightness=tightness)
     if preexisting and not next_state.scale_rungs_fired:
         # A trail that predates runner must not retroactively dump 30% of a
         # bag that already cleared 2x under the old leash.

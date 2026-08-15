@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -36,16 +38,19 @@ positions: []
     (path.parent / "wallet").write_text(str(wallet), encoding="utf-8")
 
 
-def _thresholds(policy) -> tuple:
-    return (
-        policy.stop_loss_pct,
-        policy.take_profit_pct,
-        policy.trailing_stop_pct,
-        policy.rug_exit,
-        policy.exit_style,
-        policy.floor_confirm_quotes,
-        policy.hold_trail_until_graduated,
-    )
+def _thresholds(policy) -> dict:
+    """Every rule field, read off the type rather than listed here.
+
+    A hand-written list goes stale exactly when a field is added, which is the moment this
+    comparison most needs to include it.
+    """
+
+    lot_specific = {"mint", "name", "buy_price_sol", "cost_basis_sol"}
+    return {
+        field.name: getattr(policy, field.name)
+        for field in dataclasses.fields(policy)
+        if field.name not in lot_specific
+    }
 
 
 def test_every_route_into_a_policy_produces_the_same_unstated_rule(tmp_path: Path) -> None:
@@ -111,29 +116,88 @@ def test_policy_without_basis_keeps_thresholds() -> None:
     assert "cost_basis_sol" not in policy_to_yaml_mapping(cleared)
 
 
-def test_new_payload_defaults_to_runner_not_percent_leash() -> None:
+def test_a_legacy_runner_policy_migrates_to_the_same_behaviour() -> None:
+    """`exit_style: runner` + `trailing_stop_pct: N` was already the tightness knob.
+
+    Asserted as decision-equivalence rather than field-equality: what must survive the
+    rename is what the rule DOES.
+    """
+
     mint = str(Keypair().pubkey())
-    policy = policy_from_payload(
+    legacy = policy_from_payload(
         mint,
         {
             "name": "CLOUT",
             "cost_basis_sol": 1.15,
             "stop_loss_pct": -10,
             "take_profit_pct": 80,
-            "trailing_stop_pct": 20,
+            "trailing_stop_pct": 35,
+            "exit_style": "runner",
         },
     )
-    assert policy.exit_style == "runner"
-    assert policy.floor_confirm_quotes == 2
-    assert policy.hold_trail_until_graduated is True
-    mapping = policy_to_yaml_mapping(policy)
-    assert mapping["exit_style"] == "runner"
+    current = policy_from_payload(
+        mint,
+        {
+            "name": "CLOUT",
+            "cost_basis_sol": 1.15,
+            "stop_loss_pct": -10,
+            "take_profit_pct": 80,
+            "runner_tightness": 35,
+        },
+    )
+    assert legacy == current
+    assert legacy.runner_tightness == Decimal("35")
+    assert "exit_style" not in policy_to_yaml_mapping(legacy)
+    assert "trailing_stop_pct" not in policy_to_yaml_mapping(legacy)
+
+
+def test_a_legacy_fixed_trail_policy_is_refused_not_reinterpreted() -> None:
+    """The one migration that cannot be faithful, so it is not attempted.
+
+    `fixed_trail`'s 20 meant "sell at 20% off the print high". `runner_tightness`'s 20 means
+    "use the canonical lock-rung table", which on a 10x holds through a 40% wick. Carrying
+    the number across would silently turn a sell rule into a hold rule, and a policy whose
+    meaning changes under an upgrade is a money bug in either direction.
+    """
+
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError, match="fixed_trail"):
+        policy_from_payload(
+            mint,
+            {"cost_basis_sol": 1, "exit_style": "fixed_trail", "trailing_stop_pct": 20},
+        )
 
 
 def test_policy_rejects_unknown_exit_style() -> None:
     mint = str(Keypair().pubkey())
     with pytest.raises(PolicyError, match="exit_style"):
         policy_from_payload(mint, {"cost_basis_sol": 1, "exit_style": "atr"})
+
+
+def test_an_absent_threshold_takes_the_default_and_an_explicit_null_turns_it_off() -> None:
+    """Absence and OFF are different states, and both have to survive a YAML round trip."""
+
+    mint = str(Keypair().pubkey())
+    unstated = policy_from_payload(mint, {"name": "A"})
+    switched_off = policy_from_payload(
+        mint,
+        {"name": "A", "take_profit_pct": None, "runner_tightness": None},
+    )
+    assert unstated.take_profit_pct is not None
+    assert switched_off.take_profit_pct is None
+    assert switched_off.runner_tightness is None
+
+    rendered = policy_to_yaml_mapping(switched_off)
+    assert rendered["take_profit_pct"] is None
+    assert rendered["runner_tightness"] is None
+    assert policy_from_payload(mint, rendered) == switched_off
+
+
+def test_a_stop_may_be_switched_off_but_never_set_positive() -> None:
+    mint = str(Keypair().pubkey())
+    assert policy_from_payload(mint, {"stop_loss_pct": None}).stop_loss_pct is None
+    with pytest.raises(PolicyError, match="negative"):
+        policy_from_payload(mint, {"stop_loss_pct": 10})
 
 
 def test_policy_allows_missing_basis_for_rug_only() -> None:

@@ -10,7 +10,7 @@ from shitcoims_sentinel.domain import (
     evaluate_position,
     utc_now,
 )
-from shitcoims_sentinel.runner import EXIT_STYLE_FIXED, EXIT_STYLE_RUNNER, rung_key
+from shitcoims_sentinel.runner import rung_key
 
 
 def holding() -> TokenHolding:
@@ -37,9 +37,8 @@ def policy(**overrides: object) -> PositionPolicy:
         "cost_basis_sol": None,
         "stop_loss_pct": Decimal("-30"),
         "take_profit_pct": Decimal("100"),
-        "trailing_stop_pct": Decimal("20"),
+        "runner_tightness": Decimal("20"),
         "rug_exit": True,
-        "exit_style": EXIT_STYLE_FIXED,
     }
     fields.update(overrides)
     return PositionPolicy(**fields)
@@ -97,48 +96,154 @@ def test_stop_loss_resets_when_the_wick_recovers() -> None:
     assert recovered.next_state.below_stop_streak == 0
 
 
-def test_default_stop_can_be_held_off_during_grace() -> None:
-    decision = evaluate_position(
-        policy=policy(),
+def test_a_bag_with_no_stop_never_stops_out_however_far_it_falls() -> None:
+    """The rule the type could not express before, and the reason this desk lost 7.47 SOL.
+
+    `stop_loss_pct=None` is absence, not a very deep number. Swept across four orders of
+    magnitude of drawdown, and repeated so a confirmation streak cannot accumulate into a
+    sale either.
+    """
+
+    no_stop = policy(stop_loss_pct=None)
+    state = PositionState()
+    for price in ("0.90", "0.50", "0.10", "0.01", "0.0001", "0.0001", "0.0001"):
+        decision = evaluate_position(
+            policy=no_stop,
+            holding=holding(),
+            quote=quote(price),
+            state=state,
+            rug=RugSignal(False),
+        )
+        assert decision.exits is False, price
+        assert decision.next_state.below_stop_streak == 0
+        state = decision.next_state
+
+
+def test_none_is_absence_and_not_a_deep_sentinel_number() -> None:
+    """A stop implemented as -95 would still sell the bottom. This pins the difference."""
+
+    deep = evaluate_position(
+        policy=policy(stop_loss_pct=Decimal("-95"), floor_confirm_quotes=1),
         holding=holding(),
-        quote=quote("0.50"),
+        quote=quote("0.04"),
         state=PositionState(),
         rug=RugSignal(False),
-        stop_enabled=False,
     )
-    assert decision.kind is DecisionKind.HOLD
-    assert decision.exits is False
+    assert deep.kind is DecisionKind.EXIT_STOP
+
+    absent = evaluate_position(
+        policy=policy(stop_loss_pct=None, floor_confirm_quotes=1),
+        holding=holding(),
+        quote=quote("0.04"),
+        state=PositionState(),
+        rug=RugSignal(False),
+    )
+    assert absent.kind is DecisionKind.HOLD
 
 
-def test_take_profit_activates_then_updates_trailing_peak() -> None:
+def test_a_bag_with_no_take_profit_never_arms_and_never_sells_upside() -> None:
+    forever = policy(take_profit_pct=None)
+    state = PositionState()
+    for price in ("1.5", "2.5", "6.0", "40.0"):
+        decision = evaluate_position(
+            policy=forever,
+            holding=holding(),
+            quote=quote(price),
+            state=state,
+            rug=RugSignal(False),
+            pump_complete=True,
+        )
+        assert decision.kind is DecisionKind.HOLD, price
+        assert decision.next_state.trailing_active is False
+        state = decision.next_state
+
+
+def test_death_is_not_a_price_move_so_rug_still_exits_with_every_price_rule_off() -> None:
+    held_forever = policy(stop_loss_pct=None, take_profit_pct=None, runner_tightness=None)
+    decision = evaluate_position(
+        policy=held_forever,
+        holding=holding(),
+        quote=quote("0.001"),
+        state=PositionState(),
+        rug=RugSignal(True, "pool drained"),
+    )
+    assert decision.kind is DecisionKind.EXIT_RUG
+
+
+def test_take_profit_without_a_runner_is_itself_the_exit() -> None:
+    """The operator sentence, literally: hold unless it doubles or rugs."""
+
+    hold_unless_it_doubles = policy(stop_loss_pct=None, runner_tightness=None)
+    still_holding = evaluate_position(
+        policy=hold_unless_it_doubles,
+        holding=holding(),
+        quote=quote("1.99"),
+        state=PositionState(),
+        rug=RugSignal(False),
+    )
+    assert still_holding.kind is DecisionKind.HOLD
+
+    doubled = evaluate_position(
+        policy=hold_unless_it_doubles,
+        holding=holding(),
+        quote=quote("2.01"),
+        state=PositionState(),
+        rug=RugSignal(False),
+    )
+    assert doubled.kind is DecisionKind.EXIT_TAKE_PROFIT
+    assert doubled.full_exit is True
+    # Nothing to trail with, so no peak is invented.
+    assert doubled.next_state.trailing_active is False
+    assert doubled.next_state.trailing_peak_unit_price_sol is None
+
+
+def test_take_profit_arms_the_runner_and_the_peak_tracks_upward() -> None:
     activated = evaluate_position(
         policy=policy(),
         holding=holding(),
         quote=quote("2.1"),
         state=PositionState(),
         rug=RugSignal(False),
+        pump_complete=True,
     )
     assert activated.kind is DecisionKind.ACTIVATE_TRAIL
-    held = evaluate_position(
+    assert activated.exits is False
+    banked = evaluate_position(
         policy=policy(),
         holding=holding(),
         quote=quote("2.4"),
         state=activated.next_state,
         rug=RugSignal(False),
+        pump_complete=True,
     )
-    assert held.kind is DecisionKind.HOLD
-    assert held.next_state.trailing_peak_unit_price_sol == Decimal("2.4")
+    # The 2x scale rung banks a slice of the original lot; the residual keeps running.
+    assert banked.kind is DecisionKind.EXIT_SCALE
+    assert banked.full_exit is False
+    assert banked.next_state.trailing_peak_unit_price_sol == Decimal("2.4")
 
 
-def test_trailing_exit_fires_at_configured_drawdown() -> None:
+def test_the_deleted_percent_leash_would_have_sold_what_the_runner_holds() -> None:
+    """20% off a 2.4x peak was a sale under `fixed_trail`. Under the lock rungs it is not.
+
+    This is the behaviour difference the deletion buys, stated as a decision rather than as
+    a missing field.
+    """
+
     decision = evaluate_position(
         policy=policy(),
         holding=holding(),
         quote=quote("1.9"),
-        state=PositionState(True, Decimal("2.4")),
+        state=PositionState(
+            trailing_active=True,
+            trailing_peak_unit_price_sol=Decimal("2.4"),
+            original_amount=1_000_000,
+            scale_rungs_fired=(rung_key(Decimal("2.0")),),
+        ),
         rug=RugSignal(False),
+        pump_complete=True,
     )
-    assert decision.kind is DecisionKind.EXIT_TRAIL
+    assert decision.exits is False
+    assert decision.next_state.runner_floor_multiple == Decimal("1.20")
 
 
 def test_no_quote_never_fires_price_rule() -> None:
@@ -257,7 +362,7 @@ def test_rug_only_policy_exits_on_emergency_without_basis() -> None:
 
 
 def runner_policy(**overrides: object) -> PositionPolicy:
-    return policy(take_profit_pct=Decimal("80"), exit_style=EXIT_STYLE_RUNNER, **overrides)
+    return policy(take_profit_pct=Decimal("80"), **overrides)
 
 
 def test_runner_arms_on_take_profit_without_selling() -> None:
@@ -401,19 +506,6 @@ def test_runner_does_not_refire_a_spent_scale_rung() -> None:
     )
     assert decision.kind is DecisionKind.HOLD
     assert decision.sell_amount is None
-
-
-def test_fixed_trail_still_sells_twenty_percent_off_peak() -> None:
-    """Legacy leash stays available. New bags should not use it."""
-
-    decision = evaluate_position(
-        policy=policy(),
-        holding=holding(),
-        quote=quote("1.9"),
-        state=PositionState(True, Decimal("2.4")),
-        rug=RugSignal(False),
-    )
-    assert decision.kind is DecisionKind.EXIT_TRAIL
 
 
 def test_rug_only_policy_holds_without_emergency_even_with_quote() -> None:

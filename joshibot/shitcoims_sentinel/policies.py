@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import tempfile
 from decimal import Decimal
@@ -13,7 +14,8 @@ import yaml
 from solders.pubkey import Pubkey
 
 from .domain import DEFAULTS, PolicyDefaults, PositionPolicy, decimal_from
-from .runner import EXIT_STYLES
+
+log = logging.getLogger(__name__)
 
 # Derived, not restated: a field added to the policy is accepted by the API and the YAML
 # loader the moment it exists, and a field removed stops being accepted everywhere at once.
@@ -72,10 +74,9 @@ def policy_to_yaml_mapping(policy: PositionPolicy) -> dict[str, Any]:
         "name": policy.name,
         "stop_loss_pct": _percent(policy.stop_loss_pct),
         "take_profit_pct": _percent(policy.take_profit_pct),
-        "trailing_stop_pct": _percent(policy.trailing_stop_pct),
+        "runner_tightness": _percent(policy.runner_tightness),
         "rug_exit": policy.rug_exit,
         "dispose_after_break_even": policy.dispose_after_break_even,
-        "exit_style": policy.exit_style,
         "floor_confirm_quotes": int(policy.floor_confirm_quotes),
         "hold_trail_until_graduated": policy.hold_trail_until_graduated,
     }
@@ -100,10 +101,9 @@ def policy_to_api_mapping(policy: PositionPolicy) -> dict[str, Any]:
         "name": policy.name,
         "stop_loss_pct": _percent(policy.stop_loss_pct),
         "take_profit_pct": _percent(policy.take_profit_pct),
-        "trailing_stop_pct": _percent(policy.trailing_stop_pct),
+        "runner_tightness": _percent(policy.runner_tightness),
         "rug_exit": policy.rug_exit,
         "dispose_after_break_even": policy.dispose_after_break_even,
-        "exit_style": policy.exit_style,
         "floor_confirm_quotes": int(policy.floor_confirm_quotes),
         "hold_trail_until_graduated": policy.hold_trail_until_graduated,
     }
@@ -131,8 +131,81 @@ def _confirm_quotes(value: Any) -> int:
         raise PolicyError("floor_confirm_quotes must be a whole number") from exc
 
 
+def _optional_percent(
+    payload: dict[str, Any], field: str, fallback: Decimal | None
+) -> Decimal | None:
+    """A field that is absent takes the default; a field written as null is OFF.
+
+    The distinction is the whole point of making these optional. `stop_loss_pct: null` in
+    config.yaml is the operator saying "this bag has no stop", and it must not be confused
+    with "this bag did not mention a stop".
+    """
+
+    if field not in payload:
+        return fallback
+    value = payload[field]
+    if value in {None, ""}:
+        return None
+    return decimal_from(value, field=field)
+
+
+def migrate_policy_payload(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """Translate a pre-runner_tightness policy mapping. Never reinterprets silently.
+
+    The old shape carried `exit_style` plus a `trailing_stop_pct` that meant two different
+    things depending on it: a literal percent-off-the-peak leash under `fixed_trail`, and a
+    tightness knob on the lock-rung table under `runner`. Only the second survives.
+
+    - `exit_style: runner` + `trailing_stop_pct: N` -> `runner_tightness: N`. Same
+      behaviour, same number, new name.
+    - `exit_style: fixed_trail` is REFUSED. "Sell at N% off the high" has no faithful
+      equivalent here, and reading that N as a tightness knob would quietly convert a sell
+      rule into a hold rule. A policy whose meaning changes under an upgrade is a money bug
+      whichever direction it moves, so the operator is told exactly what to edit.
+    """
+
+    if not isinstance(payload, dict):
+        raise PolicyError("policy payload must be an object")
+    migrated = dict(payload)
+    notes: list[str] = []
+
+    if "exit_style" in migrated:
+        style = str(migrated.pop("exit_style") or "runner").strip()
+        if style == "fixed_trail":
+            raise PolicyError(
+                "exit_style: fixed_trail is no longer supported — it sold a 10x that wicked "
+                "22%. Delete the exit_style key and set runner_tightness (20 is the "
+                "canonical lock-rung table), or set runner_tightness: null for no trailing "
+                "behaviour at all"
+            )
+        if style != "runner":
+            raise PolicyError(
+                f"exit_style is no longer a policy field and {style!r} was never a valid "
+                "value; delete the key"
+            )
+        notes.append("exit_style: runner (dropped; runner is the only style)")
+
+    if "trailing_stop_pct" in migrated:
+        if "runner_tightness" in migrated:
+            raise PolicyError(
+                "set runner_tightness, not both it and the legacy trailing_stop_pct"
+            )
+        migrated["runner_tightness"] = migrated.pop("trailing_stop_pct")
+        notes.append("trailing_stop_pct -> runner_tightness")
+
+    if notes:
+        # Loud by construction. A migration nobody can see happening is the same failure
+        # mode as a silent reinterpretation.
+        log.warning("migrated legacy policy shape from %s: %s", source, "; ".join(notes))
+    return migrated
+
+
 def policy_from_payload(
-    mint: str, payload: dict[str, Any], *, defaults: PolicyDefaults = DEFAULTS
+    mint: str,
+    payload: dict[str, Any],
+    *,
+    defaults: PolicyDefaults = DEFAULTS,
+    source: str = "policy payload",
 ) -> PositionPolicy:
     """THE validator. `config.yaml` and the dashboard API both come through here.
 
@@ -140,8 +213,7 @@ def policy_from_payload(
     drifting defaults, so a payload the API refused could still be loaded from YAML.
     """
 
-    if not isinstance(payload, dict):
-        raise PolicyError("policy payload must be an object")
+    payload = migrate_policy_payload(payload, source=source)
     _blocked(payload)
     unknown = sorted(set(payload) - POLICY_FIELDS)
     if unknown:
@@ -167,21 +239,18 @@ def policy_from_payload(
             cost_basis_sol=(
                 None if cost_basis in {None, ""} else decimal_from(cost_basis, field="cost_basis_sol")
             ),
-            stop_loss_pct=decimal_from(
-                payload.get("stop_loss_pct", defaults.stop_loss_pct), field="stop_loss_pct"
+            stop_loss_pct=_optional_percent(payload, "stop_loss_pct", defaults.stop_loss_pct),
+            take_profit_pct=_optional_percent(
+                payload, "take_profit_pct", defaults.take_profit_pct
             ),
-            take_profit_pct=decimal_from(
-                payload.get("take_profit_pct", defaults.take_profit_pct), field="take_profit_pct"
-            ),
-            trailing_stop_pct=decimal_from(
-                payload.get("trailing_stop_pct", defaults.trailing_stop_pct), field="trailing_stop_pct"
+            runner_tightness=_optional_percent(
+                payload, "runner_tightness", defaults.runner_tightness
             ),
             rug_exit=_strict_bool(payload.get("rug_exit", defaults.rug_exit), "rug_exit"),
             dispose_after_break_even=_strict_bool(
                 payload.get("dispose_after_break_even", defaults.dispose_after_break_even),
                 "dispose_after_break_even",
             ),
-            exit_style=str(payload.get("exit_style") or defaults.exit_style).strip(),
             floor_confirm_quotes=_confirm_quotes(
                 payload.get("floor_confirm_quotes", defaults.floor_confirm_quotes)
             ),
@@ -194,14 +263,18 @@ def policy_from_payload(
         raise
     except Exception as exc:
         raise PolicyError(str(exc)) from exc
-    if policy.stop_loss_pct >= 0:
-        raise PolicyError("stop_loss_pct must be negative")
-    if policy.take_profit_pct <= 0:
-        raise PolicyError("take_profit_pct must be positive")
-    if not Decimal("0") < policy.trailing_stop_pct < Decimal("100"):
-        raise PolicyError("trailing_stop_pct must be in (0, 100)")
-    if policy.exit_style not in EXIT_STYLES:
-        raise PolicyError("exit_style must be runner or fixed_trail")
+    # Each price rule is checked only when it exists. None is not "0" and not "-95": it is
+    # a rule that never fires, which is the point of making it optional.
+    if policy.stop_loss_pct is not None and policy.stop_loss_pct >= 0:
+        raise PolicyError("stop_loss_pct must be negative, or null for no stop at all")
+    if policy.take_profit_pct is not None and policy.take_profit_pct <= 0:
+        raise PolicyError("take_profit_pct must be positive, or null for no take profit")
+    if policy.runner_tightness is not None and not (
+        Decimal("0") < policy.runner_tightness < Decimal("100")
+    ):
+        raise PolicyError(
+            "runner_tightness must be in (0, 100), or null for no trailing behaviour"
+        )
     if not 1 <= policy.floor_confirm_quotes <= 6:
         raise PolicyError("floor_confirm_quotes must be in [1, 6]")
     if (policy.buy_price_sol is not None and policy.buy_price_sol <= 0) or (
