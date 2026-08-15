@@ -856,7 +856,8 @@ entire loss region, where 36% of live supply sits, into two bins. Equal-mass edg
 where the observations are, which is the point of estimating a kernel rather than asserting a
 threshold.)*
 
-**With those fixes the 60-second kernel rejects, cleanly and in an interpretable direction:**
+**With those fixes the 60-second kernel rejects at the cell level, in an interpretable
+direction — but see the FDR caveat immediately below the table:**
 
 | horizon | response | `T_shape` | p_rot | p_shift | `T_trend` | p_rot | p_shift |
 |---|---|---|---|---|---|---|---|
@@ -868,6 +869,13 @@ with `w(u)` rising monotonically from ≈ −0.20 on supply held at a deep loss 
 held in profit. Read directly: **supply sitting in profit converts an arriving buy into more
 selling; supply deep underwater is inert.** Profit-taking, not break-even priming — and the
 opposite end of the distribution from where §7.1's individual hazard peaks.
+
+**But BY-FDR over this grid rejects 0 of 12**, and the reason is the permutation floor again: at
+200 draws the smallest attainable p is 1/201 = 0.00498, while BY at q = 0.05 over 12 dependent
+tests needs p ≤ 0.00134 at rank 1. Every "0.005" in that table is censored from below, so the
+grid cannot clear its own multiplicity correction no matter what the truth is — resolving it
+needs ≳750 permutations. **The 60-second result is therefore suggestive, not established**, even
+before it fails to replicate.
 
 **Attempt 5 — and it does not replicate at block resolution.** Every bucketed design above shares
 an assumption that was never argued for: that a 60-second (or even 10-second) window is a
@@ -885,6 +893,10 @@ event. 1,200 coins, 59,473 real arrivals, 36.1M (event, holder) snapshots.
 | response | `T_shape` | p_rot | p_shift | `T_trend` | p_rot | p_shift |
 |---|---|---|---|---|---|---|
 | SOL | 0.306 | 0.209 | 0.050 | −0.241 | 0.110 | 0.995 |
+| wallets | 0.101 | 0.348 | 0.025 | −0.080 | 0.428 | 0.711 |
+
+**BY-FDR: 0 of 8.** And here the floor is not the binding constraint — the smallest p in the grid
+is 0.025, five times the attainable minimum, so this is a real null rather than a censored one.
 
 **The 60-second result does not survive.** `T_shape` is marginal on one null and fails the other;
 the trend fails both and flips sign; and `w(u)` is no longer monotone. Since event time is strictly
@@ -895,7 +907,9 @@ contemporaneous, and with a one-bucket horizon the "response" is nearly the same
 counterparty flow.
 
 **Final verdict on excitability: NOT ESTABLISHED.** Five specifications, four of them wrong in a
-way that produced or destroyed a result, and the one design with no known defect returns a null.
+way that produced or destroyed a result; the best of the bucketed ones cannot clear its own
+multiplicity correction because of the permutation floor; and the one design with no known defect
+returns a null that is *not* floor-limited.
 The individual-wallet half stands (§7.1, a 4–7× hazard range). The aggregation to a coin-level
 excitability state does not. What would move it next is not another estimator but more events:
 59,473 arrivals from 1,200 coins is 0.9% of the cohort, and the whole corpus holds ~357,000
