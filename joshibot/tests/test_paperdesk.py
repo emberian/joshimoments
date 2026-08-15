@@ -1395,3 +1395,32 @@ def test_the_clock_makes_censoring_structurally_impossible(tmp_path: Path) -> No
     assert closes[0]["pnl_lamports"] == closes[0]["pnl_pessimistic_lamports"]
     rendered = render(read_ledger(tmp_path))
     assert "the clock is why" in rendered
+
+
+def test_each_source_is_stale_on_its_own_measured_rate(tmp_path: Path) -> None:
+    """A flag that is almost always on carries no information.
+
+    The callout feed returns ~1 mint-resolved callout every 24 minutes (measured against
+    the live collector: 0 over a 900 s window, 5 over 7200 s), so the 300 s bound meant for
+    the boards and firehose reported it STALE while it worked perfectly -- inverting the
+    exact distinction the watch windows exist to make.
+    """
+    from shitcoims_paperdesk.desk import (
+        CALLOUT_STALE_AFTER_S,
+        STALE_AFTER_S,
+        TAPE_STALE_AFTER_S,
+        Desk,
+        DeskConfig,
+    )
+
+    desk = Desk(DeskConfig(minutes=0.0, seed=1), ledger=Ledger(tmp_path, run_id="r"))
+    assert desk._stale_bound(desk.boards) == STALE_AFTER_S
+    assert desk._stale_bound(desk.firehose) == STALE_AFTER_S
+    assert desk._stale_bound(desk.tape) == TAPE_STALE_AFTER_S
+    assert desk._stale_bound(desk.callouts) == CALLOUT_STALE_AFTER_S
+    assert CALLOUT_STALE_AFTER_S > STALE_AFTER_S
+    # Ten minutes of silence is a dead boards collector and an ordinary quiet hour on the
+    # callout feed, and the desk must not call those the same thing.
+    desk.open_windows(T0)
+    assert desk.stale(desk.boards, T0 + 600)
+    assert not desk.stale(desk.callouts, T0 + 600)

@@ -67,6 +67,15 @@ STALE_AFTER_S: Final[float] = 300.0
 #: A separate, looser bound so a genuinely quiet pool is not reported as a dead collector.
 TAPE_STALE_AFTER_S: Final[float] = 3600.0
 
+#: The callout feed is INHERENTLY low-rate and the 300 s bound was set for a high-rate one.
+#: Measured 2026-08-15 against the live collector: ``poll_callout_snapshots`` returns 0
+#: mint-resolved callouts over a 900 s window and 5 over a 7200 s one -- roughly one every
+#: 24 minutes. Under the 300 s bound this source therefore reads STALE nearly all the time
+#: while working perfectly, which inverts the whole point of the flag: a state that is
+#: almost always on carries no information, and the heartbeat exists precisely to tell a
+#: cold collector from a quiet market. One hour is ~2.5x the measured mean interval.
+CALLOUT_STALE_AFTER_S: Final[float] = 3600.0
+
 #: An observation older than this cannot be traded on, so it is not offered to a position
 #: book. This matters because the desk BOOTSTRAPS the toll book's flow window from days of
 #: historical tape: those swaps are a legitimate measurement of a past window, and a
@@ -196,7 +205,12 @@ class Desk:
     # ---------------------------------------------------------------- lifecycle
 
     def _stale_bound(self, source: Source) -> float:
-        return TAPE_STALE_AFTER_S if source is self.tape else STALE_AFTER_S
+        """Per-source, because "silent" means a different thing per source's own rate."""
+        if source is self.tape:
+            return TAPE_STALE_AFTER_S
+        if source is self.callouts:
+            return CALLOUT_STALE_AFTER_S
+        return STALE_AFTER_S
 
     def stale(self, source: Source, now: float) -> bool:
         return source.seconds_since_event(now) > self._stale_bound(source)
