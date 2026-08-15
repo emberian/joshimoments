@@ -612,6 +612,12 @@ def _scope_args(p):
     ``dev_buy_share``, ``lifetime_s``, ``drawdown_from_peak``, ``curve_touches``, ``birth_time``.
     ``--mints-file`` takes an explicit newline-delimited list, which is how another lane's
     output gets piped in. Neither flag means "everything in the basis artifact".
+
+    **One trap, verified rather than assumed.** ``--select`` is evaluated against
+    ``coins.parquet``, which contains only coins BORN IN THE CORPUS WINDOW -- so a predicate can
+    never match an older coin, and three of the operator's four disappear under any ``--select``
+    at all. That is correct behaviour and not a bug, but it is silent. For anything that predates
+    the window, or for a list handed over by another lane, use ``--mints-file``.
     """
     p.add_argument(
         "--select",
