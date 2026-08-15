@@ -493,7 +493,7 @@ Scaled against the achievable range, crew pairs recover:
 
 ---
 
-## 4.6 The temporal split
+### 4.6 The temporal split
 
 PROGRAM.md §3 rule 1. Days 2026-08-05..09 (h1) against 2026-08-10..14 (h2), every stage refit
 independently on each half.
@@ -795,7 +795,7 @@ an *individual-wallet* statement: this wallet, at this PnL, has this chance of s
 that aggregates into a coin-level property is a separate question, and §7.3 is where it was asked
 properly and did not survive.
 
-### 7.3 Does it aggregate? The excitability question, and why the first three answers were wrong
+### 7.3 Does it aggregate? The excitability question, and five specifications to get there
 
 The operator's actual hypothesis was not about price levels at all. It was that unrealized PnL
 tracks **momentum** — *"how likely is an arriving event to stimulate one of those other wallets to
@@ -945,7 +945,7 @@ qualifying arrivals before subsampling.
   the median hold before a sell is 3 seconds. "Realization policy" here is mostly machine policy;
   none of it should be read as a claim about human psychology.
 
-### 8.1 Four errors this study made, and what caught each one
+### 8.1 Seven errors this study made, and what caught each one
 
 Recorded because the catches were not luck, and because a reader should weight the surviving
 results by how the failures were found.
@@ -977,6 +977,7 @@ uv run --group research python -m studies.unrealized_pnl describe  # the distrib
 uv run --group research python -m studies.unrealized_pnl hazard    # P(sell | unrealized PnL)
 uv run --group research python -m studies.unrealized_pnl momentum  # primed supply vs response
 uv run --group research python -m studies.unrealized_pnl kernel    # the response kernel w(u)
+uv run --group research python -m studies.unrealized_pnl eventtime # the same, block resolution
 uv run --group research python -m studies.unrealized_pnl q1        # basis density vs reversals
 uv run --group research python -m studies.unrealized_pnl q2        # the fingerprint, both controls
 uv run --group research python -m studies.unrealized_pnl q3        # the basis-shape feature
