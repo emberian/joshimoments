@@ -10,12 +10,15 @@ So the operator's actual question -- *is the short horizon, the medium horizon, 
 toll (LP) position the better use of the same SOL?* -- has never been asked, because the
 three have never once been measured against each other under identical rules.
 
-This package is that comparison, made standing. Three books:
+This package is that comparison, made standing. Four books:
 
 * **SHORT** (minutes-hours) -- boards / firehose / callout candidates, bracket exits.
 * **MEDIUM** (hours-days) -- the held cluster plus boards survivors, deterioration exits.
 * **TOLL** (a paper LP book) -- DLMM ranges gated on ``eta * D > VR``, fees accrued only
   from swap flow actually observed crossing the paper range.
+* **WIGGLE** (minutes, and *only* minutes) -- post-collapse bottom scalps on a HARD CLOCK.
+  The operator's own measured pattern, and the one book whose exit rule is a discipline
+  rather than a forecast; see :mod:`shitcoims_paperdesk.wiggle` for why it refuses to hold.
 
 They share ONE bankroll size, ONE friction model, ONE ledger and ONE clock discipline, so
 the cross-book table is a comparison rather than three incomparable numbers side by side.
@@ -59,11 +62,19 @@ from enum import StrEnum
 
 
 class Book(StrEnum):
-    """The three horizons. Identical capital, identical friction, one ledger."""
+    """The four horizons. Identical capital, identical friction, one ledger.
+
+    WIGGLE is not a fourth horizon so much as a fourth *discipline*, and the distinction is
+    the point: SHORT, MEDIUM and TOLL all decide when to leave by asking what the position
+    is doing, and WIGGLE decides by asking what time it is. The operator's own trades say
+    those are two populations wanting two rules, and a desk that ran one rule over both
+    would answer neither question.
+    """
 
     SHORT = "short"
     MEDIUM = "medium"
     TOLL = "toll"
+    WIGGLE = "wiggle"
 
 
-BOOKS: tuple[Book, ...] = (Book.SHORT, Book.MEDIUM, Book.TOLL)
+BOOKS: tuple[Book, ...] = (Book.SHORT, Book.MEDIUM, Book.TOLL, Book.WIGGLE)

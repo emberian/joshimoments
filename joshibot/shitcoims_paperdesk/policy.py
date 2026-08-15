@@ -1,4 +1,4 @@
-"""Three policies, one design: jittered thresholds, an epsilon flip, a logged propensity.
+"""Four policies, one design: jittered thresholds, an epsilon flip, a logged propensity.
 
 WHY THE DESK RANDOMISES ITSELF ON PURPOSE
 -----------------------------------------
@@ -56,6 +56,7 @@ __all__ = [
     "MediumPolicy",
     "ShortPolicy",
     "TollPolicy",
+    "WigglePolicy",
     "policy_for",
 ]
 
@@ -348,10 +349,126 @@ class TollPolicy(DeskPolicy):
         return eta * t["assumed_duty"] > vr * t["gate_margin"]
 
 
+class WigglePolicy(DeskPolicy):
+    """Minutes, and only minutes. Post-collapse bottom scalps behind a ghost-town guard.
+
+    THE EXIT IS THE POLICY. ``hold_seconds`` is drawn in **[240, 420] s**, a jitter box
+    centred on the five minutes that splits the operator's own reconstructed trades into a
+    winning book and a losing one (7/13 and +$3.09 under five minutes; 1/20 and -$61 in
+    every bucket beyond it). Its upper bound is inside
+    ``shitcoims_paperdesk.wiggle.WiggleBook.MAX_HOLD_S``, which refuses anything longer as
+    a defect rather than trading it -- the failure this book exists to prevent is a scalp
+    becoming a hold, and that failure would enter the CODE as a widened jitter box.
+
+    ``take_profit`` is drawn in [0.03, 0.09]. The floor is not a preference: round-trip
+    friction at the operator's 0.1 SOL clip is ~2.4% (``friction.round_trip``, corrected to
+    full three-leg taker costs), so a bracket below ~3% is a bracket that books a loss on a
+    win. ``stop_loss`` [0.10, 0.25] is wide *because* the clock is the real exit -- a tight
+    stop on a coin oscillating at 5% amplitude just pays friction to be shaken out.
+
+    THE ENTRY RULE, term by term, each with the measurement behind it:
+
+    * ``drawdown_from_ath >= dd_min`` in [0.60, 0.85], with ``drawdown_known``. The
+      operator's pattern is a *bottom* scalp; a coin still near its high is a momentum
+      trade and belongs to the short book. The vendor serves ``-1.0`` for "no ATH" and
+      ``-1.0 >= 0.70`` is false, so the unknown case fails closed here -- but
+      ``drawdown_known`` is asserted anyway, because failing closed by arithmetic accident
+      is not the same as refusing on purpose.
+    * ``sol_in_curve >= ghost_min_pool_sol`` in [5, 25] SOL. The GHOST_TOWN guard, derived
+      in :mod:`shitcoims_paperdesk.wiggle` from clip-against-depth: at 0.1 SOL, 5 SOL of
+      depth is a 2.00% one-way impact (PROGRAM.md §1.4's ceiling) and 25 SOL is 0.40%.
+      ``RESULT_crime_signatures.md`` §7.1: a fossil quote is a price nobody has tested, and
+      the rug is just the first real seller finding that ``C -> 0``. We must not be that
+      seller. Note where it binds: a bonding curve's VIRTUAL reserve floors at 30 SOL, so
+      this leg is slack pre-graduation and does its work on migrated pools, whose vault can
+      actually be drained. That is by design; see the module docstring.
+    * ``trade_recency_s <= max_trade_recency_s`` in [30, 180] s. The second half of
+      GHOST_TOWN -- thin AND stale. A coin nobody has traded in three minutes has no
+      wiggle to harvest whatever its depth says.
+    * ``wiggle_obs_per_min >= min_obs_per_min`` in [0.5, 2.0] per minute. Not a data-quality
+      filter -- an ENTRY condition, and the one this book learned the hard way. On a live
+      probe a stop armed at -16.5% filled at **-64.7%**, because the next observation of
+      that coin came 43 s later and it had gapped through. A position cannot be exited on a
+      five-minute clock if the desk sees the coin twice in fifteen minutes, whatever its
+      drawdown and depth say, so an unmarkable coin is refused rather than entered and
+      hoped over. (The complementary fix is on the other side: the desk refreshes wiggle
+      holdings as PRIORITY, at a shorter interval than the mint books' -- see
+      ``MintRefreshSource.refresh``.)
+    * ``wiggle_two_sided_frac >= min_two_sided`` in [0.25, 0.60], **once the desk has seen
+      the coin at least three times**. Direction flips in the observed price path are the
+      only two-sidedness a board snapshot can support: it carries a price and a last-trade
+      stamp, never a side. Below three observations the term is unmeasured and the rule
+      does not pretend otherwise -- it falls back to depth and recency alone and the
+      propensity log records which branch ran.
+    * ``own_exit_impact <= take_profit / impact_margin`` with ``impact_margin`` in [3, 8].
+      The guard restated as the thing it protects: our own exit must not move the price by
+      a meaningful fraction of the bracket we are trying to earn. Depth alone cannot say
+      that, because it does not know the bracket.
+
+    CALLOUT ACTIVITY enters through ``wiggle.CALLOUT_ARM``, which carries the verdict of
+    ``studies/RESULT_callout_volatility.md`` as one constant. Under ``"preferred"`` a
+    callout in the last hour RELAXES the two-sidedness bar rather than gating on it, which
+    is the honest encoding of a signal that survived its nulls but did not survive having
+    contemporaneous on-chain flow controlled: it is evidence, not a licence.
+    """
+
+    book = Book.WIGGLE
+    policy_id = "paperdesk-wiggle-v1"
+    ranges: ClassVar[dict[str, tuple[float, float]]] = {
+        # THE CLOCK. Centred on the operator's measured five-minute edge window.
+        "hold_seconds": (240.0, 420.0),
+        # Must clear ~2.4% round-trip friction at a 0.1 SOL clip, with room to spare.
+        "take_profit": (0.03, 0.09),
+        "stop_loss": (0.10, 0.25),
+        # Collapse conditioning: this is a bottom book.
+        "dd_min": (0.60, 0.85),
+        # GHOST_TOWN: depth, staleness, and our own exit against the bracket.
+        "ghost_min_pool_sol": (5.0, 25.0),
+        "max_trade_recency_s": (30.0, 180.0),
+        "impact_margin": (3.0, 8.0),
+        # Two-sidedness, measured on the desk's own observation path.
+        "min_two_sided": (0.25, 0.60),
+        # Marking cadence: can this position be EXITED on a five-minute clock at all?
+        "min_obs_per_min": (0.5, 2.0),
+        # How much a live callout stream relaxes the two-sidedness bar under CALLOUT_ARM
+        # == "preferred". Jittered so the ledger can price the relaxation itself.
+        "callout_relief": (0.05, 0.30),
+    }
+
+    def rule(self, f: Mapping[str, float], t: Mapping[str, float]) -> bool:
+        from shitcoims_paperdesk.wiggle import CALLOUT_ARM
+
+        if f.get("drawdown_known", 0.0) <= 0.5:
+            return False
+        if f.get("drawdown_from_ath", -1.0) < t["dd_min"]:
+            return False
+        if f.get("sol_in_curve", 0.0) < t["ghost_min_pool_sol"]:
+            return False
+        if f.get("trade_recency_s", 1e9) > t["max_trade_recency_s"]:
+            return False
+        if f.get("own_exit_impact", 1.0) > t["take_profit"] / t["impact_margin"]:
+            return False
+        callouts = f.get("callout_n_60m", 0.0)
+        if CALLOUT_ARM == "required" and callouts < 1.0:
+            return False
+        bar = t["min_two_sided"]
+        if CALLOUT_ARM == "preferred" and callouts >= 1.0:
+            bar = max(0.0, bar - t["callout_relief"])
+        if f.get("wiggle_observations", 0.0) >= 3.0:
+            if f.get("wiggle_obs_per_min", 0.0) < t["min_obs_per_min"]:
+                return False
+            return f.get("wiggle_two_sided_frac", 0.0) >= bar
+        # Fewer than three observations: two-sidedness is UNMEASURED, not zero. Depth and
+        # recency already passed, so the candidate is admitted and the ledger records the
+        # branch through ``wiggle_observations`` in the hashed feature vector.
+        return True
+
+
 _POLICIES: Final[dict[Book, type[DeskPolicy]]] = {
     Book.SHORT: ShortPolicy,
     Book.MEDIUM: MediumPolicy,
     Book.TOLL: TollPolicy,
+    Book.WIGGLE: WigglePolicy,
 }
 
 

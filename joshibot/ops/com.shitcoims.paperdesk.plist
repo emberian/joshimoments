@@ -4,7 +4,8 @@
 <dict>
   <key>Label</key>
   <string>com.shitcoims.paperdesk</string>
-  <!-- The standing three-book paper desk. It was launched as an agent's background
+  <!-- The standing four-book paper desk (short / medium / toll / wiggle). It was
+       launched as an agent's background
        process with no supervisor, then bounced twice for code fixes on the assumption
        "the watchdog will revive it" - which it could not, because report-only. This
        plist closes that gap: launchd keeps it alive, the watchdog restarts it, and its

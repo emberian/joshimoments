@@ -1,4 +1,4 @@
-"""The desk daemon: one loop, three books, one ledger, two clocks, heartbeats.
+"""The desk daemon: one loop, four books, one ledger, two clocks, heartbeats.
 
 RUNNING IT
 ----------
@@ -53,6 +53,7 @@ from shitcoims_paperdesk.friction import LAMPORTS_PER_SOL, Friction
 from shitcoims_paperdesk.ledger import Ledger, iso
 from shitcoims_paperdesk.policy import policy_for
 from shitcoims_paperdesk.toll import TollBook
+from shitcoims_paperdesk.wiggle import CalloutActivity, WiggleBook
 from shitcoims_tape.schema import WatchClose
 
 __all__ = ["Desk", "DeskConfig", "main"]
@@ -100,8 +101,13 @@ class DeskConfig:
         return int(self.bankroll_sol * LAMPORTS_PER_SOL)
 
 
+#: The operator's own clip, from the 36 h chain reconstruction of their live trades. The
+#: wiggle book is a paper replay of those trades and must be sized like them.
+WIGGLE_CLIP_LAMPORTS: Final[int] = 100_000_000
+
+
 class Desk:
-    """Three books over four sources, sharing one ledger and one wall clock."""
+    """Four books over five sources, sharing one ledger and one wall clock."""
 
     def __init__(self, config: DeskConfig, *, ledger: Ledger | None = None) -> None:
         self.config = config
@@ -144,6 +150,23 @@ class Desk:
             bankroll_lamports=config.bankroll_lamports,
             max_positions=4,
         )
+        self.wiggle = WiggleBook(
+            Book.WIGGLE,
+            policy=policy_for(
+                Book.WIGGLE,
+                explore_eps=config.explore_eps,
+                seed=None if seed is None else seed + 3,
+            ),
+            friction=self.friction,
+            ledger=self.ledger,
+            bankroll_lamports=config.bankroll_lamports,
+            max_positions=config.max_positions,
+            clip_lamports=WIGGLE_CLIP_LAMPORTS,
+            # A five-minute book must be free to look at the same coin again soon: its
+            # candidate is a MOMENT (a live oscillation at a tested bottom), not a coin,
+            # and a half-hour cooldown would let the desk watch every one of them go by.
+            decision_cooldown_s=120.0,
+        )
 
         self.boards = BoardsSource()
         self.firehose = FirehoseSource()
@@ -159,6 +182,11 @@ class Desk:
             self.refresh,
             self.tape,
         )
+        #: Callout counts per mint over the last hour. Logged on every wiggle decision and
+        #: gating none of them -- see ``wiggle.CALLOUT_ARM`` for the study verdict behind
+        #: that, and ``wiggle.CalloutActivity`` for why an unused column is still worth
+        #: writing down.
+        self.callout_activity = CalloutActivity()
         self._window_open: dict[str, float] = {}
         self._window_events: dict[str, int] = {}
         self._stopping = False
@@ -232,6 +260,7 @@ class Desk:
         self.short.restore(state.get("short") or {})
         self.medium.restore(state.get("medium") or {})
         self.toll.restore(state.get("toll") or {})
+        self.wiggle.restore(state.get("wiggle") or {})
 
     def save(self) -> None:
         self.ledger.save_state(
@@ -241,6 +270,7 @@ class Desk:
                 "short": self.short.state(),
                 "medium": self.medium.state(),
                 "toll": self.toll.state(),
+                "wiggle": self.wiggle.state(),
             }
         )
 
@@ -250,8 +280,10 @@ class Desk:
         boards_stale = self.stale(self.boards, now)
         tape_stale = self.stale(self.tape, now)
 
-        # 1. Boards: the marking feed for both mint books, and the survivorship record
-        #    the medium book's entry rule is built on.
+        # 1. Boards: the marking feed for the mint books, the survivorship record the
+        #    medium book's entry rule is built on, and the wiggle book's ONLY source of a
+        #    measured drawdown -- the boards vendor is the one feed that serves an ATH, and
+        #    without an ATH there is no such thing as a post-collapse bottom.
         for obs in self.boards.poll(now):
             if not self._actionable(obs, now):
                 continue
@@ -259,15 +291,28 @@ class Desk:
             self.short.consider(obs)
             self.medium.observe(obs, source_stale=boards_stale)
             self.medium.consider(obs)
+            self.wiggle.observe(obs, source_stale=boards_stale)
+            self.wiggle.consider(obs, extra_features=self.callout_activity.features(obs.mint, now))
 
-        # 2. Firehose and callouts: short-book candidates only. A mint two seconds old is
-        #    not a medium-horizon position, and pretending otherwise would let the medium
-        #    book borrow the short book's candidate flow.
-        for obs in list(self.firehose.poll(now)) + list(self.callouts.poll(now)):
+        # 2. Firehose: short-book candidates only. A mint two seconds old is not a
+        #    medium-horizon position, and it is not a wiggle candidate either -- it has no
+        #    all-time high to have collapsed from, so its drawdown is not merely unmeasured
+        #    but undefined. Callouts go to BOTH: the study demoted them from an entry
+        #    condition to a candidate generator, and a candidate generator's whole job is
+        #    to put a coin in front of a book that the boards may never carry.
+        for obs in self.firehose.poll(now):
             if not self._actionable(obs, now):
                 continue
             self.short.observe(obs, source_stale=boards_stale)
             self.short.consider(obs)
+        for obs in self.callouts.poll(now):
+            self.callout_activity.record(obs.mint, obs.t_event_unix or obs.t_ingest_unix)
+            if not self._actionable(obs, now):
+                continue
+            self.short.observe(obs, source_stale=boards_stale)
+            self.short.consider(obs)
+            self.wiggle.observe(obs, source_stale=boards_stale)
+            self.wiggle.consider(obs, extra_features=self.callout_activity.features(obs.mint, now))
 
         # 3. Cluster tape: the toll book's flow, and the medium book's held-cluster arm.
         #    EVERY swap feeds the flow window -- that is a measurement over a past window
@@ -285,21 +330,32 @@ class Desk:
         # 4. Refresh held mints so positions from any source can be marked. Without this
         #    a firehose entry could never be observed again and would resolve as censored
         #    whatever it did -- a hole in the instrument, not a property of the market.
+        #    The wiggle book's holdings are PRIORITY, because its exit is a five-minute
+        #    clock and an unmarked wiggle position is the exact failure the book exists to
+        #    prevent. Measured on a four-minute live probe before this was wired: a stop
+        #    armed at -16.5% filled at -64.7% because the next observation of that coin was
+        #    43 seconds later and it had gapped through. The desk cannot trade the tick that
+        #    told it to trade, so the only lever is how soon the NEXT tick arrives.
+        wiggle_held = {p.mint for p in self.wiggle.positions.values()} | set(self.wiggle.pending)
         held = sorted(
-            {p.mint for p in self.short.positions.values()}
+            wiggle_held
+            | {p.mint for p in self.short.positions.values()}
             | {p.mint for p in self.medium.positions.values()}
             | set(self.short.pending)
             | set(self.medium.pending)
         )
-        for obs in self.refresh.refresh(held, now):
+        for obs in self.refresh.refresh(held, now, priority=wiggle_held):
             self.short.observe(obs, source_stale=False)
             self.medium.observe(obs, source_stale=False)
+            self.wiggle.observe(obs, source_stale=False)
 
         # 5. Gates, sweeps, windows.
         self.toll.gate(now)
         self.short.sweep(now, source_stale=boards_stale)
         self.medium.sweep(now, source_stale=boards_stale and tape_stale)
         self.toll.sweep(now, source_stale=tape_stale)
+        self.wiggle.sweep(now, source_stale=boards_stale)
+        self.callout_activity.expire(now)
         self.check_windows(now)
 
     def heartbeat(self, now: float) -> None:
@@ -323,6 +379,10 @@ class Desk:
                     "deployed_lamports": self.toll.deployed_lamports,
                     "pools_with_flow": len(self.toll.flows),
                     **self.toll.counters,
+                },
+                "wiggle": {
+                    **self._book_state(self.wiggle, now),
+                    "mints_watched": len(self.wiggle.watch),
                 },
             },
             firehose_duplicates_dropped=self.firehose.duplicates_dropped,
@@ -388,6 +448,7 @@ class Desk:
             self.short.drain(end)
             self.medium.drain(end)
             self.toll.drain(end)
+            self.wiggle.drain(end)
         self.heartbeat(end)
         self.save()
         self.ledger.close()
@@ -398,6 +459,7 @@ class Desk:
             "short": self.short.counters,
             "medium": self.medium.counters,
             "toll": self.toll.counters,
+            "wiggle": self.wiggle.counters,
         }
 
 

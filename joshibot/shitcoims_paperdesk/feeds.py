@@ -506,20 +506,44 @@ class MintRefreshSource(Source):
 
     name = "mint_refresh"
 
-    def __init__(self, *, min_interval_s: float = 20.0, budget_per_poll: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        min_interval_s: float = 20.0,
+        budget_per_poll: int = 4,
+        priority_interval_s: float = 8.0,
+    ) -> None:
         super().__init__()
         self._min_interval_s = min_interval_s
+        self._priority_interval_s = priority_interval_s
         self._budget = budget_per_poll
         self._last: dict[str, float] = {}
         self.failures = 0
 
-    def refresh(self, mints: list[str], now: float) -> list[MintObservation]:
+    def refresh(
+        self, mints: list[str], now: float, *, priority: set[str] | None = None
+    ) -> list[MintObservation]:
+        """Re-observe held mints, PRIORITY ones first and on a shorter interval.
+
+        Priority is not decoration. A book whose exit is a five-minute clock needs its
+        positions marked at a cadence that can resolve five minutes; the mint books can
+        wait, because a position they hold for hours is not misjudged by a twenty-second
+        stale mark. Without the split, the queue is sorted purely by staleness and a
+        long-horizon position with an older mark displaces the one whose exit is imminent
+        -- which is a hole in the instrument dressed as fairness.
+        """
         try:
             from shitcoims_scalper.feed import poll_mint
         except Exception:
             return []
-        due = [m for m in mints if now - self._last.get(m, 0.0) >= self._min_interval_s]
-        due.sort(key=lambda m: self._last.get(m, 0.0))  # oldest observation first
+        hot = priority or set()
+
+        def interval(mint: str) -> float:
+            return self._priority_interval_s if mint in hot else self._min_interval_s
+
+        due = [m for m in mints if now - self._last.get(m, 0.0) >= interval(m)]
+        # Priority first; within each group, the oldest observation first.
+        due.sort(key=lambda m: (m not in hot, self._last.get(m, 0.0)))
         out: list[MintObservation] = []
         for mint in due[: self._budget]:
             self._last[mint] = now

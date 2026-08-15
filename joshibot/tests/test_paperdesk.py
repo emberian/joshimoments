@@ -10,6 +10,7 @@ and the LP algebra where concentration is sign-preserving.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -24,6 +25,7 @@ from shitcoims_paperdesk.feeds import (
     FirehoseSource,
     JsonlTail,
     MintObservation,
+    MintRefreshSource,
     PoolSwap,
     swap_as_mint_observation,
 )
@@ -34,9 +36,26 @@ from shitcoims_paperdesk.friction import (
     Friction,
 )
 from shitcoims_paperdesk.ledger import Ledger, LedgerRow, close_row
-from shitcoims_paperdesk.policy import DeskPolicy, MediumPolicy, ShortPolicy, TollPolicy, policy_for
+from shitcoims_paperdesk.policy import (
+    DeskPolicy,
+    MediumPolicy,
+    ShortPolicy,
+    TollPolicy,
+    WigglePolicy,
+    policy_for,
+)
 from shitcoims_paperdesk.report import read_ledger, render
 from shitcoims_paperdesk.toll import PoolFlow, TollBook, lp_fee_rate
+from shitcoims_paperdesk.wiggle import (
+    CALLOUT_ARM,
+    CALLOUT_WINDOW_S,
+    WATCH_CAPACITY,
+    WIGGLE_DEPARTURE_TIMEOUT_S,
+    CalloutActivity,
+    WiggleBook,
+    WiggleWatch,
+    ghost_town_impact,
+)
 from shitcoims_tape.schema import PropensityRecord, TapeError, WatchClose
 
 SOL = 1_000_000_000
@@ -937,7 +956,7 @@ def test_desk_heartbeat_reports_source_staleness_per_source(tmp_path: Path) -> N
     assert set(beat["sources"]) == {"boards", "firehose", "callouts", "mint_refresh", "cluster_tape"}
     for state in beat["sources"].values():
         assert "silent_seconds" in state and "stale" in state
-    assert set(beat["books"]) == {"short", "medium", "toll"}
+    assert set(beat["books"]) == {str(b) for b in BOOKS} == {"short", "medium", "toll", "wiggle"}
 
 
 def test_a_source_going_quiet_closes_its_window_as_observer_lost(tmp_path: Path) -> None:
@@ -990,3 +1009,368 @@ def test_a_position_is_never_marked_against_a_different_price_basis(tmp_path: Pa
     book.observe(observation(T0 + 30, mint=pool_obs.mint), source_stale=False)
     assert position.armed_reason is None
     assert not rows_of(tmp_path, "close")
+
+
+# ---------------------------------------------------------------------- the wiggle book
+
+
+class AlwaysWiggle(DeskPolicy):
+    """A degenerate wiggle policy: the CLOCK is real, the entry rule is not.
+
+    Book-mechanics tests must not also be policy tests. The clock stays honest at 300 s
+    because it is the thing under test in half of these.
+    """
+
+    book = Book.WIGGLE
+    policy_id = "paperdesk-wiggle-test"
+    ranges: ClassVar[dict[str, tuple[float, float]]] = {
+        "hold_seconds": (300.0, 300.0),
+        "take_profit": (0.06, 0.06),
+        "stop_loss": (0.20, 0.20),
+    }
+
+    def rule(self, features: Any, t: Any) -> bool:
+        return True
+
+
+def make_wiggle(tmp_path: Path, *, policy: DeskPolicy | None = None, bankroll: int = 5 * SOL) -> WiggleBook:
+    return WiggleBook(
+        Book.WIGGLE,
+        policy=policy or AlwaysWiggle(explore_eps=0.01, seed=0),
+        friction=Friction(),
+        ledger=Ledger(tmp_path, run_id="test-wiggle"),
+        bankroll_lamports=bankroll,
+    )
+
+
+def test_the_wiggle_clock_is_hard_and_the_position_leaves_on_it(tmp_path: Path) -> None:
+    """The one behaviour this book exists for: a scalp that cannot become a hold."""
+    book = make_wiggle(tmp_path)
+    book.observe(observation(T0), source_stale=False)
+    book.consider(observation(T0))
+    book.observe(observation(T0 + 5), source_stale=False)  # fill
+    assert len(book.positions) == 1
+    # Well inside the clock, and flat: nothing arms.
+    book.observe(observation(T0 + 200), source_stale=False)
+    assert next(iter(book.positions.values())).armed_reason is None
+    # Past it: the deadline arms, and the NEXT observation fills the exit.
+    book.observe(observation(T0 + 310), source_stale=False)
+    assert next(iter(book.positions.values())).armed_reason == "deadline"
+    book.observe(observation(T0 + 320), source_stale=False)
+    closes = rows_of(tmp_path, "close")
+    assert len(closes) == 1
+    assert closes[0]["exit_reason"] == "deadline"
+    assert closes[0]["holding_seconds"] < 400.0
+
+
+def test_a_wiggle_position_that_stops_being_observed_is_closed_inside_its_own_horizon(
+    tmp_path: Path,
+) -> None:
+    """A ten-minute departure timeout on a five-minute book is not a five-minute book.
+
+    The mint books wait ``DEPARTURE_TIMEOUT_S`` (600 s) before concluding a position left
+    observation. That is twice this book's entire holding period, so it sets its own.
+    """
+    wiggle = make_wiggle(tmp_path)
+    assert wiggle.departure_timeout_s < DEPARTURE_TIMEOUT_S
+    mint = make_book(tmp_path / "mint")
+    for book in (wiggle, mint):
+        book.observe(observation(T0), source_stale=False)
+        book.consider(observation(T0))
+        book.observe(observation(T0 + 5), source_stale=False)
+        assert book.positions
+    # One sweep, one instant, two books: past the wiggle book's horizon and inside the
+    # mint books'. The wiggle position is resolved and the mint position is still open,
+    # which is the whole content of giving a five-minute book its own timeout.
+    when = T0 + 5 + WIGGLE_DEPARTURE_TIMEOUT_S + 1.0
+    assert when < T0 + 5 + DEPARTURE_TIMEOUT_S
+    wiggle.sweep(when, source_stale=False)
+    mint.sweep(when, source_stale=False)
+    assert not wiggle.positions, "a wiggle position must not outlive its own horizon"
+    assert mint.positions, "the mint book's longer timeout is unchanged"
+
+
+def test_a_horizon_past_the_hard_clock_is_a_defect_not_a_position(tmp_path: Path) -> None:
+    """Discipline drift would enter the CODE as a widened jitter box. This is the tripwire."""
+
+    class TooLong(AlwaysWiggle):
+        ranges: ClassVar[dict[str, tuple[float, float]]] = {
+            **AlwaysWiggle.ranges,
+            "hold_seconds": (7200.0, 7200.0),
+        }
+
+    book = make_wiggle(tmp_path, policy=TooLong(explore_eps=0.01, seed=0))
+    book.observe(observation(T0), source_stale=False)
+    book.consider(observation(T0))
+    assert not book.pending
+    assert book.counters["refused_horizon"] == 1
+    defects = rows_of(tmp_path, "defect")
+    assert defects and defects[0]["detail"] == "wiggle_horizon_exceeds_hard_clock"
+    # The DECISION is still on the tape: the refusal must be visible to OPE, not a
+    # silently deleted row.
+    assert rows_of(tmp_path, "decision")
+
+
+def test_the_wiggle_clip_is_the_operators_own_size_not_the_impact_optimum(tmp_path: Path) -> None:
+    """0.1 SOL, because the book is a paper replay of trades that were that size.
+
+    ``B* = sqrt(priority * Y)`` lands around 0.03-0.06 SOL at these depths, so a wiggle
+    book sized like the mint books would be comparing a different strategy against the
+    operator's measured 7/13.
+    """
+    book = make_wiggle(tmp_path)
+    deep = observation(T0, vsol=200.0)
+    assert book._size_for(deep) == 100_000_000
+    assert MintBook._size_for(book, deep) < 100_000_000  # the impact optimum is smaller
+    # A thin pool still binds through the SHARED impact cap, never a private one.
+    thin = observation(T0, vsol=2.0)
+    assert book._size_for(thin) == int(2.0 * SOL) * Friction().rho_max_bps // 10_000
+
+
+def test_ghost_town_guard_refuses_a_pool_our_own_exit_would_move(tmp_path: Path) -> None:
+    """``dV = dQ/C`` with ``C -> 0``: refuse to be the first real seller of a fossil quote."""
+    policy = WigglePolicy(explore_eps=0.01, seed=7)
+    thresholds = {k: (lo + hi) / 2 for k, (lo, hi) in WigglePolicy.ranges.items()}
+    watch = WiggleWatch()
+    friction = Friction()
+
+    def features(vsol: float) -> dict[str, float]:
+        obs = observation(T0, vsol=vsol, drawdown=0.80, last_trade=T0 - 10.0)
+        out = obs.features()
+        out.update(watch.features(friction=friction, obs=obs, clip_lamports=100_000_000))
+        out["callout_n_60m"] = 0.0
+        return out
+
+    assert policy.rule(features(100.0), thresholds), "a deep pool clears the guard"
+    assert not policy.rule(features(2.0), thresholds), "2 SOL of depth is a 5% own-exit move"
+    assert ghost_town_impact(100_000_000, int(5.0 * SOL)) == pytest.approx(0.02)
+    assert ghost_town_impact(100_000_000, int(25.0 * SOL)) == pytest.approx(0.004)
+    assert ghost_town_impact(100_000_000, 0) == float("inf")
+
+
+def test_wiggle_entry_needs_a_measured_collapse_never_an_unknown_one() -> None:
+    """The vendor's ``-1.0`` must not read as "not collapsed"; it must not read at all."""
+    policy = WigglePolicy(explore_eps=0.01, seed=7)
+    thresholds = {k: (lo + hi) / 2 for k, (lo, hi) in WigglePolicy.ranges.items()}
+    base = {
+        "sol_in_curve": 100.0,
+        "trade_recency_s": 10.0,
+        "own_exit_impact": 0.001,
+        "wiggle_observations": 0.0,
+        "callout_n_60m": 0.0,
+    }
+    assert policy.rule({**base, "drawdown_known": 1.0, "drawdown_from_ath": 0.80}, thresholds)
+    assert not policy.rule({**base, "drawdown_known": 1.0, "drawdown_from_ath": 0.10}, thresholds)
+    assert not policy.rule(
+        {**base, "drawdown_known": 0.0, "drawdown_from_ath": DRAWDOWN_UNKNOWN}, thresholds
+    )
+
+
+def test_wiggle_entry_needs_recent_trading_not_only_depth() -> None:
+    """GHOST_TOWN is thin AND stale. Depth alone lets a fossil through."""
+    policy = WigglePolicy(explore_eps=0.01, seed=7)
+    thresholds = {k: (lo + hi) / 2 for k, (lo, hi) in WigglePolicy.ranges.items()}
+    base = {
+        "drawdown_known": 1.0,
+        "drawdown_from_ath": 0.80,
+        "sol_in_curve": 500.0,
+        "own_exit_impact": 0.0002,
+        "wiggle_observations": 0.0,
+        "callout_n_60m": 0.0,
+    }
+    assert policy.rule({**base, "trade_recency_s": 20.0}, thresholds)
+    assert not policy.rule({**base, "trade_recency_s": 3600.0}, thresholds)
+
+
+def test_two_sidedness_is_measured_from_the_observed_path_and_a_slide_scores_zero() -> None:
+    """A coin sliding to zero is not wiggling, however many trades it prints."""
+    slide = WiggleWatch()
+    for i in range(12):
+        slide.observe(1.0 - 0.01 * i, T0 + i)
+    assert slide.two_sided_frac() == 0.0
+
+    oscillating = WiggleWatch()
+    for i in range(12):
+        oscillating.observe(1.0 + (0.05 if i % 2 else -0.05), T0 + i)
+    assert oscillating.two_sided_frac() == pytest.approx(1.0)
+
+    # Fewer than three observations is UNMEASURED, and must not read as zero-and-refuse.
+    thin = WiggleWatch()
+    thin.observe(1.0, T0)
+    assert thin.two_sided_frac() == 0.0
+    assert thin.observations == 1
+
+
+def test_the_wiggle_zigzag_is_the_studys_estimator_at_the_coins_own_friction() -> None:
+    """One zigzag, imported, so "wiggle" means the same thing on the desk and in the RESULT."""
+    watch = WiggleWatch()
+    for price in (1.0, 1.10, 1.0, 1.10, 1.0):
+        watch.observe(price, T0)
+    # A 10% oscillation clears a 5% threshold and does not clear a 20% one.
+    assert watch.zigzag_at(math.log(1.05))[0] >= 2
+    assert watch.zigzag_at(math.log(1.20))[0] == 0
+    assert watch.zigzag_at(0.0) == (0, 0.0)
+
+
+def test_wiggle_features_reach_the_logged_decision_not_an_upstream_filter(tmp_path: Path) -> None:
+    """A filter outside the policy makes every OPE estimate about a policy nobody logged."""
+    book = make_wiggle(tmp_path)
+    for i, price_vsol in enumerate((40.0, 44.0, 40.0, 44.0)):
+        book.observe(observation(T0 + i, vsol=price_vsol), source_stale=False)
+    book.consider(observation(T0 + 10), extra_features={"callout_n_60m": 3.0})
+    decisions = rows_of(tmp_path, "decision")
+    assert decisions
+    features = decisions[-1]["features"]
+    for key in ("wiggle_two_sided_frac", "wiggle_n", "own_exit_impact", "callout_n_60m"):
+        assert key in features, key
+    assert features["callout_n_60m"] == 3.0
+
+
+def test_callout_activity_logs_but_does_not_gate() -> None:
+    """The study demoted callouts to a candidate generator; the column stays measurable."""
+    activity = CalloutActivity()
+    assert activity.features(MINT, T0)["callout_n_60m"] == 0.0
+    # No callout is CALLOUT_WINDOW_S ago, never "now" -- a zero would be the loudest value.
+    assert activity.features(MINT, T0)["callout_recency_s"] == CALLOUT_WINDOW_S
+    activity.record(MINT, T0 - 100.0)
+    activity.record(MINT, T0 - 50.0)
+    features = activity.features(MINT, T0)
+    assert features["callout_n_60m"] == 2.0
+    assert features["callout_recency_s"] == pytest.approx(50.0)
+    assert features["callout_cadence_s"] == pytest.approx(50.0)
+    activity.expire(T0 + CALLOUT_WINDOW_S + 1.0)
+    assert MINT not in activity.seen
+    # And the arm really is off: a callout must not be able to admit a candidate that the
+    # collapse and depth conditions refuse.
+    assert CALLOUT_ARM == "ignored"
+    policy = WigglePolicy(explore_eps=0.01, seed=1)
+    thresholds = {k: (lo + hi) / 2 for k, (lo, hi) in WigglePolicy.ranges.items()}
+    shallow = {
+        "drawdown_known": 1.0, "drawdown_from_ath": 0.05, "sol_in_curve": 500.0,
+        "trade_recency_s": 5.0, "own_exit_impact": 0.0002, "wiggle_observations": 0.0,
+        "callout_n_60m": 25.0,
+    }
+    assert not policy.rule(shallow, thresholds)
+
+
+def test_the_desk_runs_four_books_and_the_report_audits_the_clock(tmp_path: Path) -> None:
+    """End to end: four books in the heartbeat, and a wiggle section in the report."""
+    from shitcoims_paperdesk.desk import Desk, DeskConfig
+
+    desk = Desk(DeskConfig(minutes=0.0, seed=3), ledger=Ledger(tmp_path, run_id="test-desk"))
+    desk.heartbeat(T0)
+    beat = rows_of(tmp_path, "heartbeat")[-1]
+    assert set(beat["books"]) == {"short", "medium", "toll", "wiggle"}
+    assert "mints_watched" in beat["books"]["wiggle"]
+    assert [str(b) for b in BOOKS] == ["short", "medium", "toll", "wiggle"]
+
+    # A closed wiggle position must show up in the clock audit with its holding time.
+    book = desk.wiggle
+    book.policy = AlwaysWiggle(explore_eps=0.01, seed=0)
+    book.observe(observation(T0), source_stale=False)
+    book.consider(observation(T0))
+    book.observe(observation(T0 + 5), source_stale=False)
+    book.observe(observation(T0 + 310), source_stale=False)
+    book.observe(observation(T0 + 320), source_stale=False)
+    rendered = render(read_ledger(tmp_path))
+    assert "WIGGLE — the anti-hold book" in rendered
+    assert "past the five-minute mark" in rendered
+    assert "under 5 min" in rendered
+
+
+def test_the_wiggle_watch_refuses_to_splice_two_price_bases(tmp_path: Path) -> None:
+    """A curve quote and a pool quote of the same mint are two series with no common scale.
+
+    Splicing them manufactures a several-hundred-percent "wiggle" out of a migration --
+    the same defect ``_same_price_basis`` exists to prevent on the marking side, which cost
+    an instant fabricated stop-loss when it was missing there.
+    """
+    watch = WiggleWatch()
+    for price in (1.0, 1.05, 1.0):
+        watch.observe(price, T0, basis=None)  # bonding curve
+    assert watch.observations == 3
+    watch.observe(400.0, T0 + 1, basis="DREGG/SOL")  # a graduated pool: different scale
+    assert watch.observations == 1, "the curve history must be dropped, not appended to"
+    assert watch.basis_changes == 1
+    assert watch.zigzag_at(math.log(1.02)) == (0, 0.0)
+
+
+def test_the_watch_is_bounded_and_never_evicts_a_mint_the_book_is_in(tmp_path: Path) -> None:
+    """A position that lost its own oscillation record was sized against evidence it no
+    longer has. The eviction is a working-set bound, not a garbage collector."""
+    book = make_wiggle(tmp_path)
+    book.observe(observation(T0), source_stale=False)
+    book.consider(observation(T0))
+    book.observe(observation(T0 + 5), source_stale=False)
+    assert book.positions
+    held = next(iter(book.positions.values())).mint
+    for i in range(WATCH_CAPACITY + 200):
+        book.observe(observation(T0 + 6, mint=f"{i:044d}"), source_stale=False)
+    assert len(book.watch) <= WATCH_CAPACITY + 200
+    assert held in book.watch, "the held mint must survive eviction"
+
+
+def test_a_priority_mint_jumps_the_refresh_queue_and_gets_a_shorter_interval() -> None:
+    """A five-minute book needs marks at a cadence that can resolve five minutes.
+
+    Sorting the queue purely by staleness lets a long-horizon position with an older mark
+    displace one whose exit is imminent, which is a hole in the instrument dressed as
+    fairness. Measured cost of the hole on a live probe: a stop armed at -16.5% filled at
+    -64.7%, because the next observation of that coin was 43 seconds later.
+    """
+    source = MintRefreshSource(min_interval_s=20.0, budget_per_poll=1, priority_interval_s=5.0)
+    calls: list[str] = []
+
+    class _Snap:
+        def __init__(self, mint: str) -> None:
+            self.mint = mint
+            self.t_ingest_unix = T0
+            self.vsol_lamports = 40 * SOL
+            self.vtok_raw = 10**15
+            self.created_unix = T0 - 600.0
+            self.last_trade_unix = T0 - 5.0
+            self.complete = False
+
+    import shitcoims_scalper.feed as feed_module
+
+    original = feed_module.poll_mint
+    feed_module.poll_mint = lambda mint: (calls.append(mint), _Snap(mint))[1]
+    try:
+        # "stale" has never been refreshed and "hot" was refreshed one second ago; under a
+        # staleness-only queue "stale" wins, and the imminent exit goes unmarked.
+        source._last["hot"] = T0 - 6.0
+        out = source.refresh(["stale", "hot"], T0, priority={"hot"})
+        assert [o.mint for o in out] == ["hot"]
+        # And without the priority set the older mark wins, which is the right default for
+        # books whose horizon is hours.
+        source._last.clear()
+        source._last["hot"] = T0 - 6.0
+        assert [o.mint for o in source.refresh(["stale", "hot"], T0)] == ["stale"]
+    finally:
+        feed_module.poll_mint = original
+
+
+def test_a_coin_the_desk_cannot_mark_often_enough_is_refused_not_entered() -> None:
+    """A five-minute clock is unenforceable on a coin observed twice in fifteen minutes."""
+    policy = WigglePolicy(explore_eps=0.01, seed=5)
+    thresholds = {k: (lo + hi) / 2 for k, (lo, hi) in WigglePolicy.ranges.items()}
+    base = {
+        "drawdown_known": 1.0, "drawdown_from_ath": 0.80, "sol_in_curve": 200.0,
+        "trade_recency_s": 10.0, "own_exit_impact": 0.0005,
+        "wiggle_observations": 12.0, "wiggle_two_sided_frac": 0.90, "callout_n_60m": 0.0,
+    }
+    assert policy.rule({**base, "wiggle_obs_per_min": 4.0}, thresholds)
+    assert not policy.rule({**base, "wiggle_obs_per_min": 0.1}, thresholds)
+    # Unmeasured cadence must not read as a fast one.
+    assert not policy.rule({**base, "wiggle_obs_per_min": 0.0}, thresholds)
+
+
+def test_observation_cadence_is_measured_over_the_watchs_own_span() -> None:
+    watch = WiggleWatch()
+    assert watch.observations_per_minute() == 0.0
+    watch.observe(1.0, T0)
+    assert watch.observations_per_minute() == 0.0, "one observation is no cadence"
+    for i in range(1, 11):
+        watch.observe(1.0 + 0.001 * i, T0 + 30.0 * i)
+    # Ten intervals of 30 s = two observations a minute.
+    assert watch.observations_per_minute() == pytest.approx(2.0)

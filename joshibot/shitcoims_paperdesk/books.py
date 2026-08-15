@@ -1,9 +1,11 @@
-"""The SHORT and MEDIUM books: one position machine, two sets of triggers.
+"""The SHORT, MEDIUM and WIGGLE books: one position machine, three sets of triggers.
 
-Both books buy a bonding-curve mint and mark it on the curve, so they share a state
-machine and differ only in policy and exit rule. Sharing it is the point -- the operator's
-question is which HORIZON pays, and two horizons measured by two pieces of code answer a
-different question than the one asked.
+All three buy a bonding-curve mint and mark it on the curve, so they share a state machine
+and differ only in policy and exit rule. Sharing it is the point -- the operator's question
+is which HORIZON pays, and three horizons measured by three pieces of code answer a
+different question than the one asked. (WIGGLE subclasses this rather than instantiating
+it, because it adds a structural refusal rather than a different threshold; see
+:mod:`shitcoims_paperdesk.wiggle`.)
 
 THE STATE MACHINE, AND WHY IT HAS AN "ARMED" STATE
 --------------------------------------------------
@@ -48,7 +50,7 @@ from shitcoims_paperdesk import Book
 from shitcoims_paperdesk.feeds import MintObservation
 from shitcoims_paperdesk.friction import Friction
 from shitcoims_paperdesk.ledger import Ledger, close_row, iso
-from shitcoims_paperdesk.policy import DeskPolicy
+from shitcoims_paperdesk.policy import DeskDecision, DeskPolicy
 from shitcoims_scalper.book import CircuitBreaker
 from shitcoims_scalper.shadow import CurveState, curve_buy, curve_sell
 from shitcoims_tape.schema import WatchClose
@@ -58,6 +60,13 @@ __all__ = ["MintBook", "PaperPosition"]
 #: How long a mint may go unobserved before the desk concludes it left observation. Set
 #: against the boards poll cadence (5 boards / 30s) with generous slack: shorter and a
 #: routine board reshuffle reads as a departure.
+#:
+#: It is the DEFAULT rather than the rule, because the right slack depends on the book's
+#: horizon: ten minutes is generous for a book holding for hours and is twice the entire
+#: holding period of the wiggle book, which therefore sets its own (see
+#: ``shitcoims_paperdesk.wiggle.WIGGLE_DEPARTURE_TIMEOUT_S``). A book whose departure
+#: timeout exceeds its own horizon cannot tell a position that left observation from one
+#: that is merely late, and for a five-minute book those are opposite facts.
 DEPARTURE_TIMEOUT_S: Final[float] = 600.0
 
 #: Below this the curve is drained and the position is genuinely worthless, not merely
@@ -147,6 +156,7 @@ class MintBook:
         decision_cooldown_s: float = 300.0,
         deterioration_exit: bool = False,
         breaker: CircuitBreaker | None = None,
+        departure_timeout_s: float = DEPARTURE_TIMEOUT_S,
     ) -> None:
         self.book = book
         self.policy = policy
@@ -157,6 +167,7 @@ class MintBook:
         self.decision_cooldown_s = decision_cooldown_s
         self.deterioration_exit = deterioration_exit
         self.breaker = breaker or CircuitBreaker()
+        self.departure_timeout_s = departure_timeout_s
 
         self.pending: dict[str, dict[str, Any]] = {}
         self.positions: dict[str, PaperPosition] = {}
@@ -393,7 +404,7 @@ class MintBook:
         """
         for position in list(self.positions.values()):
             silent = now - position.last_obs_unix
-            if silent < DEPARTURE_TIMEOUT_S:
+            if silent < self.departure_timeout_s:
                 continue
             reason = position.armed_reason or ("deadline" if now >= position.deadline_unix else "departed")
             self._close_marked(
@@ -404,7 +415,7 @@ class MintBook:
                 total_loss=False,
             )
         for mint, pending in list(self.pending.items()):
-            if now - float(pending["decided_unix"]) >= DEPARTURE_TIMEOUT_S:
+            if now - float(pending["decided_unix"]) >= self.departure_timeout_s:
                 # Never filled: the mint left observation between the decision and the
                 # next sighting. Nothing was spent, so there is no close row -- but the
                 # decision row still stands, which is what keeps the propensity log
@@ -572,9 +583,7 @@ class MintBook:
             features.update(extra_features)
 
         take_bps = self.friction.take_bps_for(obs.pool_label)
-        size = self.friction.size_lamports(
-            obs.vsol_lamports, bankroll_cap_lamports=min(self.free_lamports, self.bankroll_lamports)
-        )
+        size = self._size_for(obs)
         actionable = self.friction.affordable(size, obs.vsol_lamports, take_bps=take_bps)
 
         decision = self.policy.decide(
@@ -613,10 +622,23 @@ class MintBook:
 
         if not decision.acted or blocked is not None:
             return
+        entry = self._pending_entry(obs, decision)
+        if entry is None:
+            return
         self.counters["enters"] += 1
-        self.pending[obs.mint] = {
+        self.pending[obs.mint] = entry
+
+    def _pending_entry(self, obs: MintObservation, decision: DeskDecision) -> dict[str, Any] | None:
+        """The pending-entry record, or ``None`` to refuse the entry after the fact.
+
+        Split out of :meth:`consider` so a book with a structural constraint can veto an
+        entry its policy approved WITHOUT reaching into the decision path -- the decision
+        and its propensity are already logged at this point, which is what keeps the
+        refusal visible to off-policy evaluation instead of silently deleting a row.
+        """
+        return {
             "decision_id": decision.decision_id,
-            "decided_unix": now,
+            "decided_unix": obs.t_ingest_unix,
             "size_lamports": decision.size_lamports,
             "deadline_unix": decision.deadline_unix,
             "take_profit": decision.thresholds["take_profit"],
@@ -625,6 +647,20 @@ class MintBook:
             "deterioration_active_frac": decision.thresholds.get("deterioration_active_frac", 2.0),
             "pool_label": obs.pool_label,
         }
+
+    def _size_for(self, obs: MintObservation) -> int:
+        """Clip size for one candidate. ``B* = sqrt(priority * Y)``, capped.
+
+        A hook rather than an inline call because sizing is a POLICY question that differs
+        by book: the mint books take the impact-optimal size, and the wiggle book takes the
+        operator's own fixed clip, because its whole premise is a reconstruction of trades
+        that were all roughly that size. Overriding the size while sharing the friction
+        model is the difference between "a different book" and "a cheaper world".
+        """
+        return self.friction.size_lamports(
+            obs.vsol_lamports,
+            bankroll_cap_lamports=min(self.free_lamports, self.bankroll_lamports),
+        )
 
     # ---------------------------------------------------------------- persistence
 

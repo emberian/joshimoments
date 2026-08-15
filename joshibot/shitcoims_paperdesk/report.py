@@ -1,6 +1,6 @@
 """The table the operator has never once been able to look at.
 
-Three horizons, identical capital, identical friction, one accounting, side by side --
+Four books, identical capital, identical friction, one accounting, side by side --
 with the censoring priced rather than dropped, and with the size of that pricing shown
 explicitly so nobody has to take it on faith.
 
@@ -53,6 +53,11 @@ RULE_EXITS = frozenset(
     {"take_profit", "stop_loss", "deadline", "deterioration", "graduated",
      "curve_drained", "horizon", "gate_failed"}
 )
+
+#: The operator's measured edge window, from the 36 h chain reconstruction of their live
+#: trades: under it, 7/13 winners and +$3.09; over it, 1/20 and -$61 across every bucket.
+#: The wiggle book's exit clock is jittered around it and ``_wiggle`` audits against it.
+WIGGLE_CLOCK_S = 300.0
 
 
 @dataclass
@@ -440,6 +445,63 @@ def _toll_gate(rows: Rows) -> list[str]:
     return out
 
 
+def _wiggle(rows: Rows) -> list[str]:
+    """Did the anti-hold book actually stay a scalp? The one question it exists to answer.
+
+    The operator's leak was not analytical, it was discipline drift: under five minutes
+    their reconstructed trades ran 7/13 and +$3.09, and every bucket beyond it ran 1/20 and
+    -$61. So the wiggle book's headline diagnostic is not its P&L, it is the holding-time
+    distribution -- a book whose median hold has crept past its own clock has reproduced the
+    leak in code, and no return number would tell you that.
+    """
+    closes = [c for c in rows.closes if str(c.get("book")) == "wiggle"]
+    out = ["", "WIGGLE — the anti-hold book, audited against its own clock"]
+    refusals = Counter(
+        str(d.get("detail")) for d in rows.defects if str(d.get("book")) == "wiggle"
+    )
+    if not closes:
+        out.append("  (no closed wiggle positions yet)")
+        if refusals:
+            out += [f"  refused: {k} x{v}" for k, v in refusals.most_common()]
+        return out
+    holds = sorted(float(c.get("holding_seconds") or 0.0) for c in closes)
+    over_five = sum(1 for h in holds if h > WIGGLE_CLOCK_S)
+    out.append(
+        f"  {len(closes)} closed   median hold {statistics.median(holds) / 60:>5.1f} min"
+        f"   p90 {holds[int(0.9 * (len(holds) - 1))] / 60:>5.1f} min"
+        f"   max {holds[-1] / 60:>5.1f} min"
+    )
+    out.append(
+        f"  past the five-minute mark: {over_five} of {len(closes)}"
+        f" ({over_five / len(closes) * 100:.1f}%)"
+    )
+    # The split the operator's own reconstruction made, computed on the desk's own fills.
+    for label, subset in (
+        ("under 5 min", [c for c in closes if float(c.get("holding_seconds") or 0) <= WIGGLE_CLOCK_S]),
+        ("over 5 min", [c for c in closes if float(c.get("holding_seconds") or 0) > WIGGLE_CLOCK_S]),
+    ):
+        if not subset:
+            out.append(f"  {label:<12} (none)")
+            continue
+        wins = sum(1 for c in subset if float(c.get("pnl_lamports") or 0) > 0)
+        out.append(
+            f"  {label:<12} {wins}/{len(subset)} winners"
+            f"   {_weighted_return(subset, 'pnl_lamports') * 100:>7.2f}%"
+            f"   pess {_weighted_return(subset, 'pnl_pessimistic_lamports') * 100:>7.2f}%"
+        )
+    mix = Counter(str(c.get("exit_reason")) for c in closes)
+    out.append("  exits    " + ", ".join(f"{k}={v}" for k, v in mix.most_common()))
+    if refusals:
+        out += [f"  refused: {k} x{v}" for k, v in refusals.most_common()]
+    out.append(
+        "  The operator's own 36 h reconstruction: 7/13 and +$3.09 under five minutes,"
+    )
+    out.append(
+        "  1/20 and -$61 in every bucket beyond. This table is the desk's version of it."
+    )
+    return out
+
+
 def _cross_book(rows: Rows) -> list[str]:
     """The comparison. Same capital, same friction, three horizons."""
     out = [
@@ -514,6 +576,7 @@ def render(rows: Rows) -> str:
         _survival(rows),
         _propensity(rows),
         _toll_gate(rows),
+        _wiggle(rows),
         _defects(rows),
         _cross_book(rows),
     ]
