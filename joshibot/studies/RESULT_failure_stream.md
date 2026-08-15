@@ -11,12 +11,22 @@ a read-only Helius `getTransaction` sample of 2,266 transactions, and `state/clu
 days the bulk export does not cover. **Nothing signed, nothing sent, no transaction
 constructed.** Results cache to `studies/data/failure_stream/`; a re-run is offline.
 
-**The one-line answer to the operator's idea: it works, and it does not pay off where it
-was expected to.** The exhaust genuinely reverse-engineers competitors — it names programs,
-names the wallets behind them, recovers their exact fee bids, and separates the ones racing
-us from the ones aborting on their own clock. What it does *not* do is predict price.
-Twenty-one pre-registered tests of "does a failure surge forecast anything the successful
-stream does not", one survives multiplicity, and it has the wrong sign to trade.
+**The one-line answer to the operator's idea: it works, in the layer where the competitors'
+own edge lives, and not in the layer where a price signal would live.** The exhaust genuinely
+reverse-engineers competitors — it names programs, names the wallets behind them, recovers
+their exact fee bids, and separates the ones racing us from the ones aborting on their own
+clock. What the *aggregate minute-by-minute count* does not do is forecast price: 21
+pre-registered tests, one survivor, wrong sign.
+
+**Read that null narrowly, because it is a narrow result.** What was tested is whether a
+per-minute failure COUNT predicts a pool's forward return — a public statistic used as a
+price oracle. That is nobody's strategy, including the strategies visibly making money here.
+An arbitrageur does not forecast price; it races for a fill it can already see. The
+statistics that did *not* come back null are precisely the ones describing that race: who is
+present (§3), what they will pay (§5.2), and when the queue is contested (§5.1). The
+right conclusion is **"the aggregate count is not a price oracle"**, not "the failure stream
+carries no information" — and §7.4 states the machine-conditioned test that the aggregate
+version averages away, which this study deliberately did **not** run and did not answer.
 
 The usable output is an **execution** finding, not a signal: on our pools the median
 transaction that *lands* a fill bids **264,872 µlamports/CU** and the median transaction
@@ -272,10 +282,10 @@ None of these appears in `wallet_labels.yaml` — they are new, and they are the
 top payer is a vanity address matching its own program prefix, which is its own small tell.)
 
 **How to read the roster.** The two AMM/router rows are qualitatively different from every
-third-party row: Jupiter v6 and PumpSwap are `beaten` 75% and 52% of the time, on 736 and 574
-bps of preceding move, using 69% and 60% of the compute they requested, bidding 9.8k and 20.5k.
-Those are **real trades losing real races**. The third-party programs are beaten 12–24% of the
-time on 100–500 bps, use 2–27% of the compute they pay for, and bid 537–5,742. Those are
+third-party row: Jupiter v6 and PumpSwap are `beaten` **70% and 52%** of the time, using
+**66% and 60%** of the compute they requested, and bidding 10.6k and 20.5k — the top two bids
+on the board. Those are **real trades losing real races**. The third-party programs are beaten
+12–24% of the time, use **2–27%** of the compute they pay for, and mostly bid 537–3,312. Those are
 **arbitrage bots firing at every opportunity and aborting in-program when the arb evaporates**
 — a successful no-op whose failure rate is a property of its strategy, not of the network.
 
@@ -327,6 +337,30 @@ before any coefficient was inspected; composition-based exposures (e.g. surges s
 the stale-quote codes) were deliberately *not* tested, because adding exposures after seeing
 the table is the whole failure mode. That is the next pre-registered test, not this one's
 result.
+
+### 4.1 What this null does NOT say, stated at length because it will be misread
+
+The specification above is a **price-oracle test on an aggregate count at minute resolution**.
+Three properties of it are out of distribution relative to what the machines in §3 actually
+do, and each one is a reason a real effect would not show up here:
+
+1. **Unit.** The panel is pool-*minutes*. The competitors act inside a *slot*, and this
+   dataset uniquely carries `tx_index` — position within the block. A minute bar averages
+   over ~150 slots, which is exactly the resolution at which a race is decided. §2 shows the
+   block-level structure is strong and legible; §4 then throws that resolution away.
+2. **Conditioning.** The exposure is "failures went up", pooled across every machine. No
+   arbitrageur conditions on that. They condition on a *specific* rival's trigger firing, and
+   §3 demonstrably recovers specific rivals — several cells resolve to one wallet at 100%. A
+   test conditioned on `n_fail` averages a dozen unrelated machines' triggers into one number
+   and would dilute any single machine's signal towards zero by construction.
+3. **Outcome.** Forward return and realised volatility. The outcome that matches the strategy
+   is **fill probability at a price**, conditional on queue state — whether you get the trade,
+   not whether the trade was right.
+
+A null on (aggregate, minute, price) is therefore weak evidence about (specific machine, slot,
+fill). It is reported as a null on what it tested and nothing more. §7.4 specifies the
+replacement test; it is deliberately not run here, because running it after seeing this table
+and inside this family is how a fishing expedition gets written up as a discovery.
 
 **The survival arm the brief asked for is not identified and was not run.** Failures exist on
 9 pools; a hazard model of coin death needs thousands of coins, and the only dataset with
@@ -458,10 +492,31 @@ composition does not.
    median landed fee as the bid to clear. Both come from data the recorder already writes. The
    honest expectation is that it prevents a handful of wasted fees per day, not that it makes
    money.
-4. **Do not build a signal out of failure surges.** 1 of 21, negative, on 9 pools. If it is
-   revisited, the pre-registered next test is composition (stale-quote codes vs solo-abort
-   codes as separate exposures) on a window that includes more than one dominant pool — 82.2%
-   of this evidence is nosis/SOL.
+4. **Run the machine-conditioned test — properly pre-registered, as a second family.**
+   The operator's objection to §4 is correct and is the most valuable thing to act on: these
+   strategies visibly work for the people running them, so a null means the wrong things were
+   compared, not that the information is absent. §4.1 names the three mis-specifications. The
+   replacement, written down here *before* it is run so that it cannot be tuned afterwards:
+
+   - **Unit: the slot, not the minute.** Every row is one (pool, slot) with `tx_index`
+     ordering inside it. Already available; §2 uses it.
+   - **Exposure: one named machine, not a count.** For each of the ~10 fingerprint cells that
+     §3.1 validated to a single fee payer, an indicator "this machine fired in this slot".
+     Ten machines, ten separate exposures, each one a rival's trigger firing.
+   - **Outcome: fill, not price.** Whether a swap on that pool LANDED in the next k slots and
+     at what execution price relative to the pre-slot mid — plus, as a secondary, the CU price
+     that cleared. Forward return stays in only as a control.
+   - **Null: the same rotation, at slot resolution**, rotating each machine's own firing
+     series within pool by ≥ 1,000 slots.
+   - **Family: 10 machines × 3 outcomes = 30 tests, BY-FDR at q = 0.10**, reported whole,
+     including the failures, and *separately* from the 21 in §4 so neither borrows the
+     other's multiplicity budget.
+
+   The prediction worth recording in advance: this finds something for the machines with high
+   `beaten` and high `pre5` (the racers) and nothing for the self-aborters, because only the
+   racers are conditioning on the same state we would be.
+
+5. **Widen past nosis/SOL before believing any of it.** 82.2% of this evidence is one pool.
 
 **What would falsify the main claims.**
 
