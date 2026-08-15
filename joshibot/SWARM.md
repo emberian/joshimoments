@@ -280,6 +280,12 @@ mutation loops are on their own and every lane prompt should say so.
   whole compound command; backticks in a double-quoted `-m` get command-substituted (write prose
   commit messages to a file, `git commit -F`).
 - hbox is co-tenant (codex owns the datacake HOL build); build under `swarm-build`, keep waves small.
+- **Billed-by-scan data: always dry-run the SUPERSET before buying the subset.** BigQuery bills
+  bytes-scanned = columns × partitions; the WHERE clause is *free* if it filters on columns already
+  read. We paid ~$54 for an 11-pool pull whose identical scan would have carried ALL of pump.fun
+  (mints end in `pump`, and the mint sits in the token-balance columns we were already reading).
+  Before any billed pull, ask "what rides free on this scan?" and dry-run the widest useful WHERE —
+  the check costs $0. ($54 lesson, 2026-08-15, caught by the operator thinking, not by the tools.)
 
 ---
 
