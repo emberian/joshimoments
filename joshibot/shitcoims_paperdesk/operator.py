@@ -335,6 +335,25 @@ class OperatorBook(WiggleBook):
             "state": zap.state,
         }
         if target is None:
+            # An entry that has not filled yet is still something to get out of, and "get me
+            # out" is what the key means. Cancelling it costs nothing (no capital was spent,
+            # so there is no close row) and it is what the operator asked for; telling them
+            # "nothing to close" while the desk quietly opens the position ten seconds later
+            # would be the surface lying about what the key did.
+            cancelled = []
+            if zap.mint in self.pending:
+                cancelled.append(("pending", self.pending.pop(zap.mint)["hunch_id"]))
+            if zap.mint in self.waiting:
+                cancelled.append(("waiting", self.waiting.pop(zap.mint)["hunch_id"]))
+            if cancelled:
+                self.ledger.emit(
+                    "hunch",
+                    str(self.book),
+                    **common,
+                    detail="zap_cancelled_unfilled_entry",
+                    cancelled=[{"stage": stage, "hunch_id": hid} for stage, hid in cancelled],
+                )
+                return "cancelled_entry"
             # Not a defect and not silently ignorable: the operator pressed the key, and
             # "there was nothing to close" is a fact about the desk's book at that instant.
             # It is also the shape a double-zap takes, which is worth being able to count.

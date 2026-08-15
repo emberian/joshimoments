@@ -1012,8 +1012,11 @@ def test_the_desk_routes_a_zap_to_the_operator_book(tmp_path: Path) -> None:
     append_hunch(hunch_of(now), path=path)
     append_zap(_zap(at=now + 1), path=path)
     desk.step(now + 2)  # both events, in tape order: accept then zap
-    # The zap lands with no position open yet, and is RECORDED rather than dropped.
-    assert desk.operator.counters["zaps_no_position"] == 1
+    # Routed and applied IN ORDER: the hunch created a wait, the zap cancelled it. Nothing
+    # is left queued, which is what "get me out" has to mean for an entry that never filled.
+    assert desk.operator.counters["hunches"] == 1
+    assert desk.operator.counters["zaps"] == 1
+    assert not desk.operator.waiting and not desk.operator.pending
     ledger.close()
 
 
@@ -1131,3 +1134,36 @@ def test_a_retraction_is_idempotent_across_a_restart(tmp_path: Path) -> None:
     revived.restore(book.state())
     assert revived.retract(retraction, T0 + 7) == "duplicate"
     assert book.counters["retractions"] == 1
+
+
+def test_a_zap_cancels_an_entry_that_has_not_filled_yet(tmp_path: Path) -> None:
+    """"Get me out" means out, including out of something that has not got in yet."""
+    book = make_operator(tmp_path)
+    book.accept(hunch_of(T0, hunch_id="hn-pending"), T0)
+    first = observation(T0 + 5)
+    book.observe(first, source_stale=False)
+    book.arm_waiting(first)
+    assert MINT in book.pending
+
+    assert book.zap(_zap(at=T0 + 6), T0 + 6) == "cancelled_entry"
+    assert not book.pending
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["detail"] == "zap_cancelled_unfilled_entry"
+    assert row["cancelled"][0]["hunch_id"] == "hn-pending"
+    # No capital moved, so no close row was invented for it.
+    assert not rows_of(tmp_path, "close")
+    # And the next observation does NOT fill it.
+    book.observe(observation(T0 + 12), source_stale=False)
+    assert not book.positions
+
+
+def test_a_zap_cancels_a_hunch_still_waiting_for_its_first_observation(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    book.accept(hunch_of(T0, hunch_id="hn-waiting"), T0)
+    assert MINT in book.waiting
+    assert book.zap(_zap(at=T0 + 2), T0 + 2) == "cancelled_entry"
+    assert not book.waiting
+    first = observation(T0 + 5)
+    book.observe(first, source_stale=False)
+    book.arm_waiting(first)
+    assert not book.pending and not book.positions
