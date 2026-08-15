@@ -25,6 +25,14 @@ four complete round trips, all four profitable and all four under a minute: +0.7
 SOL deployed.** That sample cannot hide losers — `accountTrade` reports every trade the wallet
 makes — but four is four, and it shows the shape rather than an edge.
 
+**But he is not a callout account, and he loses money.** In two weeks he posted **475 tweets and
+exactly five contract addresses** — 408 of the 475 are replies. And over ten days the wallet ran
+**1,229 FIFO round trips at a 17.7% win rate, median round-trip return −40.6%, −179.65 SOL
+total**. His bio says *"never wrong, always early."* He is early; he is wrong 82% of the time.
+Three further wallets trade **99% of their coins in the same second as his buys** (a universal
+sniper control answers 1.4%), so he is not operating alone — though "his own wallets" and "a copy
+bot that only follows him" are not separable here.
+
 Three things the operator should take from that. **He never touches your coins** — nosis, weave,
 DREGG and SOLVE appear zero times in 106M transactions, and he has never posted about them
 either; the only trace in either direction is two strangers pitching `$nosis` *at* him. **The
@@ -34,9 +42,11 @@ it follows a roster of eight big callers, picked him on 2026-08-04 and renamed i
 2026-08-09, but its median hold is 46 minutes against his 45 seconds and their four shared coins
 are hours to days apart, which is nowhere near close enough to be trading against him.
 
-One correction worth carrying: **his X handle is `@jackduval`, not `@jackduvalcalls`** — the
-latter is only his pump.fun username. Anything keyed on the handle rather than the wallet has to
-use the right one, and §5 has the proof.
+Two corrections worth carrying. **His X handle is `@jackduval`, not `@jackduvalcalls`** — the
+latter is only his pump.fun username and is not an X account at all. And **`fatdogwithhat` and
+`calico` were not found** in either his tweets or his 493 coins, most likely because three coins
+of that name were minted *today* after both tapes end — so **the X arm is unvalidated against the
+two calls the operator named, and closing that needs the mint address from the operator.**
 
 ---
 
@@ -357,45 +367,143 @@ instrument** for this caller. Whatever he is doing happens inside the first minu
 
 ---
 
-## 5. Open, and owned elsewhere in this session
+## 5. He is not a callout account, and the wallet loses money
 
-The decisive question this workup raises and does **not** yet answer:
+### 5.1 The social feed: 475 tweets, five contract addresses
 
-> **Does he tweet the coins he is holding, during the hold?**
+His X handle is **`@jackduval`** (51,738 followers), not `@jackduvalcalls` — the latter is only
+his pump.fun username and **is not an X account at all**: it returns zero on every query shape,
+while `from:jackduval` returns 100 in the same session. This is `RESULT_caller_wallets.md` §1
+route 1 exactly — `searchTerm` fuzzy-matches *pump.fun* usernames, so a near-miss was always the
+expected failure mode. Found for $0 by matching the bio string *"never wrong, always early."*
 
-If a call goes out between his buy and his sell, his followers are his exit liquidity. That
-needs the X census joined to these trade times — for each call, the signed offset from buy to
-tweet and from tweet to sell. Pending.
-
-**The identification question that arm depends on is now settled — and the obvious answer was
-wrong.** Everything above is keyed on a **wallet**, so none of it cares which handle he posts
-under. The call census does.
-
-> **His X handle is `@jackduval`, not `@jackduvalcalls`.**
-
-`jackduvalcalls` is his **pump.fun username**; there is no such account on X. The join is the
-**bio**, and it is an exact string match:
+Census: **475 tweets, 2026-08-01 → 2026-08-15**, 55 slices, 0 capped, 0 failed. Bounded-query
+recall was **measured at 100%** against an unbounded pull (7/7, no misses), so what follows is his
+behaviour and not collection loss:
 
 | | |
 |---|---|
-| pump.fun `jackduvalcalls` (`BAr5csYt…`) | 17,468 followers, `following: 0`, bio **"never wrong, always early."** |
-| x.com/**jackduval** ("Jack Duval🌊") | bio **"never wrong, always early"**, posts about trading on Solana |
+| replies | **408** |
+| quotes | 36 |
+| original tweets | 31 |
+| **tweets carrying a contract address** | **5** |
+| tweets carrying a cashtag | 5 |
 
-This was found for **$0** by web search after §3.2's two third-party mentions spelled the handle
-that way. It matters because a `from:jackduvalcalls` census returns nothing while looking
-perfectly well-formed, and forward returns computed on it would be meaningless.
+**He is not a callout account.** Eighty-six percent of his output is replies, and in two weeks he
+posted five contract addresses. Whatever the operator is following him for, it is not a stream of
+calls — the name `jackduvalcalls` describes a pump.fun profile, not the behaviour.
+`@jackduvalstocks` returns zero and is dormant, not a second mouth.
 
-Also noted, and deliberately **not** merged: **@jackduvalstocks** carries the same X display name
-"Jack Duval🌊" and has a pump.fun profile in the namespace (13 followers). §2 filed it as ordinary
-squatting; it may instead be a second account of his. Treated as an open question, not a fact.
+**`fatdogwithhat` and `calico` do not appear** — not in the 475 tweets and not among the 493
+coins his wallet touched. This is most likely **coverage, not identity**: three separate coins
+named `fatdogwithhat` were minted *today* between 16:47 and 16:56 UTC, after both the corpus
+(ends 08-15T00:00Z) and the census (ends 15:15Z). **The X arm is therefore unvalidated against
+the operator's two named calls**, and "the fatdogwithhat call" does not identify a mint. *This
+needs the address from the operator to close.*
 
-The ground-truth check is cheap and was specified in advance: the operator named **fatdogwithhat**
-and **calico** as calls they acted on. If those two do not appear in the collected history, the
-handle is wrong and the arm is unvalidated — that is a stop condition, not a null to report.
+### 5.2 The wallet loses money — 82% of his round trips are losers
 
-Also pending: whether `BAr5csYt…` is his *only* wallet (temporal join against a time-matched
-null, per `RESULT_caller_wallets.md` §3 — and note §4's lesson that the one link that survived
-there turned out to be a 161-wallet crowd, not a person).
+Ten days, free corpus, SOL derived from the curve identity rather than a vendor float:
+
+| | |
+|---|---|
+| priced trades / coins | 1,794 / 481 |
+| SOL bought / sold | 1,321.74 / 1,183.30 |
+| buy clip p10 / median / p90 | 0.197 / **0.474** / 1.617 SOL |
+| FIFO round trips | 1,229 |
+| hold p10 / median / p90 | 5 / **56 s** / 3,073 s |
+| **win rate** | **17.7%** (218 / 1,229) |
+| **median round-trip return** | **−40.6%** |
+| closed P&L | −215.18 SOL |
+| open position, exit-priced | 159.50 vs 123.98 SOL cost |
+| **total, 10 days** | **−179.65 SOL** |
+
+His bio says *"never wrong, always early."* He is early. He is wrong **82%** of the time.
+
+**The sign of that total is marking-dependent, and the honest version is the pessimistic one.**
+Marking his open lots at the **marginal** price gives **+950 SOL** and flips the conclusion;
+marking them at what selling would actually collect (curve integral, including his own impact)
+gives −179.65. The latter is correct — you cannot exit a bonding-curve position at the marginal
+price — but the reader should know the number moves that far. **The win rate and the −40.6%
+median are marking-independent**, and they are the robust facts.
+
+Also separated out: **568 of his legs are transfers, not trades** (174 outbound). He tweets that
+he airdrops supply to TikTok creators and pays $200–$300 per video. On a balance delta alone a
+gift is indistinguishable from a sale; they are told apart by whether the bonding curve moved in
+the same transaction.
+
+### 5.3 The tension with §4.1, stated rather than smoothed
+
+§4.1's live hour was **4 round trips, 4 winners**. Against a 17.7% base rate that is roughly a
+1-in-1,000 hour. Both numbers are reported because both were measured; the disagreement is not
+resolved here. Candidate explanations, none verified: different SOL accounting (PumpPortal vendor
+float vs the curve identity), different unit (per-coin net vs FIFO legs — 1,229 round trips across
+481 coins means ~2.5 legs per coin, and a coin can net positive while containing losing legs), and
+different windows (one hour today vs ten days ending 08-15T00:00Z). **Weight the ten-day number**:
+it is 1,229 round trips against 4.
+
+### 5.4 Forward returns at his entries
+
+n = 350, censored rows marked and never dropped. Median return from his entry price:
+
+| horizon | 60 s | 5 m | 1 h | 8 h |
+|---|---|---|---|---|
+| median | **−18.6%** | −53.0% | −66.8% | −69.8% |
+| win rate | 40.3% | | | 7.1% |
+
+These include his own price impact, which is right for the copy question ("what would I get
+following him") and wrong for "what did the coin do".
+
+### 5.5 Wiggle vs ambient — a clean null
+
+The operator's actual use for a caller is as a marker of **harvestable oscillation**, not of
+forward return. That hypothesis was tested and it fails.
+
+The instrument was validated first: the ambient arm reproduces `RESULT_callout_volatility.md`
+§5.1 to the digit (337 rows; `wiggle_net_1h` median 0.42942 vs published 0.4294;
+`log_two_sided_1h` 3.5264 vs 3.5264).
+
+Conditional on log-mcap and log-age his entries beat ambient on `log_two_sided` at every horizon
+(z = 3.88–6.72). **Both structure-preserving nulls kill it**: observed max |z| = 6.722 over the
+declared 13-cell family, against a forward-shift null median of **7.61 (p = 0.71)** and a
+matched-coin swap null median of **7.17 (p = 0.91)**. Both nulls carry the full 144 rows.
+
+**His entry instants are not more harvestable than the ambient callout stream.** Two earlier null
+specifications were discarded and are disclosed: a symmetric shift left 8 rows and a grid-binned
+swap left 36 — he buys coins *seconds* old, so any null that moves him backwards in time empties
+the arm by construction.
+
+### 5.6 Buy → tweet → sell: cannot be seen, and that is not exculpation
+
+All 5 of his calls are on coins he traded, but **4 predate the corpus**, so any pre-tweet position
+is invisible by construction. Within the tape his first buys land *after* the tweets. **This is
+truncation, not evidence of innocence**, and it is the one question the operator most wanted
+answered. It needs a corpus that reaches back further, or forward collection from today.
+
+### 5.7 Three wallets that appear to exist only to trade alongside him
+
+The temporal join found candidates; the **crowd check** (`RESULT_caller_wallets.md` §4's lesson)
+says a median of 37 wallets — p90 232 — sit in the same 60 s pre-band, so overlap alone proves
+nothing. What decides it is **breadth**: scanning each candidate against the whole ten-day corpus.
+
+| wallet | pump coins in 10 d | of them, his | same-slot with his buys | same-transaction |
+|---|---|---|---|---|
+| `6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB` | 355 | **352 (99.2%)** | 925 | 0 |
+| `DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT` | 342 | **338 (98.8%)** | 892 | 0 |
+| `D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42` | 276 | **275 (99.6%)** | 656 | 0 |
+| `FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN` *(control)* | 17,908 | 247 (**1.4%**) | 93 | 0 |
+
+All on-curve, no pump.fun profiles. Median offset from his buy is **+0 s** — the same second on
+259 / 247 / 175 of the shared coins — in **separate transactions in the same slot**, i.e. a
+bundle, not one transaction funding several wallets.
+
+The fourth row is the control that makes the first three mean anything: a universal launch sniper
+that touches 17,908 coins answers **1.4%**. Three wallets answering 99% are not sampling the
+market, they are sampling *him*.
+
+**This does not separate "his own wallets" from "a copy bot that follows only him."** Confidence
+`inferred`, never higher. The permutation p is weak (325 of 350 donor matches ran at the widest
+level) — **the 99% is the evidence and it needs no null**.
 
 ---
 
