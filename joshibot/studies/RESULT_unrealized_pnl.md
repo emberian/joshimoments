@@ -18,11 +18,24 @@ Run 2026-08-15 against the ten-day all-pump.fun corpus (2026-08-05 .. 2026-08-14
 
 | # | Question | Verdict |
 |---|---|---|
-| 1 | Does cost-basis density predict where price stalls and reverses? | **NULL, twice over** |
-| 2 | Is realization policy an *actor* fingerprint? | **Mostly no — and the confound it was built to survive turned out not to exist** |
-| 3 | Is the loss-tail shape a PvP/community discriminator? | **Feature delivered; strong separation, handed to the `pvp_vamps` lane** |
-| 4 | Rug-fuel gauge on the operator's four coins | **Near zero on bought supply; the exposure is airdropped supply, which is a different object** |
-| + | *Beyond the brief:* is unrealized PnL a live state variable at all? | **Yes — sell hazard peaks at break-even and falls 4–5× in both directions** |
+| 1 | Does cost-basis density predict where price stalls and reverses? | **NULL, twice over** — indistinguishable from its own rotation null in all 18 cells, and beaten by a plain traded-volume-at-level control in all 9 matched ones |
+| 2 | Is realization policy an *actor* fingerprint? | **No.** It is a strong *wallet* fingerprint (ceiling AUC 0.775) and near-chance for same-crew pairs (0.518) — and the tooling confound it was designed around **does not exist in this market** |
+| 3 | Is the loss-tail shape a PvP/community discriminator? | **Feature delivered, not a classifier.** `supply_held_through_50pct_red` separates 0.33 vs 0.80; handed to the `pvp_vamps` lane |
+| 4 | Rug-fuel gauge on the operator's four coins | **weave 17.9% at the 99.2nd percentile**; nosis second; SOLVE and DREGG carry none. DREGG's 30.9% is free supply, and it is two wallets, not the airdrop |
+| + | Is unrealized PnL a live state variable at all? | **Yes, per wallet.** Sell hazard peaks at break-even and falls **4–7×** in both directions, surviving a volatility control |
+| + | Does that aggregate into coin-level **excitability** (the operator's actual hypothesis)? | **Not established, not refuted.** Three specifications, three self-inflicted errors, and an honest null against structure-preserving nulls. §7.3 |
+
+**The one-paragraph answer.** Cost basis is now computable for every wallet on every coin, and it
+is a real behavioural state: a wallet's probability of selling in the next minute peaks sharply at
+its own break-even and falls four-to-sevenfold in both directions, and a wallet's realization
+policy identifies *it* at AUC 0.775 across coins it has never shared. But none of the three things
+the brief hoped that would buy actually arrives. It does not locate support and resistance — the
+basis-density story is a clean null, beaten by raw volume-at-level. It does not attribute actors —
+same-crew wallets look like strangers, and not because they share a bot preset, because no preset
+clustering exists here at all. And it does not aggregate into a coin-level excitability state at
+the resolutions tested. What it does buy is a gauge — `weave` is currently carrying 17.9% of its
+observed supply at under a tenth of spot, in a population where 97.6% of coins carry none — and a
+hazard curve that says which supply is inert and which is about to move.
 
 ### 0.1 The object itself, since nobody had looked at it
 
@@ -275,6 +288,70 @@ price path is the exact marginal price rather than a last-trade proxy.
 Cell grid: 3 kernel bandwidths × 3 swing thresholds × 2 profile kinds = **18 cells**, BY-FDR
 over the grid.
 
+### 3.3 The verdict: NULL, and null in the more informative way
+
+**1,200 wiggle coins sampled, 964 usable, 200 rotations per cell.** Under the null the mean
+within-path rank is 0.5.
+
+| bw | swing θ | profile | n coins | mean rank | rotation mean | p (rotation) |
+|---|---|---|---|---|---|---|
+| 0.25 | 10% | **basis** | 949 | 0.5300 | 0.5297 | 0.408 |
+| 0.25 | 10% | occupancy | 949 | 0.5367 | 0.5369 | 0.542 |
+| 0.25 | 20% | **basis** | 887 | 0.5234 | 0.5222 | 0.299 |
+| 0.25 | 20% | occupancy | 887 | 0.5349 | 0.5330 | 0.139 |
+| 0.25 | 40% | **basis** | 662 | 0.5043 | 0.4984 | 0.269 |
+| 0.25 | 40% | occupancy | 662 | 0.5298 | 0.5193 | **0.005** |
+| 0.35 | 10% | **basis** | 949 | 0.5314 | 0.5318 | 0.602 |
+| 0.35 | 10% | occupancy | 949 | 0.5373 | 0.5373 | 0.453 |
+| 0.35 | 20% | **basis** | 887 | 0.5239 | 0.5245 | 0.672 |
+| 0.35 | 20% | occupancy | 887 | 0.5352 | 0.5334 | 0.080 |
+| 0.35 | 40% | **basis** | 662 | 0.5033 | 0.5005 | 0.259 |
+| 0.35 | 40% | occupancy | 662 | 0.5300 | 0.5196 | **0.005** |
+| 0.50 | 10% | **basis** | 949 | 0.5323 | 0.5328 | 0.612 |
+| 0.50 | 10% | occupancy | 949 | 0.5370 | 0.5372 | 0.582 |
+| 0.50 | 20% | **basis** | 887 | 0.5252 | 0.5261 | 0.687 |
+| 0.50 | 20% | occupancy | 887 | 0.5337 | 0.5331 | 0.284 |
+| 0.50 | 40% | **basis** | 662 | 0.5034 | 0.5012 | 0.264 |
+| 0.50 | 40% | occupancy | 662 | 0.5266 | 0.5184 | **0.005** |
+
+**BY-FDR over the 18-cell grid at q = 0.05: 0 rejected.**
+
+**Three readings, in order of how much they matter.**
+
+1. **The basis profile is indistinguishable from its own rotation null in every single cell**
+   — p = 0.26 to 0.69, and the observed mean rank matches the rotated mean rank to the third
+   decimal (0.5300 vs 0.5297; 0.5239 vs 0.5245). Reversal levels are no more aligned with *this
+   coin's* basis density than with a randomly chosen other coin's. The mean rank *is* above 0.5,
+   but the rotation null is above 0.5 by the same amount, which is precisely the artifact the
+   rotation was built to expose: a generic unimodal density laid over any price path ranks
+   reversals above average, because of where paths spend time, not because of whose money is
+   where.
+
+2. **The occupancy control beats the basis profile in all nine matched cells** — by 0.005 to
+   0.027 of rank, never once the other way. Basis density *is* volume-at-level minus the people
+   who already left, and removing the leavers makes the statistic worse. Whatever weak memory
+   the price path has of its own history, the surviving holders' entry prices are not the
+   carrier.
+
+3. **The one thing that is not null is not about basis at all.** Three occupancy cells (θ = 40%,
+   all three bandwidths) sit at p = 0.005 with an excess of about +0.010 rank over rotation —
+   a real but tiny "price reverses at levels where a lot of volume previously traded" effect,
+   visible only at the widest swing threshold. **Honest limitation: 0.005 is exactly the
+   permutation floor at 200 draws** (1/201 = 0.00498), so those p-values are censored from below
+   and BY-FDR cannot reject at rank 1 no matter what the truth is — clearing BY here would need
+   ≳1,300 rotations. Those three cells are *unresolved*, not refuted. But they are occupancy
+   cells, so resolving them would not change the answer to the question that was asked.
+
+**What this kills.** The hypothesis that cost-basis density is the formal substrate of chart
+support and resistance is not supported here, and it is not a matter of statistical power: the
+point estimate sits on top of the null. If the operator's chart intuition about where price
+stalls is tracking something real, **it is not tracking the surviving holders' entry prices** —
+at least not at the coin-day resolution this corpus can see, on the population of collapsed
+coins with live two-sided flow.
+
+**What survives.** §7. The same state variable *does* predict selling — just not price levels.
+Basis density is a hazard variable, not a support variable, and those are different claims.
+
 ---
 
 ## 4. Q2 — is realization policy an *actor* fingerprint?
@@ -374,6 +451,84 @@ the chain. Both readings kill the confound as a *distinguishable* artifact.
 same-slot-as-open against 48.0% for all other sells, so instant round trips are over-represented
 there — but only mildly, since the base rate is already 48%. The rest is behaviour, and §7
 measures it against a proper denominator rather than inferring it from a histogram.
+
+### 4.5 The verdict: a wallet fingerprint, not an actor fingerprint
+
+80,000 embedded wallets, 5,693 crew pairs surviving the curveball null at α = 0.01 over 200
+permutations. All distances are between half-sized histograms drawn from the same size cell.
+
+| | full histogram | off-grid residual |
+|---|---|---|
+| **ceiling** — same wallet, coin-disjoint halves | **0.7749** | **0.7817** |
+| **test** — sniper-crew pairs | **0.5176** | **0.5536** |
+| **floor** — known-zero world (sells reassigned at random) | 0.5025 | — |
+
+Scaled against the achievable range, crew pairs recover:
+
+* **6.5%** of the ceiling on the full histogram — (0.5176 − 0.5) / (0.7749 − 0.5);
+* **19.1%** of the ceiling on the off-grid residual.
+
+**Three things follow, and the first is the answer to the question.**
+
+1. **Realization policy identifies a WALLET, not an ACTOR.** A wallet's own two halves — same
+   actor, same tooling, *disjoint coins* — are separated from strangers at **AUC 0.775**. That is
+   a large, real, per-wallet idiosyncrasy, and it is the thing that made this question worth
+   asking. But wallets that co-snipe the same launches far above a degree-preserving null — the
+   best independent same-actor evidence this corpus contains — score at **0.518**, six percent of
+   the way from chance to that ceiling. **You cannot hypothesise that two wallets share an actor
+   from their realization policies.**
+
+2. **The failure is not the tooling confound the brief predicted.** §4.4 shows the round-number
+   preset artifact does not exist here, so "policy clusters are tool fingerprints" is *not* the
+   explanation. Something more interesting is: policy is highly reproducible within a wallet and
+   almost non-transferable across the wallets of one crew. Either co-sniping crews are not single
+   actors, or a single actor deliberately does not reuse one exit policy across its wallets — and
+   **this study cannot separate those two**, which is stated in §8 and is the honest limit.
+
+3. **Stripping the presets triples the crew signal** (6.5% → 19.1% of ceiling), which is the
+   brief's mitigation (a) working exactly as designed even though the confound it targets turned
+   out to be absent — the off-grid residual removes the shared *break-even* attractor, not round
+   numbers. That is the one direction worth pushing if anyone revisits this: the actor
+   information, such as it is, lives in the part of the policy that is *not* the common mode.
+
+---
+
+## 4.6 The temporal split
+
+PROGRAM.md §3 rule 1. Days 2026-08-05..09 (h1) against 2026-08-10..14 (h2), every stage refit
+independently on each half.
+
+| | full | h1 | h2 |
+|---|---|---|---|
+| basis rows | 71,562,170 | 33,256,162 | 37,924,384 |
+| wallets | 1,228,382 | 776,631 | 829,194 |
+| **Q1** basis mean rank / its rotation null | 0.5197 / 0.5186 | 0.5225 / 0.5206 | 0.5186 / 0.5182 |
+| **Q1** basis − occupancy (mean over cells) | −0.0138 | −0.0137 | −0.0148 |
+| **Q1** cells surviving BY-FDR | **0 of 18** | **0 of 18** | **0 of 18** |
+| **Q2** ceiling AUC (residual) | 0.7817 | 0.7507 | 0.7654 |
+| **Q2** crew AUC (residual) | 0.5536 | 0.5273 | 0.5448 |
+| **Q2** crew AUC (full histogram) | 0.5176 | **0.4997** | 0.5182 |
+| **Q2** known-zero world | 0.5025 | 0.5028 | 0.5037 |
+| **§7** hazard at break-even | 2.23% | 2.41% | 1.82% |
+| **§7** hazard, break-even ÷ deep red | 6.75× | 3.31× | 3.51× |
+| median realization | +2.8% | +3.0% | +2.5% |
+| sells in profit | 57.4% | 57.5% | 57.4% |
+| standing book, median | −71.4% | −69.4% | −66.1% |
+| break-even excess over baseline | 4.89× | 4.17× | 5.64× |
+| largest *other* round level's excess | 1.06× | 1.05× | 1.21× |
+
+**Everything replicates.** The Q1 null replicates as a null in both halves, with the basis profile
+below its occupancy control in both. The Q2 ceiling, the crew score and the zero-world floor all
+reproduce — and on h1 the crew AUC on the full histogram is **0.4997**, chance to four decimals.
+The break-even hazard peak, the realization distribution, the standing book and the round-number
+refutation all hold on both halves.
+
+**One thing deliberately not split: §6.** The rug-fuel gauge is a *snapshot*, not an effect. h1 and
+h2 evaluate it at different spot prices with different observable strata, so they measure
+different quantities rather than replicating one — weave reads 0.0% on h1 and 17.9% on the full
+window precisely because the full window contains both weave's low and its 21.7× high. That is a
+property of the question, not instability, and §6.2's number should be read as *"supply bought
+during this window, valued at this window's close"* — which is what a live gauge is.
 
 ---
 
@@ -531,18 +686,43 @@ corpus does. This bounds *any* in-pool acquirer, observed or censored:
 * **SOLVE and DREGG carry essentially no bought-cheap supply.** DREGG's ten-day bound is **1.12×**
   — inside the observed window no holder at all, observed or censored, can be up more than 12%.
   The 48-day bound is 16×, so that statement is about the window, not about DREGG's whole life.
-* **DREGG's exposure is 30.9% free supply, and it is a known structure, not a discovery.**
-  `wallet_labels.yaml` documents holder airdrops of exactly 744.046875 DREGG to 886 recipients
-  and 22,778.0 to 77 more, median value ~$0.24. That is what `zero_basis_share` is made of.
+* **DREGG's exposure is 30.9% free supply — and it is two wallets, not an airdrop.** The first
+  reading of this attributed it to the documented holder airdrops in `wallet_labels.yaml`
+  (744.046875 DREGG × 886 recipients, 22,778.0 × 77, median value ~$0.24). **That was wrong**, and
+  naming the counterparties rather than assuming them shows why:
 
-**On the operator's escrow, precisely.** The brief notes the operator's own escrow holds 6.26% of
-DREGG at low basis, attested and scheduled. **It is not in these numbers.** The five attested
-wallets in `wallet_labels.yaml` hold **0.0%** of observed DREGG supply at the window edge, and a
-Streamflow escrow is a program account that is not one of them; supply that never traded in the
-window has no basis row and does not enter the gauge at all. So the 30.9% is *other people's*
-airdropped supply, and the escrow sits in the censored stratum where the only thing that binds it
-is the price-path bound. Attested own supply is never counted as threat here, and in this case it
-was never counted at all.
+  | wallet | share of total supply | how it arrived |
+  |---|---|---|
+  | `72PgQEHGtfxW28G36RA8MYJ1W1Eoeu5Mj55jUma8yQ2S` | **3.39%** | four transfers (1e11, 2.2e12, 2e13, 1.16e13), all from the single counterparty `7yUmzTeHutr2iM394BAN3axhMBfXNUWYYRWzkwwkw2QR`; **never sold anything** |
+  | `EBgidVxDH8Y9Hy7gJiTEwuEbJZmB3Vna8iGLxmi6qBK9` | 1.77% net | one 2.15e13 transfer in from `2snHHreXbpJ7UwZxPe37gnUNf7Wx7wv6UKDSR2JckKuS`, then sold into the DREGG/SOL pool |
+
+  Round amounts, single counterparties, no market acquisition. That is **distribution or OTC
+  flow, not a dust airdrop**, and it is the substance of DREGG's zero-basis stratum. One of the
+  two has already been selling; the other has not sold a single token.
+
+  **This needs an operator attestation, which is the one thing no instrument can produce:** is
+  `7yUmzTeHutr2iM394BAN3axhMBfXNUWYYRWzkwwkw2QR` — and therefore `72PgQE…` — yours? If yes it is
+  attested own supply and comes straight out of the threat numerator, the way the escrow does.
+  If no, it is a 3.39% zero-basis position accumulated off-market by someone who has never sold.
+
+**On the operator's escrow, precisely — checked against the address, not inferred.** The operator
+gave the contract directly: the DREGG vesting escrow is the Streamflow contract
+`C17qiGnt6dd43x4JjcocqckBx7A2fqtWm58icgkNvKhH`. **It appears nowhere in the DREGG ledger for this
+window and has no basis row, so it is not in the gauge at all** — the locked balance never moved,
+and supply that never moves generates no ledger row.
+
+What *is* visible is the release path, and it is small: `9Go2paWtmAMK4sJnQ2RJ7BZ3QsGE6FSz5Ec5NZc8ZBhK`
+made **one** payment of 1.204e12 DREGG (**0.12% of supply**) to `Dev2Gm…` (`ember_dev`, labelled
+"DREGG unlock deposits (Streamflow escrow releases)") on 2026-08-10, and `ember_dev` passed on
+99.94% of it the same window (in 1.2044e12, out 1.2036e12, net 7.5e8). So in these ten days the
+attested overhang delivered a tenth of a percent of supply, not 6.26% — the rest is still locked
+and, correctly, invisible to a gauge built from realized balance changes.
+
+One attested wallet does appear: `Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ` (`tha_funds`, the
+Meteora LP wallet), 71 legs, 1.76e13 in and 1.79e13 out, **net −2.39e11** — the LP wallet cycling
+DREGG through liquidity and ending slightly short, which is why `own_supply_share` reads 0.0% at
+the window edge. Attested own supply is never counted as threat here, and in this case there was
+essentially none of it left to count.
 
 ---
 
@@ -610,15 +790,82 @@ bucket carries 69k–874k ticks, the shape is intact: **0.25% → 2.23% at break
 above it, then falling**. The peak shifts one bucket right of break-even, which is if anything
 the more sensible reading — a wallet takes the first green it sees.
 
-**What this is worth, stated conservatively.** It is a population hazard, not an edge. It says
-the cost-basis distribution of a coin's holders is a *live* predictor of near-term sell pressure:
-supply sitting near break-even is the supply most likely to hit the bid in the next minute, and
-supply far red or far green is comparatively inert. That is a usable state variable for a
-reactive exit — approaching a price level where a large mass of basis sits is approaching a
-region of elevated sell hazard — and it is the *only* thing in this study that survived its
-controls in that direction. But §3 shows that the same idea framed as "reversal levels align
-with basis-density modes" does **not** survive, so the honest version of the claim is the narrow
-one: elevated hazard, measured; price prediction, not established.
+**What this is worth, stated conservatively.** It is a population hazard, not an edge, and it is
+an *individual-wallet* statement: this wallet, at this PnL, has this chance of selling. Whether
+that aggregates into a coin-level property is a separate question, and §7.3 is where it was asked
+properly and did not survive.
+
+### 7.3 Does it aggregate? The excitability question, and why the first three answers were wrong
+
+The operator's actual hypothesis was not about price levels at all. It was that unrealized PnL
+tracks **momentum** — *"how likely is an arriving event to stimulate one of those other wallets to
+do something."* That is a claim about the coin's **excitability**: a coin whose holders sit near
+break-even should answer an arriving event more violently than one whose holders are all far red
+or far green. §3 does not test it (it tests price levels) and §7.1 does not test it (it tests one
+wallet at a time). This section does, and the history of getting it wrong is the useful part.
+
+**Attempt 1 — and a look-ahead that was the entire result.** Panel of (coin, 60 s bucket): state
+= share of supply within ±band of break-even, shock = SOL bought this bucket, response = SOL sold
+over the next three, coin fixed effects, cluster-robust SEs, interaction of shock × primed as the
+estimand. First run: interaction **−0.278, t = −2.93**, both nulls rejecting at p ≈ 0.02–0.03.
+Then the leak: the holder book was priced at the *last* mark inside the shock bucket, so the state
+had already seen the event it was supposed to predict. Marking it at the previous bucket's close
+instead, the interaction fell **3.5× to −0.079 (t = −1.02)** and both nulls went quiet
+(p_timeshift **0.92**). The significant version was the look-ahead.
+
+**Attempt 2 — the response variable was mine, not the operator's.** "Stimulate other wallets to
+do something" is a count of actors, not a volume. Re-running with response = number of distinct
+selling wallets: interaction **+0.35, p_rotation 0.025** — the predicted sign, and rejecting.
+But it failed the time-shift null (p = 0.38), and the reason was my rotation null, not the data:
+it drew the donor coin's state values **i.i.d. with replacement**, destroying the autocorrelation
+that any supply-share series obviously has. That is exactly the i.i.d.-null failure PROGRAM.md
+records twice. Rebuilt to hand over a *contiguous* block instead, the rotation stopped rejecting
+too (+0.007, p = 0.97 at ±5%).
+
+**Attempt 3 — the threshold was a nuisance parameter I had no business choosing.** Collapsing a
+distribution to "share inside ±10%" and then reporting three bands is not a sweep; it is three
+arbitrary points, and it discards everything the shape knows. The replacement models the whole
+distribution: let the state be the full supply-share vector over K = 16 PnL bins, and estimate
+
+```
+y_it = α_i + b·x_it + Σ_k c_k s_itk + Σ_k d_k (x_it · s_itk) + controls
+```
+
+where **d is the response kernel w(u)** — how much a unit of supply sitting at unrealized PnL *u*
+raises the elasticity of the response to an arriving event. The band is no longer chosen; the
+data draws the curve. `d` is identified only up to an additive constant (the flat direction is
+absorbed by the main effect), which is exactly right, because the null being tested is
+*"the shape carries nothing"*. The statistic is the curvature energy `T = ||D₂d||²`, invariant to
+that constant, tested against both structure-preserving nulls; horizons are swept; a
+second-difference roughness penalty is applied for the picture only and never enters the
+inference.
+
+**Result: null.** At 60 s, `T = 0.870` for the SOL response (p_rotation 0.358, p_timeshift 0.527)
+and `T = 0.917` for the wallet-count response (p_rotation 0.522, p_timeshift 0.985). The fitted
+kernel is not flat-looking — it runs negative around −75% and −20% and positive around +270% to
++690% — but its curvature is comfortably inside what a block-rotated or time-shifted state series
+produces, so that shape is not evidence.
+
+**Where it came closest, and it is worth recording.** At 10-second resolution — much closer to
+this market's real clock, where the median holding time before a sell is 3 seconds — the
+wallet-count arm reaches **t = +2.43** (±10% band, interaction +0.317) with the predicted positive
+sign and p_rotation = 0.015. It still fails the time-shift null (p = 0.124).
+
+**What that failure does and does not mean.** The time-shift null keeps the coin, keeps its state
+distribution, keeps its serial structure, and breaks only the *alignment in time* between state
+and flow. Failing it means the data cannot show that a coin is more reactive **at the moments** its
+supply is bunched near break-even than at other moments of its own life. It does **not** rule out
+a slow-moving version of the hypothesis — a coin that is primed for an hour and busy for the same
+hour is invisible to a time shift, and that is a real limitation of this design rather than a
+finding.
+
+**So the honest state of the operator's hypothesis is: not established, and not refuted.** The
+individual-wallet half is solid (§7.1, 4–7× hazard range). The aggregation to a coin-level
+excitability state is not, at 10 s or 60 s resolution, against nulls that preserve serial
+structure. The design that would settle it is **event-time, not clock-time**: identify discrete
+large arriving events and measure the response around them, which removes the slow-moving
+confound the time-shift null is punishing. That is the next experiment, and it is not in this
+document.
 
 ---
 
@@ -640,6 +887,31 @@ one: elevated hazard, measured; price prediction, not established.
   identify actors", and this study cannot separate those two.
 * **Nothing here is a trading rule.** §7 is a population hazard, not an edge; it is measured
   against no fee, no slippage, and no adverse selection.
+* **Two permutation floors bind.** Q1's rotation p-values bottom out at 1/201 = 0.00498, so the
+  three occupancy cells sitting exactly there are *unresolved*, not refuted — clearing BY-FDR at
+  rank 1 over an 18-cell grid needs ≳1,300 rotations. The same floor applies in §7.3.
+* **§7.3's time-shift null may be too strong for a slow-moving effect**, and that is a design
+  limitation rather than a result. Event-time around discrete large arrivals is the fix.
+* **This population is bots.** Half of all sells occur in the same slot the position opened and
+  the median hold before a sell is 3 seconds. "Realization policy" here is mostly machine policy;
+  none of it should be read as a claim about human psychology.
+
+### 8.1 Four errors this study made, and what caught each one
+
+Recorded because the catches were not luck, and because a reader should weight the surviving
+results by how the failures were found.
+
+| error | what it would have produced | what caught it |
+|---|---|---|
+| Virtual-reserve offset derived from the curve's peak balance | median coin correct, but **7.7% of coins off >10%** and p90 price error 32.9% — a silent per-coin bias through every result | reading `pvp_vamps`'s create-transaction finding and testing my own version against the BORN predicate |
+| `USING SAMPLE` on a `GROUP BY … HAVING` query | the 33 busiest wallets in the corpus posing as a random sample of 8,000; reported a median FIFO gap of 0.17 where the truth is 0.0 | the FIFO gap looking implausibly large |
+| Holder book priced at the *close* of the shock bucket | interaction −0.278 at t = −2.93 with both nulls rejecting — a completely fabricated §7.3 | asking what timestamp the mark actually came from |
+| Rotation null resampling the donor state i.i.d. | crew-style "signal" at p = 0.005 from destroyed autocorrelation | PROGRAM.md §3 rule 10, which records i.i.d. nulls manufacturing effects here twice |
+
+Two more that were caught by controls rather than by inspection: the Q2 metric comparing
+same-actor *halves* against different-actor *wholes* (zero-world AUC 0.333), and then the residual
+activity-size confound (0.538). Both would have been reported as findings. The zero world is now
+0.5025.
 
 ---
 
@@ -651,6 +923,8 @@ uv run --group research python -m studies.unrealized_pnl basis     # the average
 uv run --group research python -m studies.unrealized_pnl check     # falsify it; FIFO sensitivity
 uv run --group research python -m studies.unrealized_pnl describe  # the distribution + round-number test
 uv run --group research python -m studies.unrealized_pnl hazard    # P(sell | unrealized PnL)
+uv run --group research python -m studies.unrealized_pnl momentum  # primed supply vs response
+uv run --group research python -m studies.unrealized_pnl kernel    # the response kernel w(u)
 uv run --group research python -m studies.unrealized_pnl q1        # basis density vs reversals
 uv run --group research python -m studies.unrealized_pnl q2        # the fingerprint, both controls
 uv run --group research python -m studies.unrealized_pnl q3        # the basis-shape feature

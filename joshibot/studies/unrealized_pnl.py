@@ -109,6 +109,8 @@ COMMANDS
 ``holders``  supply-weighted basis distribution snapshots per coin
 ``describe`` the realization distribution, the standing book, and the round-number test
 ``hazard``   P(sell in the next minute | unrealized PnL), on a real risk set
+``momentum`` does PRIMED supply govern how big a response an arriving event provokes
+``kernel``   the same question without a threshold: the response kernel w(u) over PnL
 ``q1``       basis-density modes vs price reversals, against a rotation null
 ``q2``       realization-policy embedding, clustering, tooling-vs-actor controls
 ``q3``       loss-tail shape as a PvP/community feature (a feature, not a classifier)
@@ -874,6 +876,761 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(json.dumps(res, indent=2), flush=True)
     (_out() / "basis_check.json").write_text(json.dumps(res, indent=2))
     return 0
+
+
+# =====================================================================================
+# kernel -- the RESPONSE KERNEL over unrealized PnL, instead of a threshold count
+# =====================================================================================
+
+#: Bin edges for the unrealized-PnL distribution, in signed-log coordinates
+#: ``u_log = sign(u)*log1p(|u|)``, so -90% and +900% sit equally far from zero.
+KERNEL_BINS = 16
+KERNEL_ULIM = 3.0
+
+#: Response horizons swept, in ticks. Fixing one was another arbitrary choice.
+KERNEL_HORIZONS = (1, 3, 6)
+
+
+def _second_diff(k):
+    """Second-difference operator, for the roughness penalty on the kernel."""
+    import numpy as np
+
+    D = np.zeros((max(k - 2, 0), k))
+    for i in range(k - 2):
+        D[i, i], D[i, i + 1], D[i, i + 2] = 1.0, -2.0, 1.0
+    return D
+
+
+def cmd_kernel(args: argparse.Namespace) -> int:
+    """Estimate w(u): which part of the unrealized-PnL distribution converts an arriving event
+    into a response.
+
+    WHY THIS REPLACES `momentum`. `momentum` collapsed the state to a scalar -- the share of
+    supply inside a band of break-even -- and then tested three bands. That is a threshold
+    summary of a distribution, and the threshold is a nuisance parameter with no principled
+    value: picking it is picking the answer's resolution in advance, and reporting three of them
+    is not a sweep, it is three arbitrary points. It also throws away everything the
+    distribution's *shape* knows -- asymmetry, bimodality, where exactly the mass sits.
+
+    THE MODEL. Let the state of coin i at bucket t be the whole supply-share vector over K PnL
+    bins, ``s_it in R^K``, ``sum_k s_itk = 1``. With ``x = log1p(shock)`` and
+    ``y = log1p(response)``::
+
+        y_it = alpha_i + b*x_it + sum_k c_k s_itk + sum_k d_k (x_it * s_itk) + controls
+
+    The vector ``d`` **is** the response kernel: ``d_k`` is how much a unit of supply sitting in
+    PnL bin k raises the elasticity of the response to an arriving event. A flat ``d`` means the
+    distribution's shape is irrelevant and only its total matters; a peaked ``d`` localises the
+    reactive region and the data chooses where, rather than a band being asserted.
+
+    Because neighbouring bins are not independent, ``d`` (and ``c``) carry a second-difference
+    roughness penalty -- a smoothing spline in bin space -- and ``lambda`` is swept rather than
+    chosen. The unpenalised fit is what the nulls are run against, so the penalty never enters
+    the inference.
+
+    INFERENCE. The null is that the *shape* carries nothing, i.e. ``d`` is constant. The
+    statistic is the curvature energy ``T = ||D2 d||^2`` -- how far the kernel is from flat --
+    compared against **two structure-preserving nulls**: a block rotation that hands coin i's
+    flow another coin's contiguous state series, and a within-coin circular time shift. Both
+    preserve the serial dependence of a supply-share series, which an i.i.d. resample does not,
+    and PROGRAM.md records i.i.d. nulls manufacturing effects here twice.
+
+    Coin fixed effects throughout; standard errors clustered on coin; horizons swept; BY-FDR
+    over the whole (horizon x null) grid.
+    """
+    import numpy as np
+
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _out() / "basis.parquet"
+    dt = args.tick
+    K = args.bins
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins_all AS
+        SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last, count(*) AS n_ev
+        FROM read_parquet('{basis}') WHERE mark_after > 0
+        GROUP BY 1
+        HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
+           AND max(block_time) - min(block_time) >= {20 * dt}
+        """
+    )
+    n_pool = con.execute("SELECT count(*) FROM coins_all").fetchone()[0]
+    con.execute(
+        f"""CREATE OR REPLACE TABLE coins AS SELECT * FROM coins_all
+            USING SAMPLE {args.max_coins} ROWS (reservoir, {args.seed})"""
+    )
+    n_c = con.execute("SELECT count(*) FROM coins").fetchone()[0]
+    print(f"[kernel] {n_c:,} coins of {n_pool:,} eligible, K={K} bins, tick={dt}s", flush=True)
+    if n_c == 0:
+        print("[kernel] NULL: no eligible coin.")
+        return 0
+
+    con.execute(
+        f"""CREATE OR REPLACE TABLE ev AS
+            SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)"""
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE flow AS
+        SELECT e.mint, CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k,
+               sum(CASE WHEN e.delta_raw > 0 THEN abs(e.sol) ELSE 0 END) AS buy_sol,
+               sum(CASE WHEN e.delta_raw < 0 THEN abs(e.sol) ELSE 0 END) AS sell_sol,
+               count(DISTINCT CASE WHEN e.delta_raw > 0 THEN e.owner END) AS n_buyers,
+               count(DISTINCT CASE WHEN e.delta_raw < 0 THEN e.owner END) AS n_sellers
+        FROM ev e JOIN coins c USING (mint) WHERE e.sol IS NOT NULL
+        GROUP BY 1, 2
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE mk AS
+        SELECT mint, k, arg_max(mark_after, ord) AS mark
+        FROM (SELECT e.mint, CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k,
+                     e.mark_after, e.block_slot * 1000000 + e.tx_index AS ord
+              FROM ev e JOIN coins c USING (mint)
+              WHERE e.mark_after > 0 AND abs(e.sol) >= {args.min_sol})
+        GROUP BY 1, 2
+        """
+    )
+    con.execute(
+        """CREATE OR REPLACE TABLE st AS
+           SELECT mint, owner, episode, block_time, qty_after, basis_after
+           FROM ev WHERE basis_after > 0"""
+    )
+    con.execute(
+        f"""CREATE OR REPLACE TABLE ep AS
+            SELECT mint, owner, episode, min(block_time) AS t_in, max(block_time) AS t_out
+            FROM ev GROUP BY 1, 2, 3 HAVING max(block_time) - min(block_time) >= {dt}"""
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cand AS
+        SELECT e.mint, e.owner, e.episode, g.k, c.t_first + g.k * {dt} AS t
+        FROM ep e JOIN coins c USING (mint),
+             LATERAL (SELECT unnest(range(
+                 CAST(floor((e.t_in - c.t_first) / {dt}) AS BIGINT) + 1,
+                 CAST(floor((least(e.t_out, c.t_last) - c.t_first) / {dt}) AS BIGINT) + 1,
+                 1)) AS k) g
+        """
+    )
+    # the supply-share vector over PnL bins, strictly lagged (see `momentum`: pricing the book
+    # at the close of the shock bucket is a look-ahead and it carried the whole first result)
+    binexpr = ", ".join(
+        f"sum(CASE WHEN b = {i} THEN qty ELSE 0 END) / nullif(sum(qty), 0) AS s{i:02d}"
+        for i in range(K)
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE book AS
+        WITH ws AS (
+            SELECT c.mint, c.k, s.qty_after AS qty, s.basis_after AS basis
+            FROM cand c ASOF JOIN st s
+              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
+             AND c.t >= s.block_time
+            WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
+        ),
+        m AS (
+            SELECT w.mint, w.k, w.qty,
+                   sign(mk.mark / w.basis - 1.0)
+                     * ln(1 + abs(mk.mark / w.basis - 1.0)) AS ulog
+            FROM ws w ASOF JOIN mk ON w.mint = mk.mint AND w.k > mk.k
+        ),
+        b AS (
+            SELECT mint, k, qty,
+                   least({K - 1}, greatest(0, CAST(floor(
+                       (least({KERNEL_ULIM}, greatest(-{KERNEL_ULIM}, ulog)) + {KERNEL_ULIM})
+                       / (2.0 * {KERNEL_ULIM} / {K})) AS INTEGER))) AS b
+            FROM m
+        )
+        SELECT mint, k, count(*) AS n_holders, sum(qty) AS live_qty, {binexpr}
+        FROM b GROUP BY 1, 2
+        """
+    )
+    print(f"[kernel] book built ({time.time() - t0:.0f}s)", flush=True)
+
+    scols = ", ".join(f"b.s{i:02d}" for i in range(K))
+    hcols, hjoin = [], []
+    for h in KERNEL_HORIZONS:
+        terms_sol = " + ".join(f"coalesce(g{j}.sell_sol, 0)" for j in range(1, h + 1))
+        terms_n = " + ".join(f"coalesce(g{j}.n_sellers, 0)" for j in range(1, h + 1))
+        hcols.append(f"({terms_sol}) AS resp_sol_h{h}")
+        hcols.append(f"({terms_n}) AS resp_n_h{h}")
+    for j in range(1, max(KERNEL_HORIZONS) + 1):
+        hjoin.append(f"LEFT JOIN flow g{j} ON g{j}.mint = b.mint AND g{j}.k = b.k + {j}")
+
+    out = _out() / "kernel_panel.parquet"
+    _copy(
+        con,
+        f"""
+        SELECT b.mint, b.k, b.n_holders, {scols},
+               coalesce(f0.buy_sol, 0) AS buy_sol,
+               coalesce(f0.n_buyers, 0) AS n_buyers,
+               {", ".join(hcols)},
+               avg(coalesce(f0.buy_sol, 0) + coalesce(f0.sell_sol, 0))
+                   OVER (PARTITION BY b.mint ORDER BY b.k
+                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS trail_vol,
+               stddev_samp(ln(nullif(mk.mark, 0)))
+                   OVER (PARTITION BY b.mint ORDER BY b.k
+                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS trail_rv
+        FROM book b
+        LEFT JOIN flow f0 ON f0.mint = b.mint AND f0.k = b.k
+        LEFT JOIN mk ON mk.mint = b.mint AND mk.k = b.k - 1
+        {" ".join(hjoin)}
+        WHERE b.n_holders >= {args.min_holders}
+        """,
+        out,
+        "kernel panel",
+    )
+
+    df = con.execute(
+        f"""SELECT * FROM read_parquet('{out}')
+            WHERE buy_sol > 0 AND n_buyers > 0 AND trail_vol > 0
+              AND trail_rv IS NOT NULL AND n_holders > 0"""
+    ).fetchdf()
+    print(f"[kernel] {len(df):,} usable (coin, bucket) rows ({time.time() - t0:.0f}s)", flush=True)
+    if len(df) < 5000:
+        print("[kernel] NULL: too few usable buckets.")
+        return 0
+
+    S = np.column_stack([df[f"s{i:02d}"].to_numpy() for i in range(K)])
+    mints = df["mint"].to_numpy()
+    uniq = np.unique(mints)
+    ctrl = np.column_stack(
+        [
+            np.log1p(df["trail_vol"].to_numpy()),
+            df["trail_rv"].to_numpy(),
+            np.log1p(df["n_holders"].to_numpy().astype(float)),
+        ]
+    )
+    edges = np.linspace(-KERNEL_ULIM, KERNEL_ULIM, K + 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+    pnl_centers = np.sign(centers) * np.expm1(np.abs(centers))
+
+    rng = np.random.default_rng(args.seed)
+    res = {
+        "n_coins": int(n_c),
+        "n_rows": len(df),
+        "tick": dt,
+        "bins": K,
+        "bin_centers_pnl": [round(float(v), 4) for v in pnl_centers],
+        "mean_supply_share": [round(float(v), 5) for v in S.mean(axis=0)],
+        "cells": [],
+    }
+
+    for h in KERNEL_HORIZONS:
+        for kind in ("sol", "wallets"):
+            xr = df["buy_sol"].to_numpy() if kind == "sol" else df["n_buyers"].to_numpy().astype(float)
+            yr = (
+                df[f"resp_sol_h{h}"].to_numpy()
+                if kind == "sol"
+                else df[f"resp_n_h{h}"].to_numpy().astype(float)
+            )
+            cell = _kernel_cell(np.log1p(xr), np.log1p(yr), S, ctrl, mints, uniq, rng, args)
+            cell.update({"horizon_ticks": h, "response": kind})
+            res["cells"].append(cell)
+            print(
+                f"[kernel] h={h} resp={kind:7s}: curvature T={cell['T_curvature']:.5f} "
+                f"p_rotation={cell['p_rotation']:.4f} p_timeshift={cell['p_timeshift']:.4f}  "
+                f"kernel={[round(v, 3) for v in cell['kernel_d']]}",
+                flush=True,
+            )
+
+    res["by_fdr"] = _by_fdr(
+        [c["p_rotation"] for c in res["cells"]] + [c["p_timeshift"] for c in res["cells"]],
+        args.fdr_q,
+    )
+    (_out() / f"kernel_t{dt}.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"[kernel] -> {_out() / f'kernel_t{dt}.json'}  ({time.time() - t0:.0f}s)", flush=True)
+    return 0
+
+
+def _kernel_cell(x, y, S, ctrl, mints, uniq, rng, args):
+    """Fit the response kernel, penalise it for the picture, test it flat against both nulls."""
+    import numpy as np
+
+    K = S.shape[1]
+    D2 = _second_diff(K)
+
+    def demean(a):
+        return a - pd_groupby_mean(a, mints)
+
+    def fit(Smat, penalty=0.0):
+        X = np.column_stack([np.ones(x.size), x, Smat, x[:, None] * Smat, ctrl])
+        Xd = np.column_stack([X[:, 0]] + [demean(X[:, j]) for j in range(1, X.shape[1])])
+        yd = demean(y)
+        if penalty > 0:
+            P = np.zeros((X.shape[1], X.shape[1]))
+            blk = D2.T @ D2
+            P[2 : 2 + K, 2 : 2 + K] += penalty * blk
+            P[2 + K : 2 + 2 * K, 2 + K : 2 + 2 * K] += penalty * blk
+            beta = np.linalg.solve(Xd.T @ Xd + P, Xd.T @ yd)
+            return beta, None
+        return _clustered_ols(yd, Xd, mints)
+
+    beta, se = fit(S)
+    d = beta[2 + K : 2 + 2 * K]
+    T = float(np.sum((D2 @ d) ** 2))
+
+    # a smoothed version, for the picture only -- never for inference
+    lam_grid = [0.0, 1e-3, 1e-2, 1e-1, 1.0]
+    smoothed = {}
+    for lam in lam_grid:
+        b2, _ = fit(S, penalty=lam)
+        smoothed[str(lam)] = [round(float(v), 4) for v in b2[2 + K : 2 + 2 * K]]
+
+    idx_by_mint = {m: np.flatnonzero(mints == m) for m in uniq}
+    order = list(uniq)
+    rot_T, shift_T = [], []
+    for _ in range(args.nulls):
+        shift = int(rng.integers(1, len(order)))
+        Sr = S.copy()
+        for i, m in enumerate(order):
+            src = idx_by_mint[order[(i + shift) % len(order)]]
+            dst = idx_by_mint[m]
+            if src.size == 0:
+                continue
+            start = int(rng.integers(0, src.size))
+            reps = int(np.ceil(dst.size / src.size))
+            block = np.tile(np.roll(S[src], -start, axis=0), (reps, 1))[: dst.size]
+            Sr[dst] = block
+        br, _ = fit(Sr)
+        rot_T.append(float(np.sum((D2 @ br[2 + K : 2 + 2 * K]) ** 2)))
+
+        Ss = S.copy()
+        for m in order:
+            dst = idx_by_mint[m]
+            if dst.size < 3:
+                continue
+            Ss[dst] = np.roll(S[dst], int(rng.integers(1, dst.size)), axis=0)
+        bs, _ = fit(Ss)
+        shift_T.append(float(np.sum((D2 @ bs[2 + K : 2 + 2 * K]) ** 2)))
+
+    rot = np.asarray(rot_T)
+    sh = np.asarray(shift_T)
+    return {
+        "kernel_d": [round(float(v), 4) for v in d],
+        "kernel_d_se": [round(float(v), 4) for v in se[2 + K : 2 + 2 * K]] if se is not None else None,
+        "kernel_c": [round(float(v), 4) for v in beta[2 : 2 + K]],
+        "kernel_smoothed": smoothed,
+        "main_shock": float(beta[1]),
+        "T_curvature": T,
+        "rotation_T_mean": float(rot.mean()) if rot.size else None,
+        "rotation_T_p95": float(np.quantile(rot, 0.95)) if rot.size else None,
+        "p_rotation": float(((rot >= T).sum() + 1) / (rot.size + 1)) if rot.size else None,
+        "timeshift_T_mean": float(sh.mean()) if sh.size else None,
+        "timeshift_T_p95": float(np.quantile(sh, 0.95)) if sh.size else None,
+        "p_timeshift": float(((sh >= T).sum() + 1) / (sh.size + 1)) if sh.size else None,
+    }
+
+
+# =====================================================================================
+# momentum -- unrealized PnL as EXCITABILITY: how much does an arriving event provoke?
+# =====================================================================================
+
+#: A wallet is PRIMED when its unrealized PnL is inside this band of break-even. The band is
+#: not a guess: `hazard` measures P(sell in the next minute) peaking at 2.23% inside +/-5% and
+#: falling to 0.33% below -80% and 0.48% above +400%, so the reactive region is empirically
+#: the neighbourhood of zero. Reported as a grid, because §3 rule 7.
+PRIMED_BANDS = (0.05, 0.10, 0.25)
+
+#: Response horizon, in ticks, after the shock bucket.
+RESP_TICKS = 3
+
+
+def cmd_momentum(args: argparse.Namespace) -> int:
+    """Does the share of supply sitting near break-even govern how big a response an arriving
+    event provokes?
+
+    WHY THIS AND NOT §3. §3 asked whether cost-basis density predicts *price levels* -- where
+    the chart stalls and turns -- and the answer was a clean null. But that framing carries an
+    assumption that was never argued for: that the mechanism lives on the price axis, as a
+    function "how many people bought at x". The alternative, and the one the operator actually
+    had in mind, is that unrealized PnL is a **scalar state of the coin at time t** -- how much
+    of its holder base is currently in a reactive condition -- and that what it governs is not
+    where price turns but **how violently the coin answers an arriving event**. That is a
+    branching-ratio question, not a support-and-resistance question, and nothing in §3 tests it.
+
+    `hazard` already establishes the individual-wallet half: a wallet's own sell probability
+    peaks sharply at break-even. This asks the aggregate question that follows from it -- if a
+    coin's supply is bunched near break-even, is the coin *primed*, so that an arriving buy
+    provokes a larger answering sell flow than the same buy would on a coin whose holders are
+    all far red or far green?
+
+    PRE-REGISTERED DESIGN.
+
+    * **Unit** (coin, 60-second bucket). The state is recomputed every bucket, because an
+      excitability state moves as price moves -- freezing it, as §3 did, is only defensible for
+      a price-level story.
+    * **State** at bucket start: `primed_share`, the share of live supply whose holder is within
+      `band` of its own break-even; plus `red_share` (< -50%) and `green_share` (> +50%) so the
+      contrast is against a specific alternative rather than against nothing.
+    * **Shock**: SOL bought in the bucket.
+    * **Response**: SOL sold over the next `RESP_TICKS` buckets.
+    * **Estimator**: within-coin (coin-demeaned) OLS of `log1p(response)` on `log1p(shock)`,
+      `primed_share`, and **their interaction** -- the interaction is the whole answer -- plus
+      trailing volume and trailing realized volatility. Standard errors clustered on coin.
+    * **Two nulls at matched density** (§3 rule 13): a **rotation** null that gives coin i's
+      flow series coin j's primed series, and a **circular time-shift** null that keeps the coin
+      but breaks the alignment. The first kills "this is just what a busy coin looks like"; the
+      second kills "this is just a slow-moving common trend".
+
+    A NULL IS A RESULT here too: if the interaction is zero, unrealized PnL is a wallet-level
+    state that does not aggregate into a coin-level one, which is worth knowing before anyone
+    builds a reactive exit on it.
+    """
+    import numpy as np
+
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _out() / "basis.parquet"
+    dt = args.tick
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins_all AS
+        SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last, count(*) AS n_ev
+        FROM read_parquet('{basis}') WHERE mark_after > 0
+        GROUP BY 1
+        HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
+           AND max(block_time) - min(block_time) >= {20 * dt}
+        """
+    )
+    n_pool = con.execute("SELECT count(*) FROM coins_all").fetchone()[0]
+    con.execute(
+        f"""CREATE OR REPLACE TABLE coins AS SELECT * FROM coins_all
+            USING SAMPLE {args.max_coins} ROWS (reservoir, {args.seed})"""
+    )
+    n_c = con.execute("SELECT count(*) FROM coins").fetchone()[0]
+    print(f"[momentum] {n_c:,} coins of {n_pool:,} eligible (tick={dt}s)", flush=True)
+    if n_c == 0:
+        print("[momentum] NULL: no eligible coin.")
+        return 0
+
+    con.execute(
+        f"""CREATE OR REPLACE TABLE ev AS
+            SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)"""
+    )
+    # flow per bucket, and the coin's own mark path
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE flow AS
+        SELECT e.mint, CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k,
+               sum(CASE WHEN e.delta_raw > 0 THEN abs(e.sol) ELSE 0 END) AS buy_sol,
+               sum(CASE WHEN e.delta_raw < 0 THEN abs(e.sol) ELSE 0 END) AS sell_sol,
+               count(*) AS n_fills,
+               count(DISTINCT CASE WHEN e.delta_raw > 0 THEN e.owner END) AS n_buyers,
+               count(DISTINCT CASE WHEN e.delta_raw < 0 THEN e.owner END) AS n_sellers
+        FROM ev e JOIN coins c USING (mint)
+        WHERE e.sol IS NOT NULL
+        GROUP BY 1, 2
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE mk AS
+        SELECT mint, k, arg_max(mark_after, ord) AS mark, count(*) AS n
+        FROM (SELECT e.mint, CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k,
+                     e.mark_after, e.block_slot * 1000000 + e.tx_index AS ord
+              FROM ev e JOIN coins c USING (mint)
+              WHERE e.mark_after > 0 AND abs(e.sol) >= {args.min_sol})
+        GROUP BY 1, 2
+        """
+    )
+    # the holder book, sampled at bucket boundaries
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE st AS
+        SELECT mint, owner, episode, block_time, qty_after, basis_after
+        FROM ev WHERE basis_after > 0
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE ep AS
+        SELECT mint, owner, episode, min(block_time) AS t_in, max(block_time) AS t_out
+        FROM ev GROUP BY 1, 2, 3 HAVING max(block_time) - min(block_time) >= {dt}
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cand AS
+        SELECT e.mint, e.owner, e.episode, g.k, c.t_first + g.k * {dt} AS t
+        FROM ep e JOIN coins c USING (mint),
+             LATERAL (SELECT unnest(range(
+                 CAST(floor((e.t_in - c.t_first) / {dt}) AS BIGINT) + 1,
+                 CAST(floor((least(e.t_out, c.t_last) - c.t_first) / {dt}) AS BIGINT) + 1,
+                 1)) AS k) g
+        """
+    )
+    n_cand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+    print(f"[momentum] {n_cand:,} (wallet, bucket) states ({time.time() - t0:.0f}s)", flush=True)
+
+    bands = ", ".join(
+        f"sum(CASE WHEN abs(upnl) <= {b} THEN qty ELSE 0 END) / nullif(sum(qty), 0)"
+        f" AS primed_{int(b * 100):03d}"
+        for b in PRIMED_BANDS
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE book AS
+        WITH ws AS (
+            SELECT c.mint, c.k, s.qty_after AS qty, s.basis_after AS basis
+            FROM cand c ASOF JOIN st s
+              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
+             AND c.t >= s.block_time
+            WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
+        ),
+        m AS (
+            -- STRICTLY LAGGED, and this is the difference between a result and an artifact.
+            -- `mk.mark` is the LAST mark inside its bucket, so joining at `w.k >= mk.k` prices
+            -- the holder book at the END of the very bucket whose flow is the shock -- a state
+            -- variable that has already seen the event it is supposed to predict. Marking the
+            -- book at the previous bucket's close removes the leak: everything in `primed` is
+            -- known before the shock bucket opens.
+            SELECT w.mint, w.k, w.qty, w.basis, mk.mark, mk.mark / w.basis - 1.0 AS upnl
+            FROM ws w ASOF JOIN mk ON w.mint = mk.mint AND w.k > mk.k
+        )
+        SELECT mint, k, count(*) AS n_holders, sum(qty) AS live_qty,
+               {bands},
+               sum(CASE WHEN upnl < -0.5 THEN qty ELSE 0 END) / nullif(sum(qty), 0) AS red_share,
+               sum(CASE WHEN upnl > 0.5 THEN qty ELSE 0 END) / nullif(sum(qty), 0) AS green_share
+        FROM m GROUP BY 1, 2
+        """
+    )
+    print(f"[momentum] book built ({time.time() - t0:.0f}s)", flush=True)
+
+    resp = " + ".join(f"coalesce(f{i}.sell_sol, 0)" for i in range(1, RESP_TICKS + 1))
+    # THE OPERATOR'S OWN PHRASING -- "how likely is an arriving event to stimulate one of those
+    # other wallets to DO SOMETHING" -- is a count of actors, not a volume. Both are carried,
+    # because they are different hypotheses and only one of them is the one that was asked.
+    resp_n = " + ".join(f"coalesce(f{i}.n_sellers, 0)" for i in range(1, RESP_TICKS + 1))
+    joins = " ".join(
+        f"LEFT JOIN flow f{i} ON f{i}.mint = b.mint AND f{i}.k = b.k + {i}"
+        for i in range(1, RESP_TICKS + 1)
+    )
+    out = _out() / "momentum.parquet"
+    _copy(
+        con,
+        f"""
+        SELECT b.mint, b.k, b.n_holders, b.live_qty,
+               {", ".join("b.primed_%03d" % int(x * 100) for x in PRIMED_BANDS)},
+               b.red_share, b.green_share,
+               coalesce(f0.buy_sol, 0) AS buy_sol, coalesce(f0.sell_sol, 0) AS sell_sol,
+               ({resp}) AS resp_sell_sol,
+               ({resp_n}) AS resp_sellers,
+               coalesce(f0.n_buyers, 0) AS n_buyers,
+               avg(coalesce(f0.buy_sol, 0) + coalesce(f0.sell_sol, 0))
+                   OVER (PARTITION BY b.mint ORDER BY b.k
+                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS trail_vol,
+               stddev_samp(ln(nullif(mk.mark, 0)))
+                   OVER (PARTITION BY b.mint ORDER BY b.k
+                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS trail_rv
+        FROM book b
+        LEFT JOIN flow f0 ON f0.mint = b.mint AND f0.k = b.k
+        LEFT JOIN mk ON mk.mint = b.mint AND mk.k = b.k - 1
+        {joins}
+        WHERE b.n_holders >= {args.min_holders}
+        """,
+        out,
+        "momentum panel",
+    )
+
+    df = con.execute(
+        f"""SELECT * FROM read_parquet('{out}')
+            WHERE buy_sol > 0 AND n_buyers > 0 AND trail_vol > 0
+              AND trail_rv IS NOT NULL AND n_holders > 0"""
+    ).fetchdf()
+    print(f"[momentum] {len(df):,} usable (coin, bucket) rows", flush=True)
+    if len(df) < 5000:
+        print("[momentum] NULL: too few usable buckets.")
+        return 0
+
+    res = {"n_coins": int(n_c), "n_rows": len(df), "tick": dt,
+           "resp_ticks": RESP_TICKS, "cells": []}
+    rng = np.random.default_rng(args.seed)
+    mints = df["mint"].to_numpy()
+    uniq = np.unique(mints)
+
+    for b in PRIMED_BANDS:
+        col = "primed_%03d" % int(b * 100)
+        for resp_kind in ("sol", "wallets"):
+            cell = _momentum_cell(df, col, uniq, rng, args, resp_kind)
+            cell["band"] = b
+            cell["response"] = resp_kind
+            res["cells"].append(cell)
+            print(
+                f"[momentum] band={b} resp={resp_kind:7s}: "
+                f"interaction={cell['interaction']:+.4f} "
+                f"(clustered t={cell['t_interaction']:+.2f}) "
+                f"p_rotation={cell['p_rotation']:.4f} p_timeshift={cell['p_timeshift']:.4f}",
+                flush=True,
+            )
+            print(
+                f"[momentum]   response by within-coin primed tercile: "
+                f"{cell['ratio_by_tercile']}",
+                flush=True,
+            )
+
+    res["by_fdr"] = _by_fdr(
+        [c["p_rotation"] for c in res["cells"]] + [c["p_timeshift"] for c in res["cells"]],
+        args.fdr_q,
+    )
+    (_out() / "momentum.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"[momentum] -> {_out() / 'momentum.json'}  ({time.time() - t0:.0f}s)", flush=True)
+    return 0
+
+
+def _clustered_ols(y, X, groups):
+    """OLS with cluster-robust (CR0) standard errors. Returns (beta, se)."""
+    import numpy as np
+
+    XtX_inv = np.linalg.pinv(X.T @ X)
+    beta = XtX_inv @ (X.T @ y)
+    resid = y - X @ beta
+    meat = np.zeros((X.shape[1], X.shape[1]))
+    order = np.argsort(groups, kind="stable")
+    g = groups[order]
+    Xo, ro = X[order], resid[order]
+    bounds = np.flatnonzero(np.r_[True, g[1:] != g[:-1], True])
+    for i in range(bounds.size - 1):
+        sl = slice(bounds[i], bounds[i + 1])
+        u = Xo[sl].T @ ro[sl]
+        meat += np.outer(u, u)
+    cov = XtX_inv @ meat @ XtX_inv
+    return beta, np.sqrt(np.maximum(np.diag(cov), 0))
+
+
+def _momentum_cell(df, col, uniq, rng, args, resp_kind="sol"):
+    """One (primed band, response) cell: the interaction estimate, both nulls, a binned view."""
+    import numpy as np
+
+    # The shock is measured in the same units as the response, so that the interaction is an
+    # elasticity in both arms rather than a volume elasticity in one and a count in the other.
+    shock_raw = (
+        df["buy_sol"].to_numpy() if resp_kind == "sol" else df["n_buyers"].to_numpy().astype(float)
+    )
+    resp_raw = (
+        df["resp_sell_sol"].to_numpy()
+        if resp_kind == "sol"
+        else df["resp_sellers"].to_numpy().astype(float)
+    )
+    n_hold = np.log1p(df["n_holders"].to_numpy().astype(float))
+
+    def design(primed):
+        shock = np.log1p(shock_raw)
+        ctrl_v = np.log1p(df["trail_vol"].to_numpy())
+        rv = df["trail_rv"].to_numpy()
+        X = np.column_stack(
+            [np.ones(shock.size), shock, primed, shock * primed, ctrl_v, rv, n_hold]
+        )
+        return X
+
+    y = np.log1p(resp_raw)
+    mints = df["mint"].to_numpy()
+
+    # coin-demean every column, which is the fixed effect
+    def demean(a):
+        s = pd_groupby_mean(a, mints)
+        return a - s
+
+    primed = df[col].to_numpy()
+    X = design(primed)
+    Xd = np.column_stack([X[:, 0]] + [demean(X[:, j]) for j in range(1, X.shape[1])])
+    yd = demean(y)
+    beta, se = _clustered_ols(yd, Xd, mints)
+    inter, inter_se = float(beta[3]), float(se[3])
+
+    # binned, nonparametric: within-coin primed tercile vs response ratio
+    ratio = resp_raw / np.maximum(shock_raw, 1e-9)
+    terc = np.zeros(len(df), dtype=int)
+    for m in uniq:
+        sel = mints == m
+        p = primed[sel]
+        if p.size < 6:
+            terc[sel] = -1
+            continue
+        q1, q2 = np.quantile(p, [1 / 3, 2 / 3])
+        terc[sel] = np.where(p <= q1, 0, np.where(p <= q2, 1, 2))
+    ratio_by_tercile = [
+        round(float(np.median(ratio[terc == t])), 4) if (terc == t).any() else None
+        for t in (0, 1, 2)
+    ]
+
+    # NULL 1: rotation -- coin i's flow keeps coin j's primed series
+    # NULL 2: circular time shift within coin
+    #
+    # BOTH NULLS PRESERVE SERIAL STRUCTURE, and the first version of the rotation did not.
+    # Drawing coin j's primed values i.i.d. with replacement destroys the autocorrelation that
+    # a supply-share series obviously has, which makes the null strictly easier to beat than
+    # the data -- precisely the i.i.d.-null failure PROGRAM.md records twice. The donor series
+    # is therefore taken as a CONTIGUOUS wrapped block, so the null differs from the data in
+    # which coin it came from and in nothing else.
+    rot_stats, shift_stats = [], []
+    idx_by_mint = {m: np.flatnonzero(mints == m) for m in uniq}
+    order = list(uniq)
+    for _ in range(args.nulls):
+        # rotation
+        shift = int(rng.integers(1, len(order)))
+        pr = primed.copy()
+        for i, m in enumerate(order):
+            src = idx_by_mint[order[(i + shift) % len(order)]]
+            dst = idx_by_mint[m]
+            take = primed[src]
+            if take.size == 0:
+                continue
+            start = int(rng.integers(0, take.size))
+            reps = int(np.ceil(dst.size / take.size))
+            block = np.tile(np.roll(take, -start), reps)[: dst.size]
+            pr[dst] = block
+        Xr = design(pr)
+        Xrd = np.column_stack([Xr[:, 0]] + [demean(Xr[:, j]) for j in range(1, Xr.shape[1])])
+        br, _ = _clustered_ols(yd, Xrd, mints)
+        rot_stats.append(float(br[3]))
+        # circular shift
+        ps = primed.copy()
+        for m in order:
+            dst = idx_by_mint[m]
+            if dst.size < 3:
+                continue
+            ps[dst] = np.roll(primed[dst], int(rng.integers(1, dst.size)))
+        Xs = design(ps)
+        Xsd = np.column_stack([Xs[:, 0]] + [demean(Xs[:, j]) for j in range(1, Xs.shape[1])])
+        bs, _ = _clustered_ols(yd, Xsd, mints)
+        shift_stats.append(float(bs[3]))
+
+    rot = np.asarray(rot_stats)
+    sh = np.asarray(shift_stats)
+    return {
+        "n": len(df),
+        "interaction": inter,
+        "interaction_se_clustered": inter_se,
+        "t_interaction": inter / inter_se if inter_se > 0 else None,
+        "main_shock": float(beta[1]),
+        "main_primed": float(beta[2]),
+        "ratio_by_tercile": ratio_by_tercile,
+        "rotation_mean": float(rot.mean()) if rot.size else None,
+        "rotation_sd": float(rot.std(ddof=1)) if rot.size > 1 else None,
+        "p_rotation": float(((np.abs(rot) >= abs(inter)).sum() + 1) / (rot.size + 1))
+        if rot.size
+        else None,
+        "timeshift_mean": float(sh.mean()) if sh.size else None,
+        "timeshift_sd": float(sh.std(ddof=1)) if sh.size > 1 else None,
+        "p_timeshift": float(((np.abs(sh) >= abs(inter)).sum() + 1) / (sh.size + 1))
+        if sh.size
+        else None,
+    }
+
+
+def pd_groupby_mean(a, groups):
+    """Group means broadcast back to row shape, without a pandas round trip."""
+    import numpy as np
+
+    uniq, inv = np.unique(groups, return_inverse=True)
+    sums = np.bincount(inv, weights=a, minlength=uniq.size)
+    cnts = np.bincount(inv, minlength=uniq.size)
+    return (sums / np.maximum(cnts, 1))[inv]
 
 
 # =====================================================================================
@@ -2530,6 +3287,31 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--sample", type=int, default=4000)
     c.add_argument("--seed", type=int, default=17)
     c.set_defaults(fn=cmd_check)
+
+    ke = common(sub.add_parser("kernel", help="the response kernel w(u) over unrealized PnL"))
+    ke.add_argument("--tick", type=int, default=60)
+    ke.add_argument("--bins", type=int, default=KERNEL_BINS)
+    ke.add_argument("--max-coins", type=int, default=600)
+    ke.add_argument("--min-ev", type=int, default=300)
+    ke.add_argument("--max-ev", type=int, default=200000)
+    ke.add_argument("--min-holders", type=int, default=15)
+    ke.add_argument("--min-sol", type=float, default=0.01)
+    ke.add_argument("--nulls", type=int, default=200)
+    ke.add_argument("--fdr-q", type=float, default=0.05)
+    ke.add_argument("--seed", type=int, default=20260815)
+    ke.set_defaults(fn=cmd_kernel)
+
+    mo = common(sub.add_parser("momentum", help="primed supply vs response to an arriving event"))
+    mo.add_argument("--tick", type=int, default=60)
+    mo.add_argument("--max-coins", type=int, default=800)
+    mo.add_argument("--min-ev", type=int, default=300)
+    mo.add_argument("--max-ev", type=int, default=200000)
+    mo.add_argument("--min-holders", type=int, default=15)
+    mo.add_argument("--min-sol", type=float, default=0.01)
+    mo.add_argument("--nulls", type=int, default=100)
+    mo.add_argument("--fdr-q", type=float, default=0.05)
+    mo.add_argument("--seed", type=int, default=20260815)
+    mo.set_defaults(fn=cmd_momentum)
 
     q1 = common(sub.add_parser("q1", help="basis density vs price reversals"))
     q1.add_argument("--rotations", type=int, default=200)
