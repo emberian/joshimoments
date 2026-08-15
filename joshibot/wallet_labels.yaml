@@ -132,12 +132,31 @@ external:
        but the case pattern differs (FU2 vs Fu5). Its own lookalike FU21WXEB...K2zG2 dusted
        31 seconds later"}
 
-  - {address: AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c, label: fomo_family_relayer, kind: infrastructure, confidence: inferred,
+  - {address: AgmLJBMDCqWynYnQiPCuj9ewsNNsBJXyzoUhD9LJzN51, label: fomo_family_relayer, kind: infrastructure, confidence: inferred,
+     superseded_address: AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c,
      note: "gas-sponsors 22.5% of distinct traders on cluster pools; identified three ways in
-       RESULT_copytrading.md. NOT independently confirmed here: it does not appear in the
-       five wallets' counterparty set, which is expected for an infrastructure label derived
-       from the pool tape rather than from our own transfers, but means this address has
-       still never been checked against a second source. Verify before use"}
+       RESULT_copytrading.md. CORRECTED 2026-08-15 by studies/operator_crime.py: this entry
+       previously read AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c, which shares exactly the
+       first EIGHT characters with the address its own cited source uses and then diverges
+       completely. Both decode to valid 32-byte pubkeys, so a length/base58 check does not
+       catch it. FOUR independent disproofs of the old value, strongest first:
+       (1) STRUCTURAL -- ...wDrsy... is OFF the ed25519 curve, so no keypair can exist for it.
+       A relayer SIGNS transactions and pays their fees; an address that cannot hold a private
+       key cannot be one. This is decisive on its own and needs no corpus. (Same signature as
+       the fabricated payroll address corrected above -- see the PayDy... entry. Two of the
+       three full addresses this file inherited were completed from truncated displays, so
+       treat every remaining inherited address as unverified until it is checked this way.)
+       (2) ON CHAIN -- across 106,639,238 transactions in ten days of state/bulk_pump,
+       ...wDrsy... appears on ZERO token-balance legs and ...CqWyn... appears on 58,270,
+       across 11 mints.
+       (3) PROVENANCE -- the cited RESULT_copytrading.md line 24 and the code that produced it
+       (studies/copytrading.py line 164) both say ...CqWyn...
+       (4) ABSENCE -- the ...wDrsy... string appears nowhere else on disk at all.
+       Given the address_poisoning block below, a prefix-matching lookalike sitting in the
+       label file is the exact failure this file exists to prevent, so the old value is kept
+       as superseded_address rather than deleted. Still inferred, not attested: the tape
+       carries no fee payers, so this confirms the address exists and is heavily active, NOT
+       that it is FOMO's relayer. Attesting that needs a fee-payer view."}
 
 # The poisoning campaign itself, recorded so it is never re-derived. Every entry is
 # inbound-only dust (<= 0.0001 SOL, or 100-1000 raw USDC) at an address matching both the
