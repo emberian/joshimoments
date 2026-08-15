@@ -17,9 +17,23 @@ meta: ``pre_token_balances`` / ``post_token_balances`` with ``amount`` as **BIGN
 It is DAY-partitioned on ``block_timestamp`` (``requirePartitionFilter``) and clustered on
 ``signature``.
 
-Validated against 528 swaps the live RPC collector independently recorded on 2026-08-13:
-**528 of 528 present, and 528 of 528 matched on BOTH pre and post reserves, every digit,
-on both vault legs.** That is replay-grade, not summary-grade.
+Validated against the live RPC collector: over the full 2026-06-27 .. 2026-08-13 pull,
+**1611 of 1611 overlapping swaps matched on BOTH pre and post reserves, every digit, on both
+vault legs**, with zero disagreements. 54 further live swaps are absent, and ``verify``
+reports absences by (day, pool) WITH their time span because that is what makes them
+diagnosable: all 54 fall in two CONTIGUOUS windows — SOLVE/SOL 2026-08-12 14:41..17:32, and
+weave/DREGG (5%) 2026-08-12 23:58 .. 2026-08-13 02:17 — both anchored on 2026-08-12, the day
+already flagged below as carrying a one-off reprocessing in the upstream dataset. A
+contiguous window is an upstream hole; the same count scattered across a whole day would
+instead mean a parser disagreement. Do not backtest those two windows.
+
+**Exact vault balances are still not replay grade on PumpSwap**, and that is the one claim
+this file used to get wrong. A boosted PumpSwap pool prices against
+``pool_quote + virtual_quote_reserves``, which lives in the swap event in ``log_messages`` and
+is *not* selected here — 17.58 SOL unaccounted on nosis/SOL and weave/SOL, 0 on DREGG/SOL and
+SOLVE/SOL (see :mod:`shitcoims_cluster.pumpswap`). Every PumpSwap row is therefore emitted at
+``summary`` grade by :func:`_grade`, and ``regrade`` corrects an older tape in place for free.
+Including ``log_messages`` in the next full pull costs ~+1.2% and lifts them to replay grade.
 
 Two things this path has that ``getTransaction`` does not:
 
@@ -124,7 +138,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -138,7 +152,8 @@ from shitcoims_cluster.pools import (  # noqa: E402
 )
 
 TOOL_VERSION = "bulk_history/2"
-ROW_SCHEMA = "bulk_history.v2"
+#: v3 demotes PumpSwap rows from replay to summary grade. See `_grade`.
+ROW_SCHEMA = "bulk_history.v3"
 
 BQ_DATASET = "bigquery-public-data.crypto_solana_mainnet_us"
 BQ_TX = f"`{BQ_DATASET}.Transactions`"
@@ -376,6 +391,40 @@ ORDER BY block_slot, tx_index
 """.strip()
 
 
+#: Why a PumpSwap row here cannot claim replay grade, carried on every such row.
+CURVE_ABSENT_REASON: Final[str] = (
+    "pumpswap prices against pool_quote + virtual_quote_reserves and this pull did not "
+    "include log_messages, so the virtual term is unknown for this row"
+)
+
+
+def _grade(spec: PoolSpec) -> str:
+    """Replay grade, honestly, per pool.
+
+    ``PoolSpec.replay_sufficient_reserves`` says the pool is CONSTANT PRODUCT. That was taken
+    to mean "the two vault balances determine the fill", and for PumpSwap it does not: a
+    boosted pool prices against ``pool_quote + virtual_quote_reserves``, which is 17.58 SOL on
+    nosis/SOL and weave/SOL and 0 on DREGG/SOL and SOLVE/SOL — a 4.6% and 9.6% error on the
+    quote leg, large enough to invert the sign of a fitted fee. See
+    :mod:`shitcoims_cluster.pumpswap` for the on-chain decode that established it.
+
+    The live recorder reads the virtual term out of the swap event. THIS path cannot: the
+    event lives in ``log_messages``, which this pull does not select. So every PumpSwap row
+    here is downgraded to ``summary`` rather than shipped asserting a replay grade it does not
+    have — "a replay against wrong reserves is worse than no replay".
+
+    THE FIX, costed: ``log_messages`` is 3.1 GB/day against the 263 GB/day this pull already
+    scans, so including it is ~+1.2% (~$0.90 across 48 days). It cannot be back-filled cheaply
+    as a second pass, because the join key would have to be re-scanned and the pool filter
+    lives in ``post_token_balances`` at 114 GB/day — so the next FULL pull should carry it,
+    rather than paying for a separate one.
+    """
+
+    if not spec.replay_sufficient_reserves:
+        return "summary"
+    return "summary" if spec.dex == "pumpswap" else "replay"
+
+
 def build_rows(
     transactions: list[dict[str, Any]],
     *,
@@ -456,7 +505,7 @@ def build_rows(
                 "schema": ROW_SCHEMA,
                 "row_id": hashlib.sha256(f"{pool}:{signature}".encode()).hexdigest(),
                 "kind": kind,
-                "grade": "replay" if spec.replay_sufficient_reserves else "summary",
+                "grade": _grade(spec),
                 "pool": pool,
                 "dex": spec.dex,
                 "label": spec.label,
@@ -473,7 +522,10 @@ def build_rows(
                     "pool": pool,
                     "dex": spec.dex,
                     # A DLMM fill walks bins; vault totals do not determine price or depth.
-                    "replay_sufficient": spec.replay_sufficient_reserves,
+                    # A PumpSwap pool needs its virtual quote reserve too — see _grade().
+                    "replay_sufficient": _grade(spec) == "replay",
+                    "replay_sufficient_by_type": spec.replay_sufficient_reserves,
+                    "curve": {"source": "absent", "reason": CURVE_ABSENT_REASON},
                     "vaults": vaults,
                 },
                 "fee_lamports": str(_raw_int(tx["fee"], what="fee")),
@@ -579,13 +631,21 @@ def verify(out_dir: Path) -> int:
     exact = differ = missing = 0
     examples: list[str] = []
     absent_by_cell: dict[tuple[str, str], int] = defaultdict(int)
+    absent_span: dict[tuple[str, str], tuple[str, str]] = {}
     for row_id, lrow in live.items():
         if lrow["t_event"][:10] not in pulled_days:
             continue
         brow = bulk.get(row_id)
         if brow is None:
             missing += 1
-            absent_by_cell[(lrow["t_event"][:10], str(lrow.get("label", "?")))] += 1
+            cell = (lrow["t_event"][:10], str(lrow.get("label", "?")))
+            absent_by_cell[cell] += 1
+            span = absent_span.get(cell)
+            stamp = str(lrow["t_event"])
+            absent_span[cell] = (
+                stamp if span is None else min(span[0], stamp),
+                stamp if span is None else max(span[1], stamp),
+            )
             continue
         # Compare pre AND post, keyed by mint. Levels, not just deltas: that is the whole
         # difference between a replay tape and a summary tape.
@@ -616,9 +676,68 @@ def verify(out_dir: Path) -> int:
         # window's second-lowest at 91.6% and which the module docstring already flagged as
         # carrying a one-off reprocessing. A flat percentage would have hidden that.
         print("\n  absent rows by (day, pool) — concentration is the diagnosis:")
-        for (day, label), count in sorted(absent_by_cell.items(), key=lambda kv: -kv[1]):
-            print(f"    {day}  {label:<18} {count:>6}")
+        for cell, count in sorted(absent_by_cell.items(), key=lambda kv: -kv[1]):
+            day, label = cell
+            lo, hi = absent_span[cell]
+            print(f"    {day}  {label:<18} {count:>6}   {lo[11:19]}..{hi[11:19]}")
+        print("    (a CONTIGUOUS window is an upstream hole; rows scattered across a whole "
+              "day would instead be a parser disagreement)")
     return 1 if differ else 0
+
+
+# --------------------------------------------------------------------------------------
+# regrade — correct an already-pulled tape in place, for free
+# --------------------------------------------------------------------------------------
+
+
+def regrade(out_dir: Path) -> int:
+    """Re-apply :func:`_grade` to a tape pulled by an older version of this tool.
+
+    This is a pure function of ``pools.py`` and the row's own pool, not new data, so it costs
+    nothing and needs no BigQuery. It exists because 3.4M rows were pulled asserting
+    ``replay_sufficient: true`` for PumpSwap before the boost mechanism was found, and
+    leaving them that way would hand a backtester a 4.6%-wrong quote reserve with a flag
+    saying it was exact. Re-pulling to fix a flag would cost ~$54 to change one boolean.
+
+    Idempotent; rewrites via temp-and-rename; bumps ``schema`` so the correction is visible
+    in the data rather than only in this file's history.
+    """
+
+    changed_files = 0
+    changed_rows = 0
+    for source in sorted((out_dir / "swaps").glob("*.jsonl")):
+        out: list[str] = []
+        touched = 0
+        with source.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                spec = POOLS_BY_ADDRESS.get(str(row.get("pool")))
+                if spec is None:
+                    out.append(line.rstrip("\n"))
+                    continue
+                grade = _grade(spec)
+                reserves = row.get("reserves") or {}
+                before = (row.get("grade"), reserves.get("replay_sufficient"), row.get("schema"))
+                row["grade"] = grade
+                row["schema"] = ROW_SCHEMA
+                reserves["replay_sufficient"] = grade == "replay"
+                reserves["replay_sufficient_by_type"] = spec.replay_sufficient_reserves
+                reserves.setdefault("curve", {"source": "absent", "reason": CURVE_ABSENT_REASON})
+                row["reserves"] = reserves
+                if before != (row["grade"], reserves["replay_sufficient"], row["schema"]):
+                    touched += 1
+                out.append(json.dumps(row, sort_keys=True, separators=(",", ":")))
+        if not touched:
+            continue
+        _atomic_write(source, "\n".join(out) + "\n")
+        changed_files += 1
+        changed_rows += touched
+        print(f"  {source.name}: {touched:,} rows regraded", file=sys.stderr)
+    print(f"\nregraded {changed_rows:,} rows across {changed_files} file(s) to {ROW_SCHEMA}. "
+          "Re-run `parquet` to refresh the derived view.", file=sys.stderr)
+    return 0
 
 
 # --------------------------------------------------------------------------------------
@@ -674,6 +793,8 @@ _PARQUET_COLUMNS: list[tuple[str, str, Any]] = [
     ("token_out_raw", "string", lambda r: r.get("token_out_raw")),
     ("replay_sufficient", "bool", lambda r: (r.get("reserves") or {}).get("replay_sufficient")),
     ("vaults", "vaults", lambda r: (r.get("reserves") or {}).get("vaults") or []),
+    ("curve_source", "string",
+     lambda r: ((r.get("reserves") or {}).get("curve") or {}).get("source", "absent")),
     ("provenance_cursor", "string", lambda r: (r.get("provenance") or {}).get("cursor")),
 ]
 
@@ -863,7 +984,9 @@ def selftest() -> int:
         check("failed tx has no direction", "token_in_mint" not in attempt)
         check("failed tx is NOT labelled attempt", attempt["kind"] == "failed")
 
-    # A constant-product pool must be allowed to claim replay grade.
+    # A PumpSwap pool is constant product and STILL not replay grade from this source: the
+    # virtual quote reserve it prices against lives in log_messages, which this pull does not
+    # select. This check asserted the opposite until the boost mechanism was decoded.
     cp = build_rows([{**FIXTURE_TX[0],
                       "pre": [{**b, "owner": "GA1nQL5RLBYUkLfBRrTPxhiSaPYnanJwteMGa3jPRjEn",
                                "mint": WSOL_MINT if i else "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump"}
@@ -872,8 +995,11 @@ def selftest() -> int:
                                 "mint": WSOL_MINT if i else "8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump"}
                                for i, b in enumerate(FIXTURE_TX[0]["post"])]}],
                     provenance=prov)[0][0]
-    check("constant-product pool IS replay grade",
-          cp["grade"] == "replay" and cp["reserves"]["replay_sufficient"] is True, cp["grade"])
+    check("pumpswap pool is constant product BUT not replay grade here",
+          cp["grade"] == "summary"
+          and cp["reserves"]["replay_sufficient"] is False
+          and cp["reserves"]["replay_sufficient_by_type"] is True
+          and cp["reserves"]["curve"]["source"] == "absent", cp["grade"])
 
     # A float amount is the silent-corruption path shitcoims_tape.schema exists to close.
     for bad in (1.5, 2.0, True):
@@ -955,6 +1081,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     add_common(sub.add_parser("selftest", help="offline fixture tests, no network"), sub=True)
     add_common(sub.add_parser("verify", help="compare pulled rows against the live tape"), sub=True)
+    add_common(sub.add_parser("regrade", help="re-apply the replay-grade rule to a pulled tape"),
+               sub=True)
     parquet = sub.add_parser("parquet", help="rewrite the pulled JSONL as parquet (derived view)")
     add_common(parquet, sub=True)
     parquet.add_argument("--force", action="store_true", help="rewrite up-to-date files too")
@@ -978,6 +1106,8 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
     if args.cmd == "verify":
         return verify(args.out)
+    if args.cmd == "regrade":
+        return regrade(args.out)
     if args.cmd == "parquet":
         return to_parquet(args.out, force=args.force)
 

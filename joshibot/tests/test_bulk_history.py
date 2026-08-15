@@ -188,3 +188,60 @@ def test_a_dry_run_reports_the_bytes_it_would_bill(monkeypatch) -> None:
     assert rows == []
     assert stats["total_bytes_billed"] == 263_127_564_288
     assert stats["estimate_only"] is True
+
+
+# ---------------------------------------------------------------------------------------
+# replay grade — the flag a backtester trusts
+# ---------------------------------------------------------------------------------------
+
+
+def test_pumpswap_is_constant_product_but_not_replay_grade_from_this_source() -> None:
+    """A boosted pool prices against pool_quote + virtual_quote_reserves.
+
+    That term lives in the swap event in `log_messages`, which this pull does not select, so
+    the vault balances alone are 4.6% (nosis) and 9.6% (weave) short on the quote leg. The
+    pool TYPE still admits exact replay; this SOURCE does not supply it.
+    """
+
+    from shitcoims_cluster.pools import POOLS_BY_ADDRESS
+
+    pumpswap = POOLS_BY_ADDRESS["7nv2RtGXXVDEgT9sWB3EjT8MQbMuA6CTMiuBGvEwmZSc"]
+    dlmm = POOLS_BY_ADDRESS["QQnW4Zw3Z1PM3FsLxFPW32DodZLLx9S9EbdaA764FFD"]
+    assert pumpswap.replay_sufficient_reserves is True
+    assert bh._grade(pumpswap) == "summary"
+    assert bh._grade(dlmm) == "summary"
+
+
+def test_regrade_corrects_an_older_tape_in_place_and_is_idempotent(tmp_path: Path) -> None:
+    """3.4M rows were pulled asserting replay grade. Re-pulling to fix a boolean costs ~$54."""
+
+    stale = bulk_row(grade="replay", schema="bulk_history.v2")
+    stale["reserves"]["replay_sufficient"] = True
+    stale["reserves"].pop("curve", None)
+    write_day(tmp_path, "20260713", [stale])
+
+    assert bh.regrade(tmp_path) == 0
+    fixed = json.loads((tmp_path / "swaps" / "20260713.jsonl").read_text().splitlines()[0])
+    assert fixed["grade"] == "summary"
+    assert fixed["schema"] == "bulk_history.v3"
+    assert fixed["reserves"]["replay_sufficient"] is False
+    # The pool's TYPE is still recorded, so nothing is lost -- only the overclaim.
+    assert fixed["reserves"]["replay_sufficient_by_type"] is True
+    assert fixed["reserves"]["curve"]["source"] == "absent"
+    assert "log_messages" in fixed["reserves"]["curve"]["reason"]
+    # row_id hashes (pool, signature), so a regrade never renumbers a row.
+    assert fixed["row_id"] == stale["row_id"]
+
+    before = (tmp_path / "swaps" / "20260713.jsonl").read_text()
+    bh.regrade(tmp_path)
+    assert (tmp_path / "swaps" / "20260713.jsonl").read_text() == before
+
+
+def test_the_parquet_view_carries_why_a_row_is_only_summary(tmp_path: Path) -> None:
+    write_day(tmp_path, "20260713", [bulk_row()])
+    bh.regrade(tmp_path)
+    bh.to_parquet(tmp_path)
+    row = pq.read_table(tmp_path / "parquet" / "20260713.parquet").to_pylist()[0]
+    assert row["grade"] == "summary"
+    assert row["replay_sufficient"] is False
+    assert row["curve_source"] == "absent"
