@@ -505,6 +505,32 @@ market, they are sampling *him*.
 `inferred`, never higher. The permutation p is weak (325 of 350 donor matches ran at the widest
 level) — **the 99% is the evidence and it needs no null**.
 
+#### 5.7.1 The slot-offset profile, and why "same slot" is the wrong test
+
+Joining each wallet's buys to his, per shared coin, over ±4 slots:
+
+| d_slot | −4 | −3 | −2 | **0** | +2 | +3 | +4 |
+|---|---|---|---|---|---|---|---|
+| `6Eegkyd2…` (n=2,639) | 5.8% | 5.3% | 4.9% | **52.8%** | 4.9% | 5.2% | 5.4% |
+| `DkWzWsQT…` (n=2,511) | 6.0% | 5.5% | 4.9% | **53.1%** | 4.5% | 4.9% | 5.3% |
+| `D7xK1ZLz…` (n=2,037) | 6.6% | 6.1% | 5.4% | **48.9%** | 5.0% | 5.8% | 5.8% |
+| **control** `FBvxneTq…` (n=262) | 7.3% | 8.0% | 5.0% | **42.7%** | 6.1% | 6.5% | 3.8% |
+
+**The control sits at 42.7% too.** A universal launch sniper that shares 1.4% of its coins with him
+concentrates at the same slot almost as hard as the three candidates do — because *everyone racing
+a new coin lands in the same few slots*. **Same-slot co-occurrence measures launch-sniping, not
+coordination**, and a detector built on it would mostly detect the former. What separates the three
+is breadth (99% vs 1.4%), which is timing-free.
+
+Two further shape facts. The profiles are **symmetric** — d = −1 and d = +1 are equal to within a
+few counts (208/208, 200/197, 167/166) — which argues *against* "reactive copy bot", since a copier
+lags and would show a one-sided positive tail. And same-slot `tx_index` offsets are spread across
+±1…±3 rather than tightly consecutive, so this is **not one atomic Jito bundle**; it is a fleet
+firing into the same slot. Co-scheduled, not chained.
+
+This is the empirical basis for `studies/bundle_hypothesizer.py`: rank linkage channels by how
+expensive they are to *evade*. Timing is cheap to jitter; which coins you must trade is not.
+
 ---
 
 ## 6. Limits
