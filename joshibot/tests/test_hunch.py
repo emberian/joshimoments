@@ -817,3 +817,44 @@ def test_the_source_hands_retractions_to_the_desk_in_tape_order(tmp_path: Path) 
     events = HunchSource(path).poll(T0 + 2)
     assert isinstance(events[0], Hunch) and isinstance(events[1], Retraction)
     assert events[1].retracts == "hn-a"
+
+
+def test_a_second_hunch_on_a_waiting_coin_is_recorded_not_silently_dropped(
+    tmp_path: Path,
+) -> None:
+    """``waiting`` is keyed by mint, so an overwrite would lose the first gesture whole."""
+    book = make_operator(tmp_path)
+    assert book.accept(hunch_of(T0, hunch_id="hn-first"), T0) == "accepted"
+    assert book.accept(hunch_of(T0 + 10, hunch_id="hn-second"), T0 + 10) == "already_waiting"
+    # The FIRST one still owns the entry; the second is on the ledger with its own words.
+    assert book.waiting[MINT]["hunch_id"] == "hn-first"
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["detail"] == "already_awaiting_on_this_mint"
+    assert row["hunch_id"] == "hn-second" and row["awaiting"] == "hn-first"
+    # And one gesture buys one clip, not two.
+    first = observation(T0 + 20)
+    book.observe(first, source_stale=False)
+    book.arm_waiting(first)
+    book.observe(observation(T0 + 30), source_stale=False)
+    assert len(book.positions) == 1
+
+
+def test_a_wait_blocked_by_a_queued_entry_says_so_rather_than_timing_out(
+    tmp_path: Path,
+) -> None:
+    """A wrong reason on a row reads as a measurement of the feed. Name the real one."""
+    book = make_operator(tmp_path)
+    book.accept(hunch_of(T0, hunch_id="hn-a"), T0)
+    first = observation(T0 + 5)
+    book.observe(first, source_stale=False)
+    book.arm_waiting(first)
+    assert MINT in book.pending
+
+    book.waiting[MINT] = {
+        "hunch_id": "hn-b", "recorded_unix": T0 + 6, "size_lamports": 100_000_000,
+        "utterance": "again", "confidence": 0.6, "symbol": "WEAVE", "gesture_unix": T0 + 6,
+    }
+    book.arm_waiting(observation(T0 + 8))
+    assert not book.waiting
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["detail"] == "entry_already_queued_for_this_mint"

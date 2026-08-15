@@ -277,6 +277,23 @@ class OperatorBook(WiggleBook):
             )
             return "watching"
 
+        if hunch.mint in self.waiting:
+            # ``waiting`` is keyed by MINT, because a coin can have at most one pending
+            # entry. Two gestures on one coin inside one wait window would therefore have
+            # silently overwritten the first, leaving a hunch that was acknowledged as
+            # accepted and then never resolved by anything -- the exact failure mode this
+            # book exists to make impossible, in the book itself. The second gesture is a
+            # fact and gets a row; it does not get a second position, because that would
+            # double the clip behind what is plainly one call.
+            self.ledger.emit(
+                "hunch",
+                str(self.book),
+                **common,
+                detail="already_awaiting_on_this_mint",
+                awaiting=self.waiting[hunch.mint]["hunch_id"],
+            )
+            return "already_waiting"
+
         self.waiting[hunch.mint] = {
             "hunch_id": hunch.hunch_id,
             "recorded_unix": now,
@@ -396,7 +413,24 @@ class OperatorBook(WiggleBook):
         would have used, and none of them can stop it.
         """
         waiting = self.waiting.get(obs.mint)
-        if waiting is None or obs.mint in self.pending:
+        if waiting is None:
+            return
+        if obs.mint in self.pending:
+            # An entry from an earlier gesture is already queued on this coin. Drop the
+            # wait NOW with the accurate reason rather than leaving it to time out as
+            # "never observed" -- it was observed, and a wrong reason on a row is worse
+            # than a missing one because it reads as a measurement of the feed.
+            del self.waiting[obs.mint]
+            self.ledger.emit(
+                "hunch",
+                str(self.book),
+                t_ingest_unix=obs.t_ingest_unix,
+                t_event_unix=waiting["gesture_unix"],
+                t_event_source="operator:gesture",
+                key=obs.mint,
+                hunch_id=waiting["hunch_id"],
+                detail="entry_already_queued_for_this_mint",
+            )
             return
         if any(p.mint == obs.mint for p in self.positions.values()):
             # Already in it from an earlier hunch on the same coin. The gesture stands on
