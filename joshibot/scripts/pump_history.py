@@ -168,6 +168,19 @@ def repack(root: Path, *, force: bool = False) -> int:
         if writer is None:
             temp.unlink(missing_ok=True)
             continue
+
+        # The repack must PROVE it did not lose rows. Shard footers carry row counts, so the
+        # expected total is free to compute and the written file's own footer is free to read.
+        # A day that silently loses a shard is indistinguishable from a quiet market
+        # downstream, which is the failure this whole tree keeps paying for.
+        expected = sum(pq.ParquetFile(p).metadata.num_rows for p in shards)
+        actual = pq.ParquetFile(temp).metadata.num_rows
+        if expected != actual or actual != rows:
+            temp.unlink(missing_ok=True)
+            raise SystemExit(
+                f"{day}: repack lost rows — {len(shards)} shards hold {expected:,}, "
+                f"streamed {rows:,}, wrote {actual:,}. Refusing to publish a short day."
+            )
         temp.replace(target)
         written += 1
         print(f"  {day}: {len(shards):>5} shards -> {rows:>12,} rows, "

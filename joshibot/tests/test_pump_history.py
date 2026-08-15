@@ -241,3 +241,23 @@ def test_a_failed_repack_leaves_no_plausible_looking_partial(tape: Path) -> None
         ph.repack(tape)
     assert not list((tape / "daily").glob("*.partial"))
     assert not (tape / "daily" / f"{DAY}.parquet").exists()
+
+
+def test_repack_refuses_to_publish_a_day_that_lost_rows(tape: Path, monkeypatch) -> None:
+    """Row counts are in the shard footers, so proving no loss is free."""
+
+    rows = [export_row(f"sig{i:03d}", pre=[], post=[]) for i in range(12)]
+    write_shards(tape, DAY, rows, shards=4)
+
+    ds_mod, _ = ph._pyarrow()
+    real = ds_mod.dataset
+
+    def lossy(paths, **kwargs):
+        # Simulate a shard silently dropping out between the count and the read.
+        return real(paths[:-1] if isinstance(paths, list) else paths, **kwargs)
+
+    monkeypatch.setattr(ds_mod, "dataset", lossy)
+    with pytest.raises(SystemExit, match="lost rows"):
+        ph.repack(tape)
+    assert not (tape / "daily" / f"{DAY}.parquet").exists()
+    assert not list((tape / "daily").glob("*.partial"))
