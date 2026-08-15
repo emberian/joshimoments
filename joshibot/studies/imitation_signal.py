@@ -259,14 +259,22 @@ def fetch_all(
         if store.fetched_at(m) >= now - refresh_older_than:
             stats["fresh"] += 1
             continue
-        # A coin that had already stopped trading when we cached it cannot acquire new
-        # candles in the past, and on this market most coins are in that state within
-        # minutes. Skipping them is not a heuristic — the series is closed — and it is what
-        # makes a periodic refresh loop cost minutes instead of hours.
-        series = store.get(m)
-        if series and store.fetched_at(m) - series[-1][0] > dead_after:
-            stats["settled"] += 1
-            continue
+        # A coin that had already stopped trading when we cached it is unlikely to acquire
+        # new candles, and on this market most coins are in that state within minutes, so a
+        # warming loop can skip them cheaply.
+        #
+        # It can ONLY be a warming optimisation, never the state the analysis runs on. A
+        # cached series is authoritative only up to its own ``fetched_at``, and
+        # :func:`price_row` correctly refuses any horizon past that — so leaving dead coins
+        # on a stale timestamp would admin-censor precisely the coins that died early and
+        # quietly reintroduce the survivorship this study exists to avoid. Hence
+        # ``dead_after <= 0`` disables the skip, and ``--full`` (used before every reported
+        # run) sets it that way.
+        if dead_after > 0:
+            series = store.get(m)
+            if series and store.fetched_at(m) - series[-1][0] > dead_after:
+                stats["settled"] += 1
+                continue
         todo.append(m)
     stats["todo"] = len(todo)
     if not todo:
@@ -1192,7 +1200,22 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         file=out,
     )
     cached = sum(1 for l in launches if store.has(l.mint))
-    print(f"        candles cached for {cached}/{len(launches)} ({cached/len(launches):.1%})", file=out)
+    ages = [tape_end - store.fetched_at(l.mint) for l in launches if store.has(l.mint)]
+    stale = sum(1 for a in ages if a > 300.0)
+    print(
+        f"        candles cached for {cached}/{len(launches)} ({cached/len(launches):.1%}); "
+        f"{stale} ({stale/max(cached,1):.1%}) were fetched more than 5 min before the tape "
+        f"ends",
+        file=out,
+    )
+    if stale > cached * 0.05:
+        print(
+            "        WARNING: a stale cache admin-censors horizons and silently drops the "
+            "coins that\n        died early — run `--fetch --full` before trusting any "
+            "number below.",
+            file=out,
+        )
+    result["cache"] = {"cached": cached, "stale": stale}
 
     # ---- 0. detection -----------------------------------------------------
     onsets, det = run_detector(launches, store, k=k, window_s=window_s)
@@ -1836,8 +1859,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     mints = [l.mint for l in launches]
     print(f"[fetch] {len(mints)} mints in stream ({stats})", file=sys.stderr)
     t0 = time.time()
-    got = fetch_all(mints, store, workers=args.workers, pause=args.pause,
-                    refresh_older_than=args.refresh_older_than)
+    got = fetch_all(
+        mints,
+        store,
+        workers=args.workers,
+        pause=args.pause,
+        refresh_older_than=0.0 if args.full else args.refresh_older_than,
+        dead_after=0.0 if args.full else args.dead_after,
+    )
     print(f"[fetch] {got} in {time.time()-t0:.0f}s   spend: $0.00 (keyless endpoint)", file=sys.stderr)
     return 0
 
@@ -1856,6 +1885,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--pause", type=float, default=0.6)
     ap.add_argument("--loop", type=float, default=0.0, help="repeat --fetch every N seconds")
     ap.add_argument("--refresh-older-than", type=float, default=900.0)
+    ap.add_argument("--dead-after", type=float, default=2400.0,
+                    help="warming loop skips coins already settled this long; <=0 disables")
+    ap.add_argument("--full", action="store_true",
+                    help="refresh EVERY mint regardless of staleness; required before a "
+                         "reported run so no row is admin-censored by a stale cache")
     ap.add_argument("--no-candidates", action="store_true")
     args = ap.parse_args(argv)
 
