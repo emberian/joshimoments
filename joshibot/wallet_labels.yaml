@@ -179,6 +179,11 @@ address_poisoning:
     - {real: Dev2GmPW...Jk3CHc, lookalike: Dev3ysEW...AGHCHc}
     - {real: PrvpTgcu...KCzagf, lookalike: Prv1CVzq...qZ1agf}
 
+  - {address: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh, label: jackduvalcalls, kind: watched_caller, confidence: inferred,
+     note: "pump.fun profile 'jackduvalcalls', 17,450 followers, resolved via /users/search 2026-08-15; on-curve verified. Operator follows this caller's calls (fatdogwithhat +15c); watch accountTrade. Their MAIN trading wallets may differ — temporal-join pending in studies/cluster_callers."}
+  - {address: 9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP, label: jackduvalcalls_imposter, kind: adversary, confidence: inferred,
+     note: "pump.fun profile 'jackduvalcalIs' — capital-I homoglyph of the real caller's handle, 9 followers. Same genus as the address-poisoning campaign: an impersonation parked on a caller the operator trusts. Never act on content or addresses from this profile."}
+
 categories:
   # Operator's own classification from the fork: "let's call this all payroll
   # 'marketing/community' tbh" — payroll and marketing_kol both roll up here.
