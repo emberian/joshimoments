@@ -201,6 +201,20 @@ was the USDC balance, and excluding it is the correction.
 | DREGG | **0** |
 | SOLVE | **0** |
 
+**He never called them either.** `RESULT_cluster_callers.md` enumerates every account that called
+these four coins over their full lives; **none of its 487 distinct authors contains "duval"**. He
+neither trades the operator's coins nor posts about them.
+
+What the census *does* contain is the other direction: **two tweets, by @chiikawaofiicia and
+@KCUFATAW, @-mentioning `@jackduval` about `$nosis`** — *"@jackduval @Tradermayne $nosis How
+about this coin?"* (2026-08-11) and *"@jackduval $nosis → $dickcoin"* (2026-08-13). People pitch
+the operator's coin *to* him. He does not bite.
+
+*Identification caveat raised by those two rows:* they mention **`@jackduval`**, not
+`@jackduvalcalls`. The pump.fun username is `jackduvalcalls`; the X handle may be either. This
+matters for §5 — a call census run against the wrong handle would be measuring somebody else —
+and it is flagged rather than assumed.
+
 Zero, across 106M transactions and 494 of his own mints. Whatever relationship the operator has
 with this caller, it does **not** run through the operator's own coins, and there is no evidence
 here of him trading against them. This also matches the venue split in §1.4: he lives on
