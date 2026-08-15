@@ -34,8 +34,16 @@
          is why the watch_open manifest now records the keys next to the window.
          9T8QKsR2 = the capital-I homoglyph impersonating him. Watched deliberately:
          the open question is whether it snipes or dumps into the real caller's flow,
-         and that can only be answered with forward tape. Never act on it. -->
-    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP</string>
+         and that can only be answered with forward tape. Never act on it.
+         6Eegkyd2 / DkWzWsQT / D7xK1ZLz = the coordinated set that trades 99.2/98.8/99.6%
+         of its coins in common with him (studies/RESULT_jackduval_workup.md 5.7). Added
+         so the fleet can be watched FIRING rather than only reconstructed afterwards --
+         the live tape is the only place to see whether they lead him, follow him, or fire
+         together, which is the question the ten-day corpus cannot answer because it has
+         no sub-slot ordering we trust. Costs ~600 metered events/day on top of ~5,200,
+         so the funded key's 10k allowance goes from ~46h to ~41h; the metered_stale alarm
+         is what catches the far side of that. -->
+    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP,6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB,DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT,D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOUR_USERNAME/dev/joshibot</string>
