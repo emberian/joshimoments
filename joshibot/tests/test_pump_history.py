@@ -197,3 +197,47 @@ def test_err_is_an_empty_string_for_success_not_null(tape: Path) -> None:
     row = pq.read_table(tape / "daily" / f"{DAY}.parquet").to_pylist()[0]
     assert row["err"] == ""
     assert row["err"] is not None
+
+
+def test_check_finds_corruption_that_a_size_match_and_a_footer_read_both_miss(tape: Path) -> None:
+    """This is the one that cost a whole repack run.
+
+    An interrupted transfer can leave a file of exactly the right length whose page headers
+    are mangled. `ParquetFile(p).metadata` reads only the footer and calls it healthy, so the
+    corruption surfaces later, mid-repack, after several days have already streamed.
+    """
+
+    write_shards(tape, DAY, [export_row(f"sig{i}", pre=[], post=[]) for i in range(9)], shards=3)
+    shards = sorted((tape / "raw" / f"day={DAY}").glob("*.parquet"))
+    victim = shards[1]
+    good = victim.read_bytes()
+    # Keep the footer (so metadata still parses) and the length, but scramble the pages.
+    corrupt = bytearray(good)
+    for i in range(len(corrupt) // 4, len(corrupt) // 2):
+        corrupt[i] ^= 0xFF
+    victim.write_bytes(bytes(corrupt))
+    assert victim.stat().st_size == len(good)
+
+    manifest = tape / "corrupt.txt"
+    assert ph.check_shards(tape, manifest=manifest) == 1
+    listed = manifest.read_text().strip().splitlines()
+    assert len(listed) == 1
+    assert listed[0].endswith(victim.name)
+    assert f"day={DAY}" in listed[0]
+
+    # And with the shard restored, the tape is clean and the manifest is empty.
+    victim.write_bytes(good)
+    assert ph.check_shards(tape, manifest=manifest) == 0
+    assert manifest.read_text().strip() == ""
+
+
+def test_a_failed_repack_leaves_no_plausible_looking_partial(tape: Path) -> None:
+    """A `.partial` that survives a crash is a day that silently stops early."""
+
+    write_shards(tape, DAY, [export_row(f"sig{i}", pre=[], post=[]) for i in range(6)], shards=2)
+    shards = sorted((tape / "raw" / f"day={DAY}").glob("*.parquet"))
+    shards[-1].write_bytes(b"not a parquet file at all")
+    with pytest.raises(pa.ArrowInvalid):
+        ph.repack(tape)
+    assert not list((tape / "daily").glob("*.partial"))
+    assert not (tape / "daily" / f"{DAY}.parquet").exists()

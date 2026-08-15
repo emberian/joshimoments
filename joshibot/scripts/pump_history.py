@@ -153,6 +153,15 @@ def repack(root: Path, *, force: bool = False) -> int:
                                               version="2.6")
                 writer.write_batch(batch)
                 rows += batch.num_rows
+        except BaseException:
+            # A corrupt shard aborts mid-day. Take the half-written output with it, or the
+            # next run finds a plausible-looking `.partial` and a reader might be pointed at
+            # a day that silently stops early.
+            if writer is not None:
+                writer.close()
+                writer = None
+            temp.unlink(missing_ok=True)
+            raise
         finally:
             if writer is not None:
                 writer.close()
@@ -165,6 +174,41 @@ def repack(root: Path, *, force: bool = False) -> int:
               f"{target.stat().st_size / 1e9:.2f} GB", file=sys.stderr)
     print(f"\nrepacked {written} day(s) into {out_dir}", file=sys.stderr)
     return 0
+
+
+def check_shards(root: Path, *, manifest: Path | None = None) -> int:
+    """Read every downloaded shard and list the ones that are corrupt.
+
+    A size match is NOT an integrity check, and this cost a whole repack run to learn. An
+    interrupted ``gcloud storage`` transfer can leave a file that is exactly the right length
+    and still has a mangled page header inside; ``ParquetFile(p).metadata`` reads only the
+    footer and says it is fine. So this reads a real column across every row group, which is
+    what actually touches the page headers.
+
+    Writes a GCS URI per corrupt shard to ``manifest`` so they can be re-fetched individually
+    — egress is billable, and re-downloading 29 GB to repair a handful of files is money
+    spent on bytes that were already correct.
+    """
+
+    _, pq = _pyarrow()
+    manifest = manifest or (root / "corrupt_shards.txt")
+    bad: list[tuple[Path, str]] = []
+    scanned = 0
+    for path in sorted((root / "raw").rglob("*.parquet")):
+        scanned += 1
+        try:
+            pq.read_table(path, columns=["signature"])
+        except Exception as exc:
+            bad.append((path, type(exc).__name__))
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    with manifest.open("w", encoding="utf-8") as handle:
+        for path, kind in bad:
+            day = path.parent.name.split("=", 1)[1]
+            handle.write(f"gs://joshibot-pump-history/pump/v1/day={day}/{path.name}\n")
+            print(f"  CORRUPT {path} ({kind})", file=sys.stderr)
+    print(f"scanned {scanned:,} shards, {len(bad)} corrupt "
+          f"({manifest} lists them)", file=sys.stderr)
+    return 1 if bad else 0
 
 
 def summarise(root: Path) -> int:
@@ -299,11 +343,15 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("repack", help="fold the export shards into one file per UTC day")
     rp.add_argument("--force", action="store_true")
     sub.add_parser("summary", help="rows, bytes and distinct pump mints per day")
+    ck = sub.add_parser("check", help="read every shard and list the corrupt ones")
+    ck.add_argument("--manifest", type=Path, default=None)
     vf = sub.add_parser("verify", help="compare the overlap against the live cluster tape")
     vf.add_argument("--sample-days", type=int, default=2)
     args = parser.parse_args(argv)
     if args.cmd == "repack":
         return repack(args.root, force=args.force)
+    if args.cmd == "check":
+        return check_shards(args.root, manifest=args.manifest)
     if args.cmd == "summary":
         return summarise(args.root)
     return verify(args.root, sample_days=args.sample_days)
