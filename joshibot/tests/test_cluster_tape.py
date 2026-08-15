@@ -428,8 +428,8 @@ def untouched_pool_tx(signature: str = sig("untouched")) -> dict[str, Any]:
 WEAVE_SOL_DLMM = "77Nm2cKtZfJvcQttySdqoZvH1mbxUkUWQwKsrpyvAebu"
 
 
-def test_pool_table_matches_the_eleven_addresses_and_their_verified_pairs() -> None:
-    assert len(CLUSTER_POOLS) == 11
+def test_pool_table_matches_the_twelve_addresses_and_their_verified_pairs() -> None:
+    assert len(CLUSTER_POOLS) == 12
     assert {p.address for p in CLUSTER_POOLS} == {
         WEAVE_SOL,
         NOSIS_SOL,
@@ -448,6 +448,9 @@ def test_pool_table_matches_the_eleven_addresses_and_their_verified_pairs() -> N
         "9M1oU7cvRKiNo3e6iuCnApVe5RYehQ9RNv5dhtiKTrA7",
         "A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG",
         "GxnCwxTiK1uNQ1GiNutopyaRxH9X14JEvh6uaMwxuDRM",
+        # The operator's current nosis/weave position pool — the third pool over this
+        # pair; the address, never the pair, is the identity.
+        "48z2a9zvV7rBrMvwn3kE7vbwwiroiaaHm4rx1RwtksRF",
     }
     # Two pools, one pair, different tiers: neither the pair nor the venue is the identity.
     assert pool_for("A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG").mints == pool_for(

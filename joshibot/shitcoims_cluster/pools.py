@@ -148,6 +148,11 @@ CLUSTER_POOLS: Final[tuple[PoolSpec, ...]] = (
     _meteora("9M1oU7cvRKiNo3e6iuCnApVe5RYehQ9RNv5dhtiKTrA7", "weave/SOLVE", WEAVE, SOLVE),
     _meteora("A8ga6XM3b8EQV1ZD4B5KJTATxKrZm6feKcodTwAogtRG", "weave/DREGG (0.2%)", WEAVE, DREGG),
     _meteora("GxnCwxTiK1uNQ1GiNutopyaRxH9X14JEvh6uaMwxuDRM", "weave/DREGG (5%)", WEAVE, DREGG),
+    # Added 2026-08-16: the operator's CURRENT nosis/weave position (opened ~11h prior)
+    # sits here — a THIRD nosis/weave pool — while the toll gate was reading the two
+    # abandoned ones. Third instance of the own-pool blind spot (77Nm2c, then four more,
+    # now this). The recorder's universe must follow the operator's book, not history.
+    _meteora("48z2a9zvV7rBrMvwn3kE7vbwwiroiaaHm4rx1RwtksRF", "nosis/weave (3rd)", NOSIS, WEAVE),
 )
 
 POOLS_BY_ADDRESS: Final[dict[str, PoolSpec]] = {p.address: p for p in CLUSTER_POOLS}
