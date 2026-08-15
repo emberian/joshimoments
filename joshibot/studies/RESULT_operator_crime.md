@@ -458,12 +458,19 @@ no edge on which to test whether they cluster. The FOMO check *is* testable and 
 `wallet_labels.yaml` recorded FOMO's relayer as `AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c`.
 Its own cited source, `RESULT_copytrading.md` line 24, and the code that produced it,
 `studies/copytrading.py` line 164, both say `AgmLJBMDCqWynYnQiPCuj9ewsNNsBJXyzoUhD9LJzN51` —
-sharing only the first **eight** characters. Both decode to valid 32-byte pubkeys, so nothing
-syntactic catches it. Only `...CqWyn...` appears on chain (58,270 balance changes); the
-`...wDrsy...` string appears nowhere else on disk and nowhere in 106M transactions. Given the
-`address_poisoning` block in that same file, a prefix-matching lookalike sitting *in the label
-file* is precisely the failure the file exists to prevent. **Corrected**, with the old value
-retained as `superseded_address`.
+sharing exactly the first **eight** characters and then diverging completely. Both decode to
+valid 32-byte pubkeys, so a length or base58 check does not catch it. This study's evidence was
+the corpus: across 106,639,238 transactions, `...wDrsy...` appears on **zero** token-balance
+legs and `...CqWyn...` on **58,270** across 11 mints, and the `...wDrsy...` string appears
+nowhere else on disk. **Corrected**, with the old value retained as `superseded_address`.
+
+**A parallel lane then produced a strictly better disproof, and it is the one to remember:**
+`...wDrsy...` is **off the ed25519 curve**, so no keypair can exist for it — and a relayer
+*signs* transactions. That is decisive on its own, needs no corpus, and is cheap. It is the
+same signature as a fabricated payroll address corrected in that file on the same day, which
+together suggest these were truncated displays completed with invented tails rather than
+poisoning. **Every inherited full address in that file should be curve-checked**; it costs
+microseconds and it caught two.
 
 ---
 
