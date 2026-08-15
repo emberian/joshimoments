@@ -253,7 +253,11 @@ class BigQuery:
                 f"{self.max_bytes / 1e9:.1f} GB (raise with --max-bytes)"
             )
         if self.dry_run:
-            return [], {"dryRun": True, "total_bytes_processed": estimate, "total_bytes_billed": 0}
+            # The estimate is what a dry run is FOR, so report it as the number that would be
+            # billed. Returning 0 here made `--dry-run` print "$0.00" for a $50 pull, which is
+            # the one thing a spend gate must never do.
+            return [], {"dryRun": True, "total_bytes_processed": estimate,
+                        "total_bytes_billed": estimate, "estimate_only": True}
         proc = subprocess.run(
             [
                 *self._base(), "query", "--use_legacy_sql=false", "--nouse_cache",
@@ -263,7 +267,16 @@ class BigQuery:
         )
         if proc.returncode != 0:
             raise RuntimeError(f"query failed:\n{proc.stderr.strip()}\n{proc.stdout.strip()}")
-        return json.loads(proc.stdout or "[]"), self._stats_for(sql)
+        rows = json.loads(proc.stdout or "[]")
+        if len(rows) >= max_rows:
+            # `bq --max_rows` TRUNCATES silently. A short day would then be written with
+            # `complete: true` and no defect, which is the exact failure mode this tool's
+            # preflight exists to rule out — so it must never be reachable by the row cap.
+            raise RuntimeError(
+                f"result hit the --max_rows cap of {max_rows:,} and was silently truncated; "
+                "the day would be recorded short. Re-run with a higher cap."
+            )
+        return rows, self._stats_for(sql)
 
     def _stats_for(self, sql: str) -> dict[str, Any]:
         """Recover job id + billed bytes by matching the query text in recent job history.
@@ -565,12 +578,14 @@ def verify(out_dir: Path) -> int:
 
     exact = differ = missing = 0
     examples: list[str] = []
+    absent_by_cell: dict[tuple[str, str], int] = defaultdict(int)
     for row_id, lrow in live.items():
         if lrow["t_event"][:10] not in pulled_days:
             continue
         brow = bulk.get(row_id)
         if brow is None:
             missing += 1
+            absent_by_cell[(lrow["t_event"][:10], str(lrow.get("label", "?")))] += 1
             continue
         # Compare pre AND post, keyed by mint. Levels, not just deltas: that is the whole
         # difference between a replay tape and a summary tape.
@@ -592,7 +607,152 @@ def verify(out_dir: Path) -> int:
         print(line)
     if comparable:
         print(f"  recall                        : {100 * exact / comparable:.1f}%")
+    if absent_by_cell:
+        # WHERE the misses are is the whole diagnosis. A recall number spread evenly over 48
+        # days is a systematic parser difference; the same number concentrated in one
+        # (day, pool) cell is a hole in the upstream dataset, and only the second one means
+        # "do not backtest that day". The first run of this hit 29 misses at 98.2% recall,
+        # ALL of them SOLVE/SOL on 2026-08-12 — the day whose preflight ratio was the
+        # window's second-lowest at 91.6% and which the module docstring already flagged as
+        # carrying a one-off reprocessing. A flat percentage would have hidden that.
+        print("\n  absent rows by (day, pool) — concentration is the diagnosis:")
+        for (day, label), count in sorted(absent_by_cell.items(), key=lambda kv: -kv[1]):
+            print(f"    {day}  {label:<18} {count:>6}")
     return 1 if differ else 0
+
+
+# --------------------------------------------------------------------------------------
+# parquet — the same rows, in the format a backtester can actually scan
+# --------------------------------------------------------------------------------------
+#
+# The JSONL stays the source of truth: it is append-only, diffable, and independent of any
+# library version. Parquet is a DERIVED view, rebuildable at any time from the JSONL, and it
+# exists because 3.4M rows across 48 files is 10+ GB of JSON that a study has to re-parse on
+# every run.
+#
+# The schema is declared explicitly rather than inferred. Inference would type `err` from
+# whichever day happened to be read first (it is null on ~97% of rows), and — the one that
+# actually corrupts data — it would type the raw amounts as int64 or double. Every raw amount
+# stays a STRING, the same rule tape.py sets: a 1e9-supply 6-decimal token is 1e15 raw units,
+# already within one order of magnitude of the 2**53 float cliff.
+
+def _as_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+_PARQUET_VAULT = [
+    ("mint", "string"), ("decimals", "int32"),
+    ("pre_raw", "string"), ("post_raw", "string"), ("delta_raw", "string"),
+]
+_PARQUET_COLUMNS: list[tuple[str, str, Any]] = [
+    ("row_id", "string", lambda r: r.get("row_id")),
+    ("schema", "string", lambda r: r.get("schema")),
+    ("kind", "string", lambda r: r.get("kind")),
+    ("grade", "string", lambda r: r.get("grade")),
+    ("pool", "string", lambda r: r.get("pool")),
+    ("label", "string", lambda r: r.get("label")),
+    ("dex", "string", lambda r: r.get("dex")),
+    # pyarrow will not coerce an ISO string into a timestamp column, so it is parsed here.
+    # Keeping it a real timestamp is what lets a study filter a day without string-slicing.
+    ("t_event", "timestamp", lambda r: _as_datetime(r.get("t_event"))),
+    ("block_time", "int64", lambda r: (r.get("chain") or {}).get("block_time")),
+    ("slot", "int64", lambda r: (r.get("chain") or {}).get("slot")),
+    ("tx_index", "int64", lambda r: (r.get("chain") or {}).get("tx_index")),
+    ("signature", "string", lambda r: (r.get("chain") or {}).get("signature")),
+    ("err", "string", lambda r: None if r.get("err") is None else json.dumps(r["err"])),
+    ("fee_lamports", "string", lambda r: r.get("fee_lamports")),
+    ("compute_units", "int64", lambda r: r.get("compute_units")),
+    ("token_in_mint", "string", lambda r: r.get("token_in_mint")),
+    ("token_in_raw", "string", lambda r: r.get("token_in_raw")),
+    ("token_out_mint", "string", lambda r: r.get("token_out_mint")),
+    ("token_out_raw", "string", lambda r: r.get("token_out_raw")),
+    ("replay_sufficient", "bool", lambda r: (r.get("reserves") or {}).get("replay_sufficient")),
+    ("vaults", "vaults", lambda r: (r.get("reserves") or {}).get("vaults") or []),
+    ("provenance_cursor", "string", lambda r: (r.get("provenance") or {}).get("cursor")),
+]
+
+
+def _parquet_schema():
+    import pyarrow as pa
+
+    kinds = {
+        "string": pa.string(), "int32": pa.int32(), "int64": pa.int64(),
+        "bool": pa.bool_(), "timestamp": pa.timestamp("us", tz="UTC"),
+        "vaults": pa.list_(pa.struct([(n, pa.int32() if k == "int32" else pa.string())
+                                      for n, k in _PARQUET_VAULT])),
+    }
+    return pa.schema([(name, kinds[kind]) for name, kind, _ in _PARQUET_COLUMNS])
+
+
+def to_parquet(out_dir: Path, *, force: bool = False) -> int:
+    """Rewrite every pulled day's JSONL as parquet beside it. Idempotent."""
+
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError:
+        raise SystemExit(
+            "parquet needs pyarrow: `uv sync --group research` (it is in the research group "
+            "precisely so the live sentinel never depends on it)"
+        ) from None
+
+    schema = _parquet_schema()
+    target_dir = out_dir / "parquet"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    total_rows = 0
+    for source in sorted((out_dir / "swaps").glob("*.jsonl")):
+        target = target_dir / (source.stem + ".parquet")
+        if target.exists() and not force and target.stat().st_mtime >= source.stat().st_mtime:
+            continue
+        columns: dict[str, list[Any]] = {name: [] for name, _, _ in _PARQUET_COLUMNS}
+        with source.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                for name, kind, get in _PARQUET_COLUMNS:
+                    value = get(row)
+                    if kind == "vaults":
+                        value = [
+                            {
+                                "mint": v.get("mint"),
+                                "decimals": v.get("decimals"),
+                                "pre_raw": v.get("pre_raw"),
+                                "post_raw": v.get("post_raw"),
+                                "delta_raw": v.get("delta_raw"),
+                            }
+                            for v in value
+                        ]
+                    columns[name].append(value)
+        table = pa.Table.from_pydict(
+            {name: pa.array(columns[name], type=schema.field(name).type)
+             for name, _, _ in _PARQUET_COLUMNS},
+            schema=schema,
+        )
+        # A temp-then-rename, so an interrupted convert never leaves a half-written parquet
+        # that reads as a short day.
+        temp = target.with_suffix(".parquet.partial")
+        pq.write_table(table, temp, compression="zstd", version="2.6")
+        temp.replace(target)
+        written += 1
+        total_rows += table.num_rows
+        print(f"  {source.name} -> {target.name}  {table.num_rows:,} rows "
+              f"({source.stat().st_size / 1e6:.0f} MB -> {target.stat().st_size / 1e6:.0f} MB)",
+              file=sys.stderr)
+    jsonl_bytes = sum(p.stat().st_size for p in (out_dir / "swaps").glob("*.jsonl"))
+    parquet_bytes = sum(p.stat().st_size for p in target_dir.glob("*.parquet"))
+    print(f"\nwrote {written} file(s), {total_rows:,} rows to {target_dir}", file=sys.stderr)
+    print(f"jsonl {jsonl_bytes / 1e9:.2f} GB -> parquet {parquet_bytes / 1e9:.2f} GB "
+          f"({jsonl_bytes / max(parquet_bytes, 1):.1f}x smaller); the JSONL remains the "
+          f"source of truth", file=sys.stderr)
+    return 0
 
 
 # --------------------------------------------------------------------------------------
@@ -795,6 +955,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     add_common(sub.add_parser("selftest", help="offline fixture tests, no network"), sub=True)
     add_common(sub.add_parser("verify", help="compare pulled rows against the live tape"), sub=True)
+    parquet = sub.add_parser("parquet", help="rewrite the pulled JSONL as parquet (derived view)")
+    add_common(parquet, sub=True)
+    parquet.add_argument("--force", action="store_true", help="rewrite up-to-date files too")
     pre = sub.add_parser("preflight", help="cheap per-day completeness check (~2.5 GB/day)")
     add_common(pre, sub=True)
     pre.add_argument("--start", required=True)
@@ -815,6 +978,8 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
     if args.cmd == "verify":
         return verify(args.out)
+    if args.cmd == "parquet":
+        return to_parquet(args.out, force=args.force)
 
     project = args.project or default_project()
     if not project:
