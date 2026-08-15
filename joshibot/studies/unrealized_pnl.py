@@ -144,6 +144,29 @@ V_SOL_VIRT = 3.0e10  # lamports
 K_CURVE = V_SOL_VIRT * V_TOK_VIRT  # 3.219e25
 LAMPORTS = 1e9
 
+#: The real supply a pump.fun curve is funded with, and therefore the virtual-reserve offset
+#: ``v_tok = curve_balance + TOKEN_OFFSET``.
+#:
+#: **This is a CONSTANT here and that is a correction, not a shortcut.** The obvious derivation
+#: -- take the curve's own peak observed balance as its funded supply, ``offset = 1.073e15 -
+#: max(bal_after)`` -- is BIASED, and ``studies/pvp_vamps.py`` found the mechanism: the create
+#: transaction nets the curve's leg to ``supply - dev_buy``, because the mint and the dev buy
+#: land on the same account in the same transaction. A curve whose dev buy never comes back
+#: therefore peaks BELOW its funded supply and the derived offset is too large by the shortfall.
+#:
+#: Measured on this corpus (65,056 cohort mints): the MEDIAN peak balance is exactly 1e15 and
+#: the derived offset is exactly right, so the bias is invisible in aggregate -- but **7.73% of
+#: coins are off by more than 10%**, and the induced price error runs to **32.9% at p90 and
+#: 92.7% at p99** on affected coins. That is a tail large enough to move any per-coin result.
+#:
+#: The constant is safe because every coin in ``coins.parquet`` passed operator_crime's BORN
+#: predicate, ``minted_raw = 1e15 AND decimals = 6`` -- the older 7.931e14 curve configuration
+#: is excluded from that artifact by construction, so within this cohort the funded supply is
+#: 1e15 universally and the offset is exact. Coins outside the cohort fall back to the derived
+#: form and are flagged by ``offset_src``.
+PUMP_SUPPLY_RAW = 1_000_000_000_000_000
+TOKEN_OFFSET = V_TOK_VIRT - PUMP_SUPPLY_RAW  # 7.3e13
+
 #: Marino/Lillo's own conditioning: surviving to 30 swaps quadruples the graduation base rate
 #: and is the cheapest liveness filter in the literature. 67,710 of 266,928 born-in-window
 #: coins clear it.
@@ -400,20 +423,27 @@ def cmd_flow(args: argparse.Namespace) -> int:
             SELECT t.mint, t.block_slot, t.tx_index, t.block_time, t.owner, t.delta_raw,
                    x.cp_owner, x.cp_delta, x.bal_after, p.bal0, w.wsol_delta,
                    sum(abs(t.delta_raw)) OVER (PARTITION BY t.mint, t.block_slot, t.tx_index)
-                       AS tx_abs
+                       AS tx_abs,
+                   (co.mint IS NOT NULL) AS in_cohort
             FROM read_parquet('{led}') t
             JOIN read_parquet('{txcp}') x USING (mint, block_slot, tx_index)
             JOIN read_parquet('{cpparam}') p ON p.mint = x.mint AND p.owner = x.cp_owner
             LEFT JOIN read_parquet('{wsol}') w ON w.block_slot = t.block_slot
                                               AND w.tx_index = t.tx_index
                                               AND w.owner = x.cp_owner
+            LEFT JOIN read_parquet('{cohort}') co ON co.mint = t.mint
             ANTI JOIN read_parquet('{cp}') c ON c.mint = t.mint AND c.owner = t.owner
             WHERE x.n_cp_legs = 1
         ),
         v AS (
-            SELECT *, bal_after + ({V_TOK_VIRT} - bal0) AS v_after,
-                      bal_after - cp_delta + ({V_TOK_VIRT} - bal0) AS v_before
+            SELECT *,
+                   CASE WHEN in_cohort THEN {TOKEN_OFFSET} ELSE {V_TOK_VIRT} - bal0 END AS off
             FROM j
+        ),
+        v2 AS (
+            SELECT *, bal_after + off AS v_after,
+                      bal_after - cp_delta + off AS v_before
+            FROM v
         ),
         s AS (
             SELECT mint, owner, block_slot, tx_index, block_time, delta_raw, cp_owner,
@@ -428,8 +458,11 @@ def cmd_flow(args: argparse.Namespace) -> int:
                         THEN {K_CURVE} / (v_after * v_after) / {LAMPORTS} END AS curve_mark_after,
                    CASE WHEN wsol_delta IS NULL AND v_before > 0
                         THEN {K_CURVE} / (v_before * v_before) / {LAMPORTS}
-                   END AS curve_mark_before
-            FROM v
+                   END AS curve_mark_before,
+                   in_cohort,
+                   CASE WHEN in_cohort THEN 'cohort_constant' ELSE 'derived_peak' END
+                       AS offset_src
+            FROM v2
         ),
         lt AS (
             SELECT *,
@@ -444,7 +477,7 @@ def cmd_flow(args: argparse.Namespace) -> int:
             FROM lt
         )
         SELECT mint, owner, block_slot, tx_index, block_time, delta_raw, cp_owner,
-               cp_bal_after, route, sol, px,
+               cp_bal_after, route, sol, px, offset_src,
                curve_mark_after, curve_mark_before,
                coalesce(curve_mark_after, px) AS mark_after,
                coalesce(curve_mark_before, px_prev) AS mark_before,
@@ -538,8 +571,11 @@ def cmd_flow(args: argparse.Namespace) -> int:
                (p.owner = coalesce(c.curve_owner, '')) AS is_curve,
                CASE
                  WHEN p.owner = coalesce(c.curve_owner, '')
-                      AND p.bal_after + ({V_TOK_VIRT} - q.bal0) > 0
-                   THEN {K_CURVE} / pow(p.bal_after + ({V_TOK_VIRT} - q.bal0), 2) / {LAMPORTS}
+                      AND p.bal_after + (CASE WHEN c.mint IS NOT NULL THEN {TOKEN_OFFSET}
+                                              ELSE {V_TOK_VIRT} - q.bal0 END) > 0
+                   THEN {K_CURVE} / pow(p.bal_after
+                        + (CASE WHEN c.mint IS NOT NULL THEN {TOKEN_OFFSET}
+                                ELSE {V_TOK_VIRT} - q.bal0 END), 2) / {LAMPORTS}
                  WHEN w.wsol_bal > 0 AND p.bal_after > 0
                    THEN (w.wsol_bal / {LAMPORTS}) / p.bal_after
                END AS mark
