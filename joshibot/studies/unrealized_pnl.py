@@ -112,6 +112,7 @@ COMMANDS
 ``momentum`` does PRIMED supply govern how big a response an arriving event provokes
 ``kernel``   the same question without a threshold: the response kernel w(u) over PnL
 ``eventtime`` the same question at BLOCK resolution, in event time, with real arrivals
+``crosssec``  within (coin, instant): does a wallet's OWN basis pick who sells
 ``q1``       basis-density modes vs price reversals, against a rotation null
 ``q2``       realization-policy embedding, clustering, tooling-vs-actor controls
 ``q3``       loss-tail shape as a PvP/community feature (a feature, not a classifier)
@@ -597,6 +598,78 @@ def cmd_flow(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scope_args(p):
+    """Coin-subset selection, shared by every analysis stage.
+
+    THE POINT. Each stage used to hard-code its own population -- the cohort was fixed at
+    ``curve_touches >= 30`` in `flow`, and every downstream stage then re-sampled its own
+    eligible set with its own thresholds. So there was no way to ask "run all of this on the
+    graduated coins", or "on the coins the pvp lane flagged", or "on these four" -- and worse,
+    two stages reporting on "the corpus" were silently reporting on different populations.
+
+    ``--select`` is a SQL predicate evaluated against ``coins.parquet``, so anything that
+    artifact knows is available: ``graduated``, ``peak_mcap_sol``, ``n_snipers``,
+    ``dev_buy_share``, ``lifetime_s``, ``drawdown_from_peak``, ``curve_touches``, ``birth_time``.
+    ``--mints-file`` takes an explicit newline-delimited list, which is how another lane's
+    output gets piped in. Neither flag means "everything in the basis artifact".
+    """
+    p.add_argument(
+        "--select",
+        default=None,
+        help="SQL predicate over coins.parquet, e.g. 'graduated AND peak_mcap_sol > 100'",
+    )
+    p.add_argument(
+        "--mints-file",
+        default=None,
+        help="newline-delimited mint list; intersected with --select if both are given",
+    )
+    return p
+
+
+def _basis_rel(con, args):
+    """The basis relation, already restricted to the requested coin scope.
+
+    Returns a SQL relation expression, so a stage writes ``FROM {basis}`` and gets either the
+    whole artifact or a scoped subquery without knowing which.
+    """
+    path = _out() / "basis.parquet"
+    sel = getattr(args, "select", None)
+    mf = getattr(args, "mints_file", None)
+    if not sel and not mf:
+        return f"read_parquet('{path}')"
+
+    parts = []
+    if sel:
+        parts.append(
+            f"SELECT mint FROM read_parquet('{_coins_path()}') WHERE {sel}"
+        )
+    if mf:
+        mints = [
+            ln.strip()
+            for ln in Path(mf).read_text().splitlines()
+            if ln.strip() and not ln.startswith("#")
+        ]
+        if not mints:
+            raise SystemExit(f"--mints-file {mf} contained no mints")
+        lit = ",".join(f"('{m}')" for m in mints)
+        parts.append(f"SELECT * FROM (VALUES {lit}) AS t(mint)")
+    con.execute("DROP TABLE IF EXISTS scope_mints")
+    if len(parts) == 1:
+        con.execute(f"CREATE TABLE scope_mints AS {parts[0]}")
+    else:
+        con.execute(
+            f"CREATE TABLE scope_mints AS SELECT mint FROM ({parts[0]}) "
+            f"INTERSECT SELECT mint FROM ({parts[1]})"
+        )
+    n = con.execute("SELECT count(*) FROM scope_mints").fetchone()[0]
+    print(f"[scope] {n:,} coins selected", flush=True)
+    if n == 0:
+        raise SystemExit("coin scope is empty; check --select / --mints-file")
+    return (
+        f"(SELECT b.* FROM read_parquet('{path}') b SEMI JOIN scope_mints m USING (mint))"
+    )
+
+
 # =====================================================================================
 # basis
 # =====================================================================================
@@ -761,7 +834,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     import numpy as np
 
     con = _duck(args.threads, args.memory)
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
 
     # The sample must be drawn from the DISTINCT series, materialised first. Applying
     # `USING SAMPLE` directly to a `GROUP BY ... HAVING` query lets duckdb push the sample
@@ -773,7 +846,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             SELECT mint, owner, count(*) AS n_ev,
                    max(abs(log_a_min)) AS log_a_worst,
                    min(qty_before_raw) AS min_qty_raw
-            FROM read_parquet('{basis}') GROUP BY 1, 2 HAVING count(*) >= 3"""
+            FROM {basis} GROUP BY 1, 2 HAVING count(*) >= 3"""
     )
     n_all = con.execute("SELECT count(*) FROM allpairs").fetchone()[0]
     con.execute(
@@ -790,7 +863,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         f"""
         SELECT b.mint, b.owner, b.block_slot, b.tx_index, b.delta_raw, b.px, b.mark_before,
                b.basis_before, b.basis_after, b.qty_before, b.qty_before_raw, b.log_a_min
-        FROM read_parquet('{basis}') b SEMI JOIN samp s USING (mint, owner)
+        FROM {basis} b SEMI JOIN samp s USING (mint, owner)
         ORDER BY b.mint, b.owner, b.block_slot, b.tx_index"""
     ).fetchdf()
     print(f"[check] {len(rows):,} event rows", flush=True)
@@ -880,6 +953,313 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 # =====================================================================================
+# crosssec -- the one place basis CANNOT be a re-encoding of the price path
+# =====================================================================================
+
+#: Position-AGE strata, measured at the tick (`t - t_in`) rather than as the episode's
+#: eventual total duration. That distinction is not pedantic: total duration is a function
+#: of when the wallet sold, so stratifying on it selects on the outcome being tested.
+#: Age-so-far is strictly causal.
+#:
+#: Why the strata exist at all: the corpus is a mixture of two populations sharing only a
+#: schema, and pooling them is the single largest modelling error in this study: 48% of all
+#: sells land in the SAME SLOT as the buy that opened the position, and the median holding time
+#: before a sell is 3 seconds. For an atomic round-tripper "unrealized PnL" is a 400 ms artifact
+#: that is ~0 by construction, and it sells with probability ~1 because that is what it is. Any
+#: hazard peak at break-even estimated on the pooled population may be nothing but that
+#: composition.
+DURATION_STRATA = ((0, 1), (1, 60), (60, 600), (600, 10**9))
+
+
+def _permute_within(blocks, boundaries, sold, n, rng):
+    """Reassign the `sold` labels at random inside each block, keeping each block's count."""
+    import numpy as np
+
+    fake = np.zeros(n, dtype=bool)
+    for i in range(boundaries.size - 1):
+        idx = blocks[boundaries[i] : boundaries[i + 1]]
+        ns = int(sold[idx].sum())
+        if ns:
+            fake[rng.choice(idx, ns, replace=False)] = True
+    return fake
+
+
+def cmd_crosssec(args: argparse.Namespace) -> int:
+    """Among the wallets holding coin C at instant T, is the one that sells drawn uniformly
+    from that moment's cost-basis distribution?
+
+    WHY THIS IS THE TEST, and why everything before it was confounded. Cost basis is CONSTRUCTED
+    FROM past trades, so "this coin's holders are bunched near break-even" is mostly a
+    restatement of "this coin's price is near where it recently traded a lot". Every aggregate
+    result in this study is therefore contaminated by the price path, and the pattern of nulls
+    is exactly what that predicts: q1's basis profile loses to a plain traded-volume-at-level
+    control; the excitability kernel dies in event time; crew AUC sits near chance. The
+    unifying reading is that at the COIN level the basis distribution carries no information
+    the price path does not already carry.
+
+    That reading also says precisely where basis cannot be redundant. **Two wallets holding the
+    same coin at the same instant are looking at an identical price path and differ only in what
+    they paid.** Conditioning on (coin, instant) differences out price, volatility, regime,
+    news, the coin's whole history and every unobserved common shock -- exactly, not
+    approximately, and with no control variables at all. Whatever is left is basis.
+
+    THE STATISTIC. For each (coin, tick) stratum holding at least `--min-holders` wallets, of
+    which at least one sells in the next tick and at least one does not, take the percentile
+    rank of each seller's own unrealized PnL among that stratum's holders. Under the null that
+    basis is irrelevant, the seller is a uniform draw and the mean rank is 0.5, regardless of
+    what the coin was doing. Aggregated over strata, clustered on coin.
+
+    A rank test needs no functional form and no distributional assumption, and the null is exact
+    rather than asymptotic: the permutation that generates it is "which of these wallets sold",
+    which is the actual counterfactual of interest.
+
+    AND IT IS RUN INSIDE HOLDING-DURATION STRATA, because the pooled population is a mixture of
+    atomic round-trippers and real holders (see DURATION_STRATA). If the effect lives only in
+    the sub-second stratum it is composition, not behaviour.
+    """
+    import numpy as np
+
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _basis_rel(con, args)
+    dt = args.tick
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins_all AS
+        SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last, count(*) AS n_ev
+        FROM {basis} WHERE mark_after > 0
+        GROUP BY 1 HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
+           AND max(block_time) - min(block_time) >= {10 * dt}
+        """
+    )
+    n_pool = con.execute("SELECT count(*) FROM coins_all").fetchone()[0]
+    con.execute(
+        f"""CREATE OR REPLACE TABLE coins AS SELECT * FROM coins_all
+            USING SAMPLE {args.max_coins} ROWS (reservoir, {args.seed})"""
+    )
+    n_c = con.execute("SELECT count(*) FROM coins").fetchone()[0]
+    print(f"[crosssec] {n_c:,} coins of {n_pool:,} eligible, tick={dt}s", flush=True)
+    if n_c == 0:
+        print("[crosssec] NULL: no eligible coin.")
+        return 0
+
+    con.execute(
+        f"""CREATE OR REPLACE TABLE ev AS
+            SELECT b.* FROM {basis} b SEMI JOIN coins c USING (mint)"""
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE mk AS
+        SELECT mint, k, arg_max(mark_after, ord) AS mark
+        FROM (SELECT e.mint, CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k,
+                     e.mark_after, e.block_slot * 1000000 + e.tx_index AS ord
+              FROM ev e JOIN coins c USING (mint)
+              WHERE e.mark_after > 0 AND abs(e.sol) >= {args.min_sol})
+        GROUP BY 1, 2
+        """
+    )
+    con.execute(
+        """CREATE OR REPLACE TABLE st AS
+           SELECT mint, owner, episode, block_time, qty_after, basis_after
+           FROM ev WHERE basis_after > 0"""
+    )
+    # HOLD_S is the episode's own realised duration -- the stratifier.
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE ep AS
+        SELECT mint, owner, episode, min(block_time) AS t_in, max(block_time) AS t_out,
+               max(block_time) - min(block_time) AS hold_s
+        FROM ev GROUP BY 1, 2, 3 HAVING max(block_time) - min(block_time) >= 0
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cand AS
+        SELECT e.mint, e.owner, e.episode, e.hold_s, g.k, c.t_first + g.k * {dt} AS t,
+               c.t_first + g.k * {dt} - e.t_in AS age_s
+        FROM ep e JOIN coins c USING (mint),
+             LATERAL (SELECT unnest(range(
+                 CAST(floor((e.t_in - c.t_first) / {dt}) AS BIGINT) + 1,
+                 CAST(floor((least(e.t_out, c.t_last) - c.t_first) / {dt}) AS BIGINT) + 1,
+                 1)) AS k) g
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE sellticks AS
+        SELECT DISTINCT e.mint, e.owner, e.episode,
+               CAST(floor((e.block_time - c.t_first) / {dt}) AS BIGINT) AS k
+        FROM ev e JOIN coins c USING (mint) WHERE e.delta_raw < 0
+        """
+    )
+    out = _out() / "crosssec.parquet"
+    _copy(
+        con,
+        f"""
+        WITH ws AS (
+            SELECT c.mint, c.owner, c.episode, c.hold_s, c.k, c.age_s,
+                   s.qty_after AS qty, s.basis_after AS basis
+            FROM cand c ASOF JOIN st s
+              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
+             AND c.t >= s.block_time
+            WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
+        )
+        SELECT w.mint, w.k, w.owner, w.episode, w.hold_s, w.age_s, w.qty,
+               m.mark / w.basis - 1.0 AS upnl,
+               (sk.k IS NOT NULL) AS sold
+        FROM ws w
+        ASOF JOIN mk m ON w.mint = m.mint AND w.k > m.k
+        LEFT JOIN sellticks sk
+          ON sk.mint = w.mint AND sk.owner = w.owner AND sk.episode = w.episode
+         AND sk.k = w.k
+        WHERE m.mark > 0
+        """,
+        out,
+        "cross-section risk set",
+    )
+
+    res = {"n_coins": int(n_c), "tick": dt, "strata": []}
+    rng = np.random.default_rng(args.seed)
+
+    for lo, hi in DURATION_STRATA:
+        df = con.execute(
+            f"""
+            WITH r AS (
+                SELECT * FROM read_parquet('{out}')
+                WHERE age_s >= {lo} AND age_s < {hi}
+            ),
+            g AS (
+                SELECT mint, k, count(*) AS n_h, sum(sold::int) AS n_s FROM r GROUP BY 1, 2
+            )
+            SELECT r.mint, r.k, r.upnl, r.qty, r.sold, r.age_s, g.n_h, g.n_s
+            FROM r JOIN g USING (mint, k)
+            WHERE g.n_h >= {args.min_holders} AND g.n_s >= 1 AND g.n_s < g.n_h
+            """
+        ).fetchdf()
+        if len(df) < 2000:
+            res["strata"].append(
+                {"hold_lo": lo, "hold_hi": hi, "verdict": "too few rows", "n": len(df)}
+            )
+            print(f"[crosssec] hold {lo}-{hi}s: only {len(df)} rows, skipped", flush=True)
+            continue
+
+        # percentile rank of upnl within each (coin, tick) stratum
+        df = df.sort_values(["mint", "k"], kind="stable")
+        key = (df["mint"].astype(str) + "|" + df["k"].astype(str)).to_numpy()
+        upnl = df["upnl"].to_numpy()
+        sold = df["sold"].to_numpy().astype(bool)
+        mints = df["mint"].to_numpy()
+
+        uniq_k, inv = np.unique(key, return_inverse=True)
+        ranks = np.empty(upnl.size)
+        order = np.lexsort((upnl, inv))
+        grp = inv[order]
+        bounds = np.flatnonzero(np.r_[True, grp[1:] != grp[:-1], True])
+        for i in range(bounds.size - 1):
+            sl = slice(bounds[i], bounds[i + 1])
+            n = sl.stop - sl.start
+            ranks[order[sl]] = (np.arange(n) + 0.5) / n
+
+        # AGE RANK, the confound that (coin, instant) does NOT difference out. A wallet with a
+        # lower basis bought earlier, so "the seller is further ahead" and "the seller is an
+        # older position" are the same statement until they are separated. `age_rank` measures
+        # the second directly, and the conditional permutation below holds it fixed.
+        age = df["age_s"].to_numpy().astype(float)
+        aranks = np.empty(age.size)
+        aorder = np.lexsort((age, inv))
+        agrp = inv[aorder]
+        abounds = np.flatnonzero(np.r_[True, agrp[1:] != agrp[:-1], True])
+        for i in range(abounds.size - 1):
+            sl = slice(abounds[i], abounds[i + 1])
+            n = sl.stop - sl.start
+            aranks[aorder[sl]] = (np.arange(n) + 0.5) / n
+
+        seller_ranks = ranks[sold]
+        obs = float(seller_ranks.mean())
+        # coin-clustered SE on the per-coin mean seller rank
+        per_coin = {}
+        for m, r_ in zip(mints[sold], seller_ranks, strict=True):
+            per_coin.setdefault(m, []).append(r_)
+        coin_means = np.array([np.mean(v) for v in per_coin.values()])
+        se = float(coin_means.std(ddof=1) / math.sqrt(coin_means.size))
+
+        # EXACT null 1: within each (coin, instant) stratum, permute WHICH wallets sold,
+        # keeping the count. This is the actual counterfactual -- someone had to sell, was it
+        # this one?
+        #
+        # EXACT null 2: the same permutation restricted to wallets in the same AGE TERCILE of
+        # their stratum, which holds position age fixed. If the effect survives null 2 it is
+        # about what the wallet PAID, not about how long it has been sitting there.
+        agebin = np.zeros(age.size, dtype=np.int64)
+        for i in range(abounds.size - 1):
+            sl = slice(abounds[i], abounds[i + 1])
+            n = sl.stop - sl.start
+            agebin[aorder[sl]] = np.minimum(2, (np.arange(n) * 3) // max(n, 1))
+        cell_key = inv * 4 + agebin
+        corder = np.argsort(cell_key, kind="stable")
+        ckey = cell_key[corder]
+        cbounds = np.flatnonzero(np.r_[True, ckey[1:] != ckey[:-1], True])
+
+        perm = np.asarray(
+            [
+                float(ranks[_permute_within(order, bounds, sold, upnl.size, rng)].mean())
+                for _ in range(args.nulls)
+            ]
+        )
+        p = float(((np.abs(perm - 0.5) >= abs(obs - 0.5)).sum() + 1) / (perm.size + 1))
+
+        perm_age = np.asarray(
+            [
+                float(ranks[_permute_within(corder, cbounds, sold, upnl.size, rng)].mean())
+                for _ in range(args.nulls)
+            ]
+        )
+        p_age = float(
+            ((np.abs(perm_age - perm_age.mean()) >= abs(obs - perm_age.mean())).sum() + 1)
+            / (perm_age.size + 1)
+        )
+        obs_age_rank = float(aranks[sold].mean())
+
+        cell = {
+            "hold_lo": lo,
+            "hold_hi": hi,
+            "n_rows": len(df),
+            "n_strata": int(uniq_k.size),
+            "n_sellers": int(sold.sum()),
+            "n_coins": int(coin_means.size),
+            "mean_seller_rank": obs,
+            "se_clustered": se,
+            "t_vs_half": (obs - 0.5) / se if se > 0 else None,
+            "perm_mean": float(perm.mean()),
+            "p_permutation": p,
+            "mean_seller_age_rank": obs_age_rank,
+            "perm_age_conditioned_mean": float(perm_age.mean()),
+            "p_permutation_age_conditioned": p_age,
+            "median_seller_upnl": float(np.median(upnl[sold])),
+            "median_holder_upnl": float(np.median(upnl[~sold])),
+        }
+        res["strata"].append(cell)
+        print(
+            f"[crosssec] hold {lo}-{hi}s: n={len(df):,} strata={uniq_k.size:,} "
+            f"sellers={int(sold.sum()):,} mean_seller_rank={obs:.4f} "
+            f"(t={cell['t_vs_half']:+.2f}) p_perm={p:.4f} | "
+            f"age_rank={obs_age_rank:.4f} age-conditioned null={perm_age.mean():.4f} "
+            f"p={p_age:.4f}",
+            flush=True,
+        )
+
+    res["by_fdr"] = _by_fdr(
+        [c.get("p_permutation") for c in res["strata"]]
+        + [c.get("p_permutation_age_conditioned") for c in res["strata"]],
+        args.fdr_q,
+    )
+    (_out() / f"crosssec_t{dt}.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"[crosssec] -> {_out() / f'crosssec_t{dt}.json'}  ({time.time() - t0:.0f}s)", flush=True)
+    return 0
+
+
+# =====================================================================================
 # eventtime -- the same question at BLOCK resolution, in event time, no buckets at all
 # =====================================================================================
 
@@ -915,12 +1295,12 @@ def cmd_eventtime(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
 
     con.execute(
         f"""
         CREATE OR REPLACE TABLE coins_all AS
-        SELECT mint, count(*) AS n_ev FROM read_parquet('{basis}')
+        SELECT mint, count(*) AS n_ev FROM {basis}
         WHERE sol IS NOT NULL AND mark_after > 0
         GROUP BY 1 HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
         """
@@ -943,7 +1323,7 @@ def cmd_eventtime(args: argparse.Namespace) -> int:
         SELECT b.mint, b.owner, b.block_slot, b.tx_index, b.block_time, b.delta_raw, b.sol,
                b.mark_before, b.mark_after,
                row_number() OVER (PARTITION BY b.mint ORDER BY b.block_slot, b.tx_index) AS seq
-        FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)
+        FROM {basis} b SEMI JOIN coins c USING (mint)
         WHERE b.sol IS NOT NULL AND b.mark_after > 0
         """
     )
@@ -1006,7 +1386,7 @@ def cmd_eventtime(args: argparse.Namespace) -> int:
         CREATE OR REPLACE TABLE st AS
         SELECT mint, owner, episode, qty_after, basis_after,
                block_slot * 1000000 + tx_index AS ord
-        FROM read_parquet('{basis}') WHERE basis_after > 0
+        FROM {basis} WHERE basis_after > 0
         """
     )
     con.execute(
@@ -1204,7 +1584,7 @@ def cmd_kernel(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     dt = args.tick
     K = args.bins
 
@@ -1212,7 +1592,7 @@ def cmd_kernel(args: argparse.Namespace) -> int:
         f"""
         CREATE OR REPLACE TABLE coins_all AS
         SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last, count(*) AS n_ev
-        FROM read_parquet('{basis}') WHERE mark_after > 0
+        FROM {basis} WHERE mark_after > 0
         GROUP BY 1
         HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
            AND max(block_time) - min(block_time) >= {20 * dt}
@@ -1231,7 +1611,7 @@ def cmd_kernel(args: argparse.Namespace) -> int:
 
     con.execute(
         f"""CREATE OR REPLACE TABLE ev AS
-            SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)"""
+            SELECT b.* FROM {basis} b SEMI JOIN coins c USING (mint)"""
     )
     con.execute(
         f"""
@@ -1606,14 +1986,14 @@ def cmd_momentum(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     dt = args.tick
 
     con.execute(
         f"""
         CREATE OR REPLACE TABLE coins_all AS
         SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last, count(*) AS n_ev
-        FROM read_parquet('{basis}') WHERE mark_after > 0
+        FROM {basis} WHERE mark_after > 0
         GROUP BY 1
         HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
            AND max(block_time) - min(block_time) >= {20 * dt}
@@ -1632,7 +2012,7 @@ def cmd_momentum(args: argparse.Namespace) -> int:
 
     con.execute(
         f"""CREATE OR REPLACE TABLE ev AS
-            SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)"""
+            SELECT b.* FROM {basis} b SEMI JOIN coins c USING (mint)"""
     )
     # flow per bucket, and the coin's own mark path
     con.execute(
@@ -2060,7 +2440,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0w = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
 
     # --- the wiggle population -----------------------------------------------------------
     # Curve-route coins only. A migrated coin is priced at last trade rather than at an exact
@@ -2070,7 +2450,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
     con.execute(
         f"""
         CREATE OR REPLACE TABLE migrated AS
-        SELECT DISTINCT mint FROM read_parquet('{basis}') WHERE route = 'pool'
+        SELECT DISTINCT mint FROM {basis} WHERE route = 'pool'
         """
     )
     con.execute(
@@ -2080,7 +2460,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
                max(b.mark_after) AS peak_mark,
                arg_max(b.block_time, b.mark_after) AS t_peak,
                max(b.block_time) AS t_last
-        FROM read_parquet('{basis}') b
+        FROM {basis} b
         WHERE b.mark_after IS NOT NULL AND b.route = 'curve'
           AND b.mint NOT IN (SELECT mint FROM migrated)
         GROUP BY 1
@@ -2091,7 +2471,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
         f"""
         CREATE OR REPLACE TABLE t0 AS
         SELECT b.mint, min(b.block_time) AS t0
-        FROM read_parquet('{basis}') b JOIN pk p USING (mint)
+        FROM {basis} b JOIN pk p USING (mint)
         WHERE b.block_time > p.t_peak AND b.route = 'curve'
           AND b.mark_after <= (1 - {WIGGLE_DD}) * p.peak_mark
         GROUP BY 1
@@ -2102,7 +2482,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
         CREATE OR REPLACE TABLE wig AS
         SELECT b.mint, t.t0, p.t_last, count(*) AS n_post,
                sum((b.delta_raw > 0)::int) AS n_buy, sum((b.delta_raw < 0)::int) AS n_sell
-        FROM read_parquet('{basis}') b
+        FROM {basis} b
         JOIN t0 t USING (mint) JOIN pk p USING (mint)
         WHERE b.block_time > t.t0 AND b.mark_after IS NOT NULL AND b.route = 'curve'
         GROUP BY 1, 2, 3
@@ -2132,7 +2512,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
         FROM (SELECT b.mint, b.owner, b.qty_after, b.basis_after,
                      row_number() OVER (PARTITION BY b.mint, b.owner
                                         ORDER BY b.block_slot DESC, b.tx_index DESC) AS rk
-              FROM read_parquet('{basis}') b JOIN wig w USING (mint)
+              FROM {basis} b JOIN wig w USING (mint)
               WHERE b.block_time <= w.t0)
         WHERE rk = 1 AND qty_after > {DUST_RAW} AND basis_after > 0
         """
@@ -2142,7 +2522,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
         f"""
         CREATE OR REPLACE TABLE occ AS
         SELECT b.mint, ln(b.px) AS lx, abs(b.sol) AS w
-        FROM read_parquet('{basis}') b JOIN wig w2 USING (mint)
+        FROM {basis} b JOIN wig w2 USING (mint)
         WHERE b.block_time <= w2.t0 AND b.px > 0 AND b.sol IS NOT NULL AND b.route = 'curve'
         """
     )
@@ -2151,7 +2531,7 @@ def cmd_q1(args: argparse.Namespace) -> int:
         f"""
         CREATE OR REPLACE TABLE path AS
         SELECT b.mint, b.block_slot, b.tx_index, b.block_time, ln(b.mark_after) AS lx
-        FROM read_parquet('{basis}') b JOIN wig w USING (mint)
+        FROM {basis} b JOIN wig w USING (mint)
         WHERE b.block_time > w.t0 AND b.mark_after > 0 AND b.route = 'curve'
         ORDER BY b.mint, b.block_slot, b.tx_index
         """
@@ -2346,7 +2726,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     ok = (
         "upnl_at_action IS NOT NULL AND upnl_at_action > -0.999 AND upnl_at_action < 1000 "
         "AND log_a_min >= -300 AND qty_before_raw > 0"
@@ -2361,14 +2741,14 @@ def cmd_describe(args: argparse.Namespace) -> int:
               quantile_cont(upnl_at_action,0.90) p90, quantile_cont(upnl_at_action,0.95) p95,
               quantile_cont(upnl_at_action,0.99) p99,
               avg((upnl_at_action>0)::int) frac_in_profit
-            FROM read_parquet('{basis}') WHERE delta_raw < 0 AND {ok}"""
+            FROM {basis} WHERE delta_raw < 0 AND {ok}"""
     ).fetchdf().to_dict("records")[0]
 
     res["action_asymmetry"] = con.execute(
         f"""SELECT sum((delta_raw>0)::int) n_buys, sum((delta_raw<0)::int) n_sells,
               avg(CASE WHEN delta_raw>0 THEN (upnl_at_action<0)::int END) frac_adds_while_red,
               avg(CASE WHEN delta_raw<0 THEN (upnl_at_action<0)::int END) frac_sells_while_red
-            FROM read_parquet('{basis}') WHERE {ok}"""
+            FROM {basis} WHERE {ok}"""
     ).fetchdf().to_dict("records")[0]
 
     res["standing_book"] = con.execute(
@@ -2377,10 +2757,10 @@ def cmd_describe(args: argparse.Namespace) -> int:
                 SELECT mint, owner, qty_after, basis_after,
                   row_number() OVER (PARTITION BY mint,owner
                                      ORDER BY block_slot DESC,tx_index DESC) rk
-                FROM read_parquet('{basis}')) WHERE rk=1 AND qty_after>{DUST_RAW}
+                FROM {basis}) WHERE rk=1 AND qty_after>{DUST_RAW}
                                                     AND basis_after>0),
             spot AS (SELECT mint, arg_max(mark_after, block_slot*1000000+tx_index) spot
-                     FROM read_parquet('{basis}')
+                     FROM {basis}
                      WHERE mark_after>0 AND abs(sol)>={args.min_sol} GROUP BY 1)
             SELECT count(*) n_positions,
               quantile_cont(s.spot/l.basis-1, 0.05) p05,
@@ -2396,7 +2776,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
     # --- the round-number test, against a smooth baseline ---------------------------------
     u = con.execute(
-        f"""SELECT upnl_at_action u FROM read_parquet('{basis}')
+        f"""SELECT upnl_at_action u FROM {basis}
             WHERE delta_raw < 0 AND {ok} AND upnl_at_action BETWEEN -0.98 AND 10"""
     ).fetchdf()["u"].to_numpy()
     bw = 0.002
@@ -2430,7 +2810,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
         f"""WITH s AS (
               SELECT upnl_at_action u, delta_raw, block_time, block_slot, qty_after,
                      min(block_time) OVER w AS t_open, min(block_slot) OVER w AS slot_open
-              FROM read_parquet('{basis}') WHERE {ok}
+              FROM {basis} WHERE {ok}
               WINDOW w AS (PARTITION BY mint, owner, episode))
             SELECT CASE WHEN abs(u) <= 0.002 THEN 'at_breakeven'
                         WHEN abs(u) <= 0.05  THEN 'near_breakeven'
@@ -2474,7 +2854,7 @@ def cmd_hazard(args: argparse.Namespace) -> int:
     """
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     dt = args.tick
 
     con.execute(
@@ -2482,7 +2862,7 @@ def cmd_hazard(args: argparse.Namespace) -> int:
         CREATE OR REPLACE TABLE coins_all AS
         SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last,
                count(*) AS n_ev
-        FROM read_parquet('{basis}')
+        FROM {basis}
         WHERE mark_after > 0
         GROUP BY 1
         HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
@@ -2507,7 +2887,7 @@ def cmd_hazard(args: argparse.Namespace) -> int:
     con.execute(
         f"""
         CREATE OR REPLACE TABLE ev AS
-        SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)
+        SELECT b.* FROM {basis} b SEMI JOIN coins c USING (mint)
         """
     )
     # the coin's own mark path, dust-filtered, plus a trailing realized volatility
@@ -2758,7 +3138,7 @@ def cmd_q2(args: argparse.Namespace) -> int:
 
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     rng = np.random.default_rng(args.seed)
 
     # --- the sell tape, one row per realization ------------------------------------------
@@ -2766,7 +3146,7 @@ def cmd_q2(args: argparse.Namespace) -> int:
         f"""
         CREATE OR REPLACE TABLE sells AS
         SELECT owner, mint, block_time, upnl_at_action AS u, abs(sol) AS sol
-        FROM read_parquet('{basis}')
+        FROM {basis}
         WHERE delta_raw < 0 AND upnl_at_action IS NOT NULL
           AND upnl_at_action > -0.999 AND upnl_at_action < 1000
           AND log_a_min >= -300 AND qty_before_raw > 0
@@ -3143,7 +3523,7 @@ def cmd_q3(args: argparse.Namespace) -> int:
     """
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     cohort = _out() / "cohort.parquet"
 
     out = _out() / "q3_basis_shape.parquet"
@@ -3152,7 +3532,7 @@ def cmd_q3(args: argparse.Namespace) -> int:
         f"""
         WITH s AS (
             SELECT mint, upnl_at_action AS u, abs(sol) AS sol, block_time
-            FROM read_parquet('{basis}')
+            FROM {basis}
             WHERE delta_raw < 0 AND upnl_at_action IS NOT NULL
               AND upnl_at_action > -0.999 AND upnl_at_action < 1000
               AND log_a_min >= -300 AND qty_before_raw > 0
@@ -3180,12 +3560,12 @@ def cmd_q3(args: argparse.Namespace) -> int:
             FROM (SELECT mint, owner, qty_after, basis_after, mark_after,
                          row_number() OVER (PARTITION BY mint, owner
                                             ORDER BY block_slot DESC, tx_index DESC) AS rk
-                  FROM read_parquet('{basis}'))
+                  FROM {basis})
             WHERE rk = 1 AND qty_after > {DUST_RAW}
         ),
         spot AS (
             SELECT mint, arg_max(mark_after, block_slot * 1000000 + tx_index) AS spot
-            FROM read_parquet('{basis}') WHERE mark_after > 0 GROUP BY 1
+            FROM {basis} WHERE mark_after > 0 GROUP BY 1
         ),
         hold AS (
             SELECT l.mint,
@@ -3210,11 +3590,11 @@ def cmd_q3(args: argparse.Namespace) -> int:
                                          tx_index DESC
                                          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
                        AS sufmin_mark
-            FROM read_parquet('{basis}') WHERE mark_after > 0
+            FROM {basis} WHERE mark_after > 0
         ),
         entry AS (
             SELECT mint, owner, min(block_time) AS t_in
-            FROM read_parquet('{basis}') WHERE delta_raw > 0 GROUP BY 1, 2
+            FROM {basis} WHERE delta_raw > 0 GROUP BY 1, 2
         ),
         deep AS (
             SELECT e.mint, e.owner, e.t_in, m.sufmin_mark
@@ -3314,7 +3694,7 @@ def cmd_q4(args: argparse.Namespace) -> int:
     """
     con = _duck(args.threads, args.memory)
     t0 = time.time()
-    basis = _out() / "basis.parquet"
+    basis = _basis_rel(con, args)
     xfer = _out() / "xfer.parquet"
 
     own = _own_wallets()
@@ -3328,7 +3708,7 @@ def cmd_q4(args: argparse.Namespace) -> int:
         FROM (SELECT mint, owner, qty_after, basis_after,
                      row_number() OVER (PARTITION BY mint, owner
                                         ORDER BY block_slot DESC, tx_index DESC) AS rk
-              FROM read_parquet('{basis}'))
+              FROM {basis})
         WHERE rk = 1 AND qty_after > {DUST_RAW}
         """
     )
@@ -3344,7 +3724,7 @@ def cmd_q4(args: argparse.Namespace) -> int:
                max(block_time) AS t_spot,
                quantile_cont(mark_after, 0.01) AS p01_mark,
                min(mark_after) AS min_mark, max(mark_after) AS max_mark
-        FROM read_parquet('{basis}')
+        FROM {basis}
         WHERE mark_after > 0 AND abs(sol) >= {args.min_sol}
         GROUP BY 1
         """
@@ -3606,12 +3986,28 @@ def main(argv: list[str] | None = None) -> int:
     b = common(sub.add_parser("basis", help="average-cost trajectory per (coin, wallet)"))
     b.set_defaults(fn=cmd_basis)
 
-    c = common(sub.add_parser("check", help="falsify the window basis; price FIFO sensitivity"))
+    c = _scope_args(common(sub.add_parser("check", help="falsify the window basis; price FIFO sensitivity")))
     c.add_argument("--sample", type=int, default=4000)
     c.add_argument("--seed", type=int, default=17)
     c.set_defaults(fn=cmd_check)
 
-    et = common(sub.add_parser("eventtime", help="response kernel in EVENT time, block resolution"))
+    cs = _scope_args(
+        common(sub.add_parser("crosssec", help="within (coin, instant): who sells, by own basis"))
+    )
+    cs.add_argument("--tick", type=int, default=60)
+    cs.add_argument("--max-coins", type=int, default=1500)
+    cs.add_argument("--min-ev", type=int, default=200)
+    cs.add_argument("--max-ev", type=int, default=200000)
+    cs.add_argument("--min-holders", type=int, default=5)
+    cs.add_argument("--min-sol", type=float, default=0.01)
+    cs.add_argument("--nulls", type=int, default=200)
+    cs.add_argument("--fdr-q", type=float, default=0.05)
+    cs.add_argument("--seed", type=int, default=20260815)
+    cs.set_defaults(fn=cmd_crosssec)
+
+    et = _scope_args(
+        common(sub.add_parser("eventtime", help="response kernel in EVENT time, block resolution"))
+    )
     et.add_argument("--bins", type=int, default=12)
     et.add_argument("--max-coins", type=int, default=2000)
     et.add_argument("--min-ev", type=int, default=300)
@@ -3625,7 +4021,7 @@ def main(argv: list[str] | None = None) -> int:
     et.add_argument("--seed", type=int, default=20260815)
     et.set_defaults(fn=cmd_eventtime)
 
-    ke = common(sub.add_parser("kernel", help="the response kernel w(u) over unrealized PnL"))
+    ke = _scope_args(common(sub.add_parser("kernel", help="the response kernel w(u) over unrealized PnL")))
     ke.add_argument("--tick", type=int, default=60)
     ke.add_argument("--bins", type=int, default=KERNEL_BINS)
     ke.add_argument("--max-coins", type=int, default=600)
@@ -3638,7 +4034,9 @@ def main(argv: list[str] | None = None) -> int:
     ke.add_argument("--seed", type=int, default=20260815)
     ke.set_defaults(fn=cmd_kernel)
 
-    mo = common(sub.add_parser("momentum", help="primed supply vs response to an arriving event"))
+    mo = _scope_args(
+        common(sub.add_parser("momentum", help="primed supply vs response to an arriving event"))
+    )
     mo.add_argument("--tick", type=int, default=60)
     mo.add_argument("--max-coins", type=int, default=800)
     mo.add_argument("--min-ev", type=int, default=300)
@@ -3650,14 +4048,14 @@ def main(argv: list[str] | None = None) -> int:
     mo.add_argument("--seed", type=int, default=20260815)
     mo.set_defaults(fn=cmd_momentum)
 
-    q1 = common(sub.add_parser("q1", help="basis density vs price reversals"))
+    q1 = _scope_args(common(sub.add_parser("q1", help="basis density vs price reversals")))
     q1.add_argument("--rotations", type=int, default=200)
     q1.add_argument("--max-coins", type=int, default=1500)
     q1.add_argument("--fdr-q", type=float, default=0.05)
     q1.add_argument("--seed", type=int, default=20260815)
     q1.set_defaults(fn=cmd_q1)
 
-    q2 = common(sub.add_parser("q2", help="realization-policy fingerprint vs tooling"))
+    q2 = _scope_args(common(sub.add_parser("q2", help="realization-policy fingerprint vs tooling")))
     q2.add_argument("--max-wallets", type=int, default=40000)
     q2.add_argument("--neg-per-key", type=int, default=2)
     q2.add_argument("--min-snipes", type=int, default=5)
@@ -3667,11 +4065,13 @@ def main(argv: list[str] | None = None) -> int:
     q2.add_argument("--seed", type=int, default=20260815)
     q2.set_defaults(fn=cmd_q2)
 
-    de = common(sub.add_parser("describe", help="the distribution, and the round-number test"))
+    de = _scope_args(common(sub.add_parser("describe", help="the distribution, and the round-number test")))
     de.add_argument("--min-sol", type=float, default=0.01)
     de.set_defaults(fn=cmd_describe)
 
-    hz = common(sub.add_parser("hazard", help="P(sell next tick | unrealized PnL), with a risk set"))
+    hz = _scope_args(
+        common(sub.add_parser("hazard", help="P(sell next tick | unrealized PnL), with a risk set"))
+    )
     hz.add_argument("--tick", type=int, default=60)
     hz.add_argument("--max-coins", type=int, default=3000)
     hz.add_argument("--min-ev", type=int, default=200)
@@ -3681,11 +4081,11 @@ def main(argv: list[str] | None = None) -> int:
     hz.add_argument("--seed", type=int, default=20260815)
     hz.set_defaults(fn=cmd_hazard)
 
-    q3 = common(sub.add_parser("q3", help="basis-shape feature for the pvp_vamps lane"))
+    q3 = _scope_args(common(sub.add_parser("q3", help="basis-shape feature for the pvp_vamps lane")))
     q3.add_argument("--min-sells", type=int, default=30)
     q3.set_defaults(fn=cmd_q3)
 
-    q4 = common(sub.add_parser("q4", help="the rug-fuel gauge"))
+    q4 = _scope_args(common(sub.add_parser("q4", help="the rug-fuel gauge")))
     q4.add_argument("--min-holders", type=int, default=20)
     q4.add_argument("--min-sol", type=float, default=0.01,
                     help="ignore fills smaller than this when reading the spot mark")
