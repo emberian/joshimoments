@@ -290,6 +290,31 @@ class OperatorBook(WiggleBook):
           pair. The reactive-exit-policy search reads this; the wiggle book's five-minute
           clock is a placeholder standing in for a policy nobody has recorded until now.
         """
+        # IDEMPOTENCE, and this one is not cosmetic. The tape replays from the START on
+        # every restart, so without a dedupe a zap from three days ago would be re-read and
+        # could arm a position opened this morning on the same coin -- an exit nobody asked
+        # for, attributed to the operator. Same guard as hunches, different id space.
+        if zap.zap_id in self._acted_set:
+            return "duplicate"
+        self._remember(zap.zap_id)
+        # And the same staleness bound: a gesture the desk was not around to see is not an
+        # action it can take now. A zap that arrived while the desk was down closed nothing,
+        # and pretending otherwise would fabricate an exit at a price nobody chose.
+        if now - zap.t_event_unix > HUNCH_ACTIONABLE_S:
+            self.counters["zaps"] += 1
+            self.ledger.emit(
+                "hunch",
+                str(self.book),
+                t_ingest_unix=now,
+                t_event_unix=zap.t_event_unix,
+                t_event_source="operator:zap",
+                key=zap.mint,
+                zap_id=zap.zap_id,
+                detail="zap_expired_before_the_desk_saw_it",
+                censor_reason="OBSERVER_LOST",
+                age_s=now - zap.t_event_unix,
+            )
+            return "expired"
         self.counters["zaps"] += 1
         target = None
         if zap.position_id:
@@ -510,6 +535,13 @@ class OperatorBook(WiggleBook):
         which is a decision made at analysis time on visible data rather than by quietly
         losing a row.
         """
+        # Keyed in its own namespace: the hunch id is already in the set (that is what
+        # ``accept`` put there), so checking the bare id would swallow the FIRST retraction
+        # and then re-emit a row for it on every restart afterwards -- exactly backwards.
+        marker = f"rx:{retraction.retracts}"
+        if marker in self._acted_set:
+            return "duplicate"
+        self._remember(marker)
         self._remember(retraction.retracts)
         state = "not_found"
         for mint, waiting in list(self.waiting.items()):

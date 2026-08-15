@@ -1090,3 +1090,44 @@ def test_a_retracted_zap_leaves_the_exit_corpus(tmp_path: Path) -> None:
     assert [z.zap_id for z in read_zaps(path)] == ["zp-real"]
     # ... and it is still on disk, for the auditor.
     assert len(read_tape(path)[2]) == 2
+
+
+def test_a_zap_is_idempotent_across_a_restart(tmp_path: Path) -> None:
+    """The tape replays from the START. A stale zap must not arm today's position."""
+    book = make_operator(tmp_path)
+    _open_one(book)
+    assert book.zap(_zap(at=T0 + 60, zap_id="zp-once"), T0 + 60) == "armed"
+    assert book.zap(_zap(at=T0 + 60, zap_id="zp-once"), T0 + 61) == "duplicate"
+
+    revived = make_operator(tmp_path)
+    revived.restore(book.state())
+    assert revived.zap(_zap(at=T0 + 60, zap_id="zp-once"), T0 + 62) == "duplicate"
+
+
+def test_a_zap_the_desk_was_not_around_for_does_not_close_todays_position(
+    tmp_path: Path,
+) -> None:
+    """An exit at a price nobody chose is a fabricated exit, restart or no restart."""
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    assert book.zap(_zap(at=T0, zap_id="zp-old"), T0 + HUNCH_ACTIONABLE_S + 60) == "expired"
+    assert position.armed_reason is None
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["detail"] == "zap_expired_before_the_desk_saw_it"
+    assert row["censor_reason"] == "OBSERVER_LOST"
+
+
+def test_a_retraction_is_idempotent_across_a_restart(tmp_path: Path) -> None:
+    """Replaying the tape must not re-emit a retraction row on every boot."""
+    from shitcoims_paperdesk.hunch import Retraction
+
+    book = make_operator(tmp_path)
+    book.accept(hunch_of(T0, hunch_id="hn-x"), T0)
+    retraction = Retraction(retracts="hn-x", reason="oops", t_event_unix=T0 + 5, t_ingest_unix=T0 + 5)
+    assert book.retract(retraction, T0 + 5) == "withdrawn_before_entry"
+    assert book.retract(retraction, T0 + 6) == "duplicate"
+
+    revived = make_operator(tmp_path)
+    revived.restore(book.state())
+    assert revived.retract(retraction, T0 + 7) == "duplicate"
+    assert book.counters["retractions"] == 1
