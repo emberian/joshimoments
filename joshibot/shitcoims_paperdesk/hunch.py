@@ -130,11 +130,12 @@ ZAP_SCHEMA: Final[str] = "hunch.zap.v1"
 #: is itself a datum a distillation model should see.
 RETRACTION_SCHEMA: Final[str] = "hunch.retraction.v1"
 
-#: How stale a gesture may be when the desk first sees it and still open a position. The
-#: OPERATOR book is the wiggle book's execution, whose entire horizon is 240-420 s, so a
-#: gesture older than this is older than the trade it was asking for. Matches the desk's
-#: own ``MAX_ACTIONABLE_AGE_S`` for observations, and for the same reason: an action the
-#: desk could not have taken at the time is not an action, it is a backfill.
+#: How stale a gesture may be when the desk first sees it and still be acted on -- for a
+#: hunch, opening a position; for a zap, closing one. Matches the desk's own
+#: ``MAX_ACTIONABLE_AGE_S`` for observations and holds for the same reason: an action the
+#: desk could not have taken at the time is not an action, it is a backfill. Five minutes
+#: is generous against a book whose positions are minutes old and whose exits are reactive;
+#: past it, the market the gesture was about is not the market in front of us.
 HUNCH_ACTIONABLE_S: Final[float] = 300.0
 
 #: The CLI's ``--kind`` vocabulary, mapped onto the claim vocabulary of
@@ -143,7 +144,8 @@ HUNCH_ACTIONABLE_S: Final[float] = 300.0
 #: which is §9-rung-2 applied to the operator's own beliefs.
 #:
 #: ``wiggle``  -> the only kind that TRADES. "it'll oscillate enough to scalp", which the
-#:                OPERATOR book answers with a real paper position on the wiggle clock.
+#:                OPERATOR book answers with a real paper position -- held until the
+#:                operator zaps it, with a 20-40 min backstop behind that.
 #: ``down``    -> ``Drift(Down)``. Watch-only: no short exists on this desk, so a position
 #:                would be a claim about machinery nobody has measured.
 #: ``up``      -> ``Drift(Up)``. ALSO watch-only in v1, and this is a real choice rather
@@ -165,9 +167,8 @@ KIND_CLAIMS: Final[dict[str, str]] = {
 #: observation of an arbitrary mint is a rate-limited refresh, not a subscription. A 3-day
 #: default would mostly manufacture censored rows.
 #:
-#: ``wiggle`` takes no default because its horizon is not a preference -- it is the book's
-#: drawn clock, 240-420 s, and letting a flag widen it is precisely how discipline drift
-#: would enter the code rather than the trading.
+#: ``wiggle`` takes no default because its horizon is not a preference and not a flag: the
+#: position runs until the operator zaps it, with the book's drawn backstop behind that.
 DEFAULT_HORIZON_S: Final[dict[str, float]] = {
     "down": 3_600.0,
     "up": 3_600.0,

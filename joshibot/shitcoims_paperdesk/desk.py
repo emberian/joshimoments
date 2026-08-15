@@ -424,11 +424,15 @@ class Desk:
         #    armed at -16.5% filled at -64.7% because the next observation of that coin was
         #    43 seconds later and it had gapped through. The desk cannot trade the tick that
         #    told it to trade, so the only lever is how soon the NEXT tick arrives.
-        #    The OPERATOR book's positions, pendings and un-armed hunches are priority for
-        #    the same reason the wiggle book's are -- they run the same five-minute clock --
-        #    and its WATCHES are not: a claim with an hour-long horizon is not misjudged by
-        #    a twenty-second-old mark, and letting it displace a scalp whose exit is
-        #    imminent would be the exact fairness-shaped hole the priority split closed.
+        #    The OPERATOR book's positions, pendings and un-armed hunches are priority for a
+        #    RELATED but different reason from the wiggle book's. The wiggle book needs a
+        #    fast mark because its exit is a five-minute clock; this book needs one because
+        #    its exit is a person, and a zap fills against the NEXT observation -- so the
+        #    interval between observations is the latency the operator experiences between
+        #    deciding to get out and being out. Its WATCHES are not priority: a claim with
+        #    an hour-long horizon is not misjudged by a twenty-second-old mark, and letting
+        #    it displace a position whose exit is imminent would be the exact
+        #    fairness-shaped hole the priority split closed.
         operator_hot = (
             {p.mint for p in self.operator.positions.values()}
             | set(self.operator.pending)

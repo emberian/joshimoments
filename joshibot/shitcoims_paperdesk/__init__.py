@@ -1,4 +1,4 @@
-"""The standing paper desk: three books, one accounting, one ledger.
+"""The standing paper desk: five books, one accounting, one ledger.
 
 WHY THIS EXISTS
 ---------------
@@ -19,14 +19,15 @@ This package is that comparison, made standing. Five books:
 * **WIGGLE** (minutes, and *only* minutes) -- post-collapse bottom scalps on a HARD CLOCK.
   The operator's own measured pattern, and the one book whose exit rule is a discipline
   rather than a forecast; see :mod:`shitcoims_paperdesk.wiggle` for why it refuses to hold.
-* **OPERATOR** (the same minutes, the same clock) -- the wiggle book's execution with the
-  operator's own gesture in place of its entry rule. See below.
+* **OPERATOR** -- the wiggle book's execution with the operator's own gesture in place of
+  BOTH its entry rule and its clock: they pick the coin, and they decide when to leave.
+  See below.
 
 They share ONE bankroll size, ONE friction model, ONE ledger and ONE clock discipline, so
-the cross-book table is a comparison rather than three incomparable numbers side by side.
+the cross-book table is a comparison rather than five incomparable numbers side by side.
 
-THE FIFTH BOOK IS AN EXPERIMENT ABOUT SELECTION, AND IT IS THE ONLY ONE WITH A PRIOR
-------------------------------------------------------------------------------------
+THE FIFTH BOOK IS AN EXPERIMENT ABOUT THE OPERATOR, AND IT IS THE ONLY ONE WITH A PRIOR
+---------------------------------------------------------------------------------------
 Every entry-selection study in this tree returned null. The one repeatedly-positive signal
 is the operator's own choosing: over the same pattern and the same clock, the rule-chosen
 wiggle book's first closes ran **-14.08%** while the operator's hand-picked equivalents
@@ -34,13 +35,21 @@ measured **+3.14%**. The difference between those two numbers is not a threshold
 whatever the operator is doing when they look at a chart and say *"this one is gonna wiggle
 for a bit"*, and until now nothing in this repo recorded it.
 
-The OPERATOR book records it. Execution, friction, sizing, marking, censoring and the hard
-240-420 s clock are the WIGGLE book's, inherited rather than reimplemented, because the
-comparison is only about selection if literally everything downstream of the choice is the
-same code. What differs is one thing: the entry gates are computed and LOGGED but gate
-nothing -- the gesture IS the entry signal. Propensity is 1.0 and the source is
-``operator``, because the operator's policy is exogenous to this desk; we are not
-estimating it, we are measuring what it selects. See :mod:`shitcoims_paperdesk.operator`.
+The OPERATOR book records it. Execution, friction, sizing, marking, censoring, the brackets
+and the close-row builder are the WIGGLE book's, inherited rather than reimplemented,
+because two arms are only comparable if everything downstream of the decision is the same
+code. TWO things differ, and both are the operator:
+
+* **the entry** -- the gates are computed and LOGGED but gate nothing, because the gesture
+  IS the entry signal. Propensity 1.0, source ``operator``: their policy is exogenous to
+  this desk, so this is a treatment arm and not an off-policy estimate.
+* **the exit** -- their ZAP, not a clock. The wiggle book's five minutes is where their
+  exits happened to LAND, not a rule they follow (*"i watch it closely, and pull out the
+  position whenever i feel like it"*), so this book holds until they pull out, with a
+  20-40 minute backstop behind that. The zap carries the instrument state at the moment of
+  the exit, which is the training set for a reactive exit policy nobody has ever recorded.
+
+See :mod:`shitcoims_paperdesk.operator`.
 
 WHAT MAKES IT AN EXPERIMENT RATHER THAN A DIARY
 -----------------------------------------------
@@ -89,9 +98,10 @@ class Book(StrEnum):
     those are two populations wanting two rules, and a desk that ran one rule over both
     would answer neither question.
 
-    OPERATOR is not a fifth discipline at all -- it is WIGGLE's discipline with a different
-    ENTRY, and that is the whole design. Holding the exit fixed is what turns the pair into
-    a controlled comparison of selection rather than two strategies with two of everything.
+    OPERATOR is WIGGLE's machinery with the operator in both decision seats: they choose the
+    coin, and they choose when to leave. Everything between those two choices -- sizing,
+    friction, filling, marking, censoring, the close row -- is the same code, which is the
+    only reason the two books' P&L can be put in the same table at all.
     """
 
     SHORT = "short"
