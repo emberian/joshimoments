@@ -23,7 +23,7 @@ from shitcoims_sentinel.history import performance_summary, read_events, read_tr
 from shitcoims_sentinel.policies import (
     policies_for_unmonitored,
     policy_from_payload,
-    policy_to_mapping,
+    policy_to_api_mapping,
 )
 from shitcoims_sentinel.server import _TaskReentrantLock, create_app
 from shitcoims_sentinel.storage import EventJournal
@@ -76,7 +76,7 @@ def test_dashboard_policy_payload_round_trips_to_api_item() -> None:
         "rug_exit": True,
         "dispose_after_break_even": False,
     }
-    item = policy_to_mapping(policy_from_payload(mint, payload))
+    item = policy_to_api_mapping(policy_from_payload(mint, payload))
     assert item["mint"] == mint
     assert item["name"] == "DASH"
     assert item["cost_basis_sol"] == 1.25
@@ -440,7 +440,7 @@ def test_protect_unmonitored_round_trips_to_mapping() -> None:
         unmonitored=[{"mint": mint, "name": "L00T", "exit_sol": "0.542"}],
         current=[],
     )
-    item = policy_to_mapping(merged[0])
+    item = policy_to_api_mapping(merged[0])
     assert item["mint"] == mint
     assert item["name"] == "L00T"
     # the row carries an exit quote; it must NOT become a cost basis
@@ -454,7 +454,7 @@ def test_protect_unmonitored_round_trips_to_mapping() -> None:
         current=[],
         mode="rug_only",
     )
-    rug_item = policy_to_mapping(merged_rug[0])
+    rug_item = policy_to_api_mapping(merged_rug[0])
     assert created_rug == [mint]
     assert skipped_rug == []
     assert "cost_basis_sol" not in rug_item
@@ -508,7 +508,7 @@ class FakeEngine:
         }
 
     def list_policies(self) -> list[dict[str, Any]]:
-        return [policy_to_mapping(policy) for policy in self.config.positions]
+        return [policy_to_api_mapping(policy) for policy in self.config.positions]
 
     async def apply_positions(self, policies: list[Any], **_kwargs: Any) -> list[dict[str, Any]]:
         self.apply_calls.append(list(policies))

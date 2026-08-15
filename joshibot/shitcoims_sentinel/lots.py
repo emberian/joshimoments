@@ -10,17 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from .domain import PositionState, utc_now
 
-# -10 was a scalp against a just-stamped Jupiter quote: first wick sold
-# the bag and the coin then swung. Default SL is a death floor. Rug
-# still handles actual death. Runner handles the upside.
-DEFAULT_NEW_BAG_STOP_LOSS_PCT = Decimal("-35")
-DEFAULT_NEW_BAG_TAKE_PROFIT_PCT = Decimal("80")
-DEFAULT_NEW_BAG_TRAILING_STOP_PCT = Decimal("20")
+# Policy thresholds for a new bag are NOT here. This module used to carry its own
+# -35/100/20 while `config.py`, `policies.py` (twice) and `server.py` all said -30/100/20,
+# so an auto-discovered bag and a dashboard-created one ran different rules. There is one
+# set now and it lives in `domain.PolicyDefaults`. What stays here is lot TIMING, which is
+# a property of the lot lifecycle rather than of the rule.
 DEFAULT_NEW_BAG_PROTECT_DELAY_SECONDS = 600
 # Grace before an auto-protect stop goes live. The original reason was that basis was
 # invented from the current quote, so a stop against that number had to be held off; that

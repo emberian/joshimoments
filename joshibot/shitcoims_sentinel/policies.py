@@ -12,24 +12,15 @@ from typing import Any
 import yaml
 from solders.pubkey import Pubkey
 
-from .config import load_config
-from .domain import PositionPolicy, decimal_from
-from .runner import EXIT_STYLE_RUNNER, EXIT_STYLES
+from .domain import DEFAULTS, PolicyDefaults, PositionPolicy, decimal_from
+from .runner import EXIT_STYLES
 
-POLICY_FIELDS = {
-    "mint",
-    "name",
-    "buy_price_sol",
-    "cost_basis_sol",
-    "stop_loss_pct",
-    "take_profit_pct",
-    "trailing_stop_pct",
-    "rug_exit",
-    "dispose_after_break_even",
-    "exit_style",
-    "floor_confirm_quotes",
-    "hold_trail_until_graduated",
-}
+# Derived, not restated: a field added to the policy is accepted by the API and the YAML
+# loader the moment it exists, and a field removed stops being accepted everywhere at once.
+POLICY_FIELDS = frozenset(field.name for field in dataclasses.fields(PositionPolicy))
+# Any real Solana pubkey works; `policy_defaults_from_payload` builds a policy it throws
+# away, purely so the default set is checked by the same rules a written policy is.
+_PROBE_MINT = str(Pubkey.default())
 _BLOCKED = {
     "execution",
     "enabled",
@@ -54,31 +45,62 @@ def _blocked(mapping: dict[str, Any]) -> None:
             raise PolicyError(f"policy payload cannot include {key}")
 
 
-def policy_to_mapping(policy: PositionPolicy) -> dict[str, Any]:
-    """Render a policy for BOTH `config.yaml` persistence and the dashboard API.
+def _percent(value: Decimal | None) -> float | None:
+    """Percent/SOL scalars only — NEVER a raw base-unit amount.
 
-    The `float()` calls break the otherwise end-to-end `Decimal` discipline, and that is a
-    deliberate, bounded exception rather than an oversight. Two things keep it safe, and both
-    must hold if anyone changes this:
-
-    - These are SOL-denominated quantities and percentages, not raw base units. A SOL amount
-      at 9 decimals below ~10^6 SOL sits well inside float64's ~15-17 significant digits. The
-      exactness cliff that matters in this project is at 2**53 raw token units, which is
-      reachable by a 1e9-supply 6-decimal memecoin — see `shitcoims_tape.schema`, where raw
-      amounts therefore cross the wire as strings. Nothing raw passes through here.
-    - This mapping is shared: `persist_positions` writes it to YAML and `server.list_policies`
-      serves it to the browser, which types these fields as `number`. Switching to strings for
-      precision would silently change the API contract.
-
-    So: if a raw base-unit field is ever added to a policy, it must NOT be rendered with
-    `float()` here — split the persistence and API mappings first.
+    `float()` breaks the otherwise end-to-end `Decimal` discipline, and that is a bounded
+    exception rather than an oversight: a SOL amount at 9 decimals below ~10^6 SOL sits well
+    inside float64's ~15-17 significant digits. The exactness cliff that matters in this
+    project is at 2**53 raw token units, reachable by a 1e9-supply 6-decimal memecoin — see
+    `shitcoims_tape.schema`, where raw amounts therefore cross the wire as strings.
     """
+
+    return None if value is None else float(value)
+
+
+def policy_to_yaml_mapping(policy: PositionPolicy) -> dict[str, Any]:
+    """Render a policy for `config.yaml` persistence — the operator-readable file.
+
+    Split from the API mapping on purpose. They coincide field-for-field today, and the one
+    shared function that used to serve both carried a comment begging whoever added a field
+    to split them first. They answer to different owners: this one to a file a human edits
+    and to `load_config`, the other to a typed browser contract.
+    """
+
     payload: dict[str, Any] = {
         "mint": policy.mint,
         "name": policy.name,
-        "stop_loss_pct": float(policy.stop_loss_pct),
-        "take_profit_pct": float(policy.take_profit_pct),
-        "trailing_stop_pct": float(policy.trailing_stop_pct),
+        "stop_loss_pct": _percent(policy.stop_loss_pct),
+        "take_profit_pct": _percent(policy.take_profit_pct),
+        "trailing_stop_pct": _percent(policy.trailing_stop_pct),
+        "rug_exit": policy.rug_exit,
+        "dispose_after_break_even": policy.dispose_after_break_even,
+        "exit_style": policy.exit_style,
+        "floor_confirm_quotes": int(policy.floor_confirm_quotes),
+        "hold_trail_until_graduated": policy.hold_trail_until_graduated,
+    }
+    # Basis keys are omitted rather than written as null: their absence is what a
+    # rug-only lot looks like in the file, and a null would read as "we looked".
+    if policy.cost_basis_sol is not None:
+        payload["cost_basis_sol"] = float(policy.cost_basis_sol)
+    if policy.buy_price_sol is not None:
+        payload["buy_price_sol"] = float(policy.buy_price_sol)
+    return payload
+
+
+def policy_to_api_mapping(policy: PositionPolicy) -> dict[str, Any]:
+    """Render a policy for the local dashboard API.
+
+    The browser types these fields as `number | null`, so switching to strings for precision
+    would silently change the API contract.
+    """
+
+    payload: dict[str, Any] = {
+        "mint": policy.mint,
+        "name": policy.name,
+        "stop_loss_pct": _percent(policy.stop_loss_pct),
+        "take_profit_pct": _percent(policy.take_profit_pct),
+        "trailing_stop_pct": _percent(policy.trailing_stop_pct),
         "rug_exit": policy.rug_exit,
         "dispose_after_break_even": policy.dispose_after_break_even,
         "exit_style": policy.exit_style,
@@ -92,7 +114,32 @@ def policy_to_mapping(policy: PositionPolicy) -> dict[str, Any]:
     return payload
 
 
-def policy_from_payload(mint: str, payload: dict[str, Any]) -> PositionPolicy:
+def _strict_bool(value: Any, field: str) -> bool:
+    """A quoted 'false' is truthy in Python and is how a rug exit gets silently disabled."""
+
+    if not isinstance(value, bool):
+        raise PolicyError(f"{field} must be true or false")
+    return value
+
+
+def _confirm_quotes(value: Any) -> int:
+    if isinstance(value, bool):
+        raise PolicyError("floor_confirm_quotes must be a whole number")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise PolicyError("floor_confirm_quotes must be a whole number") from exc
+
+
+def policy_from_payload(
+    mint: str, payload: dict[str, Any], *, defaults: PolicyDefaults = DEFAULTS
+) -> PositionPolicy:
+    """THE validator. `config.yaml` and the dashboard API both come through here.
+
+    They used to implement the same rules twice, with different exception types and
+    drifting defaults, so a payload the API refused could still be loaded from YAML.
+    """
+
     if not isinstance(payload, dict):
         raise PolicyError("policy payload must be an object")
     _blocked(payload)
@@ -100,9 +147,14 @@ def policy_from_payload(mint: str, payload: dict[str, Any]) -> PositionPolicy:
     if unknown:
         raise PolicyError(f"unknown policy fields: {', '.join(unknown)}")
     try:
-        parsed_mint = str(Pubkey.from_string(mint.strip()))
+        parsed_mint = str(Pubkey.from_string(str(mint).strip()))
     except Exception as exc:
         raise PolicyError("mint is not a Solana public key") from exc
+    embedded = payload.get("mint")
+    if embedded not in {None, ""} and str(embedded).strip() != parsed_mint:
+        # PUT /api/policies/<A> with {"mint": "B"} used to write a rule for A under B's
+        # numbers without a word.
+        raise PolicyError("payload mint does not match the policy being written")
     buy_price = payload.get("buy_price_sol")
     cost_basis = payload.get("cost_basis_sol")
     if buy_price not in {None, ""} and cost_basis not in {None, ""}:
@@ -115,15 +167,31 @@ def policy_from_payload(mint: str, payload: dict[str, Any]) -> PositionPolicy:
             cost_basis_sol=(
                 None if cost_basis in {None, ""} else decimal_from(cost_basis, field="cost_basis_sol")
             ),
-            stop_loss_pct=decimal_from(payload.get("stop_loss_pct", -30), field="stop_loss_pct"),
-            take_profit_pct=decimal_from(payload.get("take_profit_pct", 100), field="take_profit_pct"),
-            trailing_stop_pct=decimal_from(payload.get("trailing_stop_pct", 20), field="trailing_stop_pct"),
-            rug_exit=bool(payload.get("rug_exit", True)),
-            dispose_after_break_even=bool(payload.get("dispose_after_break_even", False)),
-            exit_style=str(payload.get("exit_style") or EXIT_STYLE_RUNNER).strip(),
-            floor_confirm_quotes=int(payload.get("floor_confirm_quotes", 2)),
-            hold_trail_until_graduated=bool(payload.get("hold_trail_until_graduated", True)),
+            stop_loss_pct=decimal_from(
+                payload.get("stop_loss_pct", defaults.stop_loss_pct), field="stop_loss_pct"
+            ),
+            take_profit_pct=decimal_from(
+                payload.get("take_profit_pct", defaults.take_profit_pct), field="take_profit_pct"
+            ),
+            trailing_stop_pct=decimal_from(
+                payload.get("trailing_stop_pct", defaults.trailing_stop_pct), field="trailing_stop_pct"
+            ),
+            rug_exit=_strict_bool(payload.get("rug_exit", defaults.rug_exit), "rug_exit"),
+            dispose_after_break_even=_strict_bool(
+                payload.get("dispose_after_break_even", defaults.dispose_after_break_even),
+                "dispose_after_break_even",
+            ),
+            exit_style=str(payload.get("exit_style") or defaults.exit_style).strip(),
+            floor_confirm_quotes=_confirm_quotes(
+                payload.get("floor_confirm_quotes", defaults.floor_confirm_quotes)
+            ),
+            hold_trail_until_graduated=_strict_bool(
+                payload.get("hold_trail_until_graduated", defaults.hold_trail_until_graduated),
+                "hold_trail_until_graduated",
+            ),
         )
+    except PolicyError:
+        raise
     except Exception as exc:
         raise PolicyError(str(exc)) from exc
     if policy.stop_loss_pct >= 0:
@@ -143,19 +211,28 @@ def policy_from_payload(mint: str, payload: dict[str, Any]) -> PositionPolicy:
     return policy
 
 
+def policy_defaults_from_payload(payload: dict[str, Any]) -> PolicyDefaults:
+    """Read a caller-supplied default set, held to exactly the policy rules.
+
+    Validated by building one throwaway policy rather than by a second copy of the rule
+    list, so "what the dashboard may ask for" and "what may be written" cannot drift.
+    """
+
+    if not isinstance(payload, dict):
+        raise PolicyError("policy defaults must be an object")
+    names = [field.name for field in dataclasses.fields(PolicyDefaults)]
+    probe = policy_from_payload(
+        _PROBE_MINT, {key: value for key, value in payload.items() if key in names}
+    )
+    return PolicyDefaults(**{name: getattr(probe, name) for name in names})
+
+
 def policies_for_unmonitored(
     *,
     unmonitored: list[dict[str, Any]],
     current: list[PositionPolicy],
     mode: str = "rug_only",
-    stop_loss_pct: Any = -30,
-    take_profit_pct: Any = 100,
-    trailing_stop_pct: Any = 20,
-    rug_exit: bool = True,
-    dispose_after_break_even: bool = False,
-    exit_style: str = EXIT_STYLE_RUNNER,
-    floor_confirm_quotes: int = 2,
-    hold_trail_until_graduated: bool = True,
+    defaults: PolicyDefaults = DEFAULTS,
 ) -> tuple[list[PositionPolicy], list[str], list[dict[str, str]]]:
     """Merge rug-only policies for unmonitored holdings.
 
@@ -194,19 +271,12 @@ def policies_for_unmonitored(
         if mint in existing:
             continue
 
-        payload: dict[str, Any] = {
-            "name": str(row.get("name") or mint[:8])[:48],
-            "stop_loss_pct": stop_loss_pct,
-            "take_profit_pct": take_profit_pct,
-            "trailing_stop_pct": trailing_stop_pct,
-            "rug_exit": rug_exit,
-            "dispose_after_break_even": dispose_after_break_even,
-            "exit_style": exit_style,
-            "floor_confirm_quotes": floor_confirm_quotes,
-            "hold_trail_until_graduated": hold_trail_until_graduated,
-        }
         try:
-            policy = policy_from_payload(mint, payload)
+            policy = policy_from_payload(
+                mint,
+                {"name": str(row.get("name") or mint[:8])[:48]},
+                defaults=defaults,
+            )
         except PolicyError as exc:
             skipped.append({"mint": mint, "reason": str(exc)})
             continue
@@ -236,8 +306,12 @@ def policy_without_basis(policy: PositionPolicy) -> PositionPolicy:
 
 
 def persist_positions(path: Path, policies: list[PositionPolicy]) -> None:
+    # Imported here, not at module scope: `config` imports this module for THE validator,
+    # and the read-back below is the only thing this module needs from it.
+    from .config import load_config
+
     document = load_document(path)
-    document["positions"] = [policy_to_mapping(policy) for policy in policies]
+    document["positions"] = [policy_to_yaml_mapping(policy) for policy in policies]
     serialized = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)

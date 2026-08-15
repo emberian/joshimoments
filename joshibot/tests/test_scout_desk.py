@@ -55,11 +55,20 @@ def test_desk_render_lists_observe_and_protected() -> None:
     bags = bags_from_snapshot(snapshot, policies)
     clout = next(bag for bag in bags if bag.name == "clout")
     body = default_policy_body(clout)
-    assert body["stop_loss_pct"] == -35
-    assert body["take_profit_pct"] == 80
+    # An unprotected bag has no thresholds yet, and the desk does not invent any: every
+    # threshold key is ABSENT so the sentinel's own defaults decide. The desk carrying its
+    # own copy is how the same bag came to be protected under two different rules.
+    assert "stop_loss_pct" not in body
+    assert "take_profit_pct" not in body
+    assert "trailing_stop_pct" not in body
+    assert "exit_style" not in body
     assert body["cost_basis_sol"] == 0.1
-    assert body["exit_style"] == "runner"
     assert body.get("execution") is None
+
+    # A bag that already has a rule round-trips its own numbers, not the desk's.
+    omg = next(bag for bag in bags if bag.name == "OMG")
+    assert default_policy_body(omg)["stop_loss_pct"] == -10
+    assert default_policy_body(omg)["take_profit_pct"] == 80
 
 
 def test_desk_render_runner_floor_not_percent_leash() -> None:

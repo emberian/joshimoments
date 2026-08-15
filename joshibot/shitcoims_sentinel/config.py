@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 import yaml
 from solders.pubkey import Pubkey
 
-from .domain import PositionPolicy, decimal_from
-from .runner import EXIT_STYLE_RUNNER, EXIT_STYLES
+from .domain import PositionPolicy
+from .policies import PolicyError, policy_from_payload
 
 
 class ConfigError(ValueError):
@@ -211,49 +211,14 @@ def load_config(path: str | Path) -> AppConfig:
         if not mint or mint in seen_mints:
             raise ConfigError(f"positions[{index}].mint is missing or duplicated")
         seen_mints.add(mint)
-        buy_price = pos.get("buy_price_sol")
-        cost_basis = pos.get("cost_basis_sol")
-        if buy_price is not None and cost_basis is not None:
-            raise ConfigError(f"positions[{index}] cannot set both buy_price_sol and cost_basis_sol")
-        policy = PositionPolicy(
-            mint=mint,
-            name=str(pos.get("name") or mint[:8]),
-            buy_price_sol=(decimal_from(buy_price, field="buy_price_sol") if buy_price is not None else None),
-            cost_basis_sol=(
-                decimal_from(cost_basis, field="cost_basis_sol") if cost_basis is not None else None
-            ),
-            stop_loss_pct=decimal_from(pos.get("stop_loss_pct", -30), field="stop_loss_pct"),
-            take_profit_pct=decimal_from(pos.get("take_profit_pct", 100), field="take_profit_pct"),
-            trailing_stop_pct=decimal_from(pos.get("trailing_stop_pct", 20), field="trailing_stop_pct"),
-            rug_exit=bool(pos.get("rug_exit", True)),
-            dispose_after_break_even=_bool(
-                pos.get("dispose_after_break_even", False),
-                f"positions[{index}].dispose_after_break_even",
-            ),
-            exit_style=str(pos.get("exit_style") or EXIT_STYLE_RUNNER).strip(),
-            floor_confirm_quotes=int(pos.get("floor_confirm_quotes", 2)),
-            hold_trail_until_graduated=_bool(
-                pos.get("hold_trail_until_graduated", True),
-                f"positions[{index}].hold_trail_until_graduated",
-            ),
-        )
-        if policy.stop_loss_pct >= 0:
-            raise ConfigError(f"positions[{index}].stop_loss_pct must be negative")
-        if (
-            policy.buy_price_sol is not None and policy.buy_price_sol <= 0
-        ) or (
-            policy.cost_basis_sol is not None and policy.cost_basis_sol <= 0
-        ):
-            raise ConfigError(f"positions[{index}] cost basis must be positive")
-        if policy.take_profit_pct <= 0:
-            raise ConfigError(f"positions[{index}].take_profit_pct must be positive")
-        if not 0 < policy.trailing_stop_pct < 100:
-            raise ConfigError(f"positions[{index}].trailing_stop_pct must be in (0, 100)")
-        if policy.exit_style not in EXIT_STYLES:
-            raise ConfigError(f"positions[{index}].exit_style must be runner or fixed_trail")
-        if not 1 <= policy.floor_confirm_quotes <= 6:
-            raise ConfigError(f"positions[{index}].floor_confirm_quotes must be in [1, 6]")
-        positions.append(policy)
+        # ONE validator. This file used to carry a second copy of the same rules with a
+        # different exception type and its own defaults, so a rule the dashboard refused
+        # could still be loaded from YAML — and a typo'd key was silently ignored here,
+        # which is how a position ends up running on defaults nobody chose.
+        try:
+            positions.append(policy_from_payload(mint, pos))
+        except PolicyError as exc:
+            raise ConfigError(f"positions[{index}]: {exc}") from exc
 
     slippage_bps = int(jupiter_raw.get("slippage_bps", 1500))
     if not 1 <= slippage_bps <= 5000:

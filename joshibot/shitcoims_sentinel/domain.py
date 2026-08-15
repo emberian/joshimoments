@@ -7,7 +7,6 @@ from enum import StrEnum
 from typing import Any
 
 from .runner import (
-    EXIT_STYLE_FIXED,
     EXIT_STYLE_RUNNER,
     SCALE_RUNGS,
     lock_floor_multiple,
@@ -40,19 +39,42 @@ def decimal_from(value: Any, *, field: str) -> Decimal:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class PolicyDefaults:
+    """The one place a policy default is written down.
+
+    There were five: `config.py`, two in `policies.py`, `server.py` and `lots.py` — and
+    `lots.py` disagreed with the other four, so the same bag got a different rule depending
+    on whether the engine discovered it or the dashboard created it. Every default now
+    comes from here, including the field defaults of `PositionPolicy` itself.
+    """
+
+    stop_loss_pct: Decimal = Decimal("-35")
+    take_profit_pct: Decimal = Decimal("100")
+    trailing_stop_pct: Decimal = Decimal("20")
+    rug_exit: bool = True
+    dispose_after_break_even: bool = False
+    exit_style: str = EXIT_STYLE_RUNNER
+    floor_confirm_quotes: int = 2
+    hold_trail_until_graduated: bool = True
+
+
+DEFAULTS = PolicyDefaults()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class PositionPolicy:
     mint: str
     name: str
-    buy_price_sol: Decimal | None
-    cost_basis_sol: Decimal | None
-    stop_loss_pct: Decimal
-    take_profit_pct: Decimal
-    trailing_stop_pct: Decimal
-    rug_exit: bool = True
-    dispose_after_break_even: bool = False
-    exit_style: str = EXIT_STYLE_FIXED
-    floor_confirm_quotes: int = 2
-    hold_trail_until_graduated: bool = True
+    buy_price_sol: Decimal | None = None
+    cost_basis_sol: Decimal | None = None
+    stop_loss_pct: Decimal = DEFAULTS.stop_loss_pct
+    take_profit_pct: Decimal = DEFAULTS.take_profit_pct
+    trailing_stop_pct: Decimal = DEFAULTS.trailing_stop_pct
+    rug_exit: bool = DEFAULTS.rug_exit
+    dispose_after_break_even: bool = DEFAULTS.dispose_after_break_even
+    exit_style: str = DEFAULTS.exit_style
+    floor_confirm_quotes: int = DEFAULTS.floor_confirm_quotes
+    hold_trail_until_graduated: bool = DEFAULTS.hold_trail_until_graduated
 
     def entry_unit_price(self, holding: TokenHolding) -> Decimal | None:
         if self.buy_price_sol is not None:

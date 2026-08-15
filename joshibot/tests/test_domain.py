@@ -10,7 +10,7 @@ from shitcoims_sentinel.domain import (
     evaluate_position,
     utc_now,
 )
-from shitcoims_sentinel.runner import EXIT_STYLE_RUNNER, rung_key
+from shitcoims_sentinel.runner import EXIT_STYLE_FIXED, EXIT_STYLE_RUNNER, rung_key
 
 
 def holding() -> TokenHolding:
@@ -22,17 +22,27 @@ def quote(unit_price_sol: str) -> ExitQuote:
     return ExitQuote("mint", 1_000_000, lamports, None, None, "metis", utc_now())
 
 
-def policy() -> PositionPolicy:
-    return PositionPolicy(
-        "mint",
-        "MEME",
-        Decimal("1"),
-        None,
-        Decimal("-30"),
-        Decimal("100"),
-        Decimal("20"),
-        True,
-    )
+def policy(**overrides: object) -> PositionPolicy:
+    """Keyword-only on purpose.
+
+    These were positional, so the meaning of every fixture depended on the field ORDER of
+    `PositionPolicy`. Reordering or inserting a field silently re-aimed every threshold in
+    this file at a different rule.
+    """
+
+    fields: dict = {
+        "mint": "mint",
+        "name": "MEME",
+        "buy_price_sol": Decimal("1"),
+        "cost_basis_sol": None,
+        "stop_loss_pct": Decimal("-30"),
+        "take_profit_pct": Decimal("100"),
+        "trailing_stop_pct": Decimal("20"),
+        "rug_exit": True,
+        "exit_style": EXIT_STYLE_FIXED,
+    }
+    fields.update(overrides)
+    return PositionPolicy(**fields)
 
 
 def test_rug_preempts_stop_loss() -> None:
@@ -144,17 +154,7 @@ def test_no_quote_never_fires_price_rule() -> None:
 
 
 def test_dispose_requires_observed_red_to_green_edge_then_one_confirmed_block() -> None:
-    dispose_policy = PositionPolicy(
-        "mint",
-        "MEME",
-        Decimal("1"),
-        None,
-        Decimal("-30"),
-        Decimal("100"),
-        Decimal("20"),
-        True,
-        True,
-    )
+    dispose_policy = policy(dispose_after_break_even=True)
     red = evaluate_position(
         policy=dispose_policy,
         holding=holding(),
@@ -200,17 +200,7 @@ def test_dispose_requires_observed_red_to_green_edge_then_one_confirmed_block() 
 
 
 def test_dispose_does_not_infer_a_crossing_from_first_green_sample() -> None:
-    dispose_policy = PositionPolicy(
-        "mint",
-        "MEME",
-        Decimal("1"),
-        None,
-        Decimal("-30"),
-        Decimal("100"),
-        Decimal("20"),
-        True,
-        True,
-    )
+    dispose_policy = policy(dispose_after_break_even=True)
     decision = evaluate_position(
         policy=dispose_policy,
         holding=holding(),
@@ -225,17 +215,7 @@ def test_dispose_does_not_infer_a_crossing_from_first_green_sample() -> None:
 
 
 def test_dispose_fails_closed_without_slot_but_rug_still_preempts() -> None:
-    dispose_policy = PositionPolicy(
-        "mint",
-        "MEME",
-        Decimal("1"),
-        None,
-        Decimal("-30"),
-        Decimal("100"),
-        Decimal("20"),
-        True,
-        True,
-    )
+    dispose_policy = policy(dispose_after_break_even=True)
     prior = PositionState(last_pnl_pct=Decimal("-1"))
     blocked = evaluate_position(
         policy=dispose_policy,
@@ -261,16 +241,7 @@ def test_dispose_fails_closed_without_slot_but_rug_still_preempts() -> None:
 
 
 def rug_only_policy() -> PositionPolicy:
-    return PositionPolicy(
-        "mint",
-        "RUGONLY",
-        None,
-        None,
-        Decimal("-30"),
-        Decimal("100"),
-        Decimal("20"),
-        True,
-    )
+    return policy(name="RUGONLY", buy_price_sol=None)
 
 
 def test_rug_only_policy_exits_on_emergency_without_basis() -> None:
@@ -285,19 +256,8 @@ def test_rug_only_policy_exits_on_emergency_without_basis() -> None:
     assert decision.pnl_pct is None
 
 
-def runner_policy() -> PositionPolicy:
-    return PositionPolicy(
-        "mint",
-        "MEME",
-        Decimal("1"),
-        None,
-        Decimal("-30"),
-        Decimal("80"),
-        Decimal("20"),
-        True,
-        False,
-        EXIT_STYLE_RUNNER,
-    )
+def runner_policy(**overrides: object) -> PositionPolicy:
+    return policy(take_profit_pct=Decimal("80"), exit_style=EXIT_STYLE_RUNNER, **overrides)
 
 
 def test_runner_arms_on_take_profit_without_selling() -> None:

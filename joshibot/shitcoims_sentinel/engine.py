@@ -22,6 +22,7 @@ from .clients import (
 )
 from .config import AppConfig
 from .domain import (
+    DEFAULTS,
     LAMPORTS_PER_SOL,
     PUMP_MINT_AUTHORITY,
     DecisionKind,
@@ -36,9 +37,6 @@ from .domain import (
 from .executor import ExecutionGate, ExecutionResult, SellExecutor
 from .lots import (
     DEFAULT_NEW_BAG_PROTECT_DELAY_SECONDS,
-    DEFAULT_NEW_BAG_STOP_LOSS_PCT,
-    DEFAULT_NEW_BAG_TAKE_PROFIT_PCT,
-    DEFAULT_NEW_BAG_TRAILING_STOP_PCT,
     ORIGIN_DEFAULT,
     basis_applied,
     due_for_default,
@@ -53,7 +51,12 @@ from .lots import (
     to_mapping,
 )
 from .notifier import Notifier
-from .policies import persist_positions, policies_for_unmonitored, policy_to_mapping, policy_without_basis
+from .policies import (
+    persist_positions,
+    policies_for_unmonitored,
+    policy_to_api_mapping,
+    policy_without_basis,
+)
 from .rug_detector import RugDetector
 from .secrets import load_shitcoims_keypair
 from .storage import EventJournal, StateStore
@@ -1846,11 +1849,11 @@ class SentinelEngine:
             lot = self._lot(policy.mint)
             if (
                 lot.origin == ORIGIN_DEFAULT
-                and policy.stop_loss_pct > DEFAULT_NEW_BAG_STOP_LOSS_PCT
+                and policy.stop_loss_pct > DEFAULTS.stop_loss_pct
             ):
                 next_policies.append(
                     dataclasses.replace(
-                        policy, stop_loss_pct=DEFAULT_NEW_BAG_STOP_LOSS_PCT
+                        policy, stop_loss_pct=DEFAULTS.stop_loss_pct
                     )
                 )
                 changed = True
@@ -1956,7 +1959,7 @@ class SentinelEngine:
         return results
 
     def list_policies(self) -> list[dict[str, Any]]:
-        return [policy_to_mapping(policy) for policy in self.config.positions]
+        return [policy_to_api_mapping(policy) for policy in self.config.positions]
 
     async def mutate_positions(
         self,
@@ -2020,8 +2023,8 @@ class SentinelEngine:
                     category="discovery",
                     message=(
                         f"NEW BAG {row.get('name') or mint[:8]}: default SL "
-                        f"{DEFAULT_NEW_BAG_STOP_LOSS_PCT}% / arm "
-                        f"+{DEFAULT_NEW_BAG_TAKE_PROFIT_PCT}% in {int(delay / 60)}m "
+                        f"{DEFAULTS.stop_loss_pct}% / arm "
+                        f"+{DEFAULTS.take_profit_pct}% in {int(delay / 60)}m "
                         f"(SL itself waits another 10m; rug-only until then)"
                     ),
                     context={"mint": mint, "auto_action": False},
@@ -2062,11 +2065,6 @@ class SentinelEngine:
                 # a realized loss. A default bag is rug-only until its real basis
                 # has been read back off chain.
                 mode="rug_only",
-                stop_loss_pct=DEFAULT_NEW_BAG_STOP_LOSS_PCT,
-                take_profit_pct=DEFAULT_NEW_BAG_TAKE_PROFIT_PCT,
-                trailing_stop_pct=DEFAULT_NEW_BAG_TRAILING_STOP_PCT,
-                rug_exit=True,
-                dispose_after_break_even=False,
             )
             outcome["created"] = created
             outcome["skipped"] = skipped
@@ -2094,8 +2092,8 @@ class SentinelEngine:
             category="policy",
             message=(
                 f"Auto-protected {len(created)} bag(s): {len(observed)} with an observed "
-                f"on-chain cost basis (SL {DEFAULT_NEW_BAG_STOP_LOSS_PCT}% / arm "
-                f"+{DEFAULT_NEW_BAG_TAKE_PROFIT_PCT}%, SL live in 10m), "
+                f"on-chain cost basis (SL {DEFAULTS.stop_loss_pct}% / arm "
+                f"+{DEFAULTS.take_profit_pct}%, SL live in 10m), "
                 f"{len(rug_only)} rug-only until a basis can be read"
             ),
             context={

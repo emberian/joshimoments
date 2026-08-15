@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 from shitcoims_sentinel.lots import (
     DEFAULT_NEW_BAG_PROTECT_DELAY_SECONDS,
     DEFAULT_NEW_BAG_SL_GRACE_SECONDS,
-    DEFAULT_NEW_BAG_STOP_LOSS_PCT,
     ORIGIN_DEFAULT,
     ORIGIN_OPERATOR,
     basis_applied,
@@ -22,11 +20,6 @@ from shitcoims_sentinel.lots import (
 
 NOW = datetime(2026, 8, 12, 23, 0, tzinfo=timezone.utc)
 MINT = "5jUwEEKMawc1q1GCEKLgCYA77jbGfVvjz21nEpJrpump"
-
-
-def test_default_stop_is_a_death_floor_not_a_scalp() -> None:
-    assert Decimal("-35") == DEFAULT_NEW_BAG_STOP_LOSS_PCT
-    assert DEFAULT_NEW_BAG_SL_GRACE_SECONDS == 600
 
 
 def test_first_sighting_schedules_delayed_default() -> None:

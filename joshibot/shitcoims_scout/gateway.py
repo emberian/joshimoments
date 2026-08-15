@@ -315,12 +315,14 @@ class ScoutGateway:
             )
 
         body = default_policy_body(bag)
-        if callback.action == "sl":
-            body["stop_loss_pct"] = callback.parameters.get("value", body["stop_loss_pct"])
-        elif callback.action == "tp":
-            body["take_profit_pct"] = callback.parameters.get("value", body["take_profit_pct"])
-        elif callback.action == "trail":
-            body["trailing_stop_pct"] = callback.parameters.get("value", body["trailing_stop_pct"])
+        # A preset button carries its own number. When it does not, the field is left out
+        # of the body entirely rather than being back-filled from a desk-local constant.
+        pressed = callback.parameters.get("value")
+        field = {"sl": "stop_loss_pct", "tp": "take_profit_pct", "trail": "trailing_stop_pct"}.get(
+            callback.action
+        )
+        if field is not None and pressed is not None:
+            body[field] = pressed
         elif callback.action == "rug":
             body["rug_exit"] = not bool(bag.rug_exit)
         try:

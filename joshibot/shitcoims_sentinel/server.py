@@ -14,7 +14,13 @@ from .candles import CandleError, fetch_candles
 from .domain import utc_now
 from .engine import SentinelEngine
 from .history import performance_summary, read_events, read_trades
-from .policies import PolicyError, policies_for_unmonitored, policy_from_payload, policy_to_mapping
+from .policies import (
+    PolicyError,
+    policies_for_unmonitored,
+    policy_defaults_from_payload,
+    policy_from_payload,
+    policy_to_api_mapping,
+)
 
 
 class _TaskReentrantLock:
@@ -179,7 +185,7 @@ def create_app(engine: SentinelEngine) -> FastAPI:
             items = await engine.apply_positions(
                 list(current.values()), origin="operator", touch=[policy.mint]
             )
-        return {"item": policy_to_mapping(policy), "items": items, "can_execute": False}
+        return {"item": policy_to_api_mapping(policy), "items": items, "can_execute": False}
 
     @app.delete("/api/policies/{mint}")
     async def delete_policy(mint: str, request: Request):
@@ -209,18 +215,20 @@ def create_app(engine: SentinelEngine) -> FastAPI:
         # unmonitored row is skipped by policies_for_unmonitored once a policy for
         # that mint exists in `current`.
         snapshot = await engine.snapshot()
+        try:
+            # Any threshold the caller omits falls through to `PolicyDefaults`. This
+            # endpoint used to restate -30/100/20 inline, which is how the dashboard came
+            # to protect a bag under a different rule than the engine would have.
+            defaults = policy_defaults_from_payload(body)
+        except PolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         async with policy_lock:
             try:
                 merged, created, skipped = policies_for_unmonitored(
                     unmonitored=list(snapshot.get("unmonitored") or []),
                     current=list(engine.config.positions),
                     mode=str(body.get("mode") or "rug_only"),
-                    stop_loss_pct=body.get("stop_loss_pct", -30),
-                    take_profit_pct=body.get("take_profit_pct", 100),
-                    trailing_stop_pct=body.get("trailing_stop_pct", 20),
-                    rug_exit=body.get("rug_exit", True),
-                    dispose_after_break_even=body.get("dispose_after_break_even", False),
-                    exit_style=body.get("exit_style") or "runner",
+                    defaults=defaults,
                 )
             except PolicyError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

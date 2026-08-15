@@ -7,6 +7,8 @@ from solders.keypair import Keypair
 from shitcoims_sentinel.config import ConfigError, load_config
 from shitcoims_sentinel.secrets import SecretError, load_shitcoims_keypair, read_secret_file
 
+MINT = "5jUwEEKMawc1q1GCEKLgCYA77jbGfVvjz21nEpJrpump"
+
 
 def write_config(path: Path, wallet_name: str = "shitcoims") -> None:
     path.write_text(
@@ -17,7 +19,7 @@ wallet:
   name: {wallet_name}
   secret_key_file: ./wallet
 positions:
-  - mint: MINT
+  - mint: {MINT}
     name: TEST
     cost_basis_sol: 1
     stop_loss_pct: -30
@@ -88,14 +90,14 @@ def test_config_rejects_string_booleans_and_jupiter_credential_redirect(tmp_path
 def test_config_loads_rug_only_position_without_basis(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        """
+        f"""
 rpc:
   helius_api_key_file: ./helius
 wallet:
   name: shitcoims
   secret_key_file: ./wallet
 positions:
-  - mint: MINTONLY
+  - mint: {MINT}
     name: RUGONLY
     stop_loss_pct: -30
     take_profit_pct: 100

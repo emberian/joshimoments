@@ -6,12 +6,13 @@ import pytest
 import yaml
 from solders.keypair import Keypair
 
+from shitcoims_sentinel.config import load_config
 from shitcoims_sentinel.policies import (
     PolicyError,
     persist_positions,
     policies_for_unmonitored,
     policy_from_payload,
-    policy_to_mapping,
+    policy_to_yaml_mapping,
     policy_without_basis,
 )
 
@@ -33,6 +34,46 @@ positions: []
     )
     (path.parent / "helius").write_text("k", encoding="utf-8")
     (path.parent / "wallet").write_text(str(wallet), encoding="utf-8")
+
+
+def _thresholds(policy) -> tuple:
+    return (
+        policy.stop_loss_pct,
+        policy.take_profit_pct,
+        policy.trailing_stop_pct,
+        policy.rug_exit,
+        policy.exit_style,
+        policy.floor_confirm_quotes,
+        policy.hold_trail_until_graduated,
+    )
+
+
+def test_every_route_into_a_policy_produces_the_same_unstated_rule(tmp_path: Path) -> None:
+    """The bug this pins: the same bag, protected two ways, ran two different rules.
+
+    `config.py`, `policies.py` (twice), `server.py` and `lots.py` each wrote a default set
+    down, and `lots.py` disagreed — -35 there, -30 everywhere else — so whether a stop sat
+    5 points wider depended on whether the engine discovered the bag or the operator created
+    it in the dashboard. This compares the routes to EACH OTHER, so it stays honest when the
+    numbers change and fails the moment they diverge again.
+    """
+
+    mint = str(Keypair().pubkey())
+    config_path = tmp_path / "config.yaml"
+    _config(config_path)
+
+    dashboard = policy_from_payload(mint, {"name": "SAME"})
+    merged, _created, _skipped = policies_for_unmonitored(
+        unmonitored=[{"mint": mint, "name": "SAME"}], current=[]
+    )
+    auto_protect = merged[0]
+
+    document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    document["positions"] = [{"mint": mint, "name": "SAME"}]
+    config_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    from_yaml = load_config(config_path).positions[0]
+
+    assert _thresholds(dashboard) == _thresholds(auto_protect) == _thresholds(from_yaml)
 
 
 def test_policy_rejects_execution_and_secret_fields() -> None:
@@ -67,7 +108,7 @@ def test_policy_without_basis_keeps_thresholds() -> None:
     assert cleared.cost_basis_sol is None
     assert cleared.buy_price_sol is None
     assert cleared.stop_loss_pct == policy.stop_loss_pct
-    assert "cost_basis_sol" not in policy_to_mapping(cleared)
+    assert "cost_basis_sol" not in policy_to_yaml_mapping(cleared)
 
 
 def test_new_payload_defaults_to_runner_not_percent_leash() -> None:
@@ -85,7 +126,7 @@ def test_new_payload_defaults_to_runner_not_percent_leash() -> None:
     assert policy.exit_style == "runner"
     assert policy.floor_confirm_quotes == 2
     assert policy.hold_trail_until_graduated is True
-    mapping = policy_to_mapping(policy)
+    mapping = policy_to_yaml_mapping(policy)
     assert mapping["exit_style"] == "runner"
 
 
@@ -110,7 +151,7 @@ def test_policy_allows_missing_basis_for_rug_only() -> None:
     assert policy.buy_price_sol is None
     assert policy.cost_basis_sol is None
     assert policy.rug_exit is True
-    mapping = policy_to_mapping(policy)
+    mapping = policy_to_yaml_mapping(policy)
     assert "cost_basis_sol" not in mapping
     assert "buy_price_sol" not in mapping
 
@@ -172,7 +213,7 @@ def test_policies_for_unmonitored_rug_only_has_no_cost_basis() -> None:
     assert merged[0].cost_basis_sol is None
     assert merged[0].buy_price_sol is None
     assert merged[0].name == "AKitty"
-    mapping = policy_to_mapping(merged[0])
+    mapping = policy_to_yaml_mapping(merged[0])
     assert "cost_basis_sol" not in mapping
     assert "buy_price_sol" not in mapping
 

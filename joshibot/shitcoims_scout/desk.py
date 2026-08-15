@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_NEW_BAG_STOP_LOSS_PCT = -35
-DEFAULT_NEW_BAG_TAKE_PROFIT_PCT = 80
-DEFAULT_NEW_BAG_TRAILING_STOP_PCT = 20
-
+# No policy defaults live here. The desk used to carry its own -35/80/20, which disagreed
+# with both the sentinel's auto-protect rule and the dashboard's, so the same bag got a
+# different rule depending on which surface protected it. A field the operator has not
+# chosen is now OMITTED from the request body and the sentinel — the one validator, next to
+# the money — fills it in.
 SL_PRESETS = (-20, -35, -50, -80)
 TP_PRESETS = (30, 80, 120)
 TRAIL_PRESETS = (10, 20, 30)
@@ -126,22 +127,24 @@ def render_bag(bag: BagView) -> str:
 
 
 def default_policy_body(bag: BagView) -> dict[str, Any]:
-    style = bag.exit_style if bag.exit_style in {"runner", "fixed_trail"} else "runner"
-    body: dict[str, Any] = {
-        "name": bag.name,
-        "stop_loss_pct": (
-            bag.stop_loss_pct if bag.stop_loss_pct is not None else DEFAULT_NEW_BAG_STOP_LOSS_PCT
-        ),
-        "take_profit_pct": (
-            bag.take_profit_pct if bag.take_profit_pct is not None else DEFAULT_NEW_BAG_TAKE_PROFIT_PCT
-        ),
-        "trailing_stop_pct": (
-            bag.trailing_stop_pct if bag.trailing_stop_pct is not None else DEFAULT_NEW_BAG_TRAILING_STOP_PCT
-        ),
-        "rug_exit": True if bag.rug_exit is None else bag.rug_exit,
-        "dispose_after_break_even": False,
-        "exit_style": style,
-    }
+    """The PUT body for a desk button press.
+
+    Carries only what this bag already has. Everything absent is left to the sentinel's
+    `PolicyDefaults`, so pressing a button can never quietly restate a threshold the desk
+    happens to believe in.
+    """
+
+    body: dict[str, Any] = {"name": bag.name}
+    if bag.stop_loss_pct is not None:
+        body["stop_loss_pct"] = bag.stop_loss_pct
+    if bag.take_profit_pct is not None:
+        body["take_profit_pct"] = bag.take_profit_pct
+    if bag.trailing_stop_pct is not None:
+        body["trailing_stop_pct"] = bag.trailing_stop_pct
+    if bag.rug_exit is not None:
+        body["rug_exit"] = bag.rug_exit
+    if bag.exit_style in {"runner", "fixed_trail"}:
+        body["exit_style"] = bag.exit_style
     if bag.exit_sol:
         try:
             basis = float(bag.exit_sol)
