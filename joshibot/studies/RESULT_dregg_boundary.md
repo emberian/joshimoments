@@ -565,10 +565,28 @@ Three structural gaps, each of which the book needs and the package does not hav
 What the book can reuse unchanged: `curve_sell(state, tokens_raw, fee_bps=…)` in
 `shitcoims_scalper/shadow.py:31-48` is already the exact constant-product fill against observed
 reserves, and `ClusterTapeSource` already tails `state/cluster_tape/swaps/<pool>-YYYYMMDD.jsonl`
-with `PoolSwap.quote_reserve` / `base_reserve`. **One correction it must carry:**
-`friction.py:70` sets `EFFECTIVE_TAKE_BPS["DREGG/SOL"] = 20`. For the *operator* on their own coin
-the correct number is **25** (lp 20 + protocol 5, creator recaptured); for anyone else it is
-**105**. The current 20 understates the operator's cost by 20% and understates an outsider's by 5×.
+with `PoolSwap.quote_reserve` / `base_reserve`.
+
+**But there is a live defect in the fill simulation that this study can name exactly, and it is
+not confined to the new book.** `friction.py` sets `EFFECTIVE_TAKE_BPS["DREGG/SOL"] = 20`,
+measured by `scripts/sim2real.py` as the shortfall of each real swap's output against a zero-fee
+constant product from the pre-reserves. On a PumpSwap pool **that measurement recovers the LP fee
+and nothing else** — §2 verifies it, sell ratio 0.99799999 — because the LP fee is the only leg
+that comes out of the *vault*. The protocol (5 bps) and creator (75–95 bps) legs are transferred
+from the **user's** token account, so they never appear in a vault-shortfall estimator. The taker
+therefore pays **105 bps** where the paperdesk charges 20, and `MintBook._close_observed` /
+`_fill_pending` **overstate every simulated PumpSwap fill by 85 bps** on both legs of a round trip.
+
+The correct constants, all verified on chain:
+
+| who | what they pay per leg on DREGG/SOL | why |
+|---|---:|---|
+| the paperdesk today | 20 bps | vault shortfall = LP fee only |
+| **any taker** | **105 bps** | lp 20 + protocol 5 + creator 80 |
+| **this operator** | **25 bps** | the creator 80 returns to their own vault |
+
+SOLVE/SOL (also 20 in the table) has the same defect. nosis/SOL and weave/SOL at 407/909 bps are
+DLMM pools where the shortfall genuinely is the whole take, and are unaffected.
 
 ---
 
