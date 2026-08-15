@@ -74,6 +74,7 @@ external:
   # truncated display ("PayDyNeCPqJBp34JMWWj...") completed with a fabricated tail.
   # The address below is the one that actually received the money.
   - {address: PayDyNeCPqJBp34JMWWjP7DbDbneF2mHHFjPNrEbuv6, label: payroll, kind: payee, confidence: attested,
+     superseded_address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6,
      note: "1,063,079.526895 DREGG over 4 transfers, 2026-07-25T04:52:33Z..2026-08-08T16:39:27Z; the largest non-batch DREGG payee that is not a hub or the Streamflow escrow. Has its own poisoning lookalike Pay1mF5quHykSwHowLCvJLcVzD2D5zo3dCL8BRBcbuv6 which dusted 16s after the first real transfer"}
 
   # RESOLVED 2026-08-15 from the prefix "3CP". Sole 3CP-prefixed key in the entire
@@ -182,3 +183,21 @@ categories:
   # Operator's own classification from the fork: "let's call this all payroll
   # 'marketing/community' tbh" — payroll and marketing_kol both roll up here.
   marketing_community: [payroll, marketing_kol]
+
+# INVARIANT, checkable in one line and worth running after any edit here:
+#   every LIVE address is on the ed25519 curve, and every OFF-curve address is a
+#   `superseded_address`, i.e. quarantined rather than in use.
+#
+#   uv run python -c "
+#   import yaml; from solders.pubkey import Pubkey
+#   d=yaml.safe_load(open('wallet_labels.yaml'))
+#   for s in ('own_wallets','external'):
+#       for e in d.get(s) or []:
+#           a=e.get('address')
+#           assert a is None or Pubkey.from_string(a).is_on_curve(), (e.get('label'), a)
+#   print('all live addresses on-curve')"
+#
+# Two of the three full addresses this file inherited were off-curve: an ATTESTED payroll
+# address and the relayer. Both were truncated displays completed with a fabricated tail, and
+# both were caught by exactly this check. An off-curve key has no private key, so it can
+# neither sign nor be paid at -- it is not a wallet, whatever the label says.
