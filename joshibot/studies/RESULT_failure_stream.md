@@ -461,14 +461,16 @@ The live cluster tape covers 2026-08-09 → 08-15; the bulk export stops 2026-08
 | `i0:0x8` | 3.2% | 0.5% | 29 |
 | `i3:0x51` | **2.8%** | 12.5% | **1** |
 
-**Total-variation overlap between the two error-code distributions: 56.0%.** The *catalogue*
+**Total-variation overlap between the two error-code distributions: 56.0%.** (55.9% on a
+re-run two hours later — the live tape keeps growing, so this figure drifts by design.) The *catalogue*
 is stable — nine of the held-out top twelve are top-30 in training — but the *mix* moves a
 lot in two days. `i3:0x51`, 12.5% of all training failures and rank 1, collapses to 2.8%.
 
 That is a load-bearing caveat for anything built on this: a machine census from the failure
 stream has a **half-life of days**, because the machines themselves come and go. The
 persistence result survives out of sample (lag-1 autocorrelation of the failure count 0.207 on
-12 pools including several very quiet ones, against 0.30–0.54 per pool in training); the
+12 pools including several very quiet ones, against 0.30–0.54 per pool in training; 0.207
+and 0.208 on two runs two hours apart); the
 composition does not.
 
 ---
