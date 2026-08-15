@@ -658,13 +658,13 @@ one failing *inside PumpSwap itself*, beaten in-block 54% of the time.
 ### 8.2 What changed, and what did not
 
 **The reframe changes the picture qualitatively.** §4 found essentially nothing: coefficients
-of ±0.001–0.004 log units. Here the same data, re-cut by slot and by named machine, produces
+between 0.0001 and 0.004 log units, none of them interpretable as an effect. Here the same data, re-cut by slot and by named machine, produces
 effects of **+25% to +73% on fill probability**. The information is unmistakably there. The
 design was wrong before, exactly as the operator argued.
 
 **And it still does not clear the bar.** Under the same discipline applied to §4 — one
-rotation null, one FDR budget — five large fill effects land at p ≈ 0.011–0.029 and none
-survives BY across 30 tests.
+rotation null, one FDR budget — four of the five large fill effects land at p ≈ 0.011–0.029
+(the fifth, machine 2's +63%, at 0.12) and **none** survives BY across 30 tests.
 
 **Why, and this is the most transferable thing in the study: the naive t is catastrophically
 overconfident here.** Machine 6's fill effect has **t = 40.4 and a rotation p of 0.011**. A
