@@ -415,25 +415,28 @@ def default_collectors(root: Path = REPO_ROOT) -> tuple[CollectorSpec, ...]:
         ),
         CollectorSpec(
             name="paperdesk",
-            label=None,
+            label="com.shitcoims.paperdesk",
             probe=JsonlProbe(
                 root=state / "paperdesk",
                 pattern="*.jsonl",
-                kinds=None,
+                # The desk's ledger discriminates rows on `row`, not `kind`, and emits a
+                # heartbeat row every ~60s regardless of market activity — so this is a
+                # true HEARTBEAT-grade signal: silence means dead-or-wedged, never quiet.
+                kinds=frozenset({"heartbeat"}),
+                kind_field="row",
                 time_fields=("t", "t_ingest", "timestamp"),
             ),
             cadence_seconds=60.0,
             grace=5.0,
-            # Appeared 2026-08-15 while this was being written, and was picked up on the next
-            # pass with no change here — which is the point of watching a path that does not
-            # exist yet. Its ledger rows carry no `kind` and no liveness beat, so this is an
-            # EVENT-grade signal: a quiet desk and a dead one are not yet distinguishable.
-            # Upgrading it to PROOF_HEARTBEAT needs a keepalive row from the desk itself, and
-            # a plist before the watchdog may restart rather than only report.
-            proof=PROOF_EVENT,
+            # Upgraded 2026-08-15 after the desk died exactly the way this file predicts:
+            # it was bounced for a code fix on the assumption "the watchdog will revive
+            # it", and the watchdog could not, because report-only with no plist. The
+            # plist is ops/com.shitcoims.paperdesk.plist; the watchdog now restarts it
+            # like boards/firehose/cluster.
+            proof=PROOF_HEARTBEAT,
             optional=True,
-            restartable=False,
-            note="paperdesk owns this tape; watchdog reports only until it has a plist",
+            restartable=True,
+            note="standing paper desk; heartbeat row every minute is the liveness proof",
         ),
         CollectorSpec(
             name="sentinel",

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.paperdesk</string>
+  <!-- The standing three-book paper desk. It was launched as an agent's background
+       process with no supervisor, then bounced twice for code fixes on the assumption
+       "the watchdog will revive it" - which it could not, because report-only. This
+       plist closes that gap: launchd keeps it alive, the watchdog restarts it, and its
+       once-a-minute heartbeat ledger row is the liveness proof. No --seed on purpose:
+       a fixed seed under KeepAlive would replay identical jitter draws every restart;
+       propensities are logged per decision, so a fresh seed per boot costs OPE nothing. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_paperdesk</string>
+    <string>run</string>
+    <string>--minutes</string>
+    <string>0</string>
+    <string>--poll-seconds</string>
+    <string>3</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/paperdesk.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/paperdesk.err.log</string>
+</dict>
+</plist>
