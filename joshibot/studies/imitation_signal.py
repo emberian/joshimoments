@@ -103,6 +103,7 @@ from shitcoims_scalper.swarm_detect import (  # noqa: E402
     _default_paths,
     build_stream,
     listening_intervals,
+    plant_swarms,
     rotate_stream,
     shuffle_stream,
     taxonomy,
@@ -1569,6 +1570,47 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         "real_families": len(fams),
         "real_onsets": len(onsets),
         "real_max_family": real_max,
+    }
+
+    # ---- 6b. the known-EFFECT control for the detector itself -------------
+    print(f"\n--- 6b. RECOVERY — can the detector find a swarm that is definitely there? ---", file=out)
+    print(
+        "  §6 is only the zero side. A detector that finds nothing passes every "
+        "false-positive\n  test perfectly, so 40 textbook parasite swarms (3 fresh deployers, "
+        "same ticker, inside\n  two minutes) are planted into the real stream and scored.",
+        file=out,
+    )
+    planted_stream, planted = plant_swarms(launches, 40, clones=3, delay_s=120.0, seed=seed)
+    p_onsets, p_det = run_detector(planted_stream, store, k=k, window_s=window_s)
+    found_hosts = {o["host_mint"] for o in p_onsets}
+    # a plant counts as recovered if an onset fired on a family containing its clones
+    recovered = 0
+    right_host = 0
+    fam_of: dict[str, Any] = {}
+    for fam in p_det.families():
+        for m in fam.members:
+            fam_of[m.mint] = fam
+    for host_mint, clone_mints in planted.items():
+        fam = fam_of.get(clone_mints[0])
+        if fam is None:
+            continue
+        mints = {m.mint for m in fam.members}
+        if all(c in mints for c in clone_mints) and host_mint in mints:
+            recovered += 1
+            if host_mint in found_hosts:
+                right_host += 1
+    print(
+        f"  planted {len(planted)} swarms: {recovered} recovered as one family with their host "
+        f"({recovered/max(len(planted),1):.0%}), of which {right_host} also had the host "
+        f"correctly nominated ({right_host/max(len(planted),1):.0%})",
+        file=out,
+    )
+    verdict = "RECOVERED" if recovered >= 0.8 * len(planted) else "*** DETECTOR FAILED RECOVERY ***"
+    print(f"  {verdict}", file=out)
+    result["detector_recovery"] = {
+        "planted": len(planted),
+        "recovered": recovered,
+        "right_host": right_host,
     }
 
     # ---- 7. trials --------------------------------------------------------

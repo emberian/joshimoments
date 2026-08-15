@@ -36,7 +36,9 @@ from shitcoims_scalper.swarm_detect import (
     listening_intervals,
     name_similarity,
     norm_text,
+    plant_swarms,
     rotate_stream,
+    shuffle_stream,
     squash_runs,
     taxonomy,
 )
@@ -400,3 +402,104 @@ def _epoch(iso: str) -> float:
     import datetime as dt
 
     return dt.datetime.fromisoformat(iso).timestamp()
+
+
+# ---------------------------------------------------------------------------
+# the known-EFFECT control
+# ---------------------------------------------------------------------------
+
+def _distinct_stream(n: int, seed: int = 11) -> list[Launch]:
+    """A background stream in which nothing resembles anything else.
+
+    Built from a seeded RNG rather than an f-string over an index, because the obvious
+    fixture — ``f"name number {i}"`` — produces names differing in one character out of
+    eleven, i.e. similarity 0.91, well over the 0.82 threshold. That fixture silently turned
+    the "unrelated background" into one enormous clone family and made the recovery test fail
+    for the fixture instead of for the detector. A background that is supposed to be inert
+    has to be *checked* inert, which is what the assertion at the end of this function does.
+    """
+    import random as _random
+    import string as _string
+
+    rng = _random.Random(seed)
+    out = []
+    for i in range(n):
+        word = "".join(rng.choice(_string.ascii_lowercase) for _ in range(12))
+        sym = "".join(rng.choice(_string.ascii_uppercase) for _ in range(8))
+        out.append(mk(f"m{i}", i * 30.0, sym, f"D{i}", name=word))
+    det = SwarmDetector(k=2, window_s=1800)
+    assert not [e for ln in out for e in det.push(ln)], "background fixture is not inert"
+    return out
+
+
+def test_single_linkage_transitivity_is_a_real_property_not_a_bug():
+    """A ~ B and B ~ C puts A, B and C in one family even though A and C are unalike.
+
+    This is inherent to union-merge clustering and it is *correct* for this domain — a
+    campaign that drifts its ticker one character at a time is one campaign — but it means a
+    family is a connected component, not a clique, and family size must never be read as
+    "this many coins share a ticker". The largest real family in the tape spans `website`,
+    `READDDDDDDDDD` and `GRANNY` and is held together by a shared image, which is exactly
+    the behaviour wanted; the failure mode to watch is a background of near-identical names
+    fusing into one component, which is what this test pins.
+    """
+    det = SwarmDetector(k=2, window_s=3600)
+    det.push(mk("a", 0, "AAA", "D0", name="aardvark"))
+    det.push(mk("b", 10, "BBB", "D1", name="aardvarks"))
+    det.push(mk("c", 20, "CCC", "D2", name="aardvarkss"))
+    fams = [f for f in det.families() if len(f.members) >= 2]
+    assert len(fams) == 1 and len(fams[0].members) == 3
+    # a and c are NOT directly similar enough; they are one family only through b
+    assert name_similarity("aardvark", "aardvarkss") < 0.82
+
+
+def test_planted_swarms_are_recovered():
+    """PROGRAM.md §3.12: the zero-control alone certifies a broken detector.
+
+    A detector that returns nothing passes every ambient null perfectly. So the planted
+    world has to be recovered, and it has to be recovered *with the right host* — nominating
+    a clone as the host would silently point every downstream position at the wrong coin.
+    """
+    base = _distinct_stream(400)
+    stream, planted = plant_swarms(base, 20, clones=3, delay_s=120.0, seed=3)
+    assert len(planted) == 20
+    assert len(stream) == len(base) + 60
+
+    det = SwarmDetector(k=3, window_s=1800)
+    events = [e for ln in stream for e in det.push(ln)]
+    hosts = {e["host_mint"] for e in events}
+    assert len(hosts & set(planted)) == 20, "every planted swarm must be found, on its host"
+    for e in events:
+        if e["host_mint"] in planted:
+            assert e["clone_count"] >= 2
+            assert e["distinct_clone_deployers"] >= 2
+            assert e["taxonomy"] == "parasite"
+
+
+def test_planting_does_not_disturb_the_rest_of_the_stream():
+    base = _distinct_stream(400)
+    stream, planted = plant_swarms(base, 10, clones=3, seed=5)
+    # every original launch survives unchanged and in time order
+    originals = [l for l in stream if not l.mint.startswith("PLANT")]
+    assert [l.mint for l in originals] == [l.mint for l in base]
+    assert all(l.t_source == "planted" for l in stream if l.mint.startswith("PLANT"))
+
+
+def test_shuffle_preserves_marginals_but_scatters_a_burst():
+    """The collision floor must actually destroy co-arrival, unlike rotation.
+
+    Rotation on a near-constant launch rate carries a burst intact — that is measured on the
+    real tape and documented — so the i.i.d. shuffle is the null that has to do this job.
+    """
+    burst = [mk(f"b{i}", 5000 + i, "SWARM", f"D{i}") for i in range(12)]
+    rest = [mk(f"r{i}", i * 40.0, f"U{i}", f"E{i}") for i in range(400)]
+    stream = sorted(burst + rest, key=lambda l: l.t)
+
+    real = SwarmDetector(k=3, window_s=600)
+    assert len([e for ln in stream for e in real.push(ln)]) == 1
+
+    shuffled = shuffle_stream(stream, seed=7)
+    assert [l.t for l in shuffled] == [l.t for l in stream]
+    assert sorted(l.symbol for l in shuffled) == sorted(l.symbol for l in stream)
+    null = SwarmDetector(k=3, window_s=600)
+    assert len([e for ln in shuffled for e in null.push(ln)]) == 0

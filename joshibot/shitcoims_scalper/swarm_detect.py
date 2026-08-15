@@ -858,6 +858,69 @@ def shuffle_stream(launches: Sequence[Launch], seed: int) -> list[Launch]:
     return out
 
 
+def plant_swarms(
+    launches: Sequence[Launch],
+    n_swarms: int,
+    *,
+    clones: int = 3,
+    delay_s: float = 120.0,
+    seed: int = 1,
+    prefix: str = "PLANT",
+) -> tuple[list[Launch], dict[str, list[str]]]:
+    """Inject synthetic parasite swarms into a real stream. The known-EFFECT world.
+
+    PROGRAM.md §3.12: an estimator that detects nothing passes a false-positive test
+    perfectly, so a green zero-control certifies a broken detector exactly as readily as a
+    working one. The ambient nulls (:func:`shuffle_stream`, :func:`rotate_stream`) are only
+    the zero side; this is the other half.
+
+    ``n_swarms`` real launches are chosen as hosts and ``clones`` synthetic launches are
+    appended after each, spaced over ``delay_s``, each copying the host's symbol and name,
+    each from a fresh deployer — i.e. textbook parasites. The planted mints are marked with
+    ``prefix`` so recovery can be scored exactly, and the returned map is host mint ->
+    planted clone mints.
+
+    Note what this can and cannot certify. It measures the detector's **sensitivity** to a
+    clean parasite swarm and its ability to nominate the right host. It says nothing about
+    whether a real-world swarm looks like this one, which is why it is a control and not a
+    validation.
+    """
+    rng = random.Random(seed)
+    if len(launches) < n_swarms * 4 or n_swarms <= 0:
+        return list(launches), {}
+    # hosts drawn away from the ends so the planted clones land inside the tape
+    lo, hi = int(len(launches) * 0.05), int(len(launches) * 0.85)
+    host_idx = rng.sample(range(lo, hi), n_swarms)
+    planted: dict[str, list[str]] = {}
+    extra: list[Launch] = []
+    for n, i in enumerate(host_idx):
+        host = launches[i]
+        mints = []
+        for c in range(clones):
+            mint = f"{prefix}{n:04d}c{c}"
+            mints.append(mint)
+            extra.append(
+                Launch(
+                    mint=mint,
+                    symbol=host.symbol,
+                    name=host.name,
+                    deployer=f"{prefix}DEV{n:04d}{c}",
+                    t=host.t + delay_s * (c + 1) / clones,
+                    t_source="planted",
+                    uri=None,
+                    image_uri=None,
+                    sol_amount=0.5,
+                    initial_buy=1.0,
+                    mcap_sol=30.0,
+                    t_ingest=host.t,
+                    sources=("planted",),
+                )
+            )
+        planted[host.mint] = mints
+    out = sorted([*launches, *extra], key=lambda l: (l.t, l.mint))
+    return out, planted
+
+
 # --------------------------------------------------------------------------------------
 # census collector
 # --------------------------------------------------------------------------------------
