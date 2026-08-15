@@ -2,15 +2,23 @@
 
 THE ONE QUESTION
 ----------------
-Is the operator's selection worth anything, under identical execution?
+Is the operator's way of trading worth anything against the rule's, under identical
+execution machinery?
 
 Every entry-selection study in this tree returned null. The one repeatedly-positive
 observation is theirs: on the same pattern under the same clock, the rule-chosen wiggle
 book's first closes ran **-14.08%** and their hand-picked equivalents measured **+3.14%**.
-That was a hand comparison over a handful of trades. This report is the standing version,
-and it is designed so that the comparison is about SELECTION and nothing else -- the two
-books share a friction model, a sizing rule, a clock jitter box, a marking discipline and a
-close-row builder, all by inheritance rather than by intention.
+That was a hand comparison over a handful of trades. This report is the standing version.
+
+The two books share a friction model, a sizing rule, the brackets, the marking discipline
+and the close-row builder, all by inheritance rather than by intention. They differ in TWO
+places: who chose the coin, and what ended the position. The second one is a correction the
+operator made to this lane's first design -- the wiggle book's five-minute clock was read
+off their own trades and mistaken for their rule, when it is the outcome distribution of a
+reactive policy (*"i watch it closely, and pull out the position whenever i feel like
+it"*). So the operator arm exits on their ZAP, and this report never calls the difference
+"selection": it is policy against policy, and the exit-reason split is where the two effects
+begin to separate.
 
 WHY THE HEADLINE NUMBER IS A DIFFERENCE AND NOT A RETURN
 --------------------------------------------------------
@@ -149,10 +157,16 @@ def _premium(rows: Any) -> list[str]:
 
     out = [
         "=" * 96,
-        "THE INTUITION PREMIUM — operator selection vs the rule, under identical execution",
+        "THE INTUITION PREMIUM — the operator's policy against the rule's",
         "=" * 96,
-        "  Same clip, same friction, same 240-420 s clock jitter box, same marking and the same",
-        "  close-row builder. The ONLY difference between these two arms is who chose the coin.",
+        "  Same clip, same friction, same brackets, same marking, same close-row builder.",
+        "  TWO things differ, and the second one is a deliberate correction:",
+        "    1. WHO CHOSE THE COIN — a person, versus the jittered entry rule.",
+        "    2. WHAT ENDED IT — the operator's zap, versus a 240-420 s clock. That clock was",
+        "       read off their own trades and mistaken for their rule; it is the outcome",
+        "       distribution of a reactive policy, and they exit on what the chart is doing.",
+        "  So this difference is POLICY vs POLICY and NOT selection alone. The exit split",
+        "  below is where the two effects start coming apart.",
         "",
         f"  {'arm':<12}{'closes':>6}{'mints':>8}{'winners':>10}{'ret%':>10}{'pess%':>10}{'median hold':>12}",
         _arm_line("operator", operator),
@@ -194,6 +208,34 @@ def _premium(rows: Any) -> list[str]:
         f"  premium (pessimistic) {(op_pess - wg_pess) * 100:>+8.2f} pp"
         f"   [operator {op_pess * 100:+.2f}%  -  wiggle {wg_pess * 100:+.2f}%]",
     ]
+    by_exit: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for close in op_w:
+        by_exit[str(close.get("exit_reason"))].append(close)
+    if by_exit:
+        out.append("")
+        out.append("  operator arm by exit — a zap is their decision; a backstop is their absence")
+        out.append(f"    {'exit':<18}{'n':>5}{'winners':>10}{'ret%':>10}{'median hold':>13}")
+        for reason, subset in sorted(by_exit.items(), key=lambda kv: -len(kv[1])):
+            wins = sum(1 for c in subset if float(c.get("pnl_lamports") or 0) > 0)
+            holds = statistics.median(float(c.get("holding_seconds") or 0.0) for c in subset)
+            out.append(
+                f"    {reason:<18}{len(subset):>5}{f'{wins}/{len(subset)}':>10}"
+                f"{_weighted_return(subset, 'pnl_lamports') * 100:>9.2f}%{holds / 60:>11.1f}m"
+            )
+        out.append(
+            "    A backstop_expired row is a position the operator never came back to, so its"
+        )
+        out.append(
+            "    only difference from the wiggle arm is selection plus a longer clock. Compare"
+        )
+        out.append(
+            "    THOSE against wiggle for the selection-only contrast -- at the price of"
+        )
+        out.append(
+            "    conditioning on the positions they did not react to, which is its own"
+        )
+        out.append("    selection effect and is not a free lunch.")
+
     if entities < MIN_ENTITIES:
         out += [
             f"  n = {entities} distinct coins on the operator arm. Below the {MIN_ENTITIES}-entity floor",
@@ -395,9 +437,14 @@ def _scorecard(rows: Any) -> list[str]:
 
 
 def _tape_health(tape: list[Any], rows: Any) -> list[str]:
+    from shitcoims_paperdesk.hunch import read_tape
+
+    _, retractions, zaps = read_tape()
     kinds = Counter(h.kind for h in tape)
     mints = len({h.mint for h in tape})
     words = sum(1 for h in tape if h.utterance.strip())
+    with_state = sum(1 for z in zaps if z.state)
+    zap_words = sum(1 for z in zaps if z.reason.strip())
     return [
         "",
         "THE TAPE — the future training set, and its coverage",
@@ -405,6 +452,11 @@ def _tape_health(tape: list[Any], rows: Any) -> list[str]:
         + ", ".join(f"{k}={v}" for k, v in kinds.most_common()),
         f"  {words} of {len(tape)} carry words; the rest are clicks, which is a valid gesture and",
         "  is stored as an empty utterance rather than as a fabricated one.",
+        f"  {len(zaps)} zaps, {with_state} carrying instrument state, {zap_words} with words.",
+        "  The zaps are the (state, exit) corpus for the reactive-exit-policy search -- the one",
+        "  that supersedes the wiggle book's five-minute clock rather than tuning it. A zap",
+        "  without state is half a training pair, so that count is the number that matters.",
+        f"  {len(retractions)} retraction(s): gestures taken back, kept on disk, out of every score.",
         f"  file: {HUNCH_PATH}   ledger rows this scan: {rows.total:,}",
     ]
 

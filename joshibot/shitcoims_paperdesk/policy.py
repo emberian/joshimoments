@@ -373,6 +373,16 @@ class WigglePolicy(DeskPolicy):
     a defect rather than trading it -- the failure this book exists to prevent is a scalp
     becoming a hold, and that failure would enter the CODE as a widened jitter box.
 
+    **WHAT THE FIVE MINUTES IS, AND WHAT IT IS NOT.** It is the OUTCOME DISTRIBUTION of the
+    operator's reactive exits, not the rule they follow. Their own account: *"i watch it
+    closely, and pull out the position whenever i feel like it."* Nobody is watching THIS
+    book, so a clock is the honest stand-in for an absent supervisor and it stays. But it
+    is a stand-in: it encodes where their exits happened to land, and it cannot encode why.
+    The OPERATOR book therefore does not copy it (see :class:`OperatorPolicy` -- there the
+    clock is a 20-40 minute backstop and the exit is the operator's zap), and when the zap
+    tape is large enough to fit a reactive exit policy against the state at exit time, that
+    policy supersedes this constant rather than tuning it.
+
     ``take_profit`` is drawn in [0.03, 0.09]. The floor is not a preference: round-trip
     friction at the operator's 0.1 SOL clip is ~2.4% (``friction.round_trip``, corrected to
     full three-leg taker costs), so a bracket below ~3% is a bracket that books a loss on a
@@ -495,15 +505,37 @@ class WigglePolicy(DeskPolicy):
 class OperatorPolicy(WigglePolicy):
     """The operator's gesture, logged as the policy it is: exogenous, and always ``enter``.
 
-    THE JITTER BOX IS INHERITED, NOT RESTATED. Every threshold this policy draws is
-    :class:`WigglePolicy`'s -- the same clock in [240, 420] s, the same bracket, the same
-    ghost-town cutoffs. Two consequences, both deliberate:
+    EVERY ENTRY THRESHOLD IS INHERITED. ONE EXIT THRESHOLD IS NOT.
+    ---------------------------------------------------------------
+    The gate cutoffs -- ``dd_min``, ``ghost_min_pool_sol``, ``max_trade_recency_s``,
+    ``impact_margin``, ``min_two_sided``, ``min_obs_per_min`` -- are :class:`WigglePolicy`'s
+    exactly, and the brackets are too. That is what makes "this hunch would have been
+    vetoed" a statement about the ACTUAL rule rather than a nearby one, and it keeps the
+    take-profit/stop-loss the operator's pick gets identical to the one the rule's pick
+    gets.
 
-    * the EXIT the operator's pick gets is drawn from the same distribution the rule-chosen
-      pick gets, which is what makes the two books' returns differ by selection alone;
-    * the GATES are evaluated against the same drawn thresholds the wiggle book would have
-      used on that candidate, so "this hunch would have been vetoed" is a statement about
-      the actual rule and not about a nearby one.
+    ``hold_seconds`` is the exception and the correction. The wiggle book's [240, 420] s
+    came from the operator's own reconstructed trades: under five minutes they ran 7/13 and
+    +$3.09, beyond it 1/20 and -$61. That is a real measurement, and it was read as a rule
+    the operator follows. It is not. In their own words:
+
+        *"i watch it closely, and pull out the position whenever i feel like it."*
+
+    The five-minute figure is an OUTCOME DISTRIBUTION of a reactive policy, not the policy
+    -- their real exits are triggered by what the chart is doing and are often much faster
+    than five minutes. Giving this book a five-minute clock would therefore have made it
+    exit on a rule the operator does not have, and then attributed the result to their
+    judgement. So here the clock is a BACKSTOP: [1200, 2400] s, jittered, generous, and
+    labelled ``backstop_expired`` when it fires so that analysis can separate a position
+    the operator closed from one they left open past every horizon they meant. The real
+    exit is the ZAP -- see :meth:`shitcoims_paperdesk.operator.OperatorBook.zap`.
+
+    WHAT THIS COSTS THE COMPARISON, STATED PLAINLY. The operator arm and the wiggle arm now
+    differ in TWO places rather than one: who chose the coin, and what ended the position.
+    The pair is no longer a clean selection experiment and this docstring will not pretend
+    otherwise -- it is operator POLICY (entry and reactive exit) against rule POLICY, which
+    is the comparison the operator actually asked for. ``hunch_report`` says so, and splits
+    the operator arm by exit reason so the zap-closed subset is readable on its own.
 
     WHY THE PROPENSITY IS 1.0 AND THERE IS NO EPSILON ARM. The other four policies randomise
     themselves so that off-policy evaluation can ask what a nearby threshold would have
@@ -518,7 +550,17 @@ class OperatorPolicy(WigglePolicy):
     """
 
     book = Book.OPERATOR
-    policy_id = "paperdesk-operator-v1"
+    policy_id = "paperdesk-operator-v2"
+    #: Every entry threshold from the wiggle rule, verbatim, plus ONE override: the clock is
+    #: a backstop rather than a policy. Built from ``WigglePolicy.ranges`` rather than
+    #: retyped, so a change to the entry rule reaches the gate evaluation here automatically
+    #: -- the veto table has to describe the rule that is actually running.
+    ranges: ClassVar[dict[str, tuple[float, float]]] = {
+        **WigglePolicy.ranges,
+        # 20-40 minutes, centred on half an hour. Not a horizon the operator trades to: a
+        # bound past which an unattended position is closed rather than held forever.
+        "hold_seconds": (1_200.0, 2_400.0),
+    }
 
     def __init__(self, *, explore_eps: float = DEFAULT_EPS, seed: int | None = None) -> None:
         # Accepted and ignored: ``policy_for`` hands every book the same eps, and refusing

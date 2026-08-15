@@ -50,7 +50,7 @@ from shitcoims_paperdesk.feeds import (
     swap_as_mint_observation,
 )
 from shitcoims_paperdesk.friction import LAMPORTS_PER_SOL, Friction
-from shitcoims_paperdesk.hunch import HunchSource, Retraction
+from shitcoims_paperdesk.hunch import HunchSource, Retraction, Zap
 from shitcoims_paperdesk.ledger import Ledger, iso
 from shitcoims_paperdesk.operator import OperatorBook
 from shitcoims_paperdesk.policy import policy_for
@@ -335,6 +335,11 @@ class Desk:
         for event in self.hunches.poll(now):
             if isinstance(event, Retraction):
                 self.operator.retract(event, now)
+            elif isinstance(event, Zap):
+                # An EXIT gesture. Arms the position; it fills on the next observation,
+                # like every other exit on this desk. Nothing about a zap is urgent enough
+                # to justify the lookahead that filling it here would be.
+                self.operator.zap(event, now)
             else:
                 self.operator.accept(event, now)
 

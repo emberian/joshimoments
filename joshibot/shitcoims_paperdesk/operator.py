@@ -8,27 +8,61 @@ none cleared friction. One thing in the record is repeatedly positive and it is 
 on the same pattern under the same clock, the rule-chosen wiggle book's first closes ran
 **-14.08%** and the operator's hand-picked equivalents measured **+3.14%**.
 
-That difference has exactly one candidate explanation and it is selection. This book is the
-treatment arm that tests it:
+This book is the treatment arm that tests it:
 
-======================  =========================  =========================
-                        WIGGLE                     OPERATOR
-======================  =========================  =========================
-entry                   the jittered rule          a person, pointing
-sizing                  0.1 SOL clip               the same clip
-exit                    240-420 s, jittered        the same draw, same box
-brackets                take_profit / stop_loss    the same box
-friction                shared ``Friction``        the same object
-marking                 next observation, censored the same code path
-propensity              1 - eps / eps              1.0, exogenous
-======================  =========================  =========================
+======================  ==========================  ==========================
+                        WIGGLE                      OPERATOR
+======================  ==========================  ==========================
+entry                   the jittered rule           a person, pointing
+sizing                  0.1 SOL clip                the same clip
+entry gates             enforced                    computed, logged, INERT
+brackets                take_profit / stop_loss     the same box
+friction                shared ``Friction``         the same object
+marking                 next observation, censored  the same code path
+close row               one builder                 the same builder
+propensity              1 - eps / eps               1.0, exogenous
+**exit**                **240-420 s clock**         **the operator's ZAP**
+                                                    (20-40 min backstop)
+======================  ==========================  ==========================
 
-Everything below the first row is *inherited*, not reimplemented, and that is load-bearing
-rather than tidy: if the operator's arm had its own fill logic, its own clock or its own
+Everything except the bolded row is *inherited*, not reimplemented, and that is load-bearing
+rather than tidy: if the operator's arm had its own fill logic, its own sizing or its own
 friction, the difference between the two columns would be a difference between two programs
 and the study would be unfalsifiable. :class:`OperatorBook` subclasses
 :class:`~shitcoims_paperdesk.wiggle.WiggleBook` for the same reason the wiggle book
 subclasses ``MintBook``.
+
+THE EXIT ROW IS BOLD BECAUSE IT WAS WRONG, AND THE CORRECTION MATTERS
+---------------------------------------------------------------------
+This book first shipped with the wiggle book's five-minute clock, on the reasoning that
+holding the exit fixed made the pair a clean experiment about SELECTION alone. The operator
+corrected it, and they were right:
+
+    *"i watch it closely, and pull out the position whenever i feel like it."*
+
+The five minutes was never their rule. It is the OUTCOME DISTRIBUTION of a reactive policy
+-- where their exits happened to land, measured after the fact -- and their real exits are
+triggered by what the chart is doing and are frequently much faster. A book that exited
+their picks on a clock they do not use would have measured a strategy nobody runs and
+attributed the result to their judgement.
+
+So the exit here is the ZAP (:meth:`OperatorBook.zap`), the clock is a generous backstop,
+and the close reason distinguishes them: ``zap`` versus ``backstop_expired``. **What this
+costs, said plainly: the two arms now differ in two places rather than one, so the
+difference between them is operator POLICY against rule POLICY and NOT selection alone.**
+``hunch_report`` states that and splits the operator arm by exit reason. The clean
+selection contrast is recoverable later by comparing only backstop-closed operator
+positions against the wiggle book -- at the price of conditioning on the positions the
+operator did not react to, which is its own selection effect and will be labelled as one.
+
+AND THE ZAP IS THE MORE VALUABLE HALF OF THE CORPUS
+----------------------------------------------------
+Every exit rule in this repo is a function of a clock or of one threshold, because a clock
+and a threshold are the only things anybody ever wrote down. A zap row carries the
+instrument state at the moment of the exit, which makes ``(state, exit)`` pairs -- the
+training set for a reactive exit policy fitted to what the operator is actually reacting
+to. When that tape is large enough, the search it feeds SUPERSEDES the wiggle book's clock
+rather than tuning it.
 
 THE GATES ARE COMPUTED AND THEY DO NOT GATE
 -------------------------------------------
@@ -87,8 +121,9 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any, Final
 
+from shitcoims_paperdesk.books import PaperPosition
 from shitcoims_paperdesk.feeds import MintObservation
-from shitcoims_paperdesk.hunch import HUNCH_ACTIONABLE_S, Hunch, Retraction
+from shitcoims_paperdesk.hunch import HUNCH_ACTIONABLE_S, Hunch, Retraction, Zap
 from shitcoims_paperdesk.ledger import iso
 from shitcoims_paperdesk.wiggle import WiggleBook, WiggleWatch
 
@@ -183,7 +218,25 @@ class OperatorBook(WiggleBook):
     * a decision path that always enters, logs the gates, and tags the ghost-town case.
     """
 
+    #: The backstop's ceiling, replacing the wiggle book's 900 s hard clock. That constant
+    #: is a TRIPWIRE against a scalp quietly becoming a hold, and it is the right tripwire
+    #: for a book whose exit rule IS a clock. This book's exit rule is a person, so the
+    #: equivalent tripwire is a bound past which an unattended position is closed rather
+    #: than held: an hour, comfortably outside the [20, 40] min jitter box, and still short
+    #: enough that a forgotten position cannot sit on the book overnight claiming a mark.
+    MAX_HOLD_S: Final[float] = 3_600.0
+
+    #: How long a position may go unobserved before the desk stops pretending to mark it.
+    #: Longer than the wiggle book's 420 s because the horizon is longer, shorter than the
+    #: mint books' 600 s... no: it is 900 s, and the reasoning is the operator, not the
+    #: horizon. A zap can only FILL against an observation, so an unobservable position is
+    #: one the operator cannot actually leave; holding it for the full backstop while
+    #: claiming a mark would be the instrument lying about the one action this book exists
+    #: to record.
+    DEPARTURE_TIMEOUT_S: Final[float] = 900.0
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("departure_timeout_s", self.DEPARTURE_TIMEOUT_S)
         super().__init__(*args, **kwargs)
         self.waiting: dict[str, dict[str, Any]] = {}
         self.watches: dict[str, Watch] = {}
@@ -197,6 +250,138 @@ class OperatorBook(WiggleBook):
         self.counters.setdefault("falsified", 0)
         self.counters.setdefault("ghost_town_entries", 0)
         self.counters.setdefault("retractions", 0)
+        self.counters.setdefault("zaps", 0)
+        self.counters.setdefault("zaps_no_position", 0)
+
+    # ---------------------------------------------------------------- exiting
+
+    def _trigger(self, position: PaperPosition, now: float) -> str | None:
+        """The base triggers, with the deadline RENAMED to what it actually is.
+
+        On every other book "deadline" means the rule fired: the horizon was the policy and
+        reaching it is the strategy working as designed. Here it means the opposite -- the
+        operator never came back, and the desk closed the position because something had
+        to. Analysis has to be able to tell a zap-closed position from an abandoned one, and
+        an ``exit_reason`` shared with four books that mean the other thing would make that
+        distinction unrecoverable from the ledger.
+        """
+        trigger = super()._trigger(position, now)
+        return "backstop_expired" if trigger == "deadline" else trigger
+
+    def zap(self, zap: Zap, now: float) -> str:
+        """The operator pulling out. Arms the exit; it FILLS at the next observation.
+
+        *"i watch it closely, and pull out the position whenever i feel like it."*
+
+        Three things this deliberately is and is not:
+
+        * It is **not ceremony.** There is no confirmation anywhere on this path and there
+          must never be one. Arming is ceremony; stopping is instant -- and a paper zap that
+          is slower than the real thing would measure the dialog rather than the operator.
+        * It is **not an instant fill.** The exit arms here and fills against the FIRST
+          observation after it, which is the same rule every other exit on this desk obeys
+          and the reason none of them can trade the tick that told them to trade. The zap
+          row records the moment of the decision; the close row records the price that was
+          actually available after it, and the gap between them is real slippage that a
+          live zap would also pay.
+        * It is **a recorded decision, and that is the point.** ``zap.state`` carries the
+          instrument as it was when they decided -- the price path, the flow, the depth, the
+          position's own P&L and age -- which is what makes ``(state, exit)`` a training
+          pair. The reactive-exit-policy search reads this; the wiggle book's five-minute
+          clock is a placeholder standing in for a policy nobody has recorded until now.
+        """
+        self.counters["zaps"] += 1
+        target = None
+        if zap.position_id:
+            target = self.positions.get(zap.position_id)
+        if target is None:
+            live = [p for p in self.positions.values() if p.mint == zap.mint]
+            target = max(live, key=lambda p: p.entry_unix) if live else None
+
+        common: dict[str, Any] = {
+            "t_ingest_unix": now,
+            "t_event_unix": zap.t_event_unix,
+            "t_event_source": "operator:zap",
+            "key": zap.mint,
+            "zap_id": zap.zap_id,
+            "reason": zap.reason,
+            # The whole instrument, on the ledger row as well as on the tape, so a reader
+            # with only the ledger can still reconstruct what was on screen.
+            "state": zap.state,
+        }
+        if target is None:
+            # Not a defect and not silently ignorable: the operator pressed the key, and
+            # "there was nothing to close" is a fact about the desk's book at that instant.
+            # It is also the shape a double-zap takes, which is worth being able to count.
+            self.counters["zaps_no_position"] += 1
+            self.ledger.emit("hunch", str(self.book), **common, detail="zap_no_open_position")
+            return "no_position"
+        if target.armed_reason is not None:
+            self.ledger.emit(
+                "hunch",
+                str(self.book),
+                **common,
+                detail="zap_already_armed",
+                position_id=target.position_id,
+                armed=target.armed_reason,
+            )
+            return "already_armed"
+
+        target.armed_reason = "zap"
+        target.armed_unix = now
+        # Marked at the last price OBSERVED, never at a price invented for this instant --
+        # the same rule that makes a censored close honest. If the position never gets
+        # another observation, this is what it is marked out at.
+        target.armed_price = target.last_price
+        self.ledger.emit(
+            "hunch",
+            str(self.book),
+            **common,
+            detail="zap_armed",
+            position_id=target.position_id,
+            decision_id=target.decision_id,
+            held_s=now - target.entry_unix,
+            ratio=target.ratio,
+            drawdown_from_peak=target.drawdown_from_peak,
+            observations=target.observations,
+            unrealised_return=target.ratio - 1.0,
+        )
+        return "armed"
+
+    def position_states(self, now: float) -> list[dict[str, Any]]:
+        """Every open position, in the shape the zap surface needs to render a row.
+
+        Served rather than computed in the browser for the same reason every other figure
+        is: a P&L the UI derived for itself is a P&L that will disagree with the book.
+        """
+        out: list[dict[str, Any]] = []
+        for position in self.positions.values():
+            out.append(
+                {
+                    "position_id": position.position_id,
+                    "decision_id": position.decision_id,
+                    "mint": position.mint,
+                    "label": position.label,
+                    "spend_lamports": position.spend_lamports,
+                    "entry_price": position.entry_price,
+                    "last_price": position.last_price,
+                    "peak_price": position.peak_price,
+                    "unrealised_return": position.ratio - 1.0,
+                    "drawdown_from_peak": position.drawdown_from_peak,
+                    "held_s": now - position.entry_unix,
+                    "seconds_since_observed": now - position.last_obs_unix,
+                    "observations": position.observations,
+                    "backstop_in_s": position.deadline_unix - now,
+                    "take_profit": position.take_profit,
+                    "stop_loss": position.stop_loss,
+                    "armed": position.armed_reason,
+                    # The desk cannot mark what it cannot see, and a zap cannot fill against
+                    # an observation that is not coming. Shown so the surface can say so.
+                    "markable": (now - position.last_obs_unix) < self.departure_timeout_s,
+                }
+            )
+        out.sort(key=lambda p: p["held_s"], reverse=True)
+        return out
 
     # ---------------------------------------------------------------- intake
 

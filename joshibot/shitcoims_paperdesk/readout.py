@@ -57,6 +57,7 @@ __all__ = [
     "board_candidates",
     "board_path_for",
     "is_mint",
+    "parse_iso",
     "readout",
     "render_readout",
     "resolve",
@@ -212,7 +213,7 @@ def firehose_candidates(now: float, *, root: Path | None = None) -> dict[str, Ca
             symbol=payload.get("symbol"),
             name=payload.get("name"),
             source="firehose",
-            t_seen_unix=_parse_iso(row.get("t_ingest")) or 0.0,
+            t_seen_unix=parse_iso(row.get("t_ingest")) or 0.0,
             detail="launch",
         )
     return out
@@ -261,7 +262,7 @@ def held_candidates(now: float) -> dict[str, Candidate]:
     except (OSError, json.JSONDecodeError):
         state = {}
     if isinstance(state, dict):
-        stamp = _parse_iso(state.get("updated_at")) or 0.0
+        stamp = parse_iso(state.get("updated_at")) or 0.0
         for bucket in ("positions", "lots"):
             entries = state.get(bucket)
             if not isinstance(entries, dict):
@@ -535,7 +536,7 @@ class Readout:
         return out
 
 
-def _parse_iso(value: Any) -> float | None:
+def parse_iso(value: Any) -> float | None:
     if not isinstance(value, str) or not value:
         return None
     try:

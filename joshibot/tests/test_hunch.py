@@ -310,12 +310,16 @@ def test_the_operator_policy_always_enters_at_propensity_one() -> None:
     assert decision.record().propensity == 1.0
 
 
-def test_the_operator_policy_draws_from_the_wiggle_jitter_box() -> None:
-    """Same exit distribution on both arms, or the comparison is about the clock."""
-    assert OperatorPolicy.ranges is WigglePolicy.ranges
+def test_the_operator_policy_draws_the_wiggle_brackets_but_its_own_backstop() -> None:
+    """Same brackets on both arms; the CLOCK is the one thing that must differ.
+
+    The operator's exits are reactive -- the five minutes was where their exits landed, not
+    a rule they follow -- so this book's horizon is a backstop and the exit is the zap.
+    """
     drawn = OperatorPolicy(seed=3).draw()
-    assert 240.0 <= drawn["hold_seconds"] <= 420.0
     assert 0.03 <= drawn["take_profit"] <= 0.09
+    assert 0.10 <= drawn["stop_loss"] <= 0.25
+    assert 1_200.0 <= drawn["hold_seconds"] <= 2_400.0
 
 
 def test_the_gate_legs_and_the_wiggle_rule_are_the_same_object() -> None:
@@ -375,7 +379,8 @@ def test_a_hunch_becomes_a_position_on_the_observation_after_the_decision(tmp_pa
     position = next(iter(book.positions.values()))
     assert position.entry_unix == T0 + 12
     assert position.source == OPERATOR_SOURCE
-    assert 240.0 <= position.deadline_unix - (T0 + 5) <= 420.0
+    # The BACKSTOP, not a clock the operator trades to.
+    assert 1_200.0 <= position.deadline_unix - (T0 + 5) <= 2_400.0
 
 
 def test_the_feeds_cannot_enter_this_book(tmp_path: Path) -> None:
@@ -447,24 +452,29 @@ def test_a_gesture_the_desk_never_observes_is_recorded_not_invented(tmp_path: Pa
     assert book.counters["hunches_expired"] == 1
 
 
-def test_the_clock_is_the_wiggle_clock_and_the_close_is_the_shared_builder(tmp_path: Path) -> None:
-    """The whole comparison rests on this: the exit machinery is inherited, not rewritten."""
+def test_the_close_goes_through_the_one_shared_builder(tmp_path: Path) -> None:
+    """The comparison rests on this: the exit MACHINERY is inherited, not rewritten.
+
+    What differs from the wiggle book is which event ends the position (a zap, not a
+    clock). Everything downstream of that -- the fill discipline, the marking, the
+    censoring, the close row -- is the same code, which is what keeps the two arms'
+    P&L comparable at all.
+    """
     book = make_operator(tmp_path)
     assert isinstance(book, WiggleBook)
-    assert book.MAX_HOLD_S == 900.0
     book.accept(hunch_of(T0), T0)
     first = observation(T0 + 5)
     book.observe(first, source_stale=False)
     book.arm_waiting(first)
     book.observe(observation(T0 + 12), source_stale=False)
-    # Past the drawn deadline: arms on one observation, fills on the next.
-    book.observe(observation(T0 + 600), source_stale=False)
-    book.observe(observation(T0 + 610), source_stale=False)
+    # The operator pulls out; the exit fills on the observation AFTER the gesture.
+    book.zap(_zap(at=T0 + 100), T0 + 100)
+    book.observe(observation(T0 + 110), source_stale=False)
     closes = rows_of(tmp_path, "close")
     assert len(closes) == 1
     close = closes[0]
     assert close["book"] == "operator"
-    assert close["exit_reason"] == "deadline"
+    assert close["exit_reason"] == "zap"
     assert close["label"] == OPERATOR_SOURCE
     # Every field the one close-row builder guarantees, including on this new book.
     for key in ("spend_lamports", "proceeds_lamports", "pnl_lamports",
@@ -613,8 +623,8 @@ def test_the_desk_carries_the_hunch_through_end_to_end(tmp_path: Path) -> None:
     desk.operator.observe(observation(now + 6), source_stale=False)
     assert len(desk.operator.positions) == 1
 
-    desk.operator.observe(observation(now + 700), source_stale=False)
-    desk.operator.observe(observation(now + 710), source_stale=False)
+    desk.operator.zap(_zap(at=now + 100), now + 100)
+    desk.operator.observe(observation(now + 110), source_stale=False)
     ledger.close()
 
     rows = read_ledger(tmp_path)
@@ -761,7 +771,7 @@ def test_a_retraction_is_appended_and_the_original_row_stays_on_disk(tmp_path: P
     append_retraction("hn-oops", "misclick", path=path, now=T0 + 30)
 
     assert read_hunches(path) == []  # the reader's view applies it
-    hunches, retractions = read_tape(path)  # the auditor's view does not
+    hunches, retractions, _ = read_tape(path)  # the auditor's view does not
     assert [h.hunch_id for h in hunches] == ["hn-oops"]
     assert retractions[0].retracts == "hn-oops" and retractions[0].reason == "misclick"
     assert path.read_text().count("\n") == 2
@@ -858,3 +868,212 @@ def test_a_wait_blocked_by_a_queued_entry_says_so_rather_than_timing_out(
     assert not book.waiting
     row = rows_of(tmp_path, "hunch")[-1]
     assert row["detail"] == "entry_already_queued_for_this_mint"
+
+
+# ---------------------------------------------------------------------- the zap
+
+
+def _zap(mint: str = MINT, at: float = T0, **kw: Any):
+    from shitcoims_paperdesk.hunch import Zap
+
+    return Zap(
+        zap_id=kw.pop("zap_id", f"zp-{int(at)}"),
+        mint=mint,
+        position_id=kw.pop("position_id", None),
+        reason=kw.pop("reason", ""),
+        t_event_unix=at,
+        t_ingest_unix=at,
+        state=kw.pop("state", {}),
+    )
+
+
+def _open_one(book: OperatorBook, at: float = T0) -> Any:
+    book.accept(hunch_of(at), at)
+    first = observation(at + 5)
+    book.observe(first, source_stale=False)
+    book.arm_waiting(first)
+    book.observe(observation(at + 12), source_stale=False)
+    return next(iter(book.positions.values()))
+
+
+def test_the_clock_is_a_backstop_not_a_policy(tmp_path: Path) -> None:
+    """The five minutes was an outcome distribution, not the operator's rule."""
+    assert OperatorPolicy.ranges["hold_seconds"] == (1_200.0, 2_400.0)
+    assert WigglePolicy.ranges["hold_seconds"] == (240.0, 420.0)
+    # Every ENTRY threshold is still the wiggle rule's, or the veto table lies.
+    for name, box in WigglePolicy.ranges.items():
+        if name == "hold_seconds":
+            continue
+        assert OperatorPolicy.ranges[name] == box
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    horizon = position.deadline_unix - (T0 + 5)
+    assert 1_200.0 <= horizon <= 2_400.0
+    assert OperatorBook.MAX_HOLD_S == 3_600.0
+
+
+def test_the_backstop_closes_under_its_own_name(tmp_path: Path) -> None:
+    """A zap-closed position and an abandoned one must be distinguishable in the ledger."""
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    late = position.deadline_unix + 10
+    book.observe(observation(late), source_stale=False)
+    book.observe(observation(late + 5), source_stale=False)
+    close = rows_of(tmp_path, "close")[-1]
+    assert close["exit_reason"] == "backstop_expired"
+
+
+def test_a_zap_arms_the_exit_and_it_fills_at_the_next_observation(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    assert book.zap(_zap(at=T0 + 60), T0 + 60) == "armed"
+    assert position.armed_reason == "zap"
+    assert position.position_id in book.positions  # NOT closed yet: no lookahead here either
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["detail"] == "zap_armed"
+    assert row["t_event_source"] == "operator:zap"
+    assert row["held_s"] == pytest.approx(48.0)
+
+    book.observe(observation(T0 + 70), source_stale=False)
+    close = rows_of(tmp_path, "close")[-1]
+    assert close["exit_reason"] == "zap"
+    assert close["mark_source"] == "observed"
+    assert close["book"] == "operator"
+
+
+def test_a_zap_carries_the_instrument_state_that_provoked_it(tmp_path: Path) -> None:
+    """``(state, exit)`` pairs are the training set. A zap without state is half a datum."""
+    book = make_operator(tmp_path)
+    _open_one(book)
+    state = {"card": {"sol_in_curve": 40.0}, "path": [{"t": T0, "price": 1.0}]}
+    book.zap(_zap(at=T0 + 60, state=state, reason="stopped moving"), T0 + 60)
+    row = rows_of(tmp_path, "hunch")[-1]
+    assert row["state"] == state
+    assert row["reason"] == "stopped moving"
+    assert row["unrealised_return"] is not None
+    assert row["observations"] >= 1
+
+
+def test_a_zap_with_no_open_position_is_recorded_not_ignored(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    assert book.zap(_zap(at=T0), T0) == "no_position"
+    assert rows_of(tmp_path, "hunch")[-1]["detail"] == "zap_no_open_position"
+    assert book.counters["zaps_no_position"] == 1
+
+
+def test_a_second_zap_on_an_armed_position_does_not_re_arm_it(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    _open_one(book)
+    book.zap(_zap(at=T0 + 60), T0 + 60)
+    assert book.zap(_zap(at=T0 + 61, zap_id="zp-2"), T0 + 61) == "already_armed"
+    assert book.counters["zaps"] == 2
+    assert rows_of(tmp_path, "hunch")[-1]["detail"] == "zap_already_armed"
+
+
+def test_a_zap_targets_the_named_position_when_one_is_given(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    assert book.zap(_zap(at=T0 + 60, position_id=position.position_id), T0 + 60) == "armed"
+    assert position.armed_reason == "zap"
+
+
+def test_the_zap_marks_at_the_last_observed_price_never_an_invented_one(tmp_path: Path) -> None:
+    book = make_operator(tmp_path)
+    position = _open_one(book)
+    last = position.last_price
+    book.zap(_zap(at=T0 + 60), T0 + 60)
+    assert position.armed_price == last
+
+
+def test_zaps_round_trip_through_the_tape_and_the_source(tmp_path: Path) -> None:
+    from shitcoims_paperdesk.hunch import Zap, append_zap, read_tape, read_zaps
+
+    path = tmp_path / "hunches.jsonl"
+    append_hunch(hunch_of(T0, hunch_id="hn-a"), path=path)
+    append_zap(_zap(at=T0 + 60, state={"card": {"x": 1}}), path=path)
+    hunches, retractions, zaps = read_tape(path)
+    assert [h.hunch_id for h in hunches] == ["hn-a"] and not retractions
+    assert len(zaps) == 1 and zaps[0].state == {"card": {"x": 1}}
+    assert read_zaps(path)[0].mint == MINT
+    events = HunchSource(path).poll(T0 + 61)
+    assert isinstance(events[0], Hunch) and isinstance(events[1], Zap)
+
+
+def test_the_desk_routes_a_zap_to_the_operator_book(tmp_path: Path) -> None:
+    from shitcoims_paperdesk.desk import Desk, DeskConfig
+    from shitcoims_paperdesk.hunch import append_zap
+
+    path = tmp_path / "hunches.jsonl"
+    ledger = Ledger(tmp_path, run_id="zap-e2e")
+    desk = Desk(DeskConfig(minutes=0.0, seed=5, tape_from_start=False), ledger=ledger)
+    desk.hunches = HunchSource(path)
+    now = time.time()
+
+    append_hunch(hunch_of(now), path=path)
+    append_zap(_zap(at=now + 1), path=path)
+    desk.step(now + 2)  # both events, in tape order: accept then zap
+    # The zap lands with no position open yet, and is RECORDED rather than dropped.
+    assert desk.operator.counters["zaps_no_position"] == 1
+    ledger.close()
+
+
+def test_position_states_says_when_a_position_cannot_be_zapped_out_of(tmp_path: Path) -> None:
+    """A zap fills against an observation. Unmarkable means unexitable, and it must show."""
+    book = make_operator(tmp_path)
+    _open_one(book)
+    fresh = book.position_states(T0 + 20)
+    assert fresh[0]["markable"] is True
+    assert fresh[0]["unrealised_return"] is not None
+    stale = book.position_states(T0 + 12 + book.departure_timeout_s + 1)
+    assert stale[0]["markable"] is False
+
+
+# ---------------------------------------------------------------------- the duel view
+
+
+def test_a_cold_swarm_detector_is_not_an_empty_market(tmp_path: Path) -> None:
+    """An empty duel list under live_only means one of two very different things."""
+    from fastapi.testclient import TestClient
+
+    from shitcoims_paperdesk import glass
+
+    client = TestClient(glass.build_app(glass.CoinIndex()))
+    body = client.get("/hunch/families?live_only=true").json()
+    assert "absent" in body
+    # Either the file is fresh (no absence) or the staleness is NAMED. Never silence.
+    if body.get("families_age_s") and body["families_age_s"] > glass.FAMILY_STALE_S:
+        assert "families" in body["absent"]
+        assert "detector" in body["absent"]["families"]
+
+
+def test_family_leaders_are_per_axis_and_never_summed(tmp_path: Path) -> None:
+    """No composite score: there is no evidence in this repo for how to weight the axes."""
+    from shitcoims_paperdesk.glass import _family_leaders
+
+    live = [
+        {"mint": MINT, "symbol": "A", "card": {"usd_market_cap": 100.0, "sol_in_curve": 5.0,
+                                               "drawdown_from_ath": 0.9}},
+        {"mint": OTHER, "symbol": "B", "card": {"usd_market_cap": 50.0, "sol_in_curve": 50.0,
+                                                "drawdown_from_ath": 0.2}},
+    ]
+    leaders = _family_leaders(live)
+    assert leaders["market_cap"]["symbol"] == "A"
+    assert leaders["depth"]["symbol"] == "B"
+    # Shallowest drawdown wins, i.e. SMALLER is better on that axis.
+    assert leaders["shallowest_drawdown"]["symbol"] == "B"
+    # An axis no member reports is None, not a zero-valued winner.
+    assert leaders["flow"] is None
+    assert "score" not in leaders and "winner" not in leaders
+
+
+def test_a_family_with_one_live_member_is_not_a_duel(tmp_path: Path) -> None:
+    """One live member is a family; a duel needs two sides that are both being traded."""
+    from fastapi.testclient import TestClient
+
+    from shitcoims_paperdesk import glass
+
+    client = TestClient(glass.build_app(glass.CoinIndex()))
+    strict = client.get("/hunch/families?live_only=true&limit=200").json()
+    assert all(f["live_members"] >= 2 for f in strict["items"])
+    loose = client.get("/hunch/families?live_only=false&limit=200").json()
+    assert loose["n_families"] >= strict["n_families"]

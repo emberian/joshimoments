@@ -8,8 +8,15 @@ clock, the rule-chosen wiggle book's first closes ran **-14.08%** and their hand
 equivalents measured **+3.14%**. Whatever produces that gap has never been written down.
 
 This module writes it down. ``state/hunches.jsonl`` is an append-only tape of moments where
-the operator looked at a coin and said something about it -- the utterance VERBATIM, the
+the operator looked at a coin and did something about it -- the utterance VERBATIM, the
 parse alongside it, the instrument reading at that instant, and the mint it resolved to.
+
+THREE ROW KINDS, ONE CORPUS, ON PURPOSE. A ``hunch.v1`` is "I want in"; a ``hunch.zap.v1``
+is "I want out, and here is everything the instrument could see when I decided"; a
+``hunch.retraction.v1`` is "that was not a gesture". Entries and exits share one file
+because they are one behaviour -- the operator watches a coin and acts on it twice -- and a
+reactive exit policy fitted without the entry that preceded it would be fitted to half a
+decision.
 
 It is explicitly THREE things at once, and the third is the reason for the discipline:
 
@@ -68,15 +75,19 @@ __all__ = [
     "HUNCH_SCHEMA",
     "KIND_CLAIMS",
     "RETRACTION_SCHEMA",
+    "ZAP_SCHEMA",
     "Hunch",
     "HunchSource",
     "Retraction",
+    "Zap",
     "append_hunch",
     "append_retraction",
+    "append_zap",
     "default_horizon_s",
     "new_hunch_id",
     "read_hunches",
     "read_tape",
+    "read_zaps",
 ]
 
 STATE: Final[Path] = Path(__file__).resolve().parent.parent / "state"
@@ -89,6 +100,23 @@ HUNCH_PATH: Final[Path] = STATE / "hunches.jsonl"
 #: Bumped when the row shape changes in a way a reader must know about. Readers keep
 #: handling old versions; that is what the field is for.
 HUNCH_SCHEMA: Final[str] = "hunch.v1"
+
+#: A ZAP row: the operator closing a position because they do not like what they are
+#: looking at. The other half of the gesture corpus, and the more valuable half.
+#:
+#: The operator's own account of what they actually do: *"a dashboard view that always lets
+#: me zap out a position that i decide i dont like. because that's basically what i do... i
+#: watch it closely, and pull out the position whenever i feel like it."*
+#:
+#: THAT IS A REACTIVE EXIT POLICY AND NOBODY HAS EVER RECORDED ITS INPUTS. Every exit rule
+#: in this repo is a function of the clock or of one threshold, because the clock and the
+#: threshold are the only things anybody wrote down. A zap row carries the INSTRUMENT STATE
+#: AT THE MOMENT OF THE EXIT -- the recent price path, flow, depth, drawdown, the position's
+#: own P&L and age -- alongside the exit itself, which makes ``(state, exit)`` pairs. Those
+#: pairs are the training set for a reactive exit policy: the search that replaces the
+#: wiggle book's five-minute clock with something fitted to what the operator is actually
+#: reacting to. Every field dropped from a zap row is a feature that search will not have.
+ZAP_SCHEMA: Final[str] = "hunch.zap.v1"
 
 #: A RETRACTION row. The tape is append-only and nothing on it is ever edited or deleted --
 #: including a gesture that turns out not to have been one. A misclick, or a row a test
@@ -225,6 +253,8 @@ class Hunch:
         A corrupt line in a tape that is never rewritten must not be able to stop the desk
         from reading the good lines after it.
         """
+        if payload.get("schema") in {RETRACTION_SCHEMA, ZAP_SCHEMA}:
+            return None
         try:
             scope = payload.get("scope") or {}
             mint = scope.get("mint") or payload.get("mint")
@@ -252,6 +282,68 @@ class Hunch:
             )
         except (TypeError, ValueError):
             return None
+
+
+@dataclass(frozen=True, slots=True)
+class Zap:
+    """"I don't like this any more." The exit gesture, with the state that provoked it.
+
+    ``state`` is the whole point and is deliberately unstructured: whatever the instrument
+    could measure at the instant the operator decided, stored as it was measured. A schema
+    that constrained it would be a bet on which feature the exit policy will turn out to
+    need, made by the code that has the least evidence about that.
+
+    ``reason`` is the operator's own words when they typed any, verbatim as ever, and empty
+    when they just hit the key -- which is the normal case and is honest as an empty string.
+    """
+
+    zap_id: str
+    mint: str
+    position_id: str | None
+    reason: str
+    t_event_unix: float
+    t_ingest_unix: float
+    run_id: str = ""
+    state: dict[str, Any] = field(default_factory=dict)
+    schema: str = ZAP_SCHEMA
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "zap_id": self.zap_id,
+            "scope": {"kind": "mint", "mint": self.mint},
+            "mint": self.mint,
+            "position_id": self.position_id,
+            "reason": self.reason,
+            "run_id": self.run_id,
+            # Two clocks: the keystroke, and when it was persisted.
+            "t_event": iso(self.t_event_unix),
+            "t_event_unix": self.t_event_unix,
+            "t_event_source": "operator:zap",
+            "t_ingest": iso(self.t_ingest_unix),
+            "t_ingest_unix": self.t_ingest_unix,
+            # THE TRAINING SET. Everything the desk could see when they decided to leave.
+            "state": self.state,
+        }
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "Zap | None":
+        if payload.get("schema") != ZAP_SCHEMA:
+            return None
+        mint = payload.get("mint") or (payload.get("scope") or {}).get("mint")
+        zap_id = payload.get("zap_id")
+        if not isinstance(mint, str) or not isinstance(zap_id, str) or not mint:
+            return None
+        return cls(
+            zap_id=zap_id,
+            mint=mint,
+            position_id=payload.get("position_id"),
+            reason=str(payload.get("reason") or ""),
+            t_event_unix=float(payload.get("t_event_unix") or 0.0),
+            t_ingest_unix=float(payload.get("t_ingest_unix") or 0.0),
+            run_id=str(payload.get("run_id") or ""),
+            state=dict(payload.get("state") or {}),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +401,24 @@ def _append(payload: dict[str, Any], path: Path | None) -> Path:
     return target
 
 
+def new_zap_id(mint: str, unix: float) -> str:
+    return f"zp-{int(unix * 1000)}-{os.getpid()}-{mint[:8]}"
+
+
+def append_zap(zap: Zap, *, path: Path | None = None) -> Path:
+    """Record an exit gesture, fsynced, before anything else happens.
+
+    Same ordering contract as a hunch and for a stronger reason: a zap is the operator
+    deciding to get out, and the row must survive the desk, the browser and the box.
+    """
+    return _append(zap.to_json(), path)
+
+
+def read_zaps(path: Path | None = None) -> list[Zap]:
+    """Every exit gesture, oldest first. The ``(state, exit)`` corpus in one call."""
+    return read_tape(path)[2]
+
+
 def append_retraction(
     hunch_id: str, reason: str, *, path: Path | None = None, now: float | None = None
 ) -> Path:
@@ -332,14 +442,15 @@ def append_hunch(hunch: Hunch, *, path: Path | None = None) -> Path:
     return _append(hunch.to_json(), path)
 
 
-def read_tape(path: Path | None = None) -> tuple[list[Hunch], list[Retraction]]:
-    """Everything on the tape, oldest first, retractions kept SEPARATE and not applied.
+def read_tape(path: Path | None = None) -> tuple[list[Hunch], list[Retraction], list[Zap]]:
+    """Everything on the tape, oldest first, by kind. Retractions are NOT applied here.
 
     The auditor's view. :func:`read_hunches` is the reader's view and applies them.
     """
     target = path or HUNCH_PATH
     hunches: list[Hunch] = []
     retractions: list[Retraction] = []
+    zaps: list[Zap] = []
     try:
         with target.open() as fh:
             for line in fh:
@@ -356,12 +467,16 @@ def read_tape(path: Path | None = None) -> tuple[list[Hunch], list[Retraction]]:
                 if retraction is not None:
                     retractions.append(retraction)
                     continue
+                zap = Zap.from_json(payload)
+                if zap is not None:
+                    zaps.append(zap)
+                    continue
                 parsed = Hunch.from_json(payload)
                 if parsed is not None:
                     hunches.append(parsed)
     except OSError:
         pass
-    return hunches, retractions
+    return hunches, retractions, zaps
 
 
 def read_hunches(path: Path | None = None) -> list[Hunch]:
@@ -370,7 +485,7 @@ def read_hunches(path: Path | None = None) -> list[Hunch]:
     A retracted hunch is absent from THIS view and still present on disk. Anything scoring
     the operator reads this; anything auditing the file reads :func:`read_tape`.
     """
-    hunches, retractions = read_tape(path)
+    hunches, retractions, _ = read_tape(path)
     if not retractions:
         return hunches
     taken_back = {r.retracts for r in retractions}
@@ -404,13 +519,14 @@ class HunchSource:
         self._offset = 0
         self._partial = ""
 
-    def poll(self, now: float) -> list[Hunch | Retraction]:
+    def poll(self, now: float) -> list[Hunch | Retraction | Zap]:
         """Every row appended since the last poll, oldest first, in tape order.
 
-        Returns the union type rather than filtering retractions out, because ORDER is the
-        whole content of a retraction: a hunch and the retraction that follows it two
-        seconds later are two events, and a consumer that only ever saw the first would open
-        a position the operator had already taken back. The desk dispatches on the type.
+        Returns the union type rather than filtering the other kinds out, because ORDER is
+        the whole content of them: a hunch and the retraction that follows it two seconds
+        later are two events, and a consumer that only ever saw the first would open a
+        position the operator had already taken back. A zap is the same shape of fact in the
+        other direction. The desk dispatches on the type.
 
         Reuses the partial-line discipline of :class:`shitcoims_paperdesk.feeds.JsonlTail`
         rather than that class itself, because that tailer takes a per-poll path callback
@@ -435,7 +551,7 @@ class HunchSource:
         text = self._partial + chunk.decode("utf-8", errors="replace")
         lines = text.split("\n")
         self._partial = lines.pop()
-        out: list[Hunch | Retraction] = []
+        out: list[Hunch | Retraction | Zap] = []
         for line in lines:
             line = line.strip()
             if not line:
@@ -448,7 +564,9 @@ class HunchSource:
             if not isinstance(payload, dict):
                 self.bad_lines += 1
                 continue
-            parsed: Hunch | Retraction | None = Retraction.from_json(payload)
+            parsed: Hunch | Retraction | Zap | None = Retraction.from_json(payload)
+            if parsed is None:
+                parsed = Zap.from_json(payload)
             if parsed is None:
                 parsed = Hunch.from_json(payload)
             if parsed is None:
@@ -464,5 +582,5 @@ class HunchSource:
         """Age of the last hunch, or of the desk's start. Reported, never used as staleness."""
         return now - self.last_event_unix if self.last_event_unix else float("nan")
 
-    def __iter__(self) -> Iterator[Hunch | Retraction]:  # pragma: no cover - convenience
+    def __iter__(self) -> Iterator[Hunch | Retraction | Zap]:  # pragma: no cover - convenience
         return iter(self.poll(time.time()))

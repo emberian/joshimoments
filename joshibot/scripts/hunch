@@ -4,6 +4,7 @@
     uv run scripts/hunch CALICO "gonna wiggle for a bit"
     uv run scripts/hunch 3dNk wiggle
     uv run scripts/hunch 3dNkR2mQ...pump --kind down --note "this keeps bleeding"
+    uv run scripts/hunch zap 8iHW5A --note "not doing what i thought"
     uv run scripts/hunch report
     uv run scripts/hunch look CALICO          # readout only, records nothing
 
@@ -45,9 +46,12 @@ if str(ROOT) not in sys.path:
 from shitcoims_paperdesk.hunch import (  # noqa: E402
     KIND_CLAIMS,
     Hunch,
+    Zap,
     append_hunch,
+    append_zap,
     default_horizon_s,
     new_hunch_id,
+    new_zap_id,
 )
 from shitcoims_paperdesk.readout import (  # noqa: E402
     is_mint,
@@ -151,7 +155,11 @@ def cmd_hunch(args: argparse.Namespace) -> int:
     if kind == "wiggle":
         print(
             f"  The desk opens a paper position on its next observation of this coin"
-            f" ({args.size:.2f} SOL, operator book, 240-420 s clock)."
+            f" ({args.size:.2f} SOL, operator book)."
+        )
+        print(
+            "  It stays open until YOU zap it. The 20-40 min backstop is a bound, not a plan:"
+            "  `hunch zap <coin>` closes it at the next observation, no confirmation."
         )
     else:
         print(
@@ -185,6 +193,41 @@ def cmd_hunch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_zap(args: argparse.Namespace) -> int:
+    """Get out. No confirmation, and the instrument goes on the row with the decision."""
+    gesture = time.time()
+    found = _resolve_or_die(args.coin)
+    mint = found.mint
+    assert mint is not None
+    out = readout(
+        mint,
+        clip_lamports=int(WIGGLE_CLIP_SOL * 1e9),
+        symbol=found.chosen.symbol if found.chosen else None,
+    )
+    zap = Zap(
+        zap_id=new_zap_id(mint, gesture),
+        mint=mint,
+        position_id=args.position_id,
+        reason=args.note or "",
+        t_event_unix=gesture,
+        t_ingest_unix=time.time(),
+        run_id=f"cli-{int(gesture)}",
+        # THE TRAINING SET: whatever the instrument could see at the moment of the exit.
+        state={"readout": out.to_json(), "surface": {"name": "cli", "declared_by": "cli"}},
+    )
+    append_zap(zap)
+    label = out.symbol or mint[:8]
+    print()
+    print(f"  ZAPPED  {zap.zap_id}   {label}")
+    if args.note:
+        print(f'  "{args.note}"')
+    print("  The desk arms the exit on its next cycle; it fills on the first observation after.")
+    print()
+    print(render_readout(out, found))
+    print()
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     from shitcoims_paperdesk import hunch_report
 
@@ -202,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
     look.add_argument("coin")
     look.add_argument("--size", type=float, default=WIGGLE_CLIP_SOL)
     look.set_defaults(func=cmd_look)
+
+    zap = sub.add_parser("zap", help="close an open operator position, now, no confirmation")
+    zap.add_argument("coin")
+    zap.add_argument("--note", default=None, help="why, in your own words. Kept verbatim.")
+    zap.add_argument("--position-id", default=None)
+    zap.set_defaults(func=cmd_zap)
 
     report = sub.add_parser("report", help="the intuition premium and the scorecard")
     report.add_argument("--days", type=int, default=None)
@@ -244,12 +293,12 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in {"-h", "--help", "help"}:
         build_capture_parser().print_help()
-        print("\nsubcommands: look <coin>, report")
+        print("\nsubcommands: look <coin>, zap <coin> [--note ...], report")
         return 0
     # A bare first word that is a subcommand routes there; anything else is a coin, so the
     # common case stays `hunch CALICO "..."` with no ceremony. A coin named `look` or
     # `report` is addressable by its mint, which is the escape hatch and is enough.
-    if args[0] in {"look", "report"}:
+    if args[0] in {"look", "report", "zap"}:
         parsed = build_parser().parse_args(args)
         return int(parsed.func(parsed))
     parsed = build_capture_parser().parse_args(args)

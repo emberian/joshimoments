@@ -154,7 +154,7 @@ def _retracted_decisions(rows: Rows) -> set[str]:
     try:
         from shitcoims_paperdesk.hunch import read_tape
 
-        _, retractions = read_tape()
+        _, retractions, _ = read_tape()
     except Exception:
         return set()
     if not retractions:

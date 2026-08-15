@@ -52,10 +52,13 @@ from shitcoims_paperdesk.hunch import (
     HUNCH_PATH,
     KIND_CLAIMS,
     Hunch,
+    Zap,
     append_hunch,
+    append_zap,
     default_horizon_s,
     iso,
     new_hunch_id,
+    new_zap_id,
     read_hunches,
 )
 from shitcoims_paperdesk.ledger import LEDGER_DIR
@@ -64,6 +67,7 @@ from shitcoims_paperdesk.readout import (
     board_path_for,
     held_candidates,
     is_mint,
+    parse_iso,
     readout,
     resolve,
 )
@@ -92,6 +96,10 @@ INDEX_CAPACITY: Final[int] = 3_000
 #: How stale a card may be before the explorer stops offering it as "live". Two boards poll
 #: cycles: the collector visits five boards every ~30 s.
 CARD_FRESH_S: Final[float] = 180.0
+
+#: Past this, the imitation families on disk describe a market that has moved on. The
+#: detector currently runs by hand (no launchd job), so this bound is doing real work.
+FAMILY_STALE_S: Final[float] = 3_600.0
 
 #: How often the callout store is re-read. Measured rate on the live collector is one
 #: mint-resolved callout every ~24 minutes, and each read copies a 75 MB SQLite file.
@@ -448,6 +456,86 @@ def hunch_outcomes(days: int = 2) -> dict[str, dict[str, Any]]:
     return out
 
 
+#: Imitation families, cached: ``(mtime, families_by_id)``. The detector writes this file in
+#: batches, so it is re-read when it changes and not once per request.
+_FAMILY_CACHE: dict[str, Any] = {"mtime": 0.0, "value": {}}
+
+
+def family_index(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """``family_id -> family row``, from ``shitcoims_scalper.swarm_detect``'s own output.
+
+    NOT re-clustered here. That detector is a streaming, bounded-memory imitation clusterer
+    with planted-swarm controls behind it; a second name-similarity heuristic written for a
+    UI would be a different clustering wearing the same word, and the duel view would then
+    be answering a question about our reimplementation.
+
+    Families MERGE as launches link previously separate ones, and a merged family is written
+    again under the surviving id -- so later rows win, keyed by ``family_id``.
+    """
+    target = path or (STATE / "swarms" / "families.jsonl")
+    try:
+        mtime = target.stat().st_mtime
+    except OSError:
+        return {}
+    if mtime == _FAMILY_CACHE["mtime"]:
+        return _FAMILY_CACHE["value"]
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        with target.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("kind") == "family" and row.get("members"):
+                    out[str(row.get("family_id"))] = row
+    except OSError:
+        return _FAMILY_CACHE["value"]
+    _FAMILY_CACHE["mtime"] = mtime
+    _FAMILY_CACHE["value"] = out
+    return out
+
+
+def family_written_at(path: Path | None = None) -> float | None:
+    """When the swarm detector last appended. The duel view's own staleness clock."""
+    try:
+        return (path or (STATE / "swarms" / "families.jsonl")).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _family_leaders(live: list[dict[str, Any]]) -> dict[str, Any]:
+    """Which member leads on each axis. Axes reported separately, never summed.
+
+    A composite "who is winning" score would need weights, and there is no evidence in this
+    repo for what those weights should be -- so the surface reports the leader per axis and
+    lets the operator, who is the instrument here, do the combining.
+    """
+    def _lead(key: str, *, bigger_is_better: bool = True) -> dict[str, Any] | None:
+        scored = [
+            (m, m["card"].get(key))
+            for m in live
+            if m.get("card") and m["card"].get(key) is not None
+        ]
+        if len(scored) < 2:
+            return None
+        best = (max if bigger_is_better else min)(scored, key=lambda pair: pair[1])
+        return {"mint": best[0]["mint"], "symbol": best[0]["symbol"], "value": best[1]}
+
+    return {
+        "market_cap": _lead("usd_market_cap"),
+        "depth": _lead("sol_in_curve"),
+        "flow": _lead("obs_per_min"),
+        "wiggle": _lead("wiggle_n"),
+        # Least far from its own high: the branch the market has not given up on.
+        "shallowest_drawdown": _lead("drawdown_from_ath", bigger_is_better=False),
+        "freshest_trade": _lead("trade_recency_s", bigger_is_better=False),
+    }
+
+
 def desk_health() -> dict[str, Any]:
     """Is the desk alive, and what are the five books doing? From its own heartbeat row."""
     last: dict[str, Any] | None = None
@@ -754,6 +842,232 @@ def build_app(index: CoinIndex | None = None) -> Any:
                 }
                 for h in reversed(rows)
             ],
+        }
+
+    @app.get("/hunch/positions")
+    def positions() -> dict[str, Any]:
+        """Every open OPERATOR position, ready to be zapped. Polled by the zap rail.
+
+        Read straight out of the desk's persisted state rather than recomputed, because the
+        desk is the only thing that knows what it is holding, and a second opinion assembled
+        from the ledger would disagree with it exactly when a position was mid-flight.
+        """
+        now = time.time()
+        coins.refresh(now)
+        try:
+            with (STATE / "paperdesk" / "desk-state.json").open() as fh:
+                state = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {
+                "generated_at": iso(now),
+                "items": [],
+                "absent": {"positions": "the desk has not written its state yet"},
+            }
+        book = (state.get("operator") or {}) if isinstance(state, dict) else {}
+        saved_at = parse_iso(state.get("saved_at")) if isinstance(state, dict) else None
+        items: list[dict[str, Any]] = []
+        for position in (book.get("positions") or {}).values():
+            if not isinstance(position, dict):
+                continue
+            mint = str(position.get("mint"))
+            entry = float(position.get("entry_price") or 0.0)
+            last = float(position.get("last_price") or 0.0)
+            peak = float(position.get("peak_price") or 0.0)
+            tracked = coins.coins.get(mint)
+            # The FRESHEST price we have, which may be newer than the desk's last save.
+            live = tracked.obs.price if tracked else None
+            mark = live if live else (last or None)
+            items.append(
+                {
+                    "position_id": position.get("position_id"),
+                    "decision_id": position.get("decision_id"),
+                    "mint": mint,
+                    "symbol": tracked.obs.symbol if tracked else None,
+                    "label": position.get("label"),
+                    "spend_lamports": position.get("spend_lamports"),
+                    "entry_price": entry or None,
+                    "last_price": last or None,
+                    "mark_price": mark,
+                    "peak_price": peak or None,
+                    "unrealised_return": (mark / entry - 1.0) if (mark and entry > 0) else None,
+                    "drawdown_from_peak": (1.0 - last / peak) if (peak > 0 and last) else None,
+                    "held_s": now - float(position.get("entry_unix") or now),
+                    "seconds_since_observed": now - float(position.get("last_obs_unix") or now),
+                    "observations": position.get("observations"),
+                    "backstop_in_s": float(position.get("deadline_unix") or now) - now,
+                    "take_profit": position.get("take_profit"),
+                    "stop_loss": position.get("stop_loss"),
+                    "armed": position.get("armed_reason"),
+                    "card": coins.card(mint, now=now, hunched=None, held=False) if tracked else None,
+                }
+            )
+        items.sort(key=lambda p: -p["held_s"])
+        return {
+            "generated_at": iso(now),
+            # The desk saves once a minute, so this view is up to that stale by construction
+            # and says so rather than implying it is live.
+            "state_saved_at": iso(saved_at) if saved_at else None,
+            "state_age_s": (now - saved_at) if saved_at else None,
+            "items": items,
+        }
+
+    @app.post("/hunch/zap")
+    def zap(body: dict[str, Any]) -> dict[str, Any]:
+        """Get me out. No confirmation, no ceremony, and the instrument state goes with it.
+
+        The operator: *"a dashboard view that always lets me zap out a position that i
+        decide i dont like. because that's basically what i do... i watch it closely, and
+        pull out the position whenever i feel like it."*
+
+        There is no confirm step on this path and there must never be one -- arming is
+        ceremony, stopping is instant, and a paper zap slower than the real gesture would
+        measure the dialog instead of the operator. The row is fsynced before the response
+        returns; the desk arms the position on its next cycle and it fills on the first
+        observation after that, which is the same no-lookahead rule every exit here obeys.
+        """
+        now = time.time()
+        mint = str(body.get("mint") or "").strip()
+        if not is_mint(mint):
+            raise HTTPException(status_code=400, detail="mint is not a 32-byte base58 address")
+        coins.refresh(now)
+        card = coins.card(mint, now=now, hunched=None, held=True)
+        tracked = coins.coins.get(mint)
+
+        record = Zap(
+            zap_id=new_zap_id(mint, now),
+            mint=mint,
+            position_id=(str(body["position_id"]) if body.get("position_id") else None),
+            # Verbatim if they typed anything, empty if they just hit the key -- which is
+            # the normal case, and an empty string is the honest encoding of it.
+            reason=str(body.get("reason") or body.get("note") or ""),
+            t_event_unix=float(body.get("t_event_unix") or now),
+            t_ingest_unix=now,
+            run_id=f"glass-{int(now)}",
+            state={
+                # THE TRAINING SET. Everything the instrument could see when they decided.
+                "card": card,
+                # The recent price path, which is the thing they were actually looking at
+                # and the one input no aggregate can stand in for.
+                "path": (
+                    [
+                        {"t": t, "price": p}
+                        for t, p in zip(tracked.watch.times, tracked.watch.prices, strict=False)
+                    ]
+                    if tracked
+                    else []
+                ),
+                "position": body.get("position") or {},
+                "surface": {
+                    "name": str(body.get("surface") or "glass"),
+                    "declared_by": "glass",
+                    **(body.get("context") or {}),
+                },
+            },
+        )
+        append_zap(record)
+        return {
+            "ok": True,
+            "zap_id": record.zap_id,
+            "recorded_at": iso(now),
+            "mint": mint,
+            "state_features": len(record.state.get("path") or []),
+            "next": "the desk arms this on its next cycle; the exit fills on the first observation after",
+        }
+
+    @app.get("/hunch/families")
+    def families(
+        limit: int = Query(30, ge=1, le=200), live_only: bool = Query(True)
+    ) -> dict[str, Any]:
+        """THE DUEL VIEW: imitation families, their members side by side.
+
+        The operator: *"right now there is a duel between several CALICO charts, and the one
+        i'm pulling money out of... i have no idea how it's doing compared to the other
+        one!"* Two coins wearing one ticker is not an edge case on this market -- the
+        resolver refuses on it several times an hour -- and until now the answer to "which
+        branch of this knife fight is winning" was four browser tabs.
+
+        Families come from ``shitcoims_scalper.swarm_detect``'s own output rather than being
+        re-clustered here: that detector is a validated instrument with planted-swarm
+        controls behind it, and a second similarity heuristic written for a UI would be a
+        different clustering wearing the same name.
+        """
+        now = time.time()
+        coins.refresh(now)
+        out: list[dict[str, Any]] = []
+        for family in family_index().values():
+            members: list[dict[str, Any]] = []
+            for member in family["members"]:
+                mint = member.get("mint")
+                if not isinstance(mint, str):
+                    continue
+                tracked = coins.coins.get(mint)
+                card = (
+                    coins.card(mint, now=now, hunched=None, held=False) if tracked else None
+                )
+                members.append(
+                    {
+                        "mint": mint,
+                        "symbol": member.get("symbol"),
+                        "name": member.get("name"),
+                        "deployer": member.get("deployer"),
+                        "image_uri": member.get("image_uri"),
+                        "launched_at": member.get("t"),
+                        "is_host": mint == family.get("host_mint"),
+                        # None, not zero: a member no board is carrying is UNOBSERVED, and on
+                        # this surface that is itself the answer -- the branch nobody is
+                        # trading is losing the duel.
+                        "card": card,
+                    }
+                )
+            live = [m for m in members if m["card"] is not None]
+            if live_only and len(live) < 2:
+                # A duel needs two live sides. One live member is a family, not a fight.
+                continue
+            out.append(
+                {
+                    "family_id": family.get("family_id"),
+                    "host_symbol": family.get("host_symbol"),
+                    "taxonomy": family.get("taxonomy"),
+                    "size": family.get("size"),
+                    "distinct_deployers": family.get("distinct_deployers"),
+                    "t_first": family.get("t_first"),
+                    "members": members,
+                    "live_members": len(live),
+                    # Which branch the market is actually in. Reported as the leader on each
+                    # axis rather than as a score, because a composite would be a ranking
+                    # this lane has no evidence to weight.
+                    "leaders": _family_leaders(live),
+                    "absent": {
+                        "drain_direction": (
+                            "which member is gaining the shared wallets is not computed here"
+                            " -- it needs per-wallet flow attribution across the family, which"
+                            " is the pvp_vamps lane's output and does not exist yet"
+                        )
+                    },
+                }
+            )
+        out.sort(key=lambda f: (-f["live_members"], str(f.get("t_first"))), reverse=False)
+        written = family_written_at()
+        absent: dict[str, str] = {}
+        if written is None:
+            absent["families"] = "no swarm-detector output on disk"
+        elif now - written > FAMILY_STALE_S:
+            # LOUD, because the failure is silent otherwise: a stale family file produces an
+            # EMPTY duel view under live_only, which looks exactly like "there are no duels
+            # right now" and is in fact "nobody is running the detector". Those are the two
+            # states this repo refuses to conflate, and the collector has no launchd job.
+            absent["families"] = (
+                f"the swarm detector last wrote {(now - written) / 3600:.1f} h ago, so these"
+                " families are historical -- an empty live list here means the DETECTOR is"
+                " cold, not that the market has no duels"
+            )
+        return {
+            "generated_at": iso(now),
+            "families_written_at": iso(written) if written else None,
+            "families_age_s": (now - written) if written else None,
+            "n_families": len(out),
+            "items": out[:limit],
+            "absent": absent,
         }
 
     @app.get("/hunch/report")
