@@ -9,6 +9,11 @@ dependencies = [
   "pyyaml>=6.0.2,<7",
   "solders>=0.26,<1",
   "uvicorn[standard]>=0.35,<1",
+  # `shitcoims_scalper.firehose` imports this directly. It was undeclared and present only
+  # transitively through uvicorn[standard], so dropping the `[standard]` extra -- or uvicorn
+  # changing its own extras -- would have broken the firehose at the first live connect,
+  # which is the one moment nobody is watching a test run.
+  "websockets>=13,<18",
 ]
 
 [dependency-groups]
