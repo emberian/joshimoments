@@ -304,6 +304,21 @@ batch returned `PICKS: none` with the assessment *"this board is a graveyard sit
 printer farm."* The refusal is not a prompt artifact — it survives removing the bearish priming,
 removing the schema, raising the effort, and letting the model choose its own rate.
 
+And the four it did pick — freely, with everything in front of it, at its highest conviction:
+
+| picked coin | 8 h return |
+|---|---|
+| 1 | **−80.7%** |
+| 2 | −41.8% |
+| 3 | −38.2% |
+| 4 | −0.1% |
+
+Median **−40.00%**, **p(up) 0%**, against 52% up and +0.18% median among the 135 it passed on;
+AUC 0.165 (p=0.019). **Do not over-read this: n=4.** Four draws cannot establish that the model
+is anti-predictive, and p=0.019 is nowhere near the 0.0014 the trials accounting demands. It is
+here because it is the arm's actual result, and because rounding it to "found nothing" would be
+the more flattering summary rather than the more honest one.
+
 **Colour.** An unordered ten-word palette, no scale, no right answer: *"tell me what colour each
 one is."* This is the only elicitation the model actually differentiated on — it used **all ten
 colours**, spread 15–25 coins each, 2 parse failures in 189. The colours are never treated as
