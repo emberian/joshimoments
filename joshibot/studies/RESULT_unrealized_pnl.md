@@ -23,7 +23,7 @@ Run 2026-08-15 against the ten-day all-pump.fun corpus (2026-08-05 .. 2026-08-14
 | 3 | Is the loss-tail shape a PvP/community discriminator? | **Feature delivered, not a classifier.** `supply_held_through_50pct_red` separates 0.33 vs 0.80; handed to the `pvp_vamps` lane |
 | 4 | Rug-fuel gauge on the operator's four coins | **weave 17.9% at the 99.2nd percentile**; nosis second; SOLVE and DREGG carry none. DREGG's 30.9% is free supply, and it is two wallets, not the airdrop |
 | + | Is unrealized PnL a live state variable at all? | **Yes, per wallet.** Sell hazard peaks at break-even and falls **4–7×** in both directions, surviving a volatility control |
-| + | Does that aggregate into coin-level **excitability** (the operator's actual hypothesis)? | **Not established, not refuted.** Three specifications, three self-inflicted errors, and an honest null against structure-preserving nulls. §7.3 |
+| + | Does that aggregate into coin-level **excitability** (the operator's actual hypothesis)? | **Not established.** Five specifications; the only one that rejected was the coarsest, and it fails at block resolution with real arrivals. §7.3 |
 
 **The one-paragraph answer.** Cost basis is now computable for every wallet on every coin, and it
 is a real behavioural state: a wallet's probability of selling in the next minute peaks sharply at
@@ -32,8 +32,8 @@ policy identifies *it* at AUC 0.775 across coins it has never shared. But none o
 the brief hoped that would buy actually arrives. It does not locate support and resistance — the
 basis-density story is a clean null, beaten by raw volume-at-level. It does not attribute actors —
 same-crew wallets look like strangers, and not because they share a bot preset, because no preset
-clustering exists here at all. And it does not aggregate into a coin-level excitability state at
-the resolutions tested. What it does buy is a gauge — `weave` is currently carrying 17.9% of its
+clustering exists here at all. And it does not aggregate into a coin-level excitability state once
+the test is run in event time at block resolution. What it does buy is a gauge — `weave` is currently carrying 17.9% of its
 observed supply at under a tenth of spot, in a population where 97.6% of coins carry none — and a
 hazard curve that says which supply is inert and which is about to move.
 
@@ -840,32 +840,66 @@ that constant, tested against both structure-preserving nulls; horizons are swep
 second-difference roughness penalty is applied for the picture only and never enters the
 inference.
 
-**Result: null.** At 60 s, `T = 0.870` for the SOL response (p_rotation 0.358, p_timeshift 0.527)
-and `T = 0.917` for the wallet-count response (p_rotation 0.522, p_timeshift 0.985). The fitted
-kernel is not flat-looking — it runs negative around −75% and −20% and positive around +270% to
-+690% — but its curvature is comfortably inside what a block-rotated or time-shifted state series
-produces, so that shape is not evidence.
+**Attempt 4 — the test statistic was blind to the alternative the data was showing.** First run of
+the kernel used curvature energy `T = ||D₂d||²` and returned a clean null (p = 0.24 to 0.99 across
+12 tests). But `D₂` annihilates a straight line, so **a smooth monotone kernel has curvature
+zero** — and once the bins were made equal-mass the fitted `w(u)` looked like exactly that: a ramp
+from about −0.4 on deep-loss supply to about +0.38 on deep-profit supply. The statistic had
+essentially no power against the most plausible shape. Two more were added: `T_shape =
+||d − mean(d)||²`, the deviation from flat, which is the *right* primary because `d` is identified
+only up to the constant the main effect absorbs; and the signed linear contrast `T_trend`, kept
+because its sign is the interpretable part.
 
-**Where it came closest, and it is worth recording.** At 10-second resolution — much closer to
-this market's real clock, where the median holding time before a sell is 3 seconds — the
-wallet-count arm reaches **t = +2.43** (±10% band, interaction +0.317) with the predicted positive
-sign and p_rotation = 0.015. It still fails the time-shift null (p = 0.124).
+*(A fifth, smaller one, fixed at the same time: a fixed symmetric ±3 grid in signed-log PnL leaves
+6 of 16 bins mathematically unreachable — PnL is bounded below at −100% — while compressing the
+entire loss region, where 36% of live supply sits, into two bins. Equal-mass edges put resolution
+where the observations are, which is the point of estimating a kernel rather than asserting a
+threshold.)*
 
-**What that failure does and does not mean.** The time-shift null keeps the coin, keeps its state
-distribution, keeps its serial structure, and breaks only the *alignment in time* between state
-and flow. Failing it means the data cannot show that a coin is more reactive **at the moments** its
-supply is bunched near break-even than at other moments of its own life. It does **not** rule out
-a slow-moving version of the hypothesis — a coin that is primed for an hour and busy for the same
-hour is invisible to a time shift, and that is a real limitation of this design rather than a
-finding.
+**With those fixes the 60-second kernel rejects, cleanly and in an interpretable direction:**
 
-**So the honest state of the operator's hypothesis is: not established, and not refuted.** The
-individual-wallet half is solid (§7.1, 4–7× hazard range). The aggregation to a coin-level
-excitability state is not, at 10 s or 60 s resolution, against nulls that preserve serial
-structure. The design that would settle it is **event-time, not clock-time**: identify discrete
-large arriving events and measure the response around them, which removes the slow-moving
-confound the time-shift null is punishing. That is the next experiment, and it is not in this
-document.
+| horizon | response | `T_shape` | p_rot | p_shift | `T_trend` | p_rot | p_shift |
+|---|---|---|---|---|---|---|---|
+| 1 | SOL | 0.391 | **0.005** | **0.005** | **+0.360** | **0.005** | **0.005** |
+| 1 | wallets | 0.618 | **0.005** | 0.189 | −0.219 | 0.100 | 1.000 |
+| 3 | SOL | 0.225 | **0.010** | **0.030** | +0.144 | 0.050 | 0.463 |
+
+with `w(u)` rising monotonically from ≈ −0.20 on supply held at a deep loss to ≈ +0.30 on supply
+held in profit. Read directly: **supply sitting in profit converts an arriving buy into more
+selling; supply deep underwater is inert.** Profit-taking, not break-even priming — and the
+opposite end of the distribution from where §7.1's individual hazard peaks.
+
+**Attempt 5 — and it does not replicate at block resolution.** Every bucketed design above shares
+an assumption that was never argued for: that a 60-second (or even 10-second) window is a
+meaningful unit. Solana slots are ~400 ms, so a 60 s bucket is ~150 slots, and **all ordering
+inside it is destroyed** — on a corpus where the median hold before a sell is 3 seconds and 48% of
+sells land in the same slot as the buy, the whole mechanism happens inside one bucket. The ledger
+carries `block_slot` and `tx_index`; that ordering was simply thrown away.
+
+`eventtime` redoes it properly: fills ordered exactly by `(block_slot, tx_index)`; an arriving
+event is **a single buy transaction** large against that coin's own trailing 50 fills, not a
+window's aggregate; the response is sells over the next 20 fills **excluding the initiator's own
+wallet**; and the holder book is snapshotted per wallet at the fill immediately preceding the
+event. 1,200 coins, 59,473 real arrivals, 36.1M (event, holder) snapshots.
+
+| response | `T_shape` | p_rot | p_shift | `T_trend` | p_rot | p_shift |
+|---|---|---|---|---|---|---|
+| SOL | 0.306 | 0.209 | 0.050 | −0.241 | 0.110 | 0.995 |
+
+**The 60-second result does not survive.** `T_shape` is marginal on one null and fails the other;
+the trend fails both and flips sign; and `w(u)` is no longer monotone. Since event time is strictly
+better on every axis — real discrete arrivals, exact ordering, initiator excluded, state strictly
+prior — **the event-time null is the one that counts**, and the bucketed rejection is most likely
+an aggregation artifact: inside a 60-second window buying and selling are mechanically
+contemporaneous, and with a one-bucket horizon the "response" is nearly the same window's own
+counterparty flow.
+
+**Final verdict on excitability: NOT ESTABLISHED.** Five specifications, four of them wrong in a
+way that produced or destroyed a result, and the one design with no known defect returns a null.
+The individual-wallet half stands (§7.1, a 4–7× hazard range). The aggregation to a coin-level
+excitability state does not. What would move it next is not another estimator but more events:
+59,473 arrivals from 1,200 coins is 0.9% of the cohort, and the whole corpus holds ~357,000
+qualifying arrivals before subsampling.
 
 ---
 
@@ -890,8 +924,9 @@ document.
 * **Two permutation floors bind.** Q1's rotation p-values bottom out at 1/201 = 0.00498, so the
   three occupancy cells sitting exactly there are *unresolved*, not refuted — clearing BY-FDR at
   rank 1 over an 18-cell grid needs ≳1,300 rotations. The same floor applies in §7.3.
-* **§7.3's time-shift null may be too strong for a slow-moving effect**, and that is a design
-  limitation rather than a result. Event-time around discrete large arrivals is the fix.
+* **§7.3's event-time result rests on 1,200 coins and 59,473 arrivals** — 0.9% of the cohort,
+  against ~357,000 qualifying arrivals available before subsampling. The null there is a null at
+  that n, not a demonstration that no effect exists at any n.
 * **This population is bots.** Half of all sells occur in the same slot the position opened and
   the median hold before a sell is 3 seconds. "Realization policy" here is mostly machine policy;
   none of it should be read as a claim about human psychology.
@@ -907,6 +942,9 @@ results by how the failures were found.
 | `USING SAMPLE` on a `GROUP BY … HAVING` query | the 33 busiest wallets in the corpus posing as a random sample of 8,000; reported a median FIFO gap of 0.17 where the truth is 0.0 | the FIFO gap looking implausibly large |
 | Holder book priced at the *close* of the shock bucket | interaction −0.278 at t = −2.93 with both nulls rejecting — a completely fabricated §7.3 | asking what timestamp the mark actually came from |
 | Rotation null resampling the donor state i.i.d. | crew-style "signal" at p = 0.005 from destroyed autocorrelation | PROGRAM.md §3 rule 10, which records i.i.d. nulls manufacturing effects here twice |
+| Curvature `\|\|D2 d\|\|^2` as the only kernel statistic | a clean null (p = 0.24-0.99) against an alternative it cannot see, since `D2` annihilates a straight line | the fitted kernel visibly being a monotone ramp |
+| A fixed symmetric PnL grid | 6 of 16 bins mathematically unreachable, the whole loss region in 2 bins | checking mean supply share per bin and finding six zeros |
+| 60-second buckets on a 400 ms chain | a kernel rejecting at p = 0.005 that does not replicate in event time | the operator asking whether we were simulating block by block |
 
 Two more that were caught by controls rather than by inspection: the Q2 metric comparing
 same-actor *halves* against different-actor *wholes* (zero-world AUC 0.333), and then the residual

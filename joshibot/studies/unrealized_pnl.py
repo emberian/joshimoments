@@ -111,6 +111,7 @@ COMMANDS
 ``hazard``   P(sell in the next minute | unrealized PnL), on a real risk set
 ``momentum`` does PRIMED supply govern how big a response an arriving event provokes
 ``kernel``   the same question without a threshold: the response kernel w(u) over PnL
+``eventtime`` the same question at BLOCK resolution, in event time, with real arrivals
 ``q1``       basis-density modes vs price reversals, against a rotation null
 ``q2``       realization-policy embedding, clustering, tooling-vs-actor controls
 ``q3``       loss-tail shape as a PvP/community feature (a feature, not a classifier)
@@ -879,6 +880,267 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 # =====================================================================================
+# eventtime -- the same question at BLOCK resolution, in event time, no buckets at all
+# =====================================================================================
+
+
+def cmd_eventtime(args: argparse.Namespace) -> int:
+    """Response to a real arriving event, ordered by (block_slot, tx_index).
+
+    WHY THIS EXISTS, and it is a correction rather than an extension. `momentum` and `kernel`
+    bucket into fixed 60- or 10-second wall-clock windows. Solana slots are ~400 ms, so a
+    60-second bucket is roughly 150 slots, and **all ordering inside a bucket is destroyed**.
+    On this corpus the median holding time before a sell is 3 seconds and 48% of sells land in
+    the same slot as the buy that opened the position -- so the entire mechanism those stages
+    claim to measure happens *inside one bucket*. The ledger carries `block_slot` and
+    `tx_index`, which order every fill globally and exactly; bucketing throws that away for
+    nothing.
+
+    Three further things the bucketed design got wrong, all fixed here:
+
+    * **The "arriving event" was not an event.** It was the sum of all buy volume in a window.
+      Here an event is a single buy transaction, selected as large relative to that coin's own
+      trailing fill-size distribution -- a discrete arrival, which is what the hypothesis is
+      about.
+    * **The response included the initiator.** A large buyer who later sells is not the crowd
+      reacting. The initiator's own wallet is excluded from the response.
+    * **The state could be stale.** Here the holder book is snapshotted at the fill immediately
+      preceding the event, in event order, so it is exactly the state a participant could have
+      seen -- and strictly prior, so no look-ahead.
+
+    Response is measured over the next `--resp-fills` fills on that coin, which is a clock the
+    coin sets itself rather than one imposed on it.
+    """
+    import numpy as np
+
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _out() / "basis.parquet"
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins_all AS
+        SELECT mint, count(*) AS n_ev FROM read_parquet('{basis}')
+        WHERE sol IS NOT NULL AND mark_after > 0
+        GROUP BY 1 HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
+        """
+    )
+    n_pool = con.execute("SELECT count(*) FROM coins_all").fetchone()[0]
+    con.execute(
+        f"""CREATE OR REPLACE TABLE coins AS SELECT * FROM coins_all
+            USING SAMPLE {args.max_coins} ROWS (reservoir, {args.seed})"""
+    )
+    n_c = con.execute("SELECT count(*) FROM coins").fetchone()[0]
+    print(f"[eventtime] {n_c:,} coins of {n_pool:,} eligible", flush=True)
+    if n_c == 0:
+        print("[eventtime] NULL: no eligible coin.")
+        return 0
+
+    # The coin's fill sequence, in exact chain order. `seq` is the event clock.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE fills AS
+        SELECT b.mint, b.owner, b.block_slot, b.tx_index, b.block_time, b.delta_raw, b.sol,
+               b.mark_before, b.mark_after,
+               row_number() OVER (PARTITION BY b.mint ORDER BY b.block_slot, b.tx_index) AS seq
+        FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)
+        WHERE b.sol IS NOT NULL AND b.mark_after > 0
+        """
+    )
+    n_f = con.execute("SELECT count(*) FROM fills").fetchone()[0]
+    print(f"[eventtime] {n_f:,} fills in chain order ({time.time() - t0:.0f}s)", flush=True)
+
+    # An ARRIVING EVENT: a buy whose size is large against this coin's own trailing 50 fills.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE ev AS
+        SELECT * FROM (
+          SELECT f.*,
+                 quantile_cont(abs(sol), {args.event_q}) OVER (
+                     PARTITION BY mint ORDER BY seq
+                     ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING) AS thresh,
+                 avg(abs(sol)) OVER (PARTITION BY mint ORDER BY seq
+                     ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING) AS trail_sz,
+                 count(*) OVER (PARTITION BY mint) AS n_coin_fills
+          FROM fills f)
+        WHERE delta_raw > 0 AND seq > 50 AND thresh IS NOT NULL AND abs(sol) >= thresh
+          AND seq <= n_coin_fills - {args.resp_fills}
+        """
+    )
+    n_e = con.execute("SELECT count(*) FROM ev").fetchone()[0]
+    print(f"[eventtime] {n_e:,} arriving events", flush=True)
+    if n_e > args.max_events:
+        pct = 100.0 * args.max_events / n_e
+        con.execute(
+            f"CREATE OR REPLACE TABLE ev AS SELECT * FROM ev "
+            f"USING SAMPLE {pct:.4f}% (bernoulli, {args.seed})"
+        )
+        n_e = con.execute("SELECT count(*) FROM ev").fetchone()[0]
+        print(f"[eventtime]   subsampled to {n_e:,} events", flush=True)
+
+    # RESPONSE: sells over the next `resp_fills` fills, EXCLUDING the initiator's own wallet.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE resp AS
+        SELECT e.mint, e.seq,
+               sum(CASE WHEN f.delta_raw < 0 AND f.owner <> e.owner THEN abs(f.sol) ELSE 0 END)
+                   AS resp_sol,
+               count(DISTINCT CASE WHEN f.delta_raw < 0 AND f.owner <> e.owner
+                                   THEN f.owner END) AS resp_wallets
+        FROM ev e JOIN fills f
+          ON f.mint = e.mint AND f.seq > e.seq AND f.seq <= e.seq + {args.resp_fills}
+        GROUP BY 1, 2
+        """
+    )
+
+    # STATE immediately before the event, in event order: every holder's basis against the
+    # mark the event itself paid into (`mark_before`), which is strictly prior information.
+    #
+    # This needs one snapshot PER HOLDER, so the ASOF equality key has to include the wallet.
+    # An ASOF keyed on `mint` alone returns a single row per event -- the most recent state
+    # change on the coin by anybody -- which is how the first version of this produced an
+    # empty panel. The candidate set is therefore events x holders-whose-episode-spans-the-
+    # event, exactly as the bucketed stages build ticks x episodes.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE st AS
+        SELECT mint, owner, episode, qty_after, basis_after,
+               block_slot * 1000000 + tx_index AS ord
+        FROM read_parquet('{basis}') WHERE basis_after > 0
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE span AS
+        SELECT mint, owner, episode, min(ord) AS ord_in, max(ord) AS ord_out FROM st
+        GROUP BY 1, 2, 3
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE evord AS
+        SELECT *, block_slot * 1000000 + tx_index AS ord FROM ev WHERE mark_before > 0
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE cand AS
+        SELECT e.mint, e.seq, e.ord, e.mark_before, e.owner AS initiator,
+               p.owner, p.episode
+        FROM evord e JOIN span p
+          ON p.mint = e.mint AND p.ord_in < e.ord AND p.ord_out >= e.ord
+        """
+    )
+    n_cand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+    print(f"[eventtime] {n_cand:,} (event, holder) pairs", flush=True)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE hold AS
+        SELECT c.mint, c.seq, c.owner, s.qty_after AS qty, s.basis_after AS basis,
+               c.mark_before
+        FROM cand c ASOF JOIN st s
+          ON s.mint = c.mint AND s.owner = c.owner AND s.episode = c.episode
+         AND c.ord > s.ord
+        WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
+        """
+    )
+    print(f"[eventtime] holder snapshots built ({time.time() - t0:.0f}s)", flush=True)
+
+    K = args.bins
+    qs = [i / K for i in range(1, K)]
+    edges = con.execute(
+        "SELECT quantile_cont(sign(mark_before/basis - 1) * ln(1 + abs(mark_before/basis - 1)),"
+        f" {qs}) FROM hold"
+    ).fetchone()[0]
+    edges = [float(v) for v in edges]
+    cuts = " ".join(f"WHEN ulog < {e} THEN {i}" for i, e in enumerate(edges))
+    binexpr = ", ".join(
+        f"sum(CASE WHEN b = {i} THEN qty ELSE 0 END) / nullif(sum(qty), 0) AS s{i:02d}"
+        for i in range(K)
+    )
+    out = _out() / "eventtime.parquet"
+    _copy(
+        con,
+        f"""
+        SELECT e.mint, e.seq, e.block_time, abs(e.sol) AS shock_sol, e.trail_sz,
+               h.n_holders, {", ".join(f"h.s{i:02d}" for i in range(K))},
+               coalesce(r.resp_sol, 0) AS resp_sol,
+               coalesce(r.resp_wallets, 0) AS resp_wallets
+        FROM ev e
+        JOIN (SELECT mint, seq, count(*) AS n_holders, {binexpr}
+              FROM (SELECT mint, seq, qty,
+                           CASE {cuts} ELSE {K - 1} END AS b
+                    FROM (SELECT mint, seq, qty,
+                                 sign(mark_before/basis - 1)
+                                   * ln(1 + abs(mark_before/basis - 1)) AS ulog
+                          FROM hold))
+              GROUP BY 1, 2) h USING (mint, seq)
+        LEFT JOIN resp r USING (mint, seq)
+        WHERE h.n_holders >= {args.min_holders}
+        """,
+        out,
+        "event-time panel",
+    )
+
+    df = con.execute(
+        f"SELECT * FROM read_parquet('{out}') WHERE shock_sol > 0 AND trail_sz > 0"
+    ).fetchdf()
+    print(f"[eventtime] {len(df):,} usable events ({time.time() - t0:.0f}s)", flush=True)
+    if len(df) < 3000:
+        print("[eventtime] NULL: too few events.")
+        return 0
+
+    S = np.column_stack([df[f"s{i:02d}"].to_numpy() for i in range(K)])
+    mints = df["mint"].to_numpy()
+    uniq = np.unique(mints)
+    ctrl = np.column_stack(
+        [
+            np.log1p(df["trail_sz"].to_numpy()),
+            np.log1p(df["n_holders"].to_numpy().astype(float)),
+        ]
+    )
+    edges_pnl = [float(math.copysign(math.expm1(abs(e)), e)) for e in edges]
+    rng = np.random.default_rng(args.seed)
+    res = {
+        "n_coins": int(n_c),
+        "n_events": len(df),
+        "resp_fills": args.resp_fills,
+        "event_quantile": args.event_q,
+        "bins": K,
+        "bin_edges_pnl": [round(v, 4) for v in edges_pnl],
+        "mean_supply_share": [round(float(v), 5) for v in S.mean(axis=0)],
+        "cells": [],
+    }
+    for kind in ("sol", "wallets"):
+        xr = df["shock_sol"].to_numpy()
+        yr = (
+            df["resp_sol"].to_numpy()
+            if kind == "sol"
+            else df["resp_wallets"].to_numpy().astype(float)
+        )
+        cell = _kernel_cell(np.log1p(xr), np.log1p(yr), S, ctrl, mints, uniq, rng, args)
+        cell["response"] = kind
+        res["cells"].append(cell)
+        print(
+            f"[eventtime] resp={kind:7s}: shape T={cell['T_shape']:.4f} "
+            f"p_rot={cell['p_rotation_shape']:.4f} p_shift={cell['p_timeshift_shape']:.4f} | "
+            f"trend={cell['T_trend']:+.4f} p_rot={cell['p_rotation_trend']:.4f} "
+            f"p_shift={cell['p_timeshift_trend']:.4f}",
+            flush=True,
+        )
+        print(f"[eventtime]   w(u) = {[round(v, 3) for v in cell['kernel_d']]}", flush=True)
+
+    res["by_fdr"] = _by_fdr(
+        [c[f"p_{lab}_{nm}"] for c in res["cells"]
+         for lab in ("rotation", "timeshift") for nm in ("shape", "trend")],
+        args.fdr_q,
+    )
+    (_out() / "eventtime.json").write_text(json.dumps(res, indent=2, default=str))
+    print(f"[eventtime] -> {_out() / 'eventtime.json'}  ({time.time() - t0:.0f}s)", flush=True)
+    return 0
+
+
+# =====================================================================================
 # kernel -- the RESPONSE KERNEL over unrealized PnL, instead of a threshold count
 # =====================================================================================
 
@@ -1015,8 +1277,39 @@ def cmd_kernel(args: argparse.Namespace) -> int:
                  1)) AS k) g
         """
     )
-    # the supply-share vector over PnL bins, strictly lagged (see `momentum`: pricing the book
-    # at the close of the shock bucket is a look-ahead and it carried the whole first result)
+    # The per-wallet unrealized-PnL tape, strictly lagged. (See `momentum`: pricing the book at
+    # the CLOSE of the shock bucket is a look-ahead and it carried that stage's whole first
+    # result.)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE mrows AS
+        WITH ws AS (
+            SELECT c.mint, c.k, s.qty_after AS qty, s.basis_after AS basis
+            FROM cand c ASOF JOIN st s
+              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
+             AND c.t >= s.block_time
+            WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
+        )
+        SELECT w.mint, w.k, w.qty,
+               sign(mk.mark / w.basis - 1.0) * ln(1 + abs(mk.mark / w.basis - 1.0)) AS ulog
+        FROM ws w ASOF JOIN mk ON w.mint = mk.mint AND w.k > mk.k
+        """
+    )
+
+    # EQUAL-MASS BINS, set by the data rather than by a ruler. A fixed symmetric grid in
+    # signed-log PnL is a bad grid here for a reason that is structural, not cosmetic: PnL is
+    # bounded below at -100%, so a symmetric +/-3 range leaves 6 of 16 bins mathematically
+    # unreachable, while the entire loss region -- where 36% of live supply actually sits --
+    # is compressed into two. Equal-mass edges put resolution where the observations are, which
+    # is the whole point of estimating a kernel instead of asserting a threshold.
+    qs = [i / K for i in range(1, K)]
+    edges_ulog = con.execute(
+        f"SELECT quantile_cont(ulog, {qs}) FROM mrows WHERE ulog IS NOT NULL"
+    ).fetchone()[0]
+    edges_ulog = [float(v) for v in edges_ulog]
+    cuts = " ".join(
+        f"WHEN ulog < {e} THEN {i}" for i, e in enumerate(edges_ulog)
+    )
     binexpr = ", ".join(
         f"sum(CASE WHEN b = {i} THEN qty ELSE 0 END) / nullif(sum(qty), 0) AS s{i:02d}"
         for i in range(K)
@@ -1024,31 +1317,18 @@ def cmd_kernel(args: argparse.Namespace) -> int:
     con.execute(
         f"""
         CREATE OR REPLACE TABLE book AS
-        WITH ws AS (
-            SELECT c.mint, c.k, s.qty_after AS qty, s.basis_after AS basis
-            FROM cand c ASOF JOIN st s
-              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
-             AND c.t >= s.block_time
-            WHERE s.qty_after > {DUST_RAW} AND s.basis_after > 0
-        ),
-        m AS (
-            SELECT w.mint, w.k, w.qty,
-                   sign(mk.mark / w.basis - 1.0)
-                     * ln(1 + abs(mk.mark / w.basis - 1.0)) AS ulog
-            FROM ws w ASOF JOIN mk ON w.mint = mk.mint AND w.k > mk.k
-        ),
-        b AS (
-            SELECT mint, k, qty,
-                   least({K - 1}, greatest(0, CAST(floor(
-                       (least({KERNEL_ULIM}, greatest(-{KERNEL_ULIM}, ulog)) + {KERNEL_ULIM})
-                       / (2.0 * {KERNEL_ULIM} / {K})) AS INTEGER))) AS b
-            FROM m
-        )
         SELECT mint, k, count(*) AS n_holders, sum(qty) AS live_qty, {binexpr}
-        FROM b GROUP BY 1, 2
+        FROM (SELECT mint, k, qty, CASE {cuts} ELSE {K - 1} END AS b
+              FROM mrows WHERE ulog IS NOT NULL)
+        GROUP BY 1, 2
         """
     )
-    print(f"[kernel] book built ({time.time() - t0:.0f}s)", flush=True)
+    edges_pnl = [float(math.copysign(math.expm1(abs(e)), e)) for e in edges_ulog]
+    print(
+        f"[kernel] book built, equal-mass edges (PnL): "
+        f"{[round(v, 3) for v in edges_pnl]}  ({time.time() - t0:.0f}s)",
+        flush=True,
+    )
 
     scols = ", ".join(f"b.s{i:02d}" for i in range(K))
     hcols, hjoin = [], []
@@ -1104,9 +1384,15 @@ def cmd_kernel(args: argparse.Namespace) -> int:
             np.log1p(df["n_holders"].to_numpy().astype(float)),
         ]
     )
-    edges = np.linspace(-KERNEL_ULIM, KERNEL_ULIM, K + 1)
-    centers = (edges[:-1] + edges[1:]) / 2
-    pnl_centers = np.sign(centers) * np.expm1(np.abs(centers))
+    full_edges = [-np.inf, *edges_ulog, np.inf]
+    pnl_centers = []
+    for i in range(K):
+        lo, hi = full_edges[i], full_edges[i + 1]
+        lo = edges_ulog[0] - 1.0 if not np.isfinite(lo) else lo
+        hi = edges_ulog[-1] + 1.0 if not np.isfinite(hi) else hi
+        cmid = (lo + hi) / 2
+        pnl_centers.append(float(np.sign(cmid) * np.expm1(abs(cmid))))
+    pnl_centers = np.asarray(pnl_centers)
 
     rng = np.random.default_rng(args.seed)
     res = {
@@ -1115,6 +1401,7 @@ def cmd_kernel(args: argparse.Namespace) -> int:
         "tick": dt,
         "bins": K,
         "bin_centers_pnl": [round(float(v), 4) for v in pnl_centers],
+        "bin_edges_pnl": [round(float(v), 4) for v in edges_pnl],
         "mean_supply_share": [round(float(v), 5) for v in S.mean(axis=0)],
         "cells": [],
     }
@@ -1131,14 +1418,18 @@ def cmd_kernel(args: argparse.Namespace) -> int:
             cell.update({"horizon_ticks": h, "response": kind})
             res["cells"].append(cell)
             print(
-                f"[kernel] h={h} resp={kind:7s}: curvature T={cell['T_curvature']:.5f} "
-                f"p_rotation={cell['p_rotation']:.4f} p_timeshift={cell['p_timeshift']:.4f}  "
-                f"kernel={[round(v, 3) for v in cell['kernel_d']]}",
+                f"[kernel] h={h} resp={kind:7s}: "
+                f"shape T={cell['T_shape']:.4f} p_rot={cell['p_rotation_shape']:.4f} "
+                f"p_shift={cell['p_timeshift_shape']:.4f} | "
+                f"trend={cell['T_trend']:+.4f} p_rot={cell['p_rotation_trend']:.4f} "
+                f"p_shift={cell['p_timeshift_trend']:.4f}",
                 flush=True,
             )
+            print(f"[kernel]   w(u) = {[round(v, 3) for v in cell['kernel_d']]}", flush=True)
 
     res["by_fdr"] = _by_fdr(
-        [c["p_rotation"] for c in res["cells"]] + [c["p_timeshift"] for c in res["cells"]],
+        [c[f"p_{lab}_{nm}"] for c in res["cells"]
+         for lab in ("rotation", "timeshift") for nm in ("shape", "trend")],
         args.fdr_q,
     )
     (_out() / f"kernel_t{dt}.json").write_text(json.dumps(res, indent=2, default=str))
@@ -1169,9 +1460,27 @@ def _kernel_cell(x, y, S, ctrl, mints, uniq, rng, args):
             return beta, None
         return _clustered_ols(yd, Xd, mints)
 
+    # THREE STATISTICS, because the first one alone was blind to the most plausible alternative.
+    # `T_curvature = ||D2 d||^2` measures WIGGLINESS, and a smooth monotone ramp has second
+    # difference identically zero -- so a kernel that rises steadily from deep-red to deep-green
+    # supply, which is exactly the shape the equal-mass fit shows, is invisible to it. The
+    # primary statistic is therefore the deviation from FLAT, `T_shape = ||d - mean(d)||^2`,
+    # which is the right object because `d` is identified only up to an additive constant
+    # (the flat direction is absorbed by the main shock effect). `T_trend` is the signed linear
+    # contrast, kept because its sign is the interpretable part.
+    lin = np.arange(K, dtype=float)
+    lin = (lin - lin.mean()) / np.sqrt(np.sum((lin - lin.mean()) ** 2))
+
+    def stats(dv):
+        return (
+            float(np.sum((dv - dv.mean()) ** 2)),
+            float(np.sum((D2 @ dv) ** 2)),
+            float(lin @ dv),
+        )
+
     beta, se = fit(S)
     d = beta[2 + K : 2 + 2 * K]
-    T = float(np.sum((D2 @ d) ** 2))
+    T_shape, T, T_trend = stats(d)
 
     # a smoothed version, for the picture only -- never for inference
     lam_grid = [0.0, 1e-3, 1e-2, 1e-1, 1.0]
@@ -1196,7 +1505,7 @@ def _kernel_cell(x, y, S, ctrl, mints, uniq, rng, args):
             block = np.tile(np.roll(S[src], -start, axis=0), (reps, 1))[: dst.size]
             Sr[dst] = block
         br, _ = fit(Sr)
-        rot_T.append(float(np.sum((D2 @ br[2 + K : 2 + 2 * K]) ** 2)))
+        rot_T.append(stats(br[2 + K : 2 + 2 * K]))
 
         Ss = S.copy()
         for m in order:
@@ -1205,24 +1514,37 @@ def _kernel_cell(x, y, S, ctrl, mints, uniq, rng, args):
                 continue
             Ss[dst] = np.roll(S[dst], int(rng.integers(1, dst.size)), axis=0)
         bs, _ = fit(Ss)
-        shift_T.append(float(np.sum((D2 @ bs[2 + K : 2 + 2 * K]) ** 2)))
+        shift_T.append(stats(bs[2 + K : 2 + 2 * K]))
 
-    rot = np.asarray(rot_T)
+    rot = np.asarray(rot_T)  # (nulls, 3): shape, curvature, trend
     sh = np.asarray(shift_T)
-    return {
+    obs = (T_shape, T, T_trend)
+    out = {
         "kernel_d": [round(float(v), 4) for v in d],
-        "kernel_d_se": [round(float(v), 4) for v in se[2 + K : 2 + 2 * K]] if se is not None else None,
+        "kernel_d_se": [round(float(v), 4) for v in se[2 + K : 2 + 2 * K]]
+        if se is not None
+        else None,
         "kernel_c": [round(float(v), 4) for v in beta[2 : 2 + K]],
         "kernel_smoothed": smoothed,
         "main_shock": float(beta[1]),
+        "T_shape": T_shape,
         "T_curvature": T,
-        "rotation_T_mean": float(rot.mean()) if rot.size else None,
-        "rotation_T_p95": float(np.quantile(rot, 0.95)) if rot.size else None,
-        "p_rotation": float(((rot >= T).sum() + 1) / (rot.size + 1)) if rot.size else None,
-        "timeshift_T_mean": float(sh.mean()) if sh.size else None,
-        "timeshift_T_p95": float(np.quantile(sh, 0.95)) if sh.size else None,
-        "p_timeshift": float(((sh >= T).sum() + 1) / (sh.size + 1)) if sh.size else None,
+        "T_trend": T_trend,
     }
+    for j, nm in enumerate(("shape", "curvature", "trend")):
+        # trend is signed, so it gets a two-sided p; the two energies are one-sided by
+        # construction (they are norms and cannot be small-and-interesting).
+        for lab, arr in (("rotation", rot), ("timeshift", sh)):
+            if arr.size == 0:
+                out[f"p_{lab}_{nm}"] = None
+                continue
+            v = arr[:, j]
+            hit = (np.abs(v) >= abs(obs[j])).sum() if nm == "trend" else (v >= obs[j]).sum()
+            out[f"p_{lab}_{nm}"] = float((hit + 1) / (v.size + 1))
+            out[f"{lab}_{nm}_mean"] = float(v.mean())
+    out["p_rotation"] = out["p_rotation_shape"]
+    out["p_timeshift"] = out["p_timeshift_shape"]
+    return out
 
 
 # =====================================================================================
@@ -1474,7 +1796,8 @@ def cmd_momentum(args: argparse.Namespace) -> int:
             )
 
     res["by_fdr"] = _by_fdr(
-        [c["p_rotation"] for c in res["cells"]] + [c["p_timeshift"] for c in res["cells"]],
+        [c[f"p_{lab}_{nm}"] for c in res["cells"]
+         for lab in ("rotation", "timeshift") for nm in ("shape", "trend")],
         args.fdr_q,
     )
     (_out() / "momentum.json").write_text(json.dumps(res, indent=2, default=str))
@@ -3287,6 +3610,20 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--sample", type=int, default=4000)
     c.add_argument("--seed", type=int, default=17)
     c.set_defaults(fn=cmd_check)
+
+    et = common(sub.add_parser("eventtime", help="response kernel in EVENT time, block resolution"))
+    et.add_argument("--bins", type=int, default=12)
+    et.add_argument("--max-coins", type=int, default=2000)
+    et.add_argument("--min-ev", type=int, default=300)
+    et.add_argument("--max-ev", type=int, default=200000)
+    et.add_argument("--min-holders", type=int, default=15)
+    et.add_argument("--max-events", type=int, default=150000)
+    et.add_argument("--resp-fills", type=int, default=20)
+    et.add_argument("--event-q", type=float, default=0.90)
+    et.add_argument("--nulls", type=int, default=200)
+    et.add_argument("--fdr-q", type=float, default=0.05)
+    et.add_argument("--seed", type=int, default=20260815)
+    et.set_defaults(fn=cmd_eventtime)
 
     ke = common(sub.add_parser("kernel", help="the response kernel w(u) over unrealized PnL"))
     ke.add_argument("--tick", type=int, default=60)
