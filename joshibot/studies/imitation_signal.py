@@ -1310,6 +1310,38 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         lag_rows.append({"lo": lo, "hi": hi, "n": len(r), "mean": float(r.mean()), "p_up": float((r > 0).mean())})
     result["by_lag"] = lag_rows
 
+    # ---- 2a. dose-response, which is what the theory actually predicts ----
+    print(f"\n--- 2a. DOSE-RESPONSE — the sharpest form of the costly-signal claim ---", file=out)
+    print(
+        "  Pre-declared from the theory, not chosen after looking: if a swarm is a costly\n"
+        "  signal, its information content must scale with the number of INDEPENDENT parties\n"
+        "  paying (distinct clone deployers) and with the amount PAID (clone spend in SOL).\n"
+        "  A binary swarmed/not contrast can be null while a real dose-response survives, and\n"
+        "  a dose-response that is flat is a much stronger refutation than a failed t-test.\n"
+        "  Reported as Spearman rank correlation with the host's forward return, one row per\n"
+        "  onset, so no coin is counted twice.",
+        file=out,
+    )
+    from scipy.stats import spearmanr
+
+    dose_rows = []
+    for h in HORIZONS_S:
+        usable = [r for r in treated if not r[f"admin{h}"]]
+        if len(usable) < 12:
+            continue
+        y = [r[f"r{h}"] for r in usable]
+        for name in ("distinct_clone_deployers", "clone_count", "log_clone_spend_sol"):
+            x = [r[name] for r in usable]
+            if len(set(x)) < 3:
+                continue
+            rho, p = spearmanr(x, y)
+            dose_rows.append({"h": h, "var": name, "rho": float(rho), "p": float(p), "n": len(y)})
+            print(
+                f"  r{h//60:>3d}m ~ {name:<26} rho={rho:+.3f} p={p:.4f} n={len(y)}",
+                file=out,
+            )
+    result["dose_response"] = dose_rows
+
     # ---- 2b. the other reading: buy the clones ---------------------------
     print(
         f"\n--- 2b. THE CLONE ARM — buying the imitators at their own launch ---", file=out
@@ -1553,6 +1585,14 @@ def report(  # noqa: C901 - a study report is a linear script by nature
         result["fdr"] = [
             {"test": n, "p": p, "rejected": r} for n, p, r in zip(names, pvals, rejected, strict=True)
         ]
+    for d in result.get("dose_response", []):
+        if d["p"] == d["p"]:
+            pvals.append(d["p"])
+            names.append(f"dose {d['var'][:18]} r{d['h']//60}m")
+    for d in result.get("clone_arm", {}).get("diffs", []):
+        if d["p"] == d["p"]:
+            pvals.append(d["p"])
+            names.append(f"clone-vs-launch-control r{d['h']//60}m")
     for d in result.get("parasite_diffs", []):
         if d["p"] == d["p"]:
             pvals.append(d["p"])
