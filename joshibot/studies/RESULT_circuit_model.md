@@ -745,6 +745,14 @@ heavy-tailed. It separates 0.05% from ~1% and nothing finer. But that is the dis
 matters — a 19× difference in the dominant term of every fee band in §3 — and the desk's own income
 statement resolves it. A pleasing side effect: the desk's P&L is an instrument.
 
+**SUPERSEDED at the fine scale (2026-08-15, studies/RESULT_toll_positioning.md §3).** Running the
+same estimator on the actual 154-claim history against the pool's actual *daily* volume series,
+weekly over the full life, gives **0.30–0.85%** and tracks the published ladder's volume-weighted
+prediction at **0.93× mean** (0.47–1.42, n=7 weeks). The coarse discrimination above stands (it is
+~0.6%, not 0.05%), but the "excludes 0.60%" clause was the denominator artifact of a one-day
+snapshot: the ladder is confirmed, not exceeded. Falsification-table row 9 should be read
+accordingly.
+
 ---
 
 ## 10. The estimator the swap-level tape will enable

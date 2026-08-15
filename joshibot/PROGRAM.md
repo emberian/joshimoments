@@ -48,6 +48,17 @@ excluding the 0.60% tier this section assumed. The income model above is therefo
 real coverage runs ~1.5–2× the tier-table figures. Why the realized rate exceeds the published tier
 (fee-structure change, bonding-curve component, or tier misread) is unresolved; the direction is
 favourable either way.
+**SUPERSEDED (2026-08-15, studies/RESULT_toll_positioning.md §3): the 0.81–1.19% figure does not
+replicate.** It divided an income *estimate* ($213–313/day) by a *single-day* volume snapshot.
+Dividing the operator's actual 154 DREGG-vault claims by the pool's actual daily volume, week by
+week over the full life, gives **0.30–0.85% (recent 3-week mean 0.68%)** — and the claims track the
+published ladder's own volume-weighted prediction at **0.93× mean** (range 0.47–1.42, n=7 weeks).
+The ladder is confirmed, not exceeded; read the income model at ~0.6–0.8% of volume, and the
+"unresolved" anomaly above as a denominator artifact. Two consequences worth carrying: the $300k
+tier kink is real at face value (at today's FDV ≈ $305k the joint position is locally *short* its
+own price — never spend to defend the boundary), and fee income decays with the volume it taxes
+(volume t½ 12.1 d [9.1–18.4] from launch, though the last two weeks are plateau-consistent: the
+RW null beats every fitted decay OOS; fee-stream NPV brackets $4.8k–$31k).
 **The fee stream is the business; trading is a research program funded by it, not a rent strategy.**
 
 ---
