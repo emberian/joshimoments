@@ -327,6 +327,19 @@ class CoinIndex:
         drawdown = obs.drawdown_from_ath if obs.drawdown_known else None
         if drawdown is None:
             absent["drawdown_from_ath"] = "the vendor served no all-time high for this coin"
+        # EVERY null on this card has to name its reason, not just the ones that were
+        # obviously interesting when it was written. Found by the glass lane, which typed
+        # against 300 live cards and reported that these three came back null with nothing
+        # in `absent` -- so the surface could render "no data" without being able to say
+        # why, which is one honest step short of rendering a zero.
+        if not obs.usd_market_cap:
+            absent["usd_market_cap"] = "the boards vendor served no market cap on this row"
+        if not obs.ath_market_cap:
+            absent["ath_market_cap"] = "the boards vendor served no all-time-high market cap"
+        if obs.last_trade_unix is None:
+            absent["trade_recency_s"] = "this coin has no last-trade stamp from the vendor"
+        if obs.created_unix is None:
+            absent["age_s"] = "this coin has no creation stamp from the vendor"
         moves = watch.moves()
         two_sided: float | None = None
         if watch.observations < 3:

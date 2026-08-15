@@ -71,7 +71,9 @@ test("no key material or signing anywhere in browser code", async () => {
  * `/hunch` and `/hunch/zap` — reach the PAPER DESK on a different port (8790), which by
  *   construction holds no key, has no RPC client and no broadcast path, and answers
  *   `can_execute: false` on every health response. They append one row each to
- *   state/hunches.jsonl and state/zaps.jsonl. They are write paths into a process that
+ *   state/hunches.jsonl — ONE tape for both, because an entry and the exit that follows it
+ *   are one behaviour and a reactive-exit policy fitted without the entry that preceded it
+ *   would be fitted to half a decision. They are write paths into a process that
  *   CANNOT EXECUTE — which is the whole reason `shitcoims_paperdesk` is not part of the
  *   sentinel. `/hunch/zap` is a paper exit: it records an intention the desk acts on in
  *   its own book, and it signs nothing.

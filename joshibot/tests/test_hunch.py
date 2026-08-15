@@ -1236,3 +1236,35 @@ def test_the_card_marks_an_unmeasurable_two_sidedness_absent_not_zero(tmp_path: 
     assert other["price_moves"] == 1
     assert other["two_sided_frac"] is None
     assert "one price move" in other["absent"]["two_sided_frac"]
+
+
+def test_every_null_on_a_card_names_its_reason(tmp_path: Path) -> None:
+    """A surface that can render "no data" but cannot say why is one step short of a zero."""
+    from shitcoims_paperdesk.glass import CoinIndex
+
+    index = CoinIndex()
+    index._record_board(
+        {
+            "mint": MINT,
+            "symbol": "T",
+            "virtual_sol_reserves": int(40 * SOL),
+            "virtual_token_reserves": 900_000_000_000_000,
+            "t_ingest": T0,
+            # Everything the vendor can decline to serve, declined.
+            "created_unix": None,
+            "last_trade_unix": None,
+            "drawdown_from_ath": -1.0,
+            "usd_market_cap": 0.0,
+            "ath_market_cap": 0.0,
+        },
+        "market_cap",
+    )
+    card = index.card(MINT, now=T0 + 5, hunched=None, held=False)
+    nulls = {
+        k
+        for k, v in card.items()
+        if v is None and k not in {"symbol", "name", "board", "hunched", "callout_last_s",
+                                   "callout_kind", "callout_author"}
+    }
+    missing = nulls - set(card["absent"])
+    assert not missing, f"these nulls carry no reason: {sorted(missing)}"
