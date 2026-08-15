@@ -93,26 +93,29 @@ class FeeSpec:
 #   LP + protocol = 0.20% + 0.05% = 0.25%.  Sourced 2026-08-13 from pump.fun's own public
 #     docs repo (github.com/pump-fun/pump-public-docs, PUMP_SWAP_CREATOR_FEE_README) as
 #     relayed by search; NOT read from chain here, so treat as a strong lead and sweep it.
-#   creator = the dynamic FDV ladder in PROGRAM.md sec.0, itself double-sourced (operator
-#     fee stream + Marino sec.VII on-chain observation): 0.95% under $300k FDV, 0.60% to
-#     $1M, 0.35% above.  `dissipation` cross-checks this against the operator's own
-#     reported DREGG creator income, which is an independent estimator of the same rate.
+#   creator = the on-chain FeeConfig tier table, 25 rungs 5 bps apart, keyed on a market cap
+#     in LAMPORTS.  CORRECTED 2026-08-15 (studies/RESULT_dregg_boundary.md): this file used to
+#     carry PROGRAM.md sec.0's three-step ladder in USD FDV (0.95% under $300k, 0.60% to $1M,
+#     0.35% above).  No such ladder exists on chain.  The table is read once from
+#     shitcoims_netmap.physics, which snapshots the account and documents how to re-read it.
 PUMPSWAP_LP_PROTOCOL = 0.0025  # 0.20% LP + 0.05% protocol. swept in `snapshot`.
 
 
 def pumpswap_fee(fdv_usd: float) -> FeeSpec:
-    if fdv_usd < 300_000:
-        creator = 0.0095
-    elif fdv_usd < 1_000_000:
-        creator = 0.0060
-    else:
-        creator = 0.0035
+    """PumpSwap taker fee.  USD in, because that is what the vendor quotes serve -- but the
+    program reads a market cap in SOL, so a tier can move with the SOL price alone."""
+
+    from shitcoims_netmap.physics import SOL_USD_REFERENCE, creator_fee_at_mcap_sol
+
+    mcap_sol = fdv_usd / SOL_USD_REFERENCE
+    creator = creator_fee_at_mcap_sol(mcap_sol)
     taker = PUMPSWAP_LP_PROTOCOL + creator
     return FeeSpec(
         taker=taker,
         lp_share=PUMPSWAP_LP_PROTOCOL / taker if taker else 0.0,
         source=(
-            f"creator leg {creator:.2%} from PROGRAM.md sec.0 FDV ladder (FDV=${fdv_usd:,.0f}); "
+            f"creator leg {creator:.2%} from the on-chain FeeConfig tiers at {mcap_sol:,.0f} SOL "
+            f"of market cap (FDV=${fdv_usd:,.0f}); "
             f"LP+protocol leg {PUMPSWAP_LP_PROTOCOL:.2%} UNSOURCED, swept"
         ),
         uncertain=True,

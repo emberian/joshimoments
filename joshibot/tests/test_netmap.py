@@ -32,6 +32,7 @@ from shitcoims_netmap.physics import (
     arb_value_usd,
     bps,
     capacitance_usd,
+    creator_fee_at_mcap_sol,
     curl_log,
     depth_term,
     dlmm_capacitance_bounds,
@@ -137,15 +138,40 @@ def test_fee_band_is_the_sum_of_the_diode_drops() -> None:
     """Band edges ARE the fee sum, in log space: `Σ ln(1/(1-f))`."""
 
     fees = (pumpswap_fee(128_000.0), dlmm_fee(2.0, 0.0))
-    expected = math.log(1 / (1 - 0.012)) + math.log(1 / (1 - 0.02))
+    expected = math.log(1 / (1 - 0.0115)) + math.log(1 / (1 - 0.02))
     assert fee_band_log(fees) == pytest.approx(expected)
     assert bps(fee_band_log(fees)) == pytest.approx(1e4 * expected)
 
 
 def test_fdv_ladder_moves_the_pumpswap_fee() -> None:
-    assert pumpswap_fee(128_000.0).taker == pytest.approx(0.0025 + 0.0095)
-    assert pumpswap_fee(500_000.0).taker == pytest.approx(0.0025 + 0.0060)
-    assert pumpswap_fee(5_000_000.0).taker == pytest.approx(0.0025 + 0.0035)
+    """The rungs are the on-chain FeeConfig table, converted through the SOL reference price.
+
+    These expectations changed on 2026-08-15 (studies/RESULT_dregg_boundary.md): the module used
+    to carry a three-step ladder in USD FDV that does not exist on chain.  $128k of FDV is
+    1,697 SOL of market cap, which is tier 2 (90 bps), not the old table's 95.
+    """
+
+    assert pumpswap_fee(128_000.0).taker == pytest.approx(0.0025 + 0.0090)
+    assert pumpswap_fee(500_000.0).taker == pytest.approx(0.0025 + 0.0075)
+    assert pumpswap_fee(5_000_000.0).taker == pytest.approx(0.0025 + 0.0023)
+
+
+def test_the_creator_tier_is_read_in_sol_not_dollars() -> None:
+    """The threshold is a market cap in lamports, so the SOL price alone can move the tier."""
+
+    assert creator_fee_at_mcap_sol(4_419.0) == pytest.approx(0.0080)
+    assert creator_fee_at_mcap_sol(4_420.0) == pytest.approx(0.0075)
+    # same token, same price, SOL rallies 20%: the USD FDV rises but the SOL market cap does not
+    fdv = 4_400.0 * 75.449
+    assert pumpswap_fee(fdv, sol_usd=75.449).taker == pytest.approx(0.0025 + 0.0080)
+    assert pumpswap_fee(fdv * 1.2, sol_usd=75.449 * 1.2).taker == pytest.approx(0.0025 + 0.0080)
+
+
+def test_the_bottom_rung_is_a_cliff_not_a_floor() -> None:
+    """Under 420 SOL of market cap the creator takes 30 bps and the protocol takes 93."""
+
+    assert creator_fee_at_mcap_sol(419.0) == pytest.approx(0.0030)
+    assert creator_fee_at_mcap_sol(421.0) == pytest.approx(0.0095)
 
 
 def test_dlmm_fee_is_served_when_the_pool_config_is_and_flagged_when_it_is_not() -> None:

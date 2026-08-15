@@ -94,25 +94,76 @@ class Fee:
 #: Not read from chain here, so it stays flagged uncertain rather than promoted to a measurement.
 PUMPSWAP_LP_PROTOCOL: Final[float] = 0.0025
 
-#: The creator-fee ladder is FDV-dependent (PROGRAM.md §0, double-sourced: the operator's own
-#: fee stream and Marino §VII's on-chain observation).
-PUMPSWAP_CREATOR_LADDER: Final[tuple[tuple[float, float], ...]] = (
-    (300_000.0, 0.0095),
-    (1_000_000.0, 0.0060),
-    (float("inf"), 0.0035),
+#: The creator-fee ladder, **read from the pump.fun fee program's own ``FeeConfig`` account**
+#: ``5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx`` (owner ``pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ``)
+#: on 2026-08-15 and verified against 1,058 decoded swaps across four pools with zero misses —
+#: ``studies/RESULT_dregg_boundary.md``.
+#:
+#: This constant REPLACES a three-step ladder in **USD FDV** (0.95% under $300k, 0.60% to $1M,
+#: 0.35% above) that this module and ``PROGRAM.md`` §0 both carried. That ladder was wrong in
+#: three ways at once and every one of them mattered: the real schedule has **25 rungs 5 bps
+#: apart**, the threshold is a market cap in **lamports** so each rung's dollar value moves with
+#: the SOL price, and the bottom rung is a **cliff** — under 420 SOL of market cap the creator
+#: takes 30 bps while the protocol takes 93.
+#:
+#: It is a SNAPSHOT and it will rot: pump.fun has changed this schedule before (Project Ascend,
+#: 2025-09-01) and has said publicly it intends to again. Re-read the account rather than
+#: trusting this tuple; ``studies/dregg_boundary.py:fee_config_raw`` does it in one RPC call.
+#: (threshold in SOL of market cap, creator fee rate)
+PUMPSWAP_CREATOR_TIERS_SOL: Final[tuple[tuple[float, float], ...]] = (
+    (0.0, 0.0030), (420.0, 0.0095), (1_470.0, 0.0090), (2_460.0, 0.0085),
+    (3_440.0, 0.0080), (4_420.0, 0.0075), (9_820.0, 0.0070), (14_740.0, 0.0065),
+    (19_650.0, 0.0060), (24_560.0, 0.0055), (29_470.0, 0.0050), (34_380.0, 0.0045),
+    (39_300.0, 0.0040), (44_210.0, 0.0035), (49_120.0, 0.0030), (54_030.0, 0.0028),
+    (58_940.0, 0.0025), (63_860.0, 0.0023), (68_770.0, 0.0020), (73_681.0, 0.0018),
+    (78_590.0, 0.0015), (83_500.0, 0.0013), (88_400.0, 0.0010), (93_330.0, 0.0008),
+    (98_240.0, 0.0005),
 )
 
+#: Only used to translate a vendor's USD FDV into the SOL market cap the program actually reads.
+#: A snapshot, and the reason :func:`pumpswap_fee` stays ``uncertain``: near a rung the tier
+#: depends on the SOL price to two significant figures.
+SOL_USD_REFERENCE: Final[float] = 75.449
 
-def pumpswap_fee(fdv_usd: float) -> Fee:
-    """PumpSwap taker fee at this FDV. Uncertain in its LP leg; the creator leg is laddered."""
 
-    creator = next(rate for ceiling, rate in PUMPSWAP_CREATOR_LADDER if fdv_usd < ceiling)
+def creator_fee_at_mcap_sol(mcap_sol: float) -> float:
+    """The creator fee the program applies at this market cap, in SOL.
+
+    pump.fun's own reference implementation, from ``docs/FEE_PROGRAM_README.md``::
+
+        poolMarketCap = quoteReserve * baseMintSupply / baseReserve
+        take the last tier whose marketCapLamportsThreshold is <= marketCap
+
+    Evaluated fresh on every swap from live reserves — no TWAP, no oracle, no hysteresis, and
+    no high-water mark. Measured: DREGG's applied rate flipped 80→75→80→75 bps inside four
+    seconds on 2026-08-14, which no averaged or ratcheted input can produce.
+    """
+
+    rate = PUMPSWAP_CREATOR_TIERS_SOL[0][1]
+    for threshold, r in PUMPSWAP_CREATOR_TIERS_SOL:
+        if mcap_sol >= threshold:
+            rate = r
+    return rate
+
+
+def pumpswap_fee(fdv_usd: float, *, sol_usd: float = SOL_USD_REFERENCE) -> Fee:
+    """PumpSwap taker fee at this FDV.
+
+    The FDV argument is kept because that is what the vendor quotes serve, but note that **USD
+    is the wrong unit for this decision**: the program's thresholds are in lamports, so a token
+    can change fee tier with no price move at all if SOL moves. Anything making a tier-boundary
+    decision should carry market cap in SOL and call :func:`creator_fee_at_mcap_sol` directly.
+    """
+
+    mcap_sol = fdv_usd / sol_usd if sol_usd else 0.0
+    creator = creator_fee_at_mcap_sol(mcap_sol)
     taker = PUMPSWAP_LP_PROTOCOL + creator
     return Fee(
         taker=taker,
         lp_share=PUMPSWAP_LP_PROTOCOL / taker if taker else 0.0,
         source=(
-            f"creator {creator:.2%} from the PROGRAM.md §0 FDV ladder (FDV=${fdv_usd:,.0f}); "
+            f"creator {creator:.2%} from the on-chain FeeConfig tier table at "
+            f"{mcap_sol:,.0f} SOL of market cap (FDV=${fdv_usd:,.0f} / ${sol_usd:,.2f} per SOL); "
             f"LP+protocol {PUMPSWAP_LP_PROTOCOL:.2%} from pump.fun public docs, not read from chain"
         ),
         uncertain=True,
