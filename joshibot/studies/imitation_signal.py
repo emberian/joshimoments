@@ -1912,8 +1912,13 @@ def write_candidates(
                     {
                         "kind": "swarm_candidate",
                         "schema": 1,
+                        # ISO for a human reading the file; unix floats because every
+                        # paperdesk Source speaks `t_ingest_unix` / `t_event_unix` and a
+                        # consumer should not need a translation layer to tail this.
                         "t_ingest": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "t_ingest_unix": time.time(),
                         "t_event": ev["onset_t"],
+                        "t_event_unix": _epoch(ev["onset_t"]),
                         "t_event_source": ev["t_event_source"],
                         "family_id": ev["family_id"],
                         "host_mint": ev["host_mint"],
