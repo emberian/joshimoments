@@ -698,7 +698,7 @@ def build_controls(
     *,
     ratio: int = 2,
     caliper: float = 0.25,
-    per_covariate_caliper: float = 0.5,
+    per_covariate_caliper: float = 0.3,
     seed: int = 20260815,
     columns: Sequence[str] = MATCH_COLUMNS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -726,7 +726,16 @@ def build_controls(
     pool.sort(key=lambda l: l.t)
     pool_t = [l.t for l in pool]
 
-    feats = list(columns)
+    # A covariate that is constant in the treated arm carries no matching information and,
+    # worse, silently eats one dimension of the caliper budget: the retro census has no dev-buy
+    # field at all, so `log_dev_buy_sol` is 0.000 for every row there and a Euclidean caliper
+    # over six columns was really a caliper over five, which is how age drifted to |SMD| 0.32.
+    feats = [
+        c
+        for c in columns
+        if float(np.nan_to_num(np.array([r.get(c, 0.0) for r in treated], dtype=float)).std()) > 1e-9
+    ]
+    dropped = [c for c in columns if c not in feats]
     tmat = np.array([[r[f] for f in feats] for r in treated], dtype=float)
     tmat = np.nan_to_num(tmat, nan=0.0, posinf=0.0, neginf=0.0)
     mu, sd = tmat.mean(axis=0), tmat.std(axis=0)
@@ -785,6 +794,8 @@ def build_controls(
     matched_treated = {c["matched_to"] for c in controls}
     return controls, {
         "pool": len(pool),
+        "matched_on": feats,
+        "dropped_constant": dropped,
         "controls": len(controls),
         "treated_matched": len(matched_treated),
         "treated_unmatched": unmatched,
@@ -1007,6 +1018,7 @@ def bh_fdr(pvals: Sequence[float], q: float = 0.10) -> list[bool]:
 
 def summarise(rows: Sequence[dict[str, Any]], h: int, label: str, out=sys.stdout) -> dict[str, Any]:
     import numpy as np
+    from scipy.stats import trim_mean
 
     usable = [r for r in rows if not r[f"admin{h}"]]
     if not usable:
@@ -1015,10 +1027,16 @@ def summarise(rows: Sequence[dict[str, Any]], h: int, label: str, out=sys.stdout
     r = np.array([x[f"r{h}"] for x in usable], dtype=float)
     live = np.array([x[f"live{h}"] for x in usable], dtype=bool)
     mx = np.array([x[f"max{h}"] for x in usable], dtype=float)
+    # A 5% trimmed mean beside the raw one. On a memecoin tape a single coin that went 100x
+    # moves an arm's mean by hundreds of points while its median does not budge -- measured on
+    # the retro day, where one control row put the control mean at +551% against a median of
+    # +0.00%. The trimmed figure is what the text should quote whenever the two disagree.
+    trimmed = float(trim_mean(r, 0.05)) if len(r) >= 20 else float(r.mean())
     stat = {
         "label": label,
         "n": int(len(r)),
         "mean": float(r.mean()),
+        "trimmed_mean": trimmed,
         "median": float(np.median(r)),
         "p_up": float((r > 0).mean()),
         "p_2x": float((r >= 1.0).mean()),
@@ -1027,7 +1045,8 @@ def summarise(rows: Sequence[dict[str, Any]], h: int, label: str, out=sys.stdout
         "dropped_past_tape": len(rows) - len(usable),
     }
     print(
-        f"  {label:<30} n={stat['n']:<5} mean={stat['mean']:+8.2%} med={stat['median']:+8.2%} "
+        f"  {label:<30} n={stat['n']:<5} mean={stat['mean']:+8.2%} trim5={stat['trimmed_mean']:+8.2%} "
+        f"med={stat['median']:+8.2%} "
         f"p(up)={stat['p_up']:5.1%} p(2x)={stat['p_2x']:5.1%} live={stat['live']:5.1%} "
         f"max={stat['mean_max']:+7.2%}",
         file=out,
@@ -1506,7 +1525,9 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                 _u, p = mannwhitney(a, b)
                 d = ts["mean"] - cs["mean"]
                 print(
-                    f"    -> difference {d:+.2%} mean, {ts['median']-cs['median']:+.2%} median, "
+                    f"    -> difference {d:+.2%} mean, "
+                    f"{ts['trimmed_mean']-cs['trimmed_mean']:+.2%} trimmed, "
+                    f"{ts['median']-cs['median']:+.2%} median, "
                     f"{ts['p_up']-cs['p_up']:+.1%} p(up), Mann-Whitney p={p:.4f}",
                     file=out,
                 )

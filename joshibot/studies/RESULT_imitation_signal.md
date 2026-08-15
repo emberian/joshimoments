@@ -51,7 +51,7 @@ Two things did survive, and both are real:
 
 This is a null with a power floor, not a shrug. A **uniform multiplicative shift of +1% to +5%**
 applied to every row that traded would have been detected at 80% power. And it does not
-refute "watch for imitators" as *situational awareness* — §8 states which version survives.
+refute "watch for imitators" as *situational awareness* — §9 states which version survives.
 
 ---
 
@@ -192,7 +192,7 @@ infrastructure — but the clean test is unbuilt.
    incremental-AUC test, which is the only question that counts.
 3. **Survivorship.** Dropping the coins that die flipped the callout cohort's 8 h return from
    −14.6% to **+25%**. Every row here is priced mark-to-last-trade, the dead are counted as
-   their own state in a competing-risks table, and §5.3 splits every arm into rows that
+   their own state in a competing-risks table, and §5.9 splits the clone arm into rows that
    traded inside the window and rows that did not.
 
 ---
@@ -429,7 +429,79 @@ curve at the sizing `studies/exploration_map.py` derives. There is no trade here
 
 ---
 
-## 6. The candidates feed contract
+## 6. Replication on an independent 24-hour census
+
+The live window is one socket tape with holes over one 9.8 h regime. The strongest available
+check is a different day, measured a different way — so the study was re-run end to end on a
+**complete 24 h census of 2026-08-14**, built from the bulk pump pull plus the batch metadata
+endpoint (§2.5 of the code docstring; `swarm_detect retro --day 2026-08-14`). 74,046 mints
+enumerated, 33,202 of them created that day, in 218 s and $0.
+
+```
+uv run --group research python -m studies.imitation_signal --report \
+    --retro-day 2026-08-14 --k 3 --window 1800 --horizon 3600 --no-candidates
+```
+
+The two cohorts are **never pooled**. This is a replication, not extra n.
+
+| | live window (9.8 h) | retro census (24 h) |
+|---|---|---|
+| launches | 9,708 | 33,202 |
+| families (size ≥ 2) | 1,001 | 3,453 |
+| onsets at k = 3 | 547 | 1,905 |
+| parasite share of onsets | 40.6% | 46.8% |
+| treated rows | 445 | 1,830 |
+| onset lag p50 (host → onset) | 98 s | **90 s** |
+| median survival, treated | 10.7 min | **10.6 min** |
+| median survival, control | 1.0 min | **1.0 min** |
+| dead at 60 min, treated / control | 67.2% / 82.8% | 58.5% / 80.1% |
+| onsets vs i.i.d. collision floor | 1.13× | **1.17×** |
+
+**What replicates exactly.** The onset-lag distribution (90 s vs 98 s median), the survival gap
+(10.6 vs 10.7 min treated, 1.0 min control both times, log-rank p < 0.0001), the dead-state
+gap, and the excess over the collision floor (1.17× vs 1.13× onsets). These are the study's
+solid measurements.
+
+**What replicates as a null.** The matched control comparison. With four times the rows, the
+median treated-minus-control difference is **+0.00% at every horizon** again, and the
+**5%-trimmed** mean difference is a flat **−0.48% to −0.59%** across all five horizons. The raw
+means on this day run **−478% to −803%**, entirely from one control coin that went up
+enormously — which is exactly why the trimmed statistic was added, and why no mean in this
+document should be read without it.
+
+Mann-Whitney is now significant (p = 0.0000 to 0.023) because n = 376 vs 596 makes a −0.5%
+shift detectable. **Significant, tiny, and negative** is the accurate summary, and it is not a
+trade: 0.5% sits well inside the 2.26% round trip. It is also partly compositional — the
+dead-fraction gap runs −6 to −9.5 pp — and the match on this day did **not** succeed
+(worst |SMD| 0.28 on age), because the retro census carries no dev-buy field and matches on
+five covariates rather than six. The report says so in its own output rather than in a
+footnote.
+
+**What flips, and therefore is not a finding.** The swarm block's incremental AUC:
+
+| | label `r60m > 0` | label `r60m ≤ −10%` |
+|---|---|---|
+| live: free → free+swarm | 0.721 → 0.772 (+0.051) | 0.842 → **0.813 (−0.029)**, permutation beats real 20/24 |
+| retro: free → free+swarm | 0.672 → **0.653 (−0.019)**, permutation beats real 3/24 | 0.841 → 0.856 (+0.015), permutation beats real 0/24 |
+
+The sign of the swarm block's contribution flips across day × label. That pattern — not any
+one of the four numbers — is the finding: there is no stable conditional information. The
+retro free-only block is also handicapped by the missing dev-buy column, so its +0.015 is an
+upper bound on what the swarm block adds there.
+
+**What sharpens.** The dose-response on *distinct clone deployers* — the core costly-signal
+quantity. On 1,765–1,828 rows the partial correlation is **−0.075 to −0.091, p = 0.0001 to
+0.0014, surviving FDR at every horizon**. So with four times the power the effect is real, and
+it is **negative**: more independent parties paying to imitate predicts a *worse* host. It is
+also tiny — ρ ≈ −0.08 is 0.6% of rank variance. The hypothesis is not merely unsupported; in
+its own sharpest statistic, at the best power this study can bring, it points the other way.
+
+**Detector recovery on this day:** 40/40 planted swarms recovered as one family (100%), 12/40
+with the host correctly nominated (30%) — the same host-nomination weakness as the live window.
+
+---
+
+## 7. The candidates feed contract
 
 `state/swarms/candidates.jsonl`, append-only JSONL, one row per onset. It carries **evidence,
 never a verdict** — a consumer decides direction and size; the file never says "buy".
@@ -475,7 +547,7 @@ Consumer notes, which matter more than the schema:
 
 ---
 
-## 7. Trials accounting and honest limits
+## 8. Trials accounting and honest limits
 
 **Every test in the family, BH-FDR at q = 0.10: 6 of 30 survive.** Five of the six are the
 clone-arm comparisons that §5.9 shows are a dead-fraction artifact. The sixth is
@@ -494,10 +566,24 @@ observable (PROGRAM.md §3.7):
 | k = 4 | −10.47%, −1.98% (n 274) | −10.63%, −1.81% (n 249) | −5.37%, −0.63% (n 208) |
 | k = 5 | −11.32%, −0.58% (n 216) | −11.99%, −0.27% (n 199) | −10.04%, −0.38% (n 158) |
 
-The means swing from −12% to +3% across nine settings on heavy-tailed data; the medians are
-stably small and negative everywhere. Nothing in this grid contains a positive host return
-worth trading, and the instability of the means across knob settings is itself the argument
-for reading the medians and rank tests.
+Same grid on the 24 h retro census, where the means come out the *other* side:
+
+| | window 15 m | window 30 m | window 60 m |
+|---|---|---|---|
+| k = 3 | +2.07% mean, −2.32% med (n 1671) | **+2.23%, −1.30% (n 1765)** | +4.01%, −1.37% (n 1633) |
+| k = 4 | +3.99%, −1.49% (n 1143) | +6.59%, −0.81% (n 1220) | +6.76%, −0.92% (n 1180) |
+| k = 5 | +12.59%, −0.89% (n 852) | +12.61%, −0.37% (n 903) | +13.35%, −0.32% (n 899) |
+
+Across eighteen knob settings on two days the means swing from **−12% to +13%** and the
+medians never leave **−2.9% to −0.2%, always negative**. The means are not measuring a return;
+they are measuring which cell caught the day's one big coin. This is the whole reason the
+document leads with medians, rank tests and a trimmed mean, and it is worth stating as a
+standing lesson for the next lane: on a memecoin tape an arm's mean is a lottery ticket.
+
+**BH-FDR on the retro day: 23 of 25 survive** — including `treated-vs-control` at every
+horizon. That is not a reversal of the live window's null, it is what happens when n goes from
+171 to 376 against an effect of −0.5%: significance arrives, effect size does not. Any reading
+of this study that quotes a p-value without the trimmed effect beside it is misreading it.
 
 ### Limits, in the order they would bite
 
@@ -511,7 +597,7 @@ for reading the medians and rank tests.
 2. **Host nomination is right 35% of the time in the planted world.** Some treated rows point
    at a clone rather than the original, which biases toward the null.
 3. **One 9.8 h window, one market regime.** The pump.fun regime shifts in weeks (PROGRAM.md
-   §3.6). §9 reports a 24 h replication on an independent day.
+   §3.6). §6 reports a 24 h replication on an independent day.
 4. **96 onsets (17.6%) were dropped as left-censored** — their family's earliest member sat
    within one matching window of the start of a listening interval, so the true original may
    predate our tape. Dropping them is correct and it is also a selection: it removes swarms
@@ -522,7 +608,7 @@ for reading the medians and rank tests.
 
 ---
 
-## 8. Which version of the operator's hypothesis survives
+## 9. Which version of the operator's hypothesis survives
 
 The operator wrote: *"if we are fast we can setup positions that will massively gain from them
 when they are even slightly legitimate."* Taking that apart against what was measured:
@@ -555,7 +641,7 @@ even where it appears; the honest use of a negative signal here is an avoid-list
 3. **The tail, not the bulk.** The detector is only 1.13× the collision floor at k = 3 but
    1.62× at the largest family. If anything in this channel is real it is in swarms far beyond
    k = 5, and this window contains too few to test. That is a pre-registerable question for a
-   multi-day census (§9 shows the census is now cheap), and it should be declared with its
+   multi-day census (§6 shows the census is now cheap), and it should be declared with its
    threshold *before* the data is cut.
 4. **Do not re-test the clone arm without the live/dead decomposition wired in.** It is the
    most seductive artifact in this dataset: n = 4,202, p < 0.0001, survives FDR, and is worth
