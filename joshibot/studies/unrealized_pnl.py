@@ -107,6 +107,7 @@ COMMANDS
 ``flow``     per-(mint, wallet, tx) trade legs with exact SOL, cohort coins        (~15 min)
 ``basis``    the average-cost trajectory; ``--check`` brute-forces FIFO vs avgcost
 ``holders``  supply-weighted basis distribution snapshots per coin
+``hazard``   P(sell in the next minute | unrealized PnL), on a real risk set
 ``q1``       basis-density modes vs price reversals, against a rotation null
 ``q2``       realization-policy embedding, clustering, tooling-vs-actor controls
 ``q3``       loss-tail shape as a PvP/community feature (a feature, not a classifier)
@@ -1194,6 +1195,219 @@ def cmd_q1(args: argparse.Namespace) -> int:
 
 
 # =====================================================================================
+# hazard -- the operator's question, taken literally: is unrealized PnL a live state variable?
+# =====================================================================================
+
+
+def cmd_hazard(args: argparse.Namespace) -> int:
+    """P(this wallet sells in the next minute | its current unrealized PnL), on a real risk set.
+
+    The realization histogram in ``q2`` is a distribution over ACTIONS -- it says where sells
+    happen, not whether the PnL level *caused* them, because it has no denominator. A wallet
+    that sells at +40% may simply have been holding while the price was at +40%. Turning the
+    object into a decision variable needs the times the wallet held and did NOT sell, i.e. a
+    risk set.
+
+    So: lay a fixed clock over each coin, and for every wallet-episode emit one row per tick it
+    was alive for, carrying that wallet's own unrealized PnL at that tick and whether it sold
+    during the tick. That is a discrete-time hazard with a genuine denominator, and its shape in
+    PnL is the thing a reactive exit rule would have to exploit.
+
+    VOLATILITY CONTROL, per PROGRAM.md §3 (anything drawdown-adjacent gets one). A wallet deep
+    in the red is disproportionately holding a coin that is moving violently, and a violent coin
+    has more selling of every kind. The hazard is therefore reported both raw and stratified by
+    the coin's own trailing realized volatility, so "red wallets sell more" cannot be read off a
+    difference that is really "volatile coins trade more".
+    """
+    con = _duck(args.threads, args.memory)
+    t0 = time.time()
+    basis = _out() / "basis.parquet"
+    dt = args.tick
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins_all AS
+        SELECT mint, min(block_time) AS t_first, max(block_time) AS t_last,
+               count(*) AS n_ev
+        FROM read_parquet('{basis}')
+        WHERE mark_after > 0
+        GROUP BY 1
+        HAVING count(*) BETWEEN {args.min_ev} AND {args.max_ev}
+           AND max(block_time) - min(block_time) >= {10 * dt}
+        """
+    )
+    # The sample is drawn from a MATERIALISED table. `USING SAMPLE` attached directly to a
+    # `GROUP BY ... HAVING` query gets pushed below the aggregation by duckdb and silently
+    # returns the wrong thing -- here, nothing at all.
+    n_pool = con.execute("SELECT count(*) FROM coins_all").fetchone()[0]
+    con.execute(
+        f"""CREATE OR REPLACE TABLE coins AS SELECT * FROM coins_all
+            USING SAMPLE {args.max_coins} ROWS (reservoir, {args.seed})"""
+    )
+    print(f"[hazard] eligible coins: {n_pool:,}", flush=True)
+    n_c = con.execute("SELECT count(*) FROM coins").fetchone()[0]
+    print(f"[hazard] {n_c:,} coins on the clock (tick={dt}s)", flush=True)
+    if n_c == 0:
+        print("[hazard] NULL: no coin in the sampling band.")
+        return 0
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE ev AS
+        SELECT b.* FROM read_parquet('{basis}') b SEMI JOIN coins c USING (mint)
+        """
+    )
+    # the coin's own mark path, dust-filtered, plus a trailing realized volatility
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE mk AS
+        SELECT mint, block_time, mark_after AS mark,
+               ln(mark_after / nullif(lag(mark_after) OVER w, 0)) AS r
+        FROM ev WHERE mark_after > 0 AND abs(sol) >= {args.min_sol}
+        WINDOW w AS (PARTITION BY mint ORDER BY block_slot, tx_index)
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE mkv AS
+        SELECT *, sqrt(avg(r * r) OVER (PARTITION BY mint ORDER BY block_time
+                                        ROWS BETWEEN 50 PRECEDING AND 1 PRECEDING)) AS rv
+        FROM mk
+        """
+    )
+    # each wallet-episode's own state path, and the span it was alive for
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE st AS
+        SELECT mint, owner, episode, block_time, qty_after, basis_after
+        FROM ev WHERE basis_after > 0
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE ep AS
+        SELECT mint, owner, episode, min(block_time) AS t_in,
+               max(block_time) AS t_out
+        FROM ev GROUP BY 1, 2, 3
+        HAVING max(block_time) - min(block_time) >= {dt}
+        """
+    )
+    n_ep = con.execute("SELECT count(*) FROM ep").fetchone()[0]
+    print(f"[hazard] {n_ep:,} wallet-episodes ({time.time() - t0:.0f}s)", flush=True)
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cand AS
+        SELECT e.mint, e.owner, e.episode, g.t
+        FROM ep e JOIN coins c USING (mint),
+             LATERAL (SELECT unnest(range(
+                 e.t_in + {dt},
+                 least(e.t_out, c.t_last) + 1,
+                 {dt})) AS t) g
+        """
+    )
+    n_cand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+    print(f"[hazard] {n_cand:,} risk-set ticks ({time.time() - t0:.0f}s)", flush=True)
+    if n_cand == 0:
+        print("[hazard] NULL: empty risk set.")
+        return 0
+    if n_cand > args.max_ticks:
+        con.execute(
+            f"CREATE OR REPLACE TABLE cand AS SELECT * FROM cand "
+            f"USING SAMPLE {args.max_ticks} ROWS (reservoir, {args.seed})"
+        )
+        print(f"[hazard]   subsampled to {args.max_ticks:,} ticks", flush=True)
+
+    out = _out() / "hazard.parquet"
+    _copy(
+        con,
+        f"""
+        WITH withstate AS (
+            SELECT c.mint, c.owner, c.episode, c.t, s.qty_after, s.basis_after
+            FROM cand c ASOF JOIN st s
+              ON c.mint = s.mint AND c.owner = s.owner AND c.episode = s.episode
+             AND c.t >= s.block_time
+        ),
+        withmark AS (
+            SELECT w.*, m.mark, m.rv
+            FROM withstate w ASOF JOIN mkv m ON w.mint = m.mint AND w.t >= m.block_time
+        ),
+        lab AS (
+            SELECT wm.*,
+                   EXISTS (SELECT 1 FROM ev e
+                           WHERE e.mint = wm.mint AND e.owner = wm.owner
+                             AND e.episode = wm.episode AND e.delta_raw < 0
+                             AND e.block_time > wm.t AND e.block_time <= wm.t + {dt})
+                       AS sold_next
+            FROM withmark wm
+        )
+        SELECT mint, owner, episode, t, qty_after, basis_after, mark, rv,
+               mark / basis_after - 1.0 AS upnl, sold_next
+        FROM lab
+        WHERE qty_after > {DUST_RAW} AND basis_after > 0 AND mark > 0
+        """,
+        out,
+        "hazard risk set",
+    )
+
+    # The headline: hazard by unrealized-PnL bucket, raw and volatility-stratified.
+    haz = con.execute(
+        f"""
+        SELECT bucket, count(*) AS n_ticks, sum(sold_next::int) AS n_sells,
+               avg(sold_next::int) AS hazard,
+               count(DISTINCT owner) AS n_wallets, count(DISTINCT mint) AS n_coins
+        FROM (SELECT *, CASE
+                WHEN upnl < -0.8 THEN '1: < -80%'
+                WHEN upnl < -0.5 THEN '2: -80..-50%'
+                WHEN upnl < -0.25 THEN '3: -50..-25%'
+                WHEN upnl < -0.05 THEN '4: -25..-5%'
+                WHEN upnl < 0.05 THEN '5: -5..+5%'
+                WHEN upnl < 0.25 THEN '6: +5..+25%'
+                WHEN upnl < 1.0 THEN '7: +25..+100%'
+                WHEN upnl < 4.0 THEN '8: +100..+400%'
+                ELSE '9: > +400%' END AS bucket
+              FROM read_parquet('{out}'))
+        GROUP BY 1 ORDER BY 1"""
+    ).fetchdf()
+    print("[hazard] raw:\n" + haz.to_string(index=False), flush=True)
+
+    hazv = con.execute(
+        f"""
+        SELECT vol_tercile, bucket, count(*) AS n_ticks, avg(sold_next::int) AS hazard
+        FROM (SELECT *, ntile(3) OVER (ORDER BY rv) AS vol_tercile,
+                CASE
+                WHEN upnl < -0.8 THEN '1: < -80%'
+                WHEN upnl < -0.5 THEN '2: -80..-50%'
+                WHEN upnl < -0.25 THEN '3: -50..-25%'
+                WHEN upnl < -0.05 THEN '4: -25..-5%'
+                WHEN upnl < 0.05 THEN '5: -5..+5%'
+                WHEN upnl < 0.25 THEN '6: +5..+25%'
+                WHEN upnl < 1.0 THEN '7: +25..+100%'
+                WHEN upnl < 4.0 THEN '8: +100..+400%'
+                ELSE '9: > +400%' END AS bucket
+              FROM read_parquet('{out}') WHERE rv IS NOT NULL)
+        GROUP BY 1, 2 ORDER BY 1, 2"""
+    ).fetchdf()
+    print("[hazard] volatility-stratified:\n" + hazv.to_string(index=False), flush=True)
+
+    (_out() / "hazard.json").write_text(
+        json.dumps(
+            {
+                "tick_seconds": dt,
+                "n_coins": int(n_c),
+                "n_episodes": int(n_ep),
+                "raw": haz.to_dict(orient="records"),
+                "by_volatility_tercile": hazv.to_dict(orient="records"),
+            },
+            indent=2,
+            default=str,
+        )
+    )
+    print(f"[hazard] -> {out}  ({time.time() - t0:.0f}s)", flush=True)
+    return 0
+
+
+# =====================================================================================
 # q2 -- the realization-policy fingerprint, and whether it identifies ACTORS or TOOLS
 # =====================================================================================
 
@@ -1717,13 +1931,49 @@ def cmd_q3(args: argparse.Namespace) -> int:
             FROM last l JOIN spot s USING (mint)
             WHERE l.basis > 0
             GROUP BY 1
+        ),
+        -- HOLD-THROUGH-DRAWDOWN. The terminal underwater share is ~1.0 on essentially every
+        -- coin -- at the end of a collapsed coin everybody is red, so it discriminates nothing.
+        -- The informative version asks what each holder LIVED THROUGH: the deepest price the
+        -- coin printed AFTER that wallet's own entry, against that wallet's own basis. A wallet
+        -- that watched its position go 80% red and is still holding is a different animal from
+        -- one that never saw red.
+        sufmin AS (
+            SELECT mint, block_time,
+                   min(mark_after) OVER (PARTITION BY mint ORDER BY block_slot DESC,
+                                         tx_index DESC
+                                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+                       AS sufmin_mark
+            FROM read_parquet('{basis}') WHERE mark_after > 0
+        ),
+        entry AS (
+            SELECT mint, owner, min(block_time) AS t_in
+            FROM read_parquet('{basis}') WHERE delta_raw > 0 GROUP BY 1, 2
+        ),
+        deep AS (
+            SELECT e.mint, e.owner, e.t_in, m.sufmin_mark
+            FROM entry e ASOF JOIN sufmin m
+              ON e.mint = m.mint AND e.t_in >= m.block_time
+        ),
+        through AS (
+            SELECT d.mint,
+                   sum(CASE WHEN d.sufmin_mark < 0.5 * l.basis THEN l.qty ELSE 0 END)
+                       / nullif(sum(l.qty), 0) AS supply_held_through_50pct_red,
+                   sum(CASE WHEN d.sufmin_mark < 0.2 * l.basis THEN l.qty ELSE 0 END)
+                       / nullif(sum(l.qty), 0) AS supply_held_through_80pct_red,
+                   count(*) AS n_survivors
+            FROM deep d JOIN last l USING (mint, owner)
+            WHERE l.basis > 0
+            GROUP BY 1
         )
         SELECT c.mint, c.graduated, c.peak_mcap_sol, c.final_mcap_sol, c.lifetime_s,
                c.curve_touches, c.drawdown_from_peak, c.n_snipers, c.dev_buy_share,
-               a.*, h.supply_underwater, h.supply_underwater_2x, h.n_live_holders
+               a.*, h.supply_underwater, h.supply_underwater_2x, h.n_live_holders,
+               t.supply_held_through_50pct_red, t.supply_held_through_80pct_red, t.n_survivors
         FROM read_parquet('{cohort}') c
         JOIN agg a USING (mint)
         LEFT JOIN hold h USING (mint)
+        LEFT JOIN through t USING (mint)
         WHERE a.n_sells >= {args.min_sells}
         """,
         out,
@@ -1740,7 +1990,9 @@ def cmd_q3(args: argparse.Namespace) -> int:
                median(frac_sells_deep_red) AS med_frac_deep_red,
                median(med_loss_taken) AS med_loss_taken,
                median(med_gain_taken) AS med_gain_taken,
-               median(supply_underwater) AS med_supply_underwater
+               median(supply_underwater) AS med_supply_underwater,
+               median(supply_held_through_50pct_red) AS med_held_through_50,
+               median(supply_held_through_80pct_red) AS med_held_through_80
         FROM read_parquet('{out}') GROUP BY 1 ORDER BY 1"""
     ).fetchdf()
     print(desc.to_string(index=False), flush=True)
@@ -1755,6 +2007,7 @@ def cmd_q3(args: argparse.Namespace) -> int:
                     "frac_sells_red", "frac_sells_deep_red", "frac_sells_very_deep_red",
                     "med_loss_taken", "p90_loss_taken", "med_gain_taken",
                     "solshare_sells_red", "supply_underwater", "supply_underwater_2x",
+                    "supply_held_through_50pct_red", "supply_held_through_80pct_red",
                 ],
                 "descriptive_by_graduation": desc.to_dict(orient="records"),
             },
@@ -2108,6 +2361,16 @@ def main(argv: list[str] | None = None) -> int:
     q2.add_argument("--crew-alpha", type=float, default=0.01)
     q2.add_argument("--seed", type=int, default=20260815)
     q2.set_defaults(fn=cmd_q2)
+
+    hz = common(sub.add_parser("hazard", help="P(sell next tick | unrealized PnL), with a risk set"))
+    hz.add_argument("--tick", type=int, default=60)
+    hz.add_argument("--max-coins", type=int, default=3000)
+    hz.add_argument("--min-ev", type=int, default=200)
+    hz.add_argument("--max-ev", type=int, default=200000)
+    hz.add_argument("--max-ticks", type=int, default=40000000)
+    hz.add_argument("--min-sol", type=float, default=0.01)
+    hz.add_argument("--seed", type=int, default=20260815)
+    hz.set_defaults(fn=cmd_hazard)
 
     q3 = common(sub.add_parser("q3", help="basis-shape feature for the pvp_vamps lane"))
     q3.add_argument("--min-sells", type=int, default=30)
