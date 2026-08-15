@@ -93,6 +93,10 @@ INDEX_CAPACITY: Final[int] = 3_000
 #: cycles: the collector visits five boards every ~30 s.
 CARD_FRESH_S: Final[float] = 180.0
 
+#: How often the callout store is re-read. Measured rate on the live collector is one
+#: mint-resolved callout every ~24 minutes, and each read copies a 75 MB SQLite file.
+CALLOUT_REFRESH_S: Final[float] = 60.0
+
 
 @dataclass
 class Tracked:
@@ -132,6 +136,13 @@ class CoinIndex:
         self._fire_partial = ""
         self.refreshed_unix = 0.0
         self.rows_read = 0
+        #: mint -> (t_post_unix, kind, author) for the last hour of callouts.
+        self._callouts: dict[str, tuple[float, str, str | None]] = {}
+        self._callouts_at = 0.0
+        #: False once a read has failed: the difference between "nobody called this out"
+        #: and "we cannot see the callout store" is exactly the distinction this desk
+        #: refuses to collapse, and the cards carry it as an absence rather than a zero.
+        self._callouts_ok = True
 
     # ------------------------------------------------------------------ tailing
 
@@ -206,9 +217,47 @@ class CoinIndex:
                 continue
             self._record_launch(row)
 
+        self._refresh_callouts(now)
         while len(self.coins) > self.capacity:
             self.coins.popitem(last=False)
         self.refreshed_unix = now
+
+    def _refresh_callouts(self, now: float) -> None:
+        """Which coins got called out in the last hour. The operator's own browsing loop.
+
+        Their words for what this surface replaces: *"i have to click around in pumpfun a
+        bit to explore the callouts, the chart, then eg copy a CA back into over here."*
+        The callouts are the first of those three, so a card that cannot say "somebody just
+        posted this one" is missing the thing they went looking for.
+
+        Rate-limited to once a minute because ``poll_callouts`` copies a 75 MB SQLite file
+        (the intel daemon holds a write lock on the original), and the feed's measured rate
+        is roughly one mint-resolved callout every 24 minutes -- polling it per request
+        would be a hundred copies to observe zero new rows.
+
+        NOTE ON THE COUNT: ``poll_callouts`` dedupes by mint, so this measures PRESENCE and
+        recency, not volume. The card reports it as such. A real ``callout_n_60m`` would
+        need its own query, and nothing on this surface acts on the count -- the study that
+        demoted callouts to a candidate generator is why (``wiggle.CALLOUT_ARM``).
+        """
+        if now - self._callouts_at < CALLOUT_REFRESH_S:
+            return
+        self._callouts_at = now
+        try:
+            from shitcoims_scalper.feed import poll_callouts
+
+            self._callouts = {
+                c.mint: (c.t_post_unix, c.kind, c.author)
+                for c in poll_callouts(max_age_s=3_600.0)
+            }
+        except Exception:
+            # A dead intelligence collector must not take the card list with it. The cards
+            # then carry no callout block at all, which the ``absent`` map says out loud
+            # rather than rendering as "nobody called this out".
+            self._callouts = {}
+            self._callouts_ok = False
+            return
+        self._callouts_ok = True
 
     def _record_board(self, member: dict[str, Any], board: Any) -> None:
         mint = member.get("mint")
@@ -278,10 +327,15 @@ class CoinIndex:
 
         policy = WigglePolicy(seed=0)
         mid = {name: (lo + hi) / 2.0 for name, (lo, hi) in policy.ranges.items()}
+        callout = self._callouts.get(mint)
+        if not self._callouts_ok:
+            absent["callout"] = "the intelligence store could not be read"
         gate_features = {
             **obs.features(),
             **features,
-            "callout_n_60m": 0.0,
+            # Presence, not volume -- the source dedupes by mint. Nothing gates on it
+            # (``wiggle.CALLOUT_ARM`` is "ignored"), so it is logged and shown, not acted on.
+            "callout_n_60m": 1.0 if callout else 0.0,
         }
         legs = policy.legs(gate_features, mid)
         impact = ghost_town_impact(self.clip_lamports, obs.vsol_lamports)
@@ -319,6 +373,9 @@ class CoinIndex:
             "gates": legs,
             "gates_would_veto": sorted(k for k, ok in legs.items() if not ok),
             "ghost_town": not (legs.get("depth", True) and legs.get("recently_traded", True)),
+            "callout_last_s": (now - callout[0]) if callout else None,
+            "callout_kind": callout[1] if callout else None,
+            "callout_author": callout[2] if callout else None,
             "held": held,
             "hunched": hunched,
             "absent": absent,
