@@ -24,11 +24,11 @@ Data: `state/firehose/new_token/`, `state/swarms/census-*.jsonl`, `state/swarms/
 and age do not already carry, and the one dose-response that looks like the hypothesis is
 confounding.** On 9,708 launches over 9.8 h of listening, the detector fires 547 onsets; 445
 survive censoring. Against matched never-swarmed hosts balanced on size, age, dev buy,
-turnover and **momentum already banked**, the difference in host return is **−0.86% / +1.32% /
-+0.01% / +1.12% / +13.80%** mean at 5/15/30/60/120 min, with **median difference exactly
-+0.00% at every horizon** and Mann-Whitney p = 0.24, 0.35, 0.33, 0.80, 0.38. Adding the swarm
-block to the free columns *lowers* test AUC on the short label from **0.842 to 0.813**, and
-**permuting which coin got swarmed beats the real assignment in 20 of 24 draws** — the same
+turnover and **momentum already banked**, the 5%-trimmed difference in host return is a flat
+**−0.62% / −0.77% / −0.66% / −0.78% / −0.78%** at 5/15/30/60/120 min, with **median difference
+exactly +0.00% at every horizon** and Mann-Whitney p = 0.60, 0.78, 0.58, 0.80, 0.42. Adding the
+swarm block to the free columns *lowers* test AUC on the short label from **0.833 to 0.792**,
+and **permuting which coin got swarmed beats the real assignment in 22 of 24 draws** — the same
 signature the callout study found for caller identity. Only **6 of 30 tests survive BH-FDR at
 q = 0.10**, and five of those six are the clone arm, which the live/dead decomposition shows is
 a **24–28 pp dead-fraction gap** rather than a return: among rows that actually traded, the
@@ -41,13 +41,13 @@ number of *independent payers* collapses from ρ = −0.165…−0.224 (p < 0.00
 Replicated end to end on an independent **24 h census of 33,202 launches** (§6): the survival
 gap, the onset lag and the collision-floor excess reproduce almost exactly; the matched-control
 null reproduces with the median difference again **+0.00%** at every horizon and a trimmed mean
-difference of **−0.5%**; and with four times the power the costly-signal dose-response is
+difference of **−0.5%** against the live window's **−0.7%**; and with four times the power the costly-signal dose-response is
 measurable, **negative**, and worth ρ ≈ −0.08.
 
 Two things did survive, and both are real:
 
 * **Swarmed hosts live much longer.** Median survival from onset is **10.7 min vs 1.0 min** for
-  matched controls (log-rank p < 0.0001), and at 60 min **67.2% are dead vs 82.8%**. A swarm is
+  matched controls (log-rank p < 0.0001), and at 60 min **67.2% are dead vs 87.1%**. A swarm is
   a genuine marker of *attention*. It simply does not convert into return.
 * **The sign, where there is one, is negative.** Every raw dose measure points down, the
   parasite arm's median return is negative at every horizon, and nothing anywhere in this
@@ -314,22 +314,25 @@ Mann-Whitney p ≈ 0.0005. Adding `momentum_so_far`, `log_vol_sol_so_far` and
 `traded_minutes_so_far` to the match — the three covariates that encode "this coin has already
 moved" — brings every |SMD| inside 0.21 and the effect **disappears**:
 
-| horizon | treated mean | control mean | Δ mean | Δ median | Mann-Whitney p |
-|---|---|---|---|---|---|
-| 5 m | +1.72% | +2.59% | −0.86% | **+0.00%** | 0.2445 |
-| 15 m | −0.06% | −1.38% | +1.32% | **+0.00%** | 0.3496 |
-| 30 m | −1.69% | −1.70% | +0.01% | **+0.00%** | 0.3253 |
-| 60 m | +0.81% | −0.31% | +1.12% | **+0.00%** | 0.7965 |
-| 120 m | +11.63% | −2.17% | +13.80% | **+0.00%** | 0.3761 |
+| horizon | Δ mean | **Δ trimmed (5%)** | Δ median | Mann-Whitney p |
+|---|---|---|---|---|
+| 5 m | −0.87% | **−0.62%** | **+0.00%** | 0.5991 |
+| 15 m | +3.05% | **−0.77%** | **+0.00%** | 0.7825 |
+| 30 m | +0.48% | **−0.66%** | **+0.00%** | 0.5827 |
+| 60 m | +0.16% | **−0.78%** | **+0.00%** | 0.8024 |
+| 120 m | −1.44% | **−0.78%** | **+0.00%** | 0.4224 |
 
-171 treated rows found a control; 309 controls at ≤ 2 per treated row. The 120 min mean
-difference of +13.80% against a median difference of exactly zero and p = 0.38 is a single
-right-tail coin, and is reported here purely so nobody rediscovers it as a finding.
+115 treated rows found a control; 195 controls at ≤ 2 per treated row. Worst |SMD| is 0.247, on
+age, which the report flags as marginal.
 
-The parasite-only arm (59 treated, 105 controls) is null too, with median differences of
-−0.11% to −0.12% and p = 0.07–0.40.
+The trimmed column is the one to read, and it is astonishingly flat: **about −0.7% at every
+horizon**, which the independent 24 h census then reproduces at **−0.48% to −0.59%** (§6). A
+swarm is worth roughly minus three-quarters of a percent, i.e. nothing, and if anything
+slightly negative — against a 2.26% round trip.
 
-**Power floor.** A uniform multiplicative shift of **+1%** (30/60/120 min), **+3%** (15 min) or
+The parasite-only arm is null too, with median differences of −0.11% to −0.12% and p = 0.07–0.40.
+
+**Power floor.** A uniform multiplicative shift of **+1%** (60/120 min), **+2%** (15/30 min) or
 **+5%** (5 min), applied to every row that traded, would have been detected at 80% power and
 α = 0.05. The caveat that keeps this honest: a *uniform* shift is the easiest possible effect
 for a rank test to see, because it moves every live row the same way. A real effect
@@ -371,42 +374,42 @@ it is the least informative of the three.
 
 Temporal split at 08:59:51Z, families never straddling, 324 train / 325 test rows.
 
-| block | label `r60m > 0` (base 6.2%) | label `r60m ≤ −10%` (base 24.3%) |
+| block | label `r60m > 0` (base 6.0%) | label `r60m ≤ −10%` (base 27.0%) |
 |---|---|---|
-| free only | 0.721 [0.606, 0.827] | **0.842 [0.793, 0.887]** |
-| swarm only | 0.668 [0.550, 0.786] | 0.769 [0.718, 0.818] |
-| free + swarm | **0.772 [0.691, 0.840]** | 0.813 [0.762, 0.857] |
+| free only | 0.710 [0.580, 0.833] | **0.833 [0.774, 0.879]** |
+| swarm only | 0.720 [0.568, 0.847] | 0.745 [0.687, 0.798] |
+| free + swarm | **0.781 [0.704, 0.854]** | 0.792 [0.733, 0.845] |
 
 On the label that matters operationally — the short label, which has a usable base rate
 because a dead coin marks at exactly 0.00% and collapses the "up" label to 6% — **adding the
-swarm block lowers AUC from 0.842 to 0.813**, and the **swarm-block permutation null beats the
-real assignment in 20 of 24 draws** (null mean 0.825 vs real 0.813). Scrambling which coin got
+swarm block lowers AUC from 0.833 to 0.792**, and the **swarm-block permutation null beats the
+real assignment in 22 of 24 draws** (null mean 0.815 vs real 0.792). Scrambling which coin got
 swarmed makes the model *better*. That is the identical signature `RESULT_callout_edge.md`
 found when it permuted caller identity and beat reality 24/24.
 
-Both label nulls are dead flat (i.i.d. 0.510, rotation 0.503, beaten 0/24), so the model does
+Both label nulls are dead flat (i.i.d. 0.504, rotation 0.496, beaten 0/24), so the model does
 hold real signal — and all of it is in the free columns. The known-effect control recovers a
-planted treatment→label effect at 0.807 vs 0.704, so the estimator is not simply blind.
+planted treatment→label effect at 0.821 vs 0.686, so the estimator is not simply blind.
 
 ### 5.7 Survival: the one thing a swarm genuinely marks
 
 | | n | died | median survival from onset |
 |---|---|---|---|
 | swarmed hosts | 445 | 344 | **10.7 min** |
-| matched controls | 309 | 280 | **1.0 min** |
+| matched controls | 195 | 183 | **1.0 min** |
 
 Log-rank p < 0.0001. Competing risks at 60 min, three exclusive states:
 
 | | up | down | dead |
 |---|---|---|---|
 | treated | 7.3% | 25.5% | **67.2%** |
-| control | 3.4% | 13.8% | **82.8%** |
+| control | 2.4% | 10.6% | **87.1%** |
 
 A swarmed host is about ten times less likely to be a coin nobody ever trades again. This is a
 real, large, robust difference and it is the only one in the study. It says imitators are
 correctly identifying attention — they are simply identifying attention that has already
 peaked, so the survival advantage arrives without a return advantage. Note also what it does
-to the naive reading: dropping the dead would compare 33% of the treated arm against 17% of
+to the naive reading: dropping the dead would compare 33% of the treated arm against 13% of
 the control arm, which is precisely the survivorship that flipped the callout cohort from
 −14.6% to +25%.
 
@@ -488,7 +491,7 @@ The two cohorts are **never pooled**. This is a replication, not extra n.
 | onset lag p50 (host → onset) | 98 s | **90 s** |
 | median survival, treated | 10.7 min | **10.6 min** |
 | median survival, control | 1.0 min | **1.0 min** |
-| dead at 60 min, treated / control | 67.2% / 82.8% | 58.5% / 80.1% |
+| dead at 60 min, treated / control | 67.2% / 87.1% | 58.5% / 80.1% |
 | onsets vs i.i.d. collision floor | 1.13× | **1.17×** |
 
 **What replicates exactly.** The onset-lag distribution (90 s vs 98 s median), the survival gap
@@ -515,7 +518,7 @@ footnote.
 
 | | label `r60m > 0` | label `r60m ≤ −10%` |
 |---|---|---|
-| live: free → free+swarm | 0.721 → 0.772 (+0.051) | 0.842 → **0.813 (−0.029)**, permutation beats real 20/24 |
+| live: free → free+swarm | 0.710 → 0.781 (+0.071) | 0.833 → **0.792 (−0.041)**, permutation beats real 22/24 |
 | retro: free → free+swarm | 0.672 → **0.653 (−0.019)**, permutation beats real 3/24 | 0.841 → 0.856 (+0.015), permutation beats real 0/24 |
 
 The sign of the swarm block's contribution flips across day × label. That pattern — not any
