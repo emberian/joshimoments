@@ -53,7 +53,12 @@ Measured over the six real screening runs, ten concurrent workers, `--reasoning-
 |---|---|---|---|---|---|---|
 | full (sighted verdict) | 189 | $0.00467 | 1,971,179 | 59,903 | **40.1 s** | 49.6 s |
 | blind (numbers only) | 189 | $0.00273 | 784,761 | 66,908 | 40.1 s | 103.4 s |
-| probfull | 189 | $0.00560 | 1,415,704 | 67,784 | 42.1 s | 53.7 s |
+| probfull (sighted) | 189 | $0.00560 | 1,415,704 | 67,784 | 42.1 s | 53.7 s |
+| probblind (numbers only) | 189 | $0.00278 | 685,248 | 91,777 | 43.5 s | 48.2 s |
+
+Sighted prompts cost **~1.8× per call** what content-free ones do, entirely in input tokens —
+the description and URLs are the whole difference. That is the price of the channel §6 shows to
+be harmful.
 
 **Sustained throughput: 13.6 calls/min** at ten concurrent workers (measured over a 300 s
 window mid-run; a cold 8-way burst was slower, 6.8/min, because every worker pays process
@@ -196,18 +201,22 @@ AUC of the selector you would actually run (top half by signal; threshold report
 
 | arm | sees content | usable n | buy rate | Spearman(signal, return) | p | top-half AUC | p |
 |---|---|---|---|---|---|---|---|
-| **full** — verdict | yes | 189 | 0% | **−0.001** | 0.982 | 0.496 (thr 0.070) | 0.936 |
-| **blind** — verdict | no | 189 | 0% | **+0.152** | 0.040 | 0.579 (thr 0.070) | 0.140 |
-| **probfull** — P(up) | yes | 184 (5 err) | 1% | **+0.040** | 0.590 | 0.503 (thr 0.340) | 0.937 |
+| **full** — verdict | yes | 189 | 0% | **−0.001** | 0.984 | 0.496 (thr 0.070) | 0.936 |
+| **blind** — verdict | no | 189 | 0% | **+0.152** | 0.036 | 0.579 (thr 0.070) | 0.140 |
+| **probfull** — P(up) | yes | 184 (5 err) | 1% | **+0.040** | 0.603 | 0.503 (thr 0.340) | 0.937 |
+| **probblind** — P(up) | no | 189 | 3% | **+0.227** | **0.0016** | 0.634 (thr 0.380) | 0.0082 |
 | *baseline, for reference* | — | 189 | 44% | +0.321 | 0.0005 | 0.623 | 0.0025 |
 
-**Nothing here beats the baseline. The sighted arms do not beat zero.**
+**Every sighted arm is indistinguishable from zero. Both blind arms are not.**
 
 The sighted verdict arm's rank correlation with the outcome is **−0.001** — not weak, not
-noisy, *absent*. The probability framing, which was added specifically to rescue a usable
-ranking out of the degenerate verdict, produced 18 distinct values spanning 0.12–0.57 and a
-correlation of +0.040 (p=0.59). Its top-half selector has AUC 0.503 against a baseline of
-0.623.
+noisy, *absent*. The probability framing, added specifically to rescue a usable ranking out of
+the degenerate verdict, produced 18 distinct values spanning 0.12–0.57 and a correlation of
++0.040 (p=0.60) with a top-half AUC of 0.503 against the baseline's 0.623.
+
+Meanwhile the arm **forbidden to see the name, description, image and socials** reached
+Spearman **+0.227 (p=0.0016)** and AUC **0.634 (p=0.0082)** — nominally matching the drawdown
+baseline. That inversion is the result of this study, and §6 is about whether it survives.
 
 ---
 
@@ -221,16 +230,42 @@ of its null (p=0.982, p=0.590). The scorer was validated on both controls §3.12
 information-free stub it reports p=0.217 (finds nothing), and on a planted effect p=0.0005
 (finds it).
 
-**Content-free control — this is the finding.** The blind arm sees the identical numbers with
-every identifying string removed. It scored **+0.152 (p=0.040)** against the sighted arm's
-**−0.001 (p=0.982)**. The two arms agreed on **100%** of verdicts, and the median absolute
-shift in signal caused by showing the model the name, description, image and socials was
-**0.010** — a rounding error. The correlation between *that content-induced shift* and the
-actual outcome was **−0.183**: where the vibe moved the model, it moved it the wrong way.
+**Content-free control — this is the finding, and it is worse than "no help".** The blind arms
+see the identical numbers with every identifying string removed, and they beat the sighted ones
+in both framings. Comparing two p-values is not a comparison, so the difference was tested
+directly: per coin, randomly swap which arm's signal is used, 5,000 times, and see how often the
+gap in Spearman is that large.
 
-**Read plainly: the model was not reading the vibe. It was reading the numbers we handed it,
-and the qualitative content it could not otherwise get was, if anything, a distraction.** This
-is exactly the failure mode the control exists to catch, and it caught it.
+| framing | blind ρ | sighted ρ | paired difference | p |
+|---|---|---|---|---|
+| verdict | +0.152 | −0.001 | **+0.154** | 0.024 |
+| probability | +0.227 | +0.040 | **+0.212** | **0.0008** |
+
+**Showing grok-4.6 the coin's name, description, image URI and socials measurably made its
+ranking worse.** Not neutral — worse, at p=0.0008 on the framing with the most resolution.
+Corroborating detail: the arms agreed on 97–100% of verdicts, the median absolute signal shift
+caused by the content was 0.010–0.040, and the correlation between *that content-induced shift*
+and the actual outcome was **−0.183** (verdict) and **−0.141** (probability). Where the vibe
+moved the model, it moved it the wrong way.
+
+**The vibe channel is not empty; it is actively misleading.** This is exactly the failure mode
+the control exists to catch.
+
+**Partial correlation — and the blind arm's skill evaporates too.** The blind arm was handed
+the same numbers the baseline uses, so the only question worth asking is whether it added
+anything *beyond* them. Partialling the incumbent's own columns out of the rank correlation:
+
+| arm | raw ρ | p | ρ \| drawdown | p | ρ \| market cap | p |
+|---|---|---|---|---|---|---|
+| blind (verdict) | +0.152 | 0.036 | **−0.005** | 0.946 | +0.145 | 0.046 |
+| **probblind** | **+0.227** | **0.0016** | **+0.102** | **0.164** | **+0.086** | 0.243 |
+| probfull | +0.040 | 0.603 | +0.021 | 0.795 | −0.104 | 0.160 |
+| full | −0.001 | 0.984 | −0.108 | 0.140 | −0.021 | 0.776 |
+
+**Control for drawdown and the best arm in the study drops from +0.227 (p=0.0016) to +0.102
+(p=0.164).** Control for market cap instead and it drops to +0.086 (p=0.243). The verdict-framing
+blind arm goes to −0.005. The LLM given only numbers was **re-deriving the drawdown rule** — an
+expensive, high-latency, stochastic reimplementation of one comparison.
 
 **Same-rate random selector.** At the blind arm's 19% selection rate a coin flip produces a
 |gap| of 8.3 pp median, 24.4 pp at the 95th percentile. The blind arm's +21.4 pp does not clear
@@ -241,33 +276,42 @@ day, and it is damning anyway: the sighted arm's p(up) gap is **+17.3 pp in the 
 −25.7 pp in the late half**. A signal that reverses sign across a 2-hour window is noise with a
 story attached.
 
-**Trials accounting (§3.9).** Four arms × two headline statistics = 8 tests, and the arms were
+**Trials accounting (§3.9).** Six arms × four reported statistics = 24 tests, and the arms were
 not pre-registered — the probability framing was added *after* the verdict framing came back
-degenerate. Bonferroni for family-wise 5% is **p < 0.0063**. The blind arm's p=0.040 does not
-clear it. **There is no surviving positive result in this study.** The baseline is exempt: it
-was published before this study and is the thing being tested against.
+degenerate, and the 1 h horizon was added after the 8 h cohort turned out to be unrepresentative.
+Bonferroni for family-wise 5% is **p < 0.0021**. `probblind`'s raw ρ (p=0.0016) clears it; every
+partial correlation, every sighted arm, and every AUC does not. **The only result that survives
+both the correction and the drawdown control is that there is no result.** The baseline is
+exempt: it was published before this study and is the thing being tested against.
 
 ---
 
 ## 7. Verdict
 
-**The LLM filter does not beat the mechanical filter, and it is not close.**
+**The LLM filter does not beat the mechanical filter, and the qualitative content is worse than
+useless.** Three claims, in decreasing order of confidence:
 
-- Sighted, verdict framing: Spearman **−0.001** (p=0.982) versus baseline **+0.321** (p=0.0005).
-- Sighted, probability framing: **+0.040** (p=0.590), top-half AUC **0.503** versus **0.623**.
-- The only arm with a nominally significant number is the one **forbidden to see the
-  qualitative content**, and it fails trials accounting.
-- It costs **40 s and $0.005 per coin**, cannot keep up with the arrival rate at 13.6 calls/min,
-  and burns 10–22% of the intended hold on latency.
+1. **Seeing the coin's identity made the model worse.** Paired difference between the
+   content-free and sighted arms: **+0.212 Spearman, p=0.0008**. This is the strongest number
+   in the study and it points the wrong way for the hypothesis. The name, description, image URI
+   and socials are not an unused channel — they are a channel carrying noise the model acts on.
+2. **The best arm was re-deriving drawdown.** `probblind` reached ρ=+0.227 (p=0.0016) on numbers
+   alone, then fell to **+0.102 (p=0.164)** with drawdown partialled out and **+0.086 (p=0.243)**
+   with market cap partialled out. Nothing survives past the incumbent's own columns.
+3. **No arm beat the baseline on any statistic.** Best AUC 0.634 versus 0.623 — a difference of
+   0.011, inside the noise, and gone under the partials. Best Spearman +0.227 versus +0.321.
 
-The brief asked us to state plainly whether it improved on the drawdown number. **It did not.**
-It also did not improve on market cap at entry, which is a better single column than drawdown
-and costs nothing.
+And the cost of not beating it: **40 s and $0.005 per coin**, a 13.6 calls/min ceiling below the
+arrival rate, and 10–22% of the intended hold spent waiting for the verdict.
+
+The brief asked us to state plainly whether the LLM improved on the drawdown number. **It did
+not.** It also did not improve on market cap at entry, which is a better single column than
+drawdown and costs nothing.
 
 The one thing the model got right, it got right by *refusing to play*: it correctly identified
 that the 8 h-evaluable cohort is mature graduated tokens rather than fresh launches, and
-declined all 189. That is a real observation about our evaluation set, delivered as a
-degenerate policy.
+declined all 189. That is a real observation about our evaluation set, delivered as a degenerate
+policy — and it is the study's best argument for §8.1 over any amount of prompt engineering.
 
 ---
 

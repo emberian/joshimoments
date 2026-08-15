@@ -810,6 +810,73 @@ def spearman(xs: Sequence[float], ys: Sequence[float]) -> float:
     return num / den if den else 0.0
 
 
+def partial_spearman(xs: Sequence[float], ys: Sequence[float],
+                     zs: Sequence[float]) -> float:
+    """Rank correlation of x and y with z's rank-linear part removed from both.
+
+    The question this answers: once you already know `z`, does `x` still tell you
+    anything about `y`? For an LLM handed the same numbers the baseline uses, that
+    is the ONLY question worth asking — an arm that scores well by re-deriving the
+    drawdown rule has added a 40-second round trip and no information.
+    """
+    def rank(v: Sequence[float]) -> list[float]:
+        order = sorted(range(len(v)), key=lambda i: v[i])
+        r = [0.0] * len(v)
+        i = 0
+        while i < len(order):
+            j = i
+            while j + 1 < len(order) and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            avg = (i + j) / 2.0 + 1.0
+            for k in range(i, j + 1):
+                r[order[k]] = avg
+            i = j + 1
+        return r
+
+    def resid(a: list[float], b: list[float]) -> list[float]:
+        n = len(a)
+        ma, mb = sum(a) / n, sum(b) / n
+        sbb = sum((x - mb) ** 2 for x in b)
+        if sbb == 0:
+            return [x - ma for x in a]
+        beta = sum((x - ma) * (y - mb) for x, y in zip(a, b)) / sbb
+        return [x - ma - beta * (y - mb) for x, y in zip(a, b)]
+
+    rx, ry, rz = rank(xs), rank(ys), rank(zs)
+    ex, ey = resid(rx, rz), resid(ry, rz)
+    n = len(ex)
+    mx, my = sum(ex) / n, sum(ey) / n
+    num = sum((a - mx) * (b - my) for a, b in zip(ex, ey))
+    den = (sum((a - mx) ** 2 for a in ex) * sum((b - my) ** 2 for b in ey)) ** 0.5
+    return num / den if den else 0.0
+
+
+def paired_arm_difference(sig_a: Sequence[float], sig_b: Sequence[float],
+                          outcomes: Sequence[float], *, iters: int,
+                          seed: int) -> tuple[float, float]:
+    """Is arm A's ranking really better than arm B's, or are we reading two p-values?
+
+    Comparing "A is significant and B is not" is the classic error — the DIFFERENCE
+    has its own sampling distribution and it is wider than either. Null: per coin,
+    swap which arm's signal is used, independently, 50/50. Under that null the arms
+    are interchangeable and the observed gap in Spearman should be unremarkable.
+    """
+    obs = spearman(list(sig_a), list(outcomes)) - spearman(list(sig_b), list(outcomes))
+    rng = random.Random(seed)
+    hits = 0
+    for _ in range(iters):
+        a2, b2 = [], []
+        for x, y in zip(sig_a, sig_b):
+            if rng.random() < 0.5:
+                a2.append(x); b2.append(y)
+            else:
+                a2.append(y); b2.append(x)
+        d = spearman(a2, list(outcomes)) - spearman(b2, list(outcomes))
+        if abs(d) >= abs(obs) - 1e-12:
+            hits += 1
+    return obs, (hits + 1) / (iters + 1)
+
+
 def permutation_stat(labels: Sequence[Any], outcomes: Sequence[float],
                      stat: Callable[[Sequence[Any], Sequence[float]], float], *,
                      iters: int, seed: int) -> tuple[float, float, tuple[float, float]]:
@@ -982,6 +1049,16 @@ def score(cohort: list[dict[str, Any]], decisions: dict[str, list[dict[str, Any]
                 sig, v, lambda x, y: spearman(list(x), list(y)), iters=iters, seed=seed)
             print(f"    Spearman(signal, return) {rho:+.3f}  p={prho:.4f}  "
                   f"null 95% [{rlo:+.3f}, {rhi:+.3f}]")
+            # ...and the same correlation with the incumbent's own columns
+            # partialled out. If this collapses, the arm re-derived the baseline.
+            for ctrl in ("drawdown", "mc0_usd"):
+                z = [float(by_mint[r["mint"]][ctrl]) for r in ok]
+                pr = partial_spearman(sig, v, z)
+                _, ppr, (plo, phi) = permutation_stat(
+                    sig, v, lambda x, y, _z=z: partial_spearman(list(x), list(y), _z),
+                    iters=iters, seed=seed)
+                print(f"      partial on {ctrl:<9} {pr:+.3f}  p={ppr:.4f}  "
+                      f"null 95% [{plo:+.3f}, {phi:+.3f}]")
             # ...and the selector you would actually run: take the top half by
             # signal. The threshold is the cohort median, reported here per §3.7.
             cutv = st.median(sig)
@@ -1061,8 +1138,10 @@ def score(cohort: list[dict[str, Any]], decisions: dict[str, list[dict[str, Any]
     # came back degenerate. That is a garden of forking paths and the correction
     # belongs in the report, not in a footnote nobody reads.
     n_arms = len(decisions)
-    n_tests = 2 * n_arms
-    print(f"TRIALS ACCOUNTING — {n_arms} arms x 2 headline statistics = {n_tests} tests.")
+    # Per arm: raw Spearman, top-half AUC, and two partials. Counting only the
+    # two we would headline would be exactly the undercount §3.9 warns about.
+    n_tests = 4 * n_arms
+    print(f"TRIALS ACCOUNTING — {n_arms} arms x 4 reported statistics = {n_tests} tests.")
     print(f"  Bonferroni threshold for a family-wise 5%: p < {0.05 / n_tests:.4f}.")
     print("  Any arm above whose p does not clear that is a candidate, not a finding.")
     print("  The baseline is exempt: it was published before this study and is the")
@@ -1088,6 +1167,14 @@ def score(cohort: list[dict[str, Any]], decisions: dict[str, list[dict[str, Any]
                   f"Spearman(shift, return) {spearman(dd2, rr):+.3f}")
             print("  THE VIBE TEST: that last number is the whole question — it is the "
                   "correlation between what the CONTENT alone changed and what happened.")
+            shared = [m for m in both if m in outcomes]
+            if len(shared) > 20:
+                d, pd = paired_arm_difference(
+                    [_signal(b[m]) for m in shared], [_signal(f[m]) for m in shared],
+                    [outcomes[m] for m in shared], iters=min(iters, 5000), seed=seed)
+                print(f"  PAIRED ARM DIFFERENCE (blind minus sighted Spearman) on "
+                      f"{len(shared)} coins: {d:+.3f}, p={pd:.4f}")
+                print("  Two separate p-values are not a comparison; this line is.")
             flips = [m for m in both if f[m]["verdict"] != b[m]["verdict"]]
             if flips:
                 fb = [outcomes[m] for m in flips if m in outcomes and f[m]["verdict"] == "buy"]
