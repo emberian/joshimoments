@@ -236,6 +236,13 @@ DEFAULT_FIREHOSE_DIR: Final[str] = "state/firehose"
 DEFAULT_HEARTBEAT_SECONDS: Final[float] = 30.0
 DEFAULT_STALE_AFTER_SECONDS: Final[float] = 120.0
 
+#: How long the *keyed* feeds may be silent before the alarm. Much longer than the general
+#: threshold on purpose: a watched wallet legitimately does nothing for hours, so this is
+#: tuned to catch a dead subscription (exhausted key, dropped stream) rather than a quiet
+#: one. Measured 2026-08-15 on four cluster mints plus two wallets: ~3.6 trade events/min,
+#: so a full half hour of nothing is well outside normal and worth a WARNING.
+DEFAULT_METERED_STALE_AFTER_SECONDS: Final[float] = 1800.0
+
 #: Vendor-rounded quantities. Stored verbatim, never scaled into integers. See the module
 #: docstring: these are for ranking and triage, never for accounting. ``newTokenBalance`` is
 #: documented by the vendor for the trade feeds and has NOT been observed, since those feeds
@@ -914,19 +921,28 @@ class LivenessMonitor:
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS
     busy_hours: frozenset[int] = field(default_factory=lambda: frozenset(range(24)))
+    #: Independent staleness clock for the *keyed* feeds, or ``None`` to not track them.
+    #: See :meth:`note_event` for why the general clock cannot cover them.
+    metered_stale_after_seconds: float | None = None
     started_at: datetime | None = None
     last_event_at: datetime | None = None
+    last_metered_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
     stale_since: datetime | None = None
     last_stale_row_at: datetime | None = None
+    metered_stale_since: datetime | None = None
+    last_metered_row_at: datetime | None = None
     events_total: int = 0
+    metered_total: int = 0
     events_since_heartbeat: int = 0
     heartbeats: int = 0
     stale_alarms: int = 0
+    metered_alarms: int = 0
 
     def start(self, now: datetime) -> None:
         self.started_at = now
         self.last_heartbeat_at = now
+        self.last_metered_at = now
 
     @property
     def _reference(self) -> datetime | None:
@@ -934,13 +950,35 @@ class LivenessMonitor:
 
         return self.last_event_at or self.started_at
 
-    def note_event(self, now: datetime) -> dict[str, Any] | None:
-        """Record an event; returns a ``stale_cleared`` row if this ends a silent stretch."""
+    def note_event(self, now: datetime, *, metered: bool = False) -> dict[str, Any] | None:
+        """Record an event; returns a ``stale_cleared`` row if this ends a silent stretch.
+
+        ``metered`` marks a row from a **keyed** feed (tokenTrade / accountTrade). Those get
+        their own clock because the general one cannot see them fail: ``subscribeNewToken``
+        delivers ~30 events a minute unconditionally, so it resets the shared staleness timer
+        forever, and the trade subscriptions could go silent — an exhausted API key, a
+        subscription the vendor quietly dropped — with every liveness signal still green.
+
+        That is this module's founding failure wearing a different hat, and the operator's
+        wallet watch is the thing it would eat: a caller who has stopped being observed and a
+        caller who has stopped trading produce identical tape.
+
+        The honest limit, stated because it bounds what the alarm means: this cannot separate
+        "the subscription died" from "nobody traded" for any single key. It only says the
+        metered stream as a whole has gone quiet for longer than configured, which is
+        actionable when the same subscription also holds several actively-traded coins and
+        merely noise when it does not. Threshold accordingly.
+        """
 
         self.events_total += 1
         self.events_since_heartbeat += 1
         previous = self._reference
         self.last_event_at = now
+        if metered:
+            self.metered_total += 1
+            self.last_metered_at = now
+            self.metered_stale_since = None
+            self.last_metered_row_at = None
         if self.stale_since is None:
             return None
         row = _base_row("stale_cleared", now, local=True)
@@ -966,6 +1004,11 @@ class LivenessMonitor:
         reference = self.last_stale_row_at or self._reference
         if reference is not None:
             candidates.append(self.stale_after_seconds - (now - reference).total_seconds())
+        metered_reference = self.last_metered_row_at or self.last_metered_at
+        if self.metered_stale_after_seconds is not None and metered_reference is not None:
+            candidates.append(
+                self.metered_stale_after_seconds - (now - metered_reference).total_seconds()
+            )
         return max(0.0, min(candidates))
 
     def due(self, now: datetime, *, connected: bool, window_id: str | None) -> list[dict[str, Any]]:
@@ -998,6 +1041,37 @@ class LivenessMonitor:
                 LOGGER.warning(message, silent or 0.0, self.stale_after_seconds, window_id)
             else:
                 LOGGER.info(message, silent or 0.0, self.stale_after_seconds, window_id)
+
+        metered_reference = self.last_metered_row_at or self.last_metered_at
+        if (
+            connected
+            and self.metered_stale_after_seconds is not None
+            and metered_reference is not None
+            and (now - metered_reference).total_seconds() >= self.metered_stale_after_seconds
+        ):
+            if self.metered_stale_since is None:
+                self.metered_stale_since = self.last_metered_at or now
+            self.last_metered_row_at = now
+            self.metered_alarms += 1
+            row = _base_row("metered_stale", now, local=True)
+            row["stale_since"] = iso(self.metered_stale_since)
+            row["silent_seconds"] = (
+                round((now - self.metered_stale_since).total_seconds(), 6)
+                if self.metered_stale_since
+                else None
+            )
+            row["threshold_seconds"] = self.metered_stale_after_seconds
+            row["metered_events_total"] = self.metered_total
+            row["events_total"] = self.events_total
+            row["window_id"] = window_id
+            rows.append(row)
+            LOGGER.warning(
+                "no keyed-feed (tokenTrade/accountTrade) event for %.0fs while the socket is "
+                "open and %d other events arrived — the funded key may be exhausted or the "
+                "subscription dropped; a quiet market looks the same, so check the key",
+                (now - self.metered_stale_since).total_seconds(),
+                self.events_total,
+            )
 
         if (
             self.last_heartbeat_at is not None
@@ -1057,6 +1131,7 @@ class FirehoseStats:
     connect_failures: int
     heartbeats: int
     stale_alarms: int
+    metered_alarms: int
     rows_written: int
 
     @property
@@ -1078,6 +1153,7 @@ class FirehoseStats:
             "connect_failures": self.connect_failures,
             "heartbeats": self.heartbeats,
             "stale_alarms": self.stale_alarms,
+            "metered_alarms": self.metered_alarms,
             "rows_written": self.rows_written,
         }
 
@@ -1097,6 +1173,7 @@ class FirehoseClient:
         sleep: Callable[[float], Any] | None = None,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
         stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+        metered_stale_after_seconds: float = DEFAULT_METERED_STALE_AFTER_SECONDS,
         busy_hours: Iterable[int] | None = None,
         backoff: Backoff | None = None,
         max_attempts: int | None = None,
@@ -1132,6 +1209,13 @@ class FirehoseClient:
         self.monitor = LivenessMonitor(
             heartbeat_seconds=heartbeat_seconds,
             stale_after_seconds=stale_after_seconds,
+            # Tracked only when something is actually subscribed by key; otherwise there is
+            # no metered stream and an alarm about its silence would be pure noise.
+            metered_stale_after_seconds=(
+                metered_stale_after_seconds
+                if any(f.needs_keys for f in self.feeds) and metered_stale_after_seconds > 0
+                else None
+            ),
             busy_hours=frozenset(busy_hours) if busy_hours is not None else frozenset(range(24)),
         )
         self.ledger = WatchLedger(
@@ -1356,7 +1440,7 @@ class FirehoseClient:
         self.events_by_kind[kind] = self.events_by_kind.get(kind, 0) + 1
         if window is not None:
             window.events += 1
-        cleared = self.monitor.note_event(now)
+        cleared = self.monitor.note_event(now, metered=kind == "trade")
         self._emit(row)
         if cleared is not None:
             LOGGER.info("firehose recovered after %.1fs of silence", cleared["silent_seconds"] or 0.0)
@@ -1379,6 +1463,7 @@ class FirehoseClient:
             connect_failures=self.connect_failures,
             heartbeats=self.monitor.heartbeats,
             stale_alarms=self.monitor.stale_alarms,
+            metered_alarms=self.monitor.metered_alarms,
             rows_written=int(rows),
         )
 
@@ -1424,6 +1509,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--heartbeat-seconds", type=float, default=DEFAULT_HEARTBEAT_SECONDS)
     parser.add_argument("--stale-seconds", type=float, default=DEFAULT_STALE_AFTER_SECONDS)
     parser.add_argument(
+        "--metered-stale-seconds",
+        type=float,
+        default=DEFAULT_METERED_STALE_AFTER_SECONDS,
+        help=(
+            "alarm when the KEYED feeds (tokenTrade/accountTrade) go this long with no event "
+            "while other feeds keep arriving; 0 disables. Their silence is invisible to "
+            "--stale-seconds because newToken keeps resetting it"
+        ),
+    )
+    parser.add_argument(
         "--busy-hours",
         default=None,
         help="comma-separated UTC hours where staleness is WARNING (default: all 24)",
@@ -1458,6 +1553,7 @@ async def _run_cli(args: argparse.Namespace) -> FirehoseStats:
         url=args.url,
         heartbeat_seconds=args.heartbeat_seconds,
         stale_after_seconds=args.stale_seconds,
+        metered_stale_after_seconds=args.metered_stale_seconds,
         busy_hours=busy_hours,
         resume_from=resume_from,
     )

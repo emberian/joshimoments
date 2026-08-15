@@ -763,6 +763,97 @@ def test_disconnected_time_does_not_raise_a_staleness_alarm() -> None:
     assert monitor.due(START + timedelta(seconds=600), connected=False, window_id=None) == []
 
 
+def test_metered_staleness_fires_while_the_free_feed_keeps_the_general_clock_green() -> None:
+    """The failure the general clock structurally cannot see.
+
+    ``subscribeNewToken`` delivers ~30 events a minute unconditionally. If the keyed trade
+    subscriptions die — exhausted funded key, a stream the vendor dropped — every liveness
+    signal stays green forever, because the free feed keeps resetting the shared timer. The
+    operator's wallet watch would be dead and the tape would look perfectly healthy.
+    """
+
+    monitor = LivenessMonitor(
+        heartbeat_seconds=10_000.0,
+        stale_after_seconds=120.0,
+        metered_stale_after_seconds=600.0,
+    )
+    monitor.start(START)
+    # Free-feed traffic every 30s for 20 minutes: the general alarm never fires...
+    now = START
+    for step in range(40):
+        now = START + timedelta(seconds=30 * (step + 1))
+        monitor.note_event(now, metered=False)
+    assert monitor.stale_alarms == 0, "the free feed keeps the general clock green, as designed"
+    # ...but the metered stream has said nothing for the whole 20 minutes.
+    rows = monitor.due(now, connected=True, window_id="w")
+    assert [row["kind"] for row in rows] == ["metered_stale"]
+    assert rows[0]["metered_events_total"] == 0
+    assert rows[0]["events_total"] == 40
+    assert rows[0]["threshold_seconds"] == 600.0
+
+
+def test_a_metered_event_clears_the_metered_alarm() -> None:
+    monitor = LivenessMonitor(
+        heartbeat_seconds=10_000.0,
+        stale_after_seconds=10_000.0,
+        metered_stale_after_seconds=600.0,
+    )
+    monitor.start(START)
+    late = START + timedelta(seconds=601)
+    assert [r["kind"] for r in monitor.due(late, connected=True, window_id="w")] == [
+        "metered_stale"
+    ]
+    monitor.note_event(late + timedelta(seconds=1), metered=True)
+    assert monitor.metered_stale_since is None
+    assert monitor.due(late + timedelta(seconds=2), connected=True, window_id="w") == []
+
+
+def test_metered_staleness_is_not_tracked_without_a_keyed_subscription() -> None:
+    """No keyed feed means no metered stream, and an alarm about its silence is pure noise."""
+
+    monitor = LivenessMonitor(
+        heartbeat_seconds=10_000.0, stale_after_seconds=10_000.0, metered_stale_after_seconds=None
+    )
+    monitor.start(START)
+    rows = monitor.due(START + timedelta(hours=5), connected=True, window_id="w")
+    # The general alarm still fires — five hours of total silence is a real outage. The point
+    # is only that no metered row appears when there is no metered stream to be silent.
+    assert "metered_stale" not in [row["kind"] for row in rows]
+    assert monitor.metered_alarms == 0
+
+
+def test_client_only_arms_the_metered_clock_when_a_keyed_feed_is_subscribed() -> None:
+    free = FirehoseClient(sink=ListSink(), feeds=(Feed.NEW_TOKEN, Feed.MIGRATION))
+    assert free.monitor.metered_stale_after_seconds is None
+
+    keyed = FirehoseClient(
+        sink=ListSink(),
+        feeds=(Feed.NEW_TOKEN, Feed.ACCOUNT_TRADE),
+        keys_by_feed={Feed.ACCOUNT_TRADE: (WALLET_CALLER,)},
+    )
+    assert keyed.monitor.metered_stale_after_seconds is not None
+
+    disabled = FirehoseClient(
+        sink=ListSink(),
+        feeds=(Feed.ACCOUNT_TRADE,),
+        keys_by_feed={Feed.ACCOUNT_TRADE: (WALLET_CALLER,)},
+        metered_stale_after_seconds=0,
+    )
+    assert disabled.monitor.metered_stale_after_seconds is None
+
+
+def test_metered_deadline_bounds_the_read() -> None:
+    """The alarm must be able to fire during silence, not only when a frame happens to land."""
+
+    monitor = LivenessMonitor(
+        heartbeat_seconds=10_000.0,
+        stale_after_seconds=10_000.0,
+        metered_stale_after_seconds=300.0,
+    )
+    monitor.start(START)
+    assert monitor.next_deadline_seconds(START + timedelta(seconds=60)) == pytest.approx(240.0)
+
+
 def test_read_timeout_bounds_sigint_latency() -> None:
     """A quiet feed must not hold the read for a whole heartbeat interval: Ctrl-C would look
     hung and the watch window would close late or not at all."""
