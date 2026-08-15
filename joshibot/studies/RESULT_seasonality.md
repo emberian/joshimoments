@@ -133,7 +133,8 @@ crowd. The peak hour is when the spam is, not when the quality is. Mean across h
 
 ## 3. The wiggle clock — the null, and it is the important one
 
-This is the metric that would actually be tradeable, and it is measured two ways.
+This is the metric that would actually be tradeable, and it is measured **twice, on two
+different populations, through two different price constructions**. Both are null.
 
 **On our own 9 pools, 47 days, exact integer vault reserves** — 3,372,421 priced prints on the
 5 SOL-quoted pools, 1,643 pool-hours with ≥ 8 prints, of which **85.1% contain at least one
@@ -159,6 +160,37 @@ over. It is not there.
 `wiggle_net` is an **oracle bound** — it assumes turning at the exact extremes, which no live
 rule achieves. That makes the null stronger, not weaker: a null on the oracle is a null on
 every rule inside it.
+
+### 3.1 And the same answer on the coin population
+
+The pool version answers "is *our* wiggle clock-locked", which is not quite the operator's
+question — the harvest target is the long tail of collapsed coins, not the nine pools we are
+long. So the same measurement was run on a **sampled 3,000-mint cohort drawn from the corpus**,
+priced through the bonding-curve identity (`d log p = −2 d log(ata_balance + OFFSET)`) rather
+than through vault reserves. Run on persvati, 24 cores; **8 days, not 10** — that box's corpus
+mirror has `day=2026-08-13` and `day=2026-08-14` present but unpopulated, and the instrument
+now skips unpopulated days rather than dying on the ninth after forty minutes of folding.
+
+2,384 mints priced, 3,561,328 priced prints, **8,915 coin-hours with ≥ 8 prints, of which
+72.3% contain at least one friction-clearing swing**. Median `wiggle_net` 0.2709 log units —
+**31.1% per coin-hour** as an oracle bound, which is the size of the prize if you could turn
+at the extremes and is why this question is worth asking at all.
+
+| metric | days | peak | trough | amplitude | p |
+|---|---|---|---|---|---|
+| **`wiggle_net` per active coin-hour (oracle)** | 8 | 15h | 12h | 0.731 | **0.1649** |
+| realised variance per active coin-hour | 8 | 03h | 11h | 0.488 | 0.0660 |
+| friction-clearing swings per coin-hour | 8 | 15h | 11h | 0.229 | 0.0470 |
+
+**Null again.** And the two independent measurements disagree about where the swing count
+peaks — 00h on our pools, 15h on the coin population — which is what two noise series look
+like. The one thing they agree on is `wiggle_net`: p = 0.70 on 47 days of pools, p = 0.16 on
+8 days of the population. Different data, different price identity, different sample, same
+answer.
+
+That convergence is the strongest form this result can take. **When the wiggle is worth
+harvesting is not a function of the clock**, and two attempts to find otherwise — one with
+enough power to detect the effect a hundred times over — did not.
 
 ---
 
@@ -247,7 +279,7 @@ usable number in this report.
 
 ## 6. The operations calendar
 
-Eleven diurnal hypotheses, Benjamini-Yekutieli at q = 0.10. **Six survive, and the split
+Fourteen diurnal hypotheses, Benjamini-Yekutieli at q = 0.10. **Six survive, and the split
 between the survivors and the nulls is the whole result.**
 
 | metric | days | peak | trough | amplitude | p | BY |
@@ -260,6 +292,9 @@ between the survivors and the nulls is the whole result.**
 | transactions per hour (chain-wide) | 10 | **19h** | 09h | 0.122 | 0.0005 | **yes** |
 | friction-clearing swings per pool-hour | 47 | 00h | 05h | 0.214 | 0.0355 | no |
 | failure share of pool traffic | 47 | 16h | 03h | 0.029 | 0.0330 | no |
+| friction-clearing swings per coin-hour | 8 | 15h | 11h | 0.229 | 0.0470 | no |
+| realised variance per active coin-hour | 8 | 03h | 11h | 0.488 | 0.0660 | no |
+| **`wiggle_net` per active coin-hour** | 8 | 15h | 12h | 0.731 | **0.1649** | no |
 | median fee on our pools | 47 | 07h | 10h | 0.150 | 0.6217 | no |
 | **`wiggle_net` per pool-hour** | 47 | 09h | 03h | 0.227 | **0.7016** | **no** |
 | pool depth / AMM spread | 47 | 21h | 13h | 0.026 | 0.7206 | no |
@@ -268,12 +303,19 @@ between the survivors and the nulls is the whole result.**
 — `wiggle_net` and failure share are demeaned, everything else normalised — but not across the
 two.)
 
-**Every survivor is a measure of how much is happening. Every null is a measure of how good
-the opportunity is.** Volume, launches, fees and compute are locked to the clock at the p-floor
-in both the 10-day population and the 47-day pool series. Wiggle quality, spread, and landing
-odds are not locked to the clock at all, with more days of data behind them. That is exactly
-the operator's prior — *"any hypothesis simple enough to phrase likely isn't predictive"* —
-and it is the most useful thing here, because it says where **not** to spend effort.
+**Every one of the six survivors measures how MUCH is happening. Every one of the eight nulls
+measures how GOOD the opportunity is.** Fourteen hypotheses sorted themselves perfectly along
+that line, and nothing in the design encouraged them to.
+
+Volume, launches, fees and compute are locked to the clock at the p-floor, in the 10-day
+population *and* the 47-day pool series. Wiggle quality, spread and landing odds are not
+locked to the clock at all — and the wiggle answer now rests on **two independent
+measurements** (§3.1), on different populations, through different price identities, one of
+them with the power to detect the observed amplitude a hundred times over.
+
+That is exactly the operator's prior — *"any hypothesis simple enough to phrase likely isn't
+predictive"* — and it is the most useful thing here, because it says where **not** to spend
+effort.
 
 **The calendar itself:**
 
@@ -303,14 +345,14 @@ collects everything needed, and `seasonality.py` is offline-reproducible from ca
 
 - **Ten days is 1.43 weeks.** Nothing weekly is claimed from the corpus. The one weekly table
   is one pool over 6.9 weeks and is labelled description.
-- **The population-level wiggle cohort was not run.** `seasonality.py wiggle` builds a sampled
-  3,000-mint price cohort from the corpus and applies the same zigzag; it is deliberately
-  excluded from `all` because it is a ten-day corpus fold and this machine is shared. §3's
-  wiggle result is therefore *our nine pools*, not the coin population the operator would
-  harvest. Run it alone, or on persvati (24 cores, 73 GB free, corpus present at
-  `~/corpus/bulk_pump/`), with `uv run --group research python studies/seasonality.py wiggle`.
-  **This is the one place where a different answer is genuinely plausible**, because the
-  harvest target is the long tail of collapsed coins and not the pools we happen to be long.
+- **The population-level wiggle cohort RAN, on 8 days rather than 10.** It stays out of `all`
+  — it is a corpus fold and this laptop is shared — and it was run on persvati (24 cores,
+  `JOSHIBOT_CORPUS_THREADS=8 JOSHIBOT_CORPUS_MEM=24GB`). That box's corpus mirror has
+  `day=2026-08-13` and `day=2026-08-14` present but **unpopulated** (0 shards against ~3,300
+  on the days that did sync), so the cohort covers 2026-08-05..08-12. Two fewer days is less
+  power on the arm that already returned the weakest signal, so its p = 0.16 is a **weaker**
+  null than the 47-day pool version's p = 0.70 and should be read that way. Syncing those two
+  days and re-running is the cheapest outstanding improvement to this study.
 - **Only diurnal amplitude was multiplicity-controlled.** The birth-hour survival contrast
   (§2.1) and the weekday table (§4.1) are descriptive and were kept out of the family
   deliberately rather than quietly included.

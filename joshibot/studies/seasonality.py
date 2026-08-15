@@ -49,15 +49,18 @@ Confidence intervals resample DAYS (or, for the weekly panel, WEEKS), because a 
 unit that repeats. Hours inside a day are not independent and treating them as such would
 shrink every interval by a factor of five for free.
 
-Multiplicity: eleven diurnal hypotheses are tested, Benjamini-Yekutieli at q = 0.10.
+Multiplicity: fourteen diurnal hypotheses are tested, Benjamini-Yekutieli at q = 0.10.
 
 AND THE ANSWER, SO THE MODULE STATES ITS OWN RESULT
 ----------------------------------------------------
-Six of eleven survive, and the split is the finding: **every survivor measures how MUCH is
+Six of fourteen survive, and the split is the finding: **every survivor measures how MUCH is
 happening (volume, launches, fees, compute) and every null measures how GOOD the opportunity
-is (wiggle quality, spread, landing odds)** -- the latter on 47 days of data against the
-former's 10. The operator's prior, that a hypothesis simple enough to phrase is unlikely to be
-predictive, is what the data says.
+is (wiggle quality, spread, landing odds)**. Fourteen hypotheses sorted themselves perfectly
+along that line and nothing in the design encouraged them to. The wiggle null is measured
+TWICE -- 47 days of our pools through vault reserves (p = 0.70) and 8 days of a 3,000-mint
+corpus cohort through the bonding-curve identity (p = 0.16) -- on different populations, with
+different price constructions, and they agree. The operator's prior, that a hypothesis simple
+enough to phrase is unlikely to be predictive, is what the data says.
 
 Reproduce::
 
@@ -75,6 +78,7 @@ import argparse
 import contextlib
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Final, Sequence
@@ -114,8 +118,11 @@ FDR_Q: Final[float] = 0.10
 # that returns hours or mints, never rows -- each connection is capped, and the sections
 # are designed to run one at a time.
 MEM_LIMIT: Final[str] = "6GB"
-CORPUS_MEM: Final[str] = "4GB"  # see _duckdb: measured, not guessed
-CORPUS_THREADS: Final[int] = 1
+# Defaults are the LAPTOP's measured settings (see _duckdb). A bigger box should not be
+# throttled to a laptop's ceiling, so both are env-overridable: persvati runs this with
+# JOSHIBOT_CORPUS_THREADS=8 JOSHIBOT_CORPUS_MEM=24GB against 24 cores and ~50 GB free.
+CORPUS_MEM: Final[str] = os.environ.get("JOSHIBOT_CORPUS_MEM", "4GB")
+CORPUS_THREADS: Final[int] = int(os.environ.get("JOSHIBOT_CORPUS_THREADS", "1"))
 
 
 def _duckdb(*, corpus: bool = False) -> Any:
@@ -164,8 +171,38 @@ def _duckdb(*, corpus: bool = False) -> Any:
     return con
 
 
+def bulk_days() -> list[tuple[str, str]]:
+    """[(day, duckdb-readable path expression)], oldest first.
+
+    Two layouts, because the corpus lives in two shapes on two machines. This laptop has the
+    repacked one file per day (``state/bulk_pump/daily/2026-08-05.parquet``); persvati has the
+    raw ``EXPORT DATA`` shards still partitioned (``~/corpus/bulk_pump/raw/day=2026-08-05/``,
+    ~3,000 files of ~1 MB). DuckDB reads either, and the per-day fold is per-day in both, so
+    supporting both costs one function and saves repacking 20 GB on the remote box for no
+    analytical gain. Override the root with ``JOSHIBOT_CORPUS``.
+    """
+    root = Path(os.environ.get("JOSHIBOT_CORPUS", BULK))
+    flat = sorted(root.glob("*.parquet"))
+    if flat:
+        return [(p.stem, str(p)) for p in flat]
+    # An EMPTY day directory is not a day. persvati's mirror has day=2026-08-13 and
+    # day=2026-08-14 present but unpopulated (0 shards each, against ~3,300 on the days that
+    # did sync), and taking the directory listing at face value crashed a 40-minute fold on
+    # its ninth day with an IOException from inside DuckDB. A partial mirror is the normal
+    # state of a mirror; skip what is not there and say so.
+    hive = sorted(d for d in root.glob("day=*") if d.is_dir() and any(d.glob("*.parquet")))
+    if hive:
+        empty = sorted(
+            d.name for d in root.glob("day=*") if d.is_dir() and not any(d.glob("*.parquet"))
+        )
+        if empty:
+            print(f"corpus: skipping {len(empty)} unpopulated day(s): {', '.join(empty)}", file=sys.stderr)
+        return [(d.name.split("=", 1)[1], f"{d}/*.parquet") for d in hive]
+    raise SystemExit(f"no corpus parquet under {root} (set JOSHIBOT_CORPUS)")
+
+
 def bulk_files() -> list[Path]:
-    return sorted(BULK.glob("*.parquet"))
+    return [Path(p) for _day, p in bulk_days()]
 
 
 def per_day(name: str, sql: Callable[[str], str], *, echo: Callable[[str], None] = print) -> Any:
@@ -183,8 +220,8 @@ def per_day(name: str, sql: Callable[[str], str], *, echo: Callable[[str], None]
     part_dir = DATA / "parts" / name
     part_dir.mkdir(parents=True, exist_ok=True)
     frames = []
-    for path in bulk_files():
-        part = part_dir / (path.stem + ".parquet")
+    for day, expr in bulk_days():
+        part = part_dir / (day + ".parquet")
         # A part is only trusted if it is non-empty. Killing a fold mid-COPY leaves a
         # zero-byte file behind, and an existence check alone then hands the next run a
         # corrupt cache entry that fails in pyarrow with a message about a <Buffer>, three
@@ -196,11 +233,11 @@ def per_day(name: str, sql: Callable[[str], str], *, echo: Callable[[str], None]
             tmp.unlink(missing_ok=True)
             con = _duckdb(corpus=True)
             try:
-                con.execute(f"COPY ({sql(str(path))}) TO '{tmp}' (FORMAT PARQUET)")
+                con.execute(f"COPY ({sql(expr)}) TO '{tmp}' (FORMAT PARQUET)")
             finally:
                 con.close()
             tmp.rename(part)
-            echo(f"     {name}: folded {path.stem}")
+            echo(f"     {name}: folded {day}")
         frames.append(pd.read_parquet(part))
     return pd.concat(frames, ignore_index=True)
 
@@ -603,10 +640,11 @@ def build_cohort(*, echo: Callable[[str], None] = print) -> Path:
     price = f"""CASE WHEN c.is_pool AND w.wsol > 0 AND c.tok > 0 THEN ln(w.wsol) - ln(c.tok)
                      WHEN NOT c.is_pool AND c.tok + {CURVE_TOKEN_OFFSET} > 0
                        THEN ln({CURVE_K}) - 2 * ln(c.tok + {CURVE_TOKEN_OFFSET}) END"""
-    for path in bulk_files():
-        part = part_dir / (path.stem + ".parquet")
-        if part.exists():
+    for day, expr in bulk_days():
+        part = part_dir / (day + ".parquet")
+        if part.exists() and part.stat().st_size > 0:
             continue
+        part.unlink(missing_ok=True)
         con = _duckdb(corpus=True)
         try:
             con.execute(
@@ -614,7 +652,7 @@ def build_cohort(*, echo: Callable[[str], None] = print) -> Path:
                 CREATE OR REPLACE TABLE legs AS
                 SELECT t.block_time, t.block_slot, t.tx_index, u.owner AS owner, u.mint AS mint,
                        CAST(u.amount AS HUGEINT) AS amt
-                FROM read_parquet('{path}') t, UNNEST(t.post) s(u)
+                FROM read_parquet('{expr}') t, UNNEST(t.post) s(u)
                 WHERE u.mint IN {listed} OR u.mint = '{WSOL}'
                 """
             )
@@ -651,13 +689,13 @@ def build_cohort(*, echo: Callable[[str], None] = print) -> Path:
                   FROM cur c LEFT JOIN w ON c.mint = w.mint AND c.block_slot = w.block_slot
                                         AND c.tx_index = w.tx_index
                   WHERE ({price}) IS NOT NULL
-                  ORDER BY mint, block_slot, tx_index
+                  ORDER BY c.mint, c.block_slot, c.tx_index
                 ) TO '{part}' (FORMAT PARQUET, COMPRESSION ZSTD)
                 """
             )
         finally:
             con.close()
-        echo(f"     cohort: folded {path.stem}")
+        echo(f"     cohort: folded {day}")
     con = _duckdb()
     try:
         con.execute(
