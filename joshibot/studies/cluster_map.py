@@ -89,6 +89,19 @@ reads the previous one's parquet out of ``.cache/clustermap/``.
     uv run --group research python -m studies.cluster_map --operator --source bulk
     uv run --group research python -m studies.cluster_map --probe 1504,6464,4899 --source bulk
 
+Second wave (operator-deputized session, same seed discipline):
+
+    uv run --group research python -m studies.cluster_map --resonance  --source bulk
+      # wallet-grain locked-offset scan; BLIND to rungs >~2 slots apart (documented inline)
+    uv run --group research python -m studies.cluster_map --resonance2 --source bulk
+      # cluster-grain ladder scan; found the 110-cluster / 479-wallet decelerating schedule
+    uv run --group research python -m studies.cluster_map --selection 1504,6464,... --source bulk
+      # what picks a fleet's coins; day-matched, joins operator_crime coins.parquet
+    uv run --group research python -m studies.cluster_map --deployer-territory --source bulk
+    uv run --group research python -m studies.cluster_map --persistence --source bulk
+    uv run --group research python -m studies.cluster_map --ecology --source bulk --draws 200
+      # guild taxonomy (rules stated inline), guild food web, demography
+
 REPRODUCIBILITY
 ---------------
 Infomap is seeded, but that is NOT sufficient on its own: node ids are assigned in the order
@@ -102,7 +115,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Final, Sequence
 
@@ -165,6 +178,7 @@ def _duck(threads: int = 3, memory: str = "4GB"):
     con.execute(f"PRAGMA threads={threads}")
     con.execute(f"SET memory_limit='{memory}'")
     con.execute("SET preserve_insertion_order=false")
+    con.execute("SET enable_progress_bar=false")
     con.execute(f"SET temp_directory='{tmp}'")
     return con
 
@@ -1569,6 +1583,1202 @@ def cmd_probe(source: str, cids: list[int], thresh: float = 0.10,
     con.close()
 
 
+# ---------------------------------------------------------------------------------------
+# STAGE 9 -- what SELECTS a cluster's coins, and whether territory is deployer allegiance.
+# The deployer/curve features come from studies/data/operator_crime/coins.parquet, which
+# covers this exact window (266,928 coins, 218,652 with a deployer, 53,335 deployers).
+# ---------------------------------------------------------------------------------------
+
+CRIME_COINS = ROOT / "studies" / "data" / "operator_crime" / "coins.parquet"
+
+
+def cmd_selection(source: str, cids: list[int], thresh: float = 0.10,
+                  min_size: int = 3, seed: int = 20260815) -> None:
+    """The named clusters touch ~1.5% of corpus mints. What picks them?
+
+    Contrast is DAY-MATCHED: touched coins vs all same-birth-day corpus coins, because
+    launch volume and ambient quality drift day to day and an unmatched contrast would
+    measure the calendar (the repo has paid for that mistake more than once).
+    """
+    import pandas as pd
+
+    if not CRIME_COINS.exists():
+        echo(f"  {CRIME_COINS} missing; run operator_crime first")
+        return
+    cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
+    con = _duck()
+    cl = pd.read_parquet(cl_path)
+    members = cl[cl["cid"].isin(cids)]
+    lst = ",".join("'" + w + "'" for w in members["owner"])
+    d = ev_dir(source)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE touched AS
+        WITH x AS (SELECT mint, unnest(owners) AS owner
+                   FROM read_parquet('{d}/*.parquet') WHERE kind = 'entry')
+        SELECT DISTINCT mint FROM x WHERE owner IN ({lst})
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE coins AS
+        SELECT c.*, date_trunc('day', to_timestamp(c.birth_time)) AS bday,
+               t.mint IS NOT NULL AS touched
+        FROM read_parquet('{CRIME_COINS}') c LEFT JOIN touched t ON t.mint = c.mint
+        """
+    )
+    cov = con.execute(
+        """SELECT count(*) FILTER (WHERE touched) t_in,
+                  (SELECT count(*) FROM touched) t_all, count(*) uni FROM coins"""
+    ).fetchone()
+    echo(f"\n=== 9.1 selection: clusters {cids} ===")
+    echo(
+        f"  touched mints: {cov[1]:,}; with birth/curve features: {cov[0]:,} "
+        f"({cov[0] / max(cov[1], 1):.1%} joined); corpus universe: {cov[2]:,}"
+    )
+    echo("  day-matched contrast (medians unless noted):")
+    rows = con.execute(
+        """
+        SELECT touched, count(*) n,
+               median(n_snipers) med_snipers,
+               avg(graduated::INT) grad_rate,
+               median(dev_buy_share) med_devbuy,
+               median(peak_mcap_sol) med_peak_mcap,
+               median(lifetime_s) med_lifetime,
+               median(drawdown_from_peak) med_drawdown,
+               median(n_birth_legs) med_birth_legs
+        FROM coins GROUP BY touched ORDER BY touched
+        """
+    ).fetchdf()
+    echo(rows.to_string(index=False, float_format=lambda x: f"{x:,.3f}"))
+    echo("\n  per-day touch rate (is the selector stable?):")
+    per = con.execute(
+        """SELECT bday, count(*) launches, count(*) FILTER (WHERE touched) sel,
+                  count(*) FILTER (WHERE touched)::DOUBLE / count(*) rate
+           FROM coins GROUP BY bday ORDER BY bday"""
+    ).fetchdf()
+    for _, r in per.iterrows():
+        echo(f"    {str(r.bday)[:10]}  {int(r.launches):>7,} launches  "
+             f"{int(r.sel):>6,} touched  {r.rate:>6.2%}")
+
+    echo("\n=== 9.2 deployer concentration of the touched set ===")
+    echo("  If the clusters are a paid service, WHO they buy is a ledger of who paid;")
+    echo("  concentration in few deployers is the signature. Contrast: top-10-deployer")
+    echo("  share of touched coins vs the same share among all same-day launches.")
+    dep = con.execute(
+        """
+        WITH t AS (SELECT deployer, count(*) n FROM coins
+                   WHERE touched AND deployer IS NOT NULL GROUP BY deployer),
+             a AS (SELECT deployer, count(*) n FROM coins
+                   WHERE deployer IS NOT NULL GROUP BY deployer)
+        SELECT (SELECT sum(n) FROM (SELECT n FROM t ORDER BY n DESC LIMIT 10))::DOUBLE
+                 / (SELECT sum(n) FROM t) AS top10_touched,
+               (SELECT sum(n) FROM (SELECT n FROM a ORDER BY n DESC LIMIT 10))::DOUBLE
+                 / (SELECT sum(n) FROM a) AS top10_all,
+               (SELECT count(*) FROM t) AS touched_deployers,
+               (SELECT count(*) FROM a) AS all_deployers
+        """
+    ).fetchone()
+    echo(f"  distinct deployers among touched : {dep[2]:,} (universe {dep[3]:,})")
+    echo(f"  top-10 deployer share, touched   : {dep[0]:.2%}")
+    echo(f"  top-10 deployer share, universe  : {dep[1]:.2%}")
+    top = con.execute(
+        """SELECT deployer, count(*) n,
+                  (SELECT count(*) FROM coins c2 WHERE c2.deployer = coins.deployer)
+                    AS dep_total
+           FROM coins WHERE touched AND deployer IS NOT NULL
+           GROUP BY deployer ORDER BY n DESC LIMIT 12"""
+    ).fetchdf()
+    echo("  busiest deployers in the touched set (n touched / deployer's total launches):")
+    for _, r in top.iterrows():
+        echo(f"    {r.deployer}  {int(r.n):>5,} / {int(r.dep_total):>5,} "
+             f"({r.n / r.dep_total:.0%} of their launches)")
+    con.close()
+
+
+def cmd_deployer_territory(source: str, thresh: float = 0.10, min_size: int = 3,
+                           seed: int = 20260815, top: int = 25) -> None:
+    """Is the territory partition a DEPLOYER partition?
+
+    For the same top clusters the territory test ran on: each cluster's coin set joined to
+    deployers; then pairwise deployer-set overlap next to coin-set overlap. If avoidance is
+    deployer allegiance, coin-disjoint pairs are also deployer-disjoint and, conversely,
+    each cluster's coins concentrate on deployers the others do not touch.
+    """
+    import pandas as pd
+
+    if not CRIME_COINS.exists():
+        echo(f"  {CRIME_COINS} missing")
+        return
+    cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
+    con = _duck()
+    prof = pd.read_parquet(CACHE / f"profiles_{source}.parquet")
+    big = prof.nlargest(top, "coins")["cid"].tolist()
+    _member_events(con, source, cl_path)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cd AS
+        SELECT DISTINCT me.cid, me.mint, c.deployer
+        FROM me JOIN read_parquet('{CRIME_COINS}') c ON c.mint = me.mint
+        WHERE me.cid IN ({",".join(str(c) for c in big)}) AND c.deployer IS NOT NULL
+        """
+    )
+    echo(f"\n=== 9.3 territory vs deployers (top {top} clusters) ===")
+    per = con.execute(
+        """SELECT cid, count(DISTINCT mint) coins, count(DISTINCT deployer) deployers
+           FROM cd GROUP BY cid ORDER BY coins DESC"""
+    ).fetchdf()
+    echo(f"  {'cid':>7} {'coins(joined)':>14} {'deployers':>10} {'coins/deployer':>15}")
+    for _, r in per.iterrows():
+        echo(f"  {int(r.cid):>7} {int(r.coins):>14,} {int(r.deployers):>10,} "
+             f"{r.coins / r.deployers:>15.2f}")
+    echo("\n  pairwise: coin Jaccard vs deployer Jaccard "
+         "(deployer-aligned avoidance => both near zero; coin-only avoidance =>")
+    echo("  deployer overlap HIGH while coin overlap is low -- they know the same houses")
+    echo("  but split the catalogue):")
+    pairs = con.execute(
+        """
+        WITH cm2 AS (SELECT DISTINCT cid, mint FROM cd),
+             dm AS (SELECT DISTINCT cid, deployer FROM cd)
+        SELECT a.cid A, b.cid B,
+               (SELECT count(*) FROM cm2 x JOIN cm2 y
+                 ON x.mint = y.mint AND x.cid = a.cid AND y.cid = b.cid) inter_c,
+               (SELECT count(*) FROM dm x JOIN dm y
+                 ON x.deployer = y.deployer AND x.cid = a.cid AND y.cid = b.cid) inter_d,
+               (SELECT count(*) FROM cm2 WHERE cid = a.cid) ca,
+               (SELECT count(*) FROM cm2 WHERE cid = b.cid) cb,
+               (SELECT count(*) FROM dm WHERE cid = a.cid) da,
+               (SELECT count(*) FROM dm WHERE cid = b.cid) db
+        FROM (SELECT DISTINCT cid FROM cd) a JOIN (SELECT DISTINCT cid FROM cd) b
+          ON a.cid < b.cid
+        """
+    ).fetchdf()
+    pairs["jc"] = pairs.inter_c / (pairs.ca + pairs.cb - pairs.inter_c)
+    pairs["jd"] = pairs.inter_d / (pairs.da + pairs.db - pairs.inter_d)
+    echo(f"  {'A':>7} {'B':>7} {'coin J':>8} {'deployer J':>11}")
+    show = pairs.sort_values("jc").head(10)
+    for _, r in show.iterrows():
+        echo(f"  {int(r.A):>7} {int(r.B):>7} {r.jc:>8.4f} {r.jd:>11.4f}")
+    import numpy as np
+
+    lo = pairs[pairs.jc < 0.01]
+    echo(
+        f"\n  among the {len(lo):,} coin-disjoint pairs (coin J < 0.01): "
+        f"median deployer J = {lo['jd'].median():.4f}"
+    )
+    echo(
+        f"  among all {len(pairs):,} pairs:               "
+        f"median deployer J = {pairs['jd'].median():.4f}"
+    )
+    echo("  READ: if coin-disjoint pairs still share deployers heavily, the fleets shop the")
+    echo("  same catalogue and split coins some other way; if deployer J collapses with coin")
+    echo("  J, the avoidance IS deployer allegiance.")
+    con.close()
+
+
+# ---------------------------------------------------------------------------------------
+# STAGE 13 -- PvP meta-events: theme bursts in the live launch stream.
+#
+# Measured live on the 2026-08-15 "Scratch" storm (Disney character announcement):
+# 39 instances in 2 h; the war resolved in ~35 s; first mover lost despite an 11.85 SOL dev
+# buy; 3 organic winners launched at +22 s and +35 s; a 16-instance zero-dev-buy "OG"
+# scavenger wave at +3 min captured nothing; one 85 SOL dev buy at +17 min forced a fourth
+# migration; the 35 losers held 1.3 SOL combined. The organic winners' first-60 txs were
+# full of FLASH-guild wallets from this module's ten-day map; the ladder sat the storm out.
+# ---------------------------------------------------------------------------------------
+
+FIREHOSE_NEW = ROOT / "state" / "firehose" / "new_token"
+
+
+def cmd_pvp(min_instances: int = 8, window_s: int = 7200) -> None:
+    """Detect theme bursts (PvP storms) in the firehose launch stream.
+
+    A burst is a name token whose launch count inside a sliding window is >= min_instances
+    while the token is otherwise rare in the day's stream. Common carrier words are
+    suppressed by a document-frequency cut rather than a stopword list, so tomorrow's meme
+    vocabulary needs no code change.
+    """
+    import json as _json
+    import re
+
+    files = sorted(FIREHOSE_NEW.glob("*.jsonl"))
+    if not files:
+        echo(f"  no launch stream under {FIREHOSE_NEW}")
+        return
+    rows = []
+    for f in files:
+        with open(f) as fh:
+            for line in fh:
+                try:
+                    r = _json.loads(line)
+                except Exception:
+                    continue
+                p = r.get("payload", {})
+                rows.append((
+                    r.get("t_ingest", ""), p.get("mint"),
+                    (p.get("name") or ""), (p.get("symbol") or ""),
+                    p.get("traderPublicKey"), p.get("solAmount") or 0.0,
+                ))
+    echo(f"\n=== 13.1 launch stream: {len(rows):,} launches in {len(files)} file(s) ===")
+    from datetime import datetime as _dt
+
+    def ts(s: str) -> float:
+        try:
+            return _dt.fromisoformat(s).timestamp()
+        except Exception:
+            return 0.0
+
+    tok_hits: dict[str, list] = defaultdict(list)
+    for r in rows:
+        for w in set(re.findall(r"[a-z]{4,}", (r[2] + " " + r[3]).lower())):
+            tok_hits[w].append(r)
+    n = len(rows)
+    bursts = []
+    for w, hs in tok_hits.items():
+        # carrier words appear all day at a steady rate; a theme burst is concentrated
+        if len(hs) < min_instances or len(hs) > 0.02 * n:
+            continue
+        times = sorted(ts(h[0]) for h in hs)
+        best = 0
+        lo = 0
+        for hi in range(len(times)):
+            while times[hi] - times[lo] > window_s:
+                lo += 1
+            best = max(best, hi - lo + 1)
+        if best >= min_instances and best >= 0.7 * len(hs):
+            bursts.append((w, len(hs), best, hs))
+    bursts.sort(key=lambda b: -b[2])
+    echo(f"  theme bursts (>= {min_instances} instances inside {window_s / 3600:.0f} h, "
+         f"concentrated): {len(bursts)}")
+    echo(f"  {'token':<14} {'total':>6} {'in-window':>10} {'first':>20} "
+         f"{'shotgun devs':>13} {'zero-buy':>9}")
+    for w, tot, best, hs in bursts[:15]:
+        devs = Counter(h[4] for h in hs)
+        shot = sum(1 for _, c in devs.items() if c > 1)
+        zero = sum(1 for h in hs if (h[5] or 0) < 0.05)
+        first = min(hs, key=lambda h: h[0])
+        echo(f"  {w:<14} {tot:>6} {best:>10} {first[0][:19]:>20} {shot:>13} {zero:>9}")
+    echo("\n  anatomy lesson from the measured storm: winners come from the +20-40 s cohort,")
+    echo("  not the first instance; a zero-dev-buy wave minutes later is scavengers; a huge")
+    echo("  late dev buy is a forced winner, visible instantly in this stream.")
+
+
+# ---------------------------------------------------------------------------------------
+# STAGE 14 -- ATTENTION STORMS in the corpus, detected without names.
+#
+# The live launch stream carries names, so theme bursts are visible there directly (stage
+# 13). The ten-day corpus does not -- but competing instances of one theme share EARLY
+# BUYERS racing across them, so the storm is recoverable from wallet overlap alone: coins
+# born close together whose first-minute buyer sets overlap far above chance are one
+# attention event. This buys the thing stage 13 cannot: outcomes, rotation, and fleet
+# identity for HUNDREDS of storms instead of one.
+# ---------------------------------------------------------------------------------------
+
+# MEASURED (--storms, --storm-edge, 10-day corpus, 6,003 buyer-overlap storms):
+#   * buyer overlap recovers CO-SNIPING clusters, not name-themes: board-name modal purity
+#     is only 33% (25/130 storms >= 2/3 pure). Honest negative -- the same racing crowd hits
+#     many concurrent coins regardless of theme. So these are "same early crowd," not "same
+#     meme."
+#   * the graduation signal is ACCUMULATOR/LADDER touch, and it is enormous and clean:
+#     ladder-touched coins graduate 62.2% (0 FLASH competitors) / 34.8% (contested) vs
+#     3-5% untouched -- 11-13x, holding every one of the 10 days.
+#   * the apparent "FLASH presence lowers graduation" is SIMPSON'S PARADOX: FLASH marks
+#     contested storms (low per-coin base rate), and the 0-FLASH bucket was enriched in
+#     ladder picks. Stratifying on ladder touch dissolves it.
+#   * WITHIN a storm (self-controlled: same theme, moment, crowd) FLASH concentration still
+#     points at the eventual winner in 37% of storms vs a 14.2% random-instance null (2.6x).
+#   * EDGE STATUS: all of this is IN-SAMPLE -- the clusters were built from this same corpus,
+#     so "fleet presence predicts" is not yet an edge. The ladder touches within 5 s, giving
+#     a t+5s graduation posterior of 35-62% vs a ~3% base, BUT the predict-vs-manufacture
+#     ambiguity is unresolved offline, and out-of-sample (Aug-15) confirmation is the gate.
+#
+# OUT-OF-SAMPLE (Aug-15 live stream, 29 named bursts / 2,994 instances, curves probed):
+#   * the Scratch arrival-order rule ("winners come from the +20-60s cohort, never first")
+#     is DEAD, and in the OPPOSITE direction: advantage is MONOTONE-EARLY -- rank-1
+#     instances win 17.2% (~15x the 1.1% base), decaying with rank; +20-60s won 1 of 43.
+#     (An earlier read of these numbers in this session was wrong -- a case-sensitive state
+#     filter dropped 32 of 34 winners. The agent report with the against-opportunity table
+#     is authoritative.)
+#   * the scavenger rule REPLICATED: 1 winner in 2,325 late zero-dev-buy instances (0.043%).
+#   * NEW SPECIES: a forced-migration operator -- ten "winners" across nine storms are ONE
+#     actor, fresh wallet each time, dev buy exactly 85.005359 SOL = the curve-completion
+#     amount. Mechanical self-migration, not a market outcome; it also re-reads the Scratch
+#     late whale as the same operation. Fingerprint: the magic number.
+#   * 10 of 29 bursts produced no winner; organic winners are 24/2,994 (0.8%).
+#   * the within-storm fleet-pointer FAILED its cheap OOS test: on the 3 bursts where the
+#     winner's first minute was reachable, early fleet presence did not separate winners
+#     from big-dev-buy losers (1W/2L vs a 0.75-win null; funded losers carried 4-10 FLASH
+#     wallets, one winner carried zero). Fleet presence marks WHICH STORMS the pros attend,
+#     not which instance wins. Caveat: all six unreachable instances were winners (25k+ txs
+#     within hours), so the test is winner-side truncated -- rerun on the daily parquet.
+#   * the ladder was absent from storm flow entirely: 1 rung wallet across 33 instances.
+#   * the ladder-touch OOS test is BLOCKED by RPC shape (a winner accumulates >25k txs in
+#     hours; newest-first pagination cannot reach its first minute -- measured: 25 pages,
+#     still 66 min short). It becomes FREE when the Aug-15 daily parquet lands: rerun
+#     --events for the new day, then --storms/--storm-edge with clusters frozen from the
+#     PRIOR ten days. That is the single highest-value next run this module leaves open.
+#
+# A wallet early-buying more than this many coins inside one 5-minute birth bucket is a
+# universal sniper spraying everything concurrent -- zero theme information, and the edges
+# it would create link every concurrent coin into one blob. Excluded, with counts.
+STORM_BUCKET_S: Final = 300
+STORM_MAX_PER_BUCKET: Final = 15
+STORM_PAIR_DT: Final = 600
+STORM_MIN_SHARED: Final = 3
+STORM_MIN_COS: Final = 0.25
+
+
+def _storm_tables(con) -> None:
+    """early (owner, mint, birth) legs + informative-buyer filter, shared by both stages."""
+    d = ev_dir("bulk")
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE births AS
+        SELECT mint, birth_time, deployer, dev_buy_share, graduated,
+               peak_mcap_sol, lifetime_s
+        FROM read_parquet('{CRIME_COINS}') WHERE birth_time IS NOT NULL
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE early AS
+        WITH e AS (
+          SELECT e.mint, e.block_time, e.block_slot, unnest(e.owners) AS owner
+          FROM read_parquet('{d}/*.parquet') e
+          WHERE e.kind = 'entry'
+        )
+        SELECT e.owner, e.mint, b.birth_time,
+               e.block_time - b.birth_time AS lat,
+               (b.birth_time // {STORM_BUCKET_S}) AS bucket
+        FROM e JOIN births b ON b.mint = e.mint
+        WHERE e.block_time <= b.birth_time + 60
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE inform AS
+        SELECT owner, bucket, count(*) AS k
+        FROM (SELECT DISTINCT owner, mint, bucket FROM early)
+        GROUP BY owner, bucket
+        HAVING count(*) BETWEEN 2 AND {STORM_MAX_PER_BUCKET}
+        """
+    )
+
+
+def cmd_storms() -> None:
+    """Detect attention storms from early-buyer overlap; validate against board names."""
+    import json as _json
+    import re
+
+    import pandas as pd
+
+    con = _duck()
+    _storm_tables(con)
+    tot = con.execute(
+        """SELECT (SELECT count(*) FROM early),
+                  (SELECT count(DISTINCT owner) FROM early),
+                  (SELECT count(*) FROM inform),
+                  (SELECT count(DISTINCT owner) FROM
+                     (SELECT owner, bucket, count(DISTINCT mint) c FROM early
+                      GROUP BY owner, bucket HAVING c > {mx}) t)
+        """.format(mx=STORM_MAX_PER_BUCKET)
+    ).fetchone()
+    echo("\n=== 14.1 storm detection (buyer-overlap, no names) ===")
+    echo(f"  early (<=60 s) entry legs          : {tot[0]:,} from {tot[1]:,} wallets")
+    echo(f"  informative (owner, bucket) pairs  : {tot[2]:,}  "
+         f"(2..{STORM_MAX_PER_BUCKET} early buys per {STORM_BUCKET_S}s birth bucket)")
+    echo(f"  EXCLUDED spray wallets (theme-free): {tot[3]:,} wallet-buckets over the cap")
+
+    # pairs via informative wallets; weight 1/(k-1) per wallet so one selective racer
+    # contributes one unit of evidence total, however many instances it raced.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cpairs AS
+        WITH ie AS (
+          SELECT DISTINCT e.owner, e.mint, e.birth_time, e.bucket, i.k
+          FROM early e JOIN inform i ON i.owner = e.owner AND i.bucket = e.bucket
+        )
+        SELECT a.mint AS ma, b.mint AS mb,
+               sum(1.0 / (a.k - 1)) AS w,
+               count(DISTINCT a.owner) AS shared
+        FROM ie a JOIN ie b
+          ON a.owner = b.owner AND a.mint < b.mint
+         AND abs(a.birth_time - b.birth_time) <= {STORM_PAIR_DT}
+        GROUP BY a.mint, b.mint
+        HAVING count(DISTINCT a.owner) >= {STORM_MIN_SHARED}
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE csize AS
+        SELECT mint, count(DISTINCT owner) AS n FROM
+          (SELECT e.owner, e.mint FROM early e JOIN inform i
+             ON i.owner = e.owner AND i.bucket = e.bucket)
+        GROUP BY mint
+        """
+    )
+    edges = con.execute(
+        f"""
+        SELECT p.ma, p.mb, p.w, p.shared,
+               p.w / sqrt(sa.n::DOUBLE * sb.n::DOUBLE) AS cos
+        FROM cpairs p JOIN csize sa ON sa.mint = p.ma JOIN csize sb ON sb.mint = p.mb
+        WHERE p.w / sqrt(sa.n::DOUBLE * sb.n::DOUBLE) >= {STORM_MIN_COS}
+        """
+    ).fetchdf()
+    echo(f"  coin pairs >= {STORM_MIN_SHARED} shared informative buyers, "
+         f"cos >= {STORM_MIN_COS}: {len(edges):,}")
+
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for r in edges.itertuples():
+        a, b = find(r.ma), find(r.mb)
+        if a != b:
+            parent[a] = b
+    comp: dict[str, list] = defaultdict(list)
+    for m in parent:
+        comp[find(m)].append(m)
+    storms = sorted((v for v in comp.values() if len(v) >= 3), key=len, reverse=True)
+    nodes = len(parent)
+    echo(f"  storm candidates (components >= 3 instances): {len(storms):,} "
+         f"covering {sum(len(s) for s in storms):,} coins")
+    if storms:
+        echo(f"  giant-component share of graph nodes: {len(storms[0]) / max(nodes, 1):.1%} "
+             f"(union-find pathology check; sizes: "
+             + ", ".join(str(len(s)) for s in storms[:12]) + " ...)")
+
+    rows = []
+    for i, s in enumerate(storms):
+        for m in s:
+            rows.append((i, m))
+    sdf = pd.DataFrame(rows, columns=["storm_id", "mint"])
+    sdf.to_parquet(CACHE / "storms_bulk.parquet", index=False)
+    echo(f"  -> {CACHE}/storms_bulk.parquet")
+
+    # ---- 14.2 external validation against board names ----------------------------------
+    echo("\n=== 14.2 validation: do buyer-overlap storms share NAME tokens? ===")
+    echo("  Board snapshots (state/boards/) carry symbols for board-visible coins. For every")
+    echo("  storm with >= 3 board-named members, the modal name-token share is computed.")
+    names: dict[str, str] = {}
+    for f in sorted((ROOT / "state" / "boards").glob("boards-*.jsonl")):
+        with open(f) as fh:
+            for line in fh:
+                try:
+                    r = _json.loads(line)
+                except Exception:
+                    continue
+                for mrow in r.get("members", []) or []:
+                    if mrow.get("mint") and mrow.get("symbol"):
+                        names[mrow["mint"]] = str(mrow["symbol"])
+    echo(f"  board-named mints available: {len(names):,}")
+    sdf["symbol"] = sdf["mint"].map(names)
+    purities = []
+    examples = []
+    for sid, g in sdf.dropna(subset=["symbol"]).groupby("storm_id"):
+        if len(g) < 3:
+            continue
+        toks = [re.sub(r"[^a-z]", "", s.lower()) for s in g["symbol"]]
+        toks = [t for t in toks if t]
+        if len(toks) < 3:
+            continue
+        top, cnt = Counter(toks).most_common(1)[0]
+        purities.append(cnt / len(toks))
+        if len(examples) < 8:
+            examples.append((sid, len(g), top, cnt, len(toks)))
+    if purities:
+        import numpy as np
+
+        echo(f"  storms with >=3 board-named members: {len(purities):,}; "
+             f"median modal-token purity: {np.median(purities):.0%}; "
+             f">=2/3 pure: {sum(1 for p in purities if p >= 2 / 3)}/{len(purities)}")
+        for sid, n, top, cnt, nt in examples:
+            echo(f"    storm {sid:>5} ({n} named): modal '{top}' {cnt}/{nt}")
+    else:
+        echo("  no storm had 3+ board-named members; validation is indeterminate on names.")
+    con.close()
+
+
+def cmd_storm_edge(seed: int = 20260815) -> None:
+    """The edge test: features observable at t+60 s vs outcomes, across all storms.
+
+    Everything here is a CONDITIONAL RATE with its n, never a fit; the within-storm rank
+    comparisons are self-controlled (same theme, same moment, same crowd), which is the
+    strongest design available offline. Trials accounting: five features are examined
+    (arrival rank, arrival offset, dev-buy share, mapped-fleet presence, ladder touch) --
+    PROGRAM.md 3.9 says say so.
+    """
+    import numpy as np
+    import pandas as pd
+
+    con = _duck()
+    _storm_tables(con)
+    sp = CACHE / "storms_bulk.parquet"
+    if not sp.exists():
+        raise SystemExit("run --storms first")
+    con.execute(f"CREATE OR REPLACE TABLE storms AS SELECT * FROM read_parquet('{sp}')")
+    cl_path = CACHE / "clusters_bulk.parquet"
+    gd = pd.read_parquet(CACHE / "guilds_bulk.parquet")[["cid", "guild"]]
+    con.execute(f"CREATE OR REPLACE TABLE cl AS SELECT * FROM read_parquet('{cl_path}')")
+    con.register("gdf", gd)
+    con.execute("CREATE OR REPLACE TABLE guilds AS SELECT * FROM gdf")
+    lad = ",".join(str(c) for c in (1504, 6464, 4899, 17569, 16518, 13755))
+
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE inst AS
+        WITH fleet AS (
+          SELECT e.mint,
+                 count(DISTINCT cl.cid) AS n_fleets,
+                 count(DISTINCT CASE WHEN g.guild = 'FLASH' THEN cl.cid END) AS n_flash,
+                 count(DISTINCT CASE WHEN cl.cid IN ({lad}) THEN cl.cid END) AS n_ladder
+          FROM early e
+          JOIN cl ON cl.owner = e.owner
+          LEFT JOIN guilds g ON g.cid = cl.cid
+          GROUP BY e.mint
+        )
+        SELECT s.storm_id, s.mint, b.birth_time, b.dev_buy_share, b.graduated,
+               b.peak_mcap_sol,
+               rank() OVER (PARTITION BY s.storm_id ORDER BY b.birth_time) AS arrival_rank,
+               b.birth_time - min(b.birth_time) OVER (PARTITION BY s.storm_id) AS offset_s,
+               COALESCE(f.n_fleets, 0) AS n_fleets,
+               COALESCE(f.n_flash, 0) AS n_flash,
+               COALESCE(f.n_ladder, 0) > 0 AS ladder
+        FROM storms s
+        JOIN births b ON b.mint = s.mint
+        LEFT JOIN fleet f ON f.mint = s.mint
+        """
+    )
+    df = con.execute("SELECT * FROM inst").fetchdf()
+    df["day"] = pd.to_datetime(df["birth_time"], unit="s", utc=True).dt.date
+    ns = df["storm_id"].nunique()
+    echo(f"\n=== 14.3 the edge test: {len(df):,} instances in {ns:,} storms ===")
+    echo("  five features examined; every number is a conditional rate with its n.")
+
+    # winner = max peak mcap within storm
+    df["win"] = (
+        df.groupby("storm_id")["peak_mcap_sol"].transform("max") == df["peak_mcap_sol"]
+    ) & df["peak_mcap_sol"].notna()
+
+    def rate(dd, mask, label):
+        n = int(mask.sum())
+        if n == 0:
+            echo(f"    {label:<38} n=0")
+            return
+        g = float(dd.loc[mask, "graduated"].mean())
+        w = float(dd.loc[mask, "win"].mean())
+        echo(f"    {label:<38} n={n:>7,}  P(grad)={g:>7.2%}  P(storm-win)={w:>7.2%}")
+
+    echo("\n  arrival ORDER within storm (the Scratch rule at population scale):")
+    rate(df, df.arrival_rank == 1, "first instance")
+    rate(df, df.arrival_rank.isin([2, 3]), "rank 2-3")
+    rate(df, (df.arrival_rank >= 4) & (df.arrival_rank <= 10), "rank 4-10")
+    rate(df, df.arrival_rank > 10, "rank > 10")
+
+    echo("\n  arrival OFFSET from storm start:")
+    rate(df, df.offset_s == 0, "t+0 (storm opener)")
+    rate(df, (df.offset_s > 0) & (df.offset_s <= 60), "1-60 s")
+    rate(df, (df.offset_s > 60) & (df.offset_s <= 300), "1-5 min")
+    rate(df, df.offset_s > 300, "> 5 min")
+
+    echo("\n  mapped-fleet presence in first 60 s:")
+    rate(df, df.n_fleets == 0, "no mapped fleet")
+    rate(df, (df.n_fleets >= 1) & (df.n_fleets <= 3), "1-3 fleets")
+    rate(df, (df.n_fleets >= 4) & (df.n_fleets <= 10), "4-10 fleets")
+    rate(df, df.n_fleets > 10, "> 10 fleets")
+
+    echo("\n  FLASH-guild fleets specifically:")
+    rate(df, df.n_flash == 0, "no FLASH fleet")
+    rate(df, (df.n_flash >= 1) & (df.n_flash <= 2), "1-2 FLASH")
+    rate(df, df.n_flash >= 3, ">= 3 FLASH")
+
+    echo("\n  ladder touch (<= 60 s):")
+    rate(df, ~df.ladder, "not touched")
+    rate(df, df.ladder, "touched by the ladder")
+
+    echo("\n  per-day stability of the strongest contrast (>=3 FLASH vs 0), P(grad):")
+    for day, g in df.groupby("day"):
+        a = g[g.n_flash >= 3]["graduated"]
+        b = g[g.n_flash == 0]["graduated"]
+        if len(a) >= 20:
+            echo(f"    {day}  >=3 FLASH: {a.mean():>6.2%} (n={len(a):,})   "
+                 f"0 FLASH: {b.mean():>6.2%} (n={len(b):,})")
+
+    echo("\n  WITHIN-storm self-controlled test: in storms with >= 5 instances and exactly")
+    echo("  one max-mcap winner, does the winner have the most FLASH fleets in its first")
+    echo("  minute? (null: winner is a random instance, so P = 1/n_instances)")
+    hits = tries = 0
+    exp = 0.0
+    for sid, g in df.groupby("storm_id"):
+        if len(g) < 5 or g["win"].sum() != 1:
+            continue
+        w = g[g["win"]].iloc[0]
+        mx = g["n_flash"].max()
+        if mx == 0:
+            continue
+        tries += 1
+        exp += 1.0 / len(g)
+        top = g[g["n_flash"] == mx]
+        if w["n_flash"] == mx and len(top) == 1:
+            hits += 1
+    if tries:
+        echo(f"    winner is the UNIQUE max-FLASH instance in {hits}/{tries} storms "
+             f"({hits / tries:.1%}); random-instance null expects ~{exp / tries:.1%}")
+    df.to_parquet(CACHE / "storm_instances.parquet", index=False)
+    echo(f"\n  -> {CACHE}/storm_instances.parquet")
+    con.close()
+
+
+# ---------------------------------------------------------------------------------------
+# STAGE 11 -- persistence: does a fleet live for a day, a week, or the whole window?
+# ---------------------------------------------------------------------------------------
+
+
+def cmd_persistence(source: str, thresh: float = 0.10, min_size: int = 3,
+                    seed: int = 20260815) -> None:
+    """Per-day cohesion of every profiled cluster.
+
+    A cluster 'co-fires' on a day if at least one (mint, slot) event that day contains two
+    or more of its members. Ten days cannot measure a lifetime longer than ten days, but
+    they can measure TURNOVER: if most fleets co-fire on one or two days, the map decays in
+    days and the detector matters more than any snapshot; if most span the window, the
+    snapshot is an asset. Days are UTC.
+    """
+    cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
+    con = _duck()
+    _member_events(con, source, cl_path)
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE codays AS
+        WITH co AS (
+          SELECT cid, date_trunc('day', to_timestamp(t)) AS day
+          FROM me GROUP BY cid, mint, slot, kind, day
+          HAVING count(DISTINCT owner) >= 2
+        )
+        SELECT cid, count(DISTINCT day) AS n_days,
+               min(day) AS first_day, max(day) AS last_day,
+               date_diff('day', min(day), max(day)) + 1 AS span
+        FROM co GROUP BY cid
+        """
+    )
+    echo("\n=== 11.1 cluster persistence (co-firing days per cluster) ===")
+    tot, nco = con.execute(
+        "SELECT (SELECT count(DISTINCT cid) FROM me), count(*) FROM codays"
+    ).fetchone()
+    echo(f"  profiled clusters: {tot:,}; ever co-firing (>=2 members in one event): {nco:,}")
+    dist = con.execute(
+        "SELECT n_days, count(*) n FROM codays GROUP BY n_days ORDER BY n_days"
+    ).fetchdf()
+    for _, r in dist.iterrows():
+        echo(f"    co-active on {int(r.n_days):>2} day(s): {int(r.n):>6,} clusters "
+             f"{'#' * min(int(r.n) // 40, 60)}")
+    gaps = con.execute(
+        "SELECT avg((span - n_days)::DOUBLE) FROM codays WHERE n_days > 1"
+    ).fetchone()[0]
+    echo(f"  mean skipped days inside a span: {gaps:.2f}")
+    surv = con.execute(
+        """
+        SELECT count(*) FILTER (WHERE first_day = (SELECT min(first_day) FROM codays)
+                                  AND last_day = (SELECT max(last_day) FROM codays)) fs,
+               count(*) FILTER (WHERE first_day = (SELECT min(first_day) FROM codays)) d1,
+               count(*) n
+        FROM codays
+        """
+    ).fetchone()
+    echo(f"  co-firing already on day 1 (left-censored) : {surv[1]:,} "
+         f"({surv[1] / max(surv[2], 1):.1%})")
+    echo(f"  co-firing on BOTH day 1 and day 10         : {surv[0]:,} "
+         f"({surv[0] / max(surv[2], 1):.1%})")
+    births = con.execute(
+        "SELECT first_day, count(*) n FROM codays GROUP BY first_day ORDER BY first_day"
+    ).fetchdf()
+    echo("  first-co-fire day (fleet 'births'; day 1 is left-censored):")
+    for _, r in births.iterrows():
+        echo(f"    {str(r.first_day)[:10]}  {int(r.n):>6,} {'#' * min(int(r.n) // 40, 60)}")
+    con.execute(
+        f"COPY codays TO '{CACHE}/persistence_{source}.parquet' "
+        f"(FORMAT PARQUET, COMPRESSION ZSTD)"
+    )
+    echo(f"\n  -> {CACHE}/persistence_{source}.parquet")
+    con.close()
+
+
+# ---------------------------------------------------------------------------------------
+# STAGE 12 -- ECOLOGY: guilds, niches, the food web, and demography.
+# ---------------------------------------------------------------------------------------
+
+GUILD_RULES = """
+guild rules, stated up front (interpretable rules, not a hidden fit):
+  AFTERMARKET : <50% of touched coins are in-window launches (trades OLD coins)
+  ACCUMULATOR : exit_ratio < 0.2 (buys and does not leave; the ladder's guild)
+  FLASH       : median hold <= 60 s (in and out inside the launch spike)
+  HARVESTER   : median hold 60 s .. 1 h (rides the first wave, then leaves)
+  SLOW        : median hold > 1 h (position traders on fresh launches)
+rules apply top to bottom; first match wins. exit_ratio = exits / entries.
+"""
+
+
+def _guild(fresh_frac, exit_ratio, med_hold) -> str:
+    import math as _m
+
+    if fresh_frac is not None and fresh_frac == fresh_frac and fresh_frac < 0.5:
+        return "AFTERMARKET"
+    if exit_ratio < 0.2:
+        return "ACCUMULATOR"
+    if med_hold is None or (isinstance(med_hold, float) and _m.isnan(med_hold)):
+        return "FLASH"
+    if med_hold <= 60:
+        return "FLASH"
+    if med_hold <= 3600:
+        return "HARVESTER"
+    return "SLOW"
+
+
+def cmd_ecology(source: str, thresh: float = 0.10, min_size: int = 3,
+                seed: int = 20260815, n_null: int = 200) -> None:
+    """The map, read as an ecosystem.
+
+    Taxonomy first (guild assignment by stated rules), then the trait distributions that
+    justify the cut points, then the guild-level FOOD WEB (exit-into-entry with the
+    matched-moment null, pooled by guild so the test is strong), then demography (per-guild
+    persistence). Retail is not in the map -- wallets appear here only if they co-cross with
+    somebody -- so 'retail' appears implicitly: it is the counterparty of every flow that
+    does not net to zero inside the mapped guilds. Said out loud in the output.
+    """
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
+    con = _duck()
+    _member_events(con, source, cl_path)
+
+    # ---- 12.1 traits and taxonomy -------------------------------------------------------
+    echo("\n=== 12.1 traits and taxonomy ===")
+    echo(GUILD_RULES)
+    fresh = con.execute(
+        f"""
+        SELECT cid,
+               avg(CASE WHEN c.mint IS NOT NULL THEN 1.0 ELSE 0.0 END) AS fresh_frac
+        FROM (SELECT DISTINCT cid, mint FROM cm) t
+        LEFT JOIN read_parquet('{CRIME_COINS}') c ON c.mint = t.mint
+        GROUP BY cid
+        """
+    ).fetchdf().set_index("cid")["fresh_frac"]
+    prof = pd.read_parquet(CACHE / f"profiles_{source}.parquet").set_index("cid")
+    prof["fresh_frac"] = fresh
+    prof["exit_ratio"] = prof["exits"] / prof["entries"].clip(lower=1)
+    prof["guild"] = [
+        _guild(r.fresh_frac, r.exit_ratio, r.median_hold_s) for r in prof.itertuples()
+    ]
+    echo("  trait quantiles that motivate the cut points:")
+    q = prof[["exit_ratio", "median_hold_s", "fresh_frac"]].quantile(
+        [0.1, 0.25, 0.5, 0.75, 0.9]
+    )
+    echo(q.to_string(float_format=lambda x: f"{x:,.3f}"))
+    echo("\n  guild populations:")
+    pop = prof.groupby("guild").agg(
+        clusters=("n_wallets", "size"), wallets=("n_wallets", "sum"),
+        coins_pd=("coins_per_day", "median"), med_hold=("median_hold_s", "median"),
+        exit_ratio=("exit_ratio", "median"), fresh=("fresh_frac", "median"),
+    ).sort_values("clusters", ascending=False)
+    echo(pop.to_string(float_format=lambda x: f"{x:,.2f}"))
+    prof.reset_index().to_parquet(CACHE / f"guilds_{source}.parquet", index=False)
+
+    # ---- 12.2 the food web --------------------------------------------------------------
+    echo("\n=== 12.2 the food web: guild-level exit-into-entry, matched-moment null ===")
+    echo("  pooled by guild: every guild-A exit vs every guild-B entry on the same coin,")
+    echo(f"  |slot difference| <= 2, {n_null} within-coin draws from the pooled entry slots.")
+    gmap = prof["guild"].to_dict()
+    ev = con.execute("SELECT cid, mint, slot, kind, amt FROM me").fetchdf()
+    ev["guild"] = ev["cid"].map(gmap)
+    ev = ev.dropna(subset=["guild"])
+    mint_ids = {m: i for i, m in enumerate(ev["mint"].unique())}
+    ev["mi"] = ev["mint"].map(mint_ids)
+    ex = ev[ev["kind"] == "exit"]
+    en = ev[ev["kind"] == "entry"]
+    entry_pool = {mi: np.asarray(g) for mi, g in en.groupby("mi")["slot"]}
+    exl = {
+        (g, m): (np.asarray(x["slot"]), np.asarray(x["amt"], dtype=float))
+        for (g, m), x in ex.groupby(["guild", "mi"])[["slot", "amt"]]
+    }
+    enl = {(g, m): np.asarray(x) for (g, m), x in en.groupby(["guild", "mi"])["slot"]}
+    ex_mints: dict[str, set] = defaultdict(set)
+    for g, m in exl:
+        ex_mints[g].add(m)
+    en_mints: dict[str, set] = defaultdict(set)
+    for g, m in enl:
+        en_mints[g].add(m)
+    guilds = sorted(pop.index)
+
+    def hits(A, shared, end):
+        n, vol = 0, 0.0
+        for m in shared:
+            sl, am = exl[(A, m)]
+            bb = end.get(m)
+            if bb is None or len(bb) == 0:
+                continue
+            hit = (np.abs(sl[:, None] - bb[None, :]) <= 2).any(axis=1)
+            n += int(hit.sum())
+            vol += float(am[hit].sum())
+        return n, vol
+
+    echo(f"\n  {'prey(sell)':>12} {'predator(buy)':>14} {'coins':>7} {'absorbed':>9} "
+         f"{'null':>7} {'z(vol)':>7} {'p':>6}  verdict")
+    web = []
+    for A in guilds:
+        for B in guilds:
+            if A == B:
+                continue
+            shared = sorted(ex_mints[A] & en_mints[B])
+            if len(shared) < 30:
+                continue
+            # subsample huge shared sets for tractability; stated, not hidden
+            if len(shared) > 4000:
+                shared = list(rng.choice(shared, size=4000, replace=False))
+            expo = sum(float(exl[(A, m)][1].sum()) for m in shared) or 1.0
+            obs_n, obs_v = hits(A, shared, {m: enl[(B, m)] for m in shared})
+            nv = []
+            for _ in range(n_null):
+                perm = {}
+                for m in shared:
+                    sl = enl[(B, m)]
+                    pool = entry_pool.get(m)
+                    perm[m] = (
+                        sl if pool is None or len(pool) == 0
+                        else rng.choice(pool, size=len(sl), replace=True)
+                    )
+                nv.append(hits(A, shared, perm)[1])
+            av = np.array(nv)
+            zv = (obs_v - av.mean()) / av.std() if av.std() > 0 else float("nan")
+            p = (int((av >= obs_v).sum()) + 1) / (n_null + 1)
+            web.append((A, B, len(shared), obs_v / expo, av.mean() / expo, zv, p))
+    web.sort(key=lambda r: -(r[5] if r[5] == r[5] else -9e9))
+    for A, B, ns, ov, mv, zv, p in web:
+        v = "FLOW" if zv == zv and zv > 3 and p < 0.05 else "-"
+        echo(f"  {A:>12} {B:>14} {ns:>7,} {ov:>8.2%} {mv:>6.2%} {zv:>7.2f} {p:>6.3f}  {v}")
+    echo("\n  what does not net out inside these guilds is absorbed by wallets not in the")
+    echo("  map -- retail and singletons. The map only sees actors who co-move.")
+    pd.DataFrame(
+        web, columns=["prey", "predator", "coins", "absorbed", "null", "z", "p"]
+    ).to_parquet(CACHE / f"foodweb_{source}.parquet", index=False)
+
+    # ---- 12.3 demography ---------------------------------------------------------------
+    echo("\n=== 12.3 demography (needs --persistence run first; reuses its parquet) ===")
+    pp = CACHE / f"persistence_{source}.parquet"
+    if pp.exists():
+        cod = pd.read_parquet(pp).set_index("cid")
+        prof2 = prof.join(cod, how="inner")
+        demo = prof2.groupby("guild").agg(
+            clusters=("n_days", "size"), med_co_days=("n_days", "median"),
+            full_window=("n_days", lambda s: (s >= 10).mean()),
+            one_day=("n_days", lambda s: (s <= 1).mean()),
+        ).sort_values("clusters", ascending=False)
+        echo(demo.to_string(float_format=lambda x: f"{x:,.2f}"))
+        echo("  READ: full_window = share of the guild co-firing on 10+ of the 11 UTC days;")
+        echo("  one_day = share that co-fired exactly once. Ten days censor longer lives.")
+    else:
+        echo("  (skipped: persistence parquet missing)")
+    con.close()
+
+
+def cmd_resonance(source: str, cos_min: float = 0.05, mints_min: int = 50,
+                  n_min: int = 50, width_max: int = 2) -> None:
+    """Scan every strong edge for a LOCKED first-entry offset.
+
+    The 8-second ladder was found by eye in a top-25 table. This is the systematic version:
+    a pair of wallets whose first entries on hundreds of different coins sit at a CONSTANT
+    offset (IQR width <= `width_max` seconds) is driven by a scheduler, full stop -- no
+    market process holds two independent actors at a fixed relative latency across weeks of
+    distinct launches. Zero-offset locked pairs are co-triggered; nonzero-offset locked
+    pairs are RUNGS of a work queue, and their offsets should assemble into consistent
+    one-dimensional ladders if they come from one scheduler.
+
+    The scan is edge-first (only pairs already strong in the co-crossing graph), so it
+    inherits the gate's validation and costs one join, not an all-pairs pass.
+    """
+    import numpy as np
+    import pandas as pd
+
+    con = _duck()
+    E = CACHE / f"edges_{source}.parquet"
+    d = ev_dir(source)
+    con.execute(
+        f"""CREATE OR REPLACE TABLE cand AS
+            SELECT u, v, cos, n_mints FROM read_parquet('{E}')
+            WHERE cos >= {cos_min} AND n_mints >= {mints_min}"""
+    )
+    ncand = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+    con.execute(
+        """CREATE OR REPLACE TABLE ws AS
+           SELECT DISTINCT w FROM (SELECT u AS w FROM cand UNION ALL SELECT v FROM cand)"""
+    )
+    nws = con.execute("SELECT count(*) FROM ws").fetchone()[0]
+    echo(f"\n=== 8.1 resonance scan: {ncand:,} candidate edges over {nws:,} wallets ===")
+    echo(f"  candidates: cos >= {cos_min}, shared mints >= {mints_min}")
+
+    # First entry per (owner, mint), over ALL entry events including k=1: a wallet's own
+    # schedule does not care whether anyone else crossed in its slot.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE fe AS
+        WITH x AS (
+          SELECT mint, block_time AS t, unnest(owners) AS owner
+          FROM read_parquet('{d}/*.parquet') WHERE kind = 'entry'
+        )
+        SELECT owner, mint, min(t) AS t
+        FROM x JOIN ws ON ws.w = x.owner
+        GROUP BY owner, mint
+        """
+    )
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE off AS
+        SELECT c.u, c.v, c.cos, count(*) AS n,
+               median(b.t - a.t) AS med,
+               quantile_cont(b.t - a.t, 0.25) AS q1,
+               quantile_cont(b.t - a.t, 0.75) AS q3,
+               quantile_cont(b.t - a.t, 0.10) AS p10,
+               quantile_cont(b.t - a.t, 0.90) AS p90
+        FROM cand c
+        JOIN fe a ON a.owner = c.u
+        JOIN fe b ON b.owner = c.v AND b.mint = a.mint
+        GROUP BY c.u, c.v, c.cos
+        """
+    )
+    lk = con.execute(
+        f"""SELECT u, v, cos, n, med, q1, q3, p10, p90
+            FROM off WHERE n >= {n_min} AND (q3 - q1) <= {width_max}
+            ORDER BY n DESC"""
+    ).fetchdf()
+    tot = con.execute("SELECT count(*) FROM off").fetchone()[0]
+    echo(f"  edges with >= {n_min} co-entered coins   : {tot:,}")
+    echo(
+        f"  LOCKED (IQR width <= {width_max}s)          : {len(lk):,}  "
+        f"({len(lk) / max(tot, 1):.1%})"
+    )
+    z = lk[lk["med"].abs() <= 1]
+    nz = lk[lk["med"].abs() > 1]
+    echo(f"    at zero offset (co-triggered)    : {len(z):,}")
+    echo(f"    at NONZERO offset (rungs)        : {len(nz):,}")
+    if len(nz):
+        echo("\n  offset spectrum of nonzero locked pairs (|median|, seconds):")
+        spec = nz["med"].abs().round().astype(int).value_counts().sort_index()
+        for k, v in spec.items():
+            echo(f"    {k:>5}s : {v:>4} pairs {'#' * min(v, 60)}")
+
+    # ---- assemble automation groups ---------------------------------------------------
+    # Components over ALL locked pairs; then, inside each component, solve the 1-D embedding
+    # from rounded median offsets and COUNT THE MISMATCHES instead of trusting it.
+    echo("\n=== 8.2 automation groups (components of locked pairs) ===")
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for _, r in lk.iterrows():
+        a, b = find(r.u), find(r.v)
+        if a != b:
+            parent[a] = b
+    comp: dict[str, list] = defaultdict(list)
+    for w in parent:
+        comp[find(w)].append(w)
+    groups = sorted(comp.values(), key=len, reverse=True)
+    echo(f"  groups: {len(groups):,}   sizes: "
+         + ", ".join(str(len(g)) for g in groups[:20])
+         + (" ..." if len(groups) > 20 else ""))
+
+    cl_path = CACHE / f"clusters_{source}.parquet"
+    cid_of = {}
+    if cl_path.exists():
+        cldf = pd.read_parquet(cl_path)
+        cid_of = dict(zip(cldf["owner"], cldf["cid"]))
+
+    edges_by_pair = {(r.u, r.v): r for _, r in lk.iterrows()}
+    out_rows = []
+    for gi, g in enumerate(groups):
+        if len(g) < 3:
+            continue
+        gset = set(g)
+        ge = [r for (u, v), r in edges_by_pair.items() if u in gset and v in gset]
+        # BFS embedding from the best-connected node
+        deg = Counter()
+        for r in ge:
+            deg[r.u] += 1
+            deg[r.v] += 1
+        root = max(deg, key=deg.get)
+        pos = {root: 0.0}
+        for _ in range(len(g)):
+            for r in ge:
+                m = round(r.med)
+                if r.u in pos and r.v not in pos:
+                    pos[r.v] = pos[r.u] + m
+                if r.v in pos and r.u not in pos:
+                    pos[r.u] = pos[r.v] - m
+        mism = sum(
+            1 for r in ge
+            if r.u in pos and r.v in pos and abs((pos[r.v] - pos[r.u]) - round(r.med)) > 1
+        )
+        checks = len(ge) - (len(pos) - 1)
+        rungs = sorted(set(pos.values()))
+        spac = [int(rungs[i + 1] - rungs[i]) for i in range(len(rungs) - 1)]
+        cids = sorted({cid_of.get(w, -1) for w in g})
+        coins = int(np.median([r.n for r in ge]))
+        out_rows.append((gi, len(g), len(ge), checks, mism, rungs, spac, cids, coins))
+    echo("\n  groups with >=3 wallets, embedded and CHECKED:")
+    echo(f"  {'grp':>4} {'wal':>4} {'edges':>6} {'checks':>7} {'mismatch':>9} "
+         f"{'rungs (s)':>28} {'spacing':>14} {'med coins':>10}  clusters")
+    for gi, nwal, nedge, checks, mism, rungs, spac, cids, coins in out_rows[:20]:
+        rt = ",".join(f"{int(r):+d}" for r in rungs[:8]) + ("…" if len(rungs) > 8 else "")
+        st = ",".join(str(x) for x in spac[:6]) + ("…" if len(spac) > 6 else "")
+        echo(
+            f"  {gi:>4} {nwal:>4} {nedge:>6} {checks:>7} {mism:>9} {rt:>28} {st:>14} "
+            f"{coins:>10,}  {cids}"
+        )
+    lk.to_parquet(CACHE / f"resonance_{source}.parquet", index=False)
+    echo(f"\n  locked pairs -> {CACHE}/resonance_{source}.parquet")
+    echo("\n  RECALL CAVEAT, learned from the 8s ladder: rungs spaced more than ~2 slots")
+    echo("  apart never co-cross in one (mint, slot) event, so they have NO edge in this")
+    echo("  graph and this scan cannot see them. Coarse ladders live at CLUSTER grain --")
+    echo("  that is what --resonance2 is for.")
+    con.close()
+
+
+def cmd_resonance2(source: str, thresh: float = 0.10, min_size: int = 3,
+                   seed: int = 20260815, min_shared: int = 50, crowd_cap: int = 30,
+                   width_max: int = 4) -> None:
+    """The CLUSTER-grain ladder scan -- the one that can see coarse rungs.
+
+    A wallet pair 8 seconds apart never lands in the same (mint, slot) event, so the
+    co-crossing graph carries no edge between rungs and ``cmd_resonance`` is structurally
+    blind to any scheduler whose spacing exceeds a slot or two. At cluster grain the
+    blindness disappears: each cluster has a first-entry time per coin, and a locked
+    cluster-pair offset over hundreds of distinct coins is the same smoking gun.
+
+    Pair candidates are generated mint-first with a crowd cap: a coin entered by hundreds
+    of clusters is a stampede and carries no scheduler information (and would blow the
+    pair count); a coin entered by a handful is where a fixed offset can be seen. Offset
+    stats are then computed over ALL shared coins of the surviving pairs.
+    """
+    import numpy as np
+    import pandas as pd
+
+    cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
+    con = _duck()
+    _member_events(con, source, cl_path)
+    # cluster-level first entry per coin, from the cm table _member_events built
+    con.execute(
+        """CREATE OR REPLACE TABLE cfe AS
+           SELECT cid, mint, first_entry_t AS t FROM cm WHERE first_entry_t IS NOT NULL"""
+    )
+    n = con.execute("SELECT count(*) FROM cfe").fetchone()[0]
+    echo(f"\n=== 10.1 cluster-grain resonance: {n:,} (cluster, coin) first entries ===")
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE cand AS
+        WITH low AS (
+          SELECT mint FROM cfe GROUP BY mint HAVING count(*) BETWEEN 2 AND {crowd_cap}
+        )
+        SELECT a.cid A, b.cid B, count(*) n_low
+        FROM cfe a JOIN cfe b ON a.mint = b.mint AND a.cid < b.cid
+        JOIN low l ON l.mint = a.mint
+        GROUP BY a.cid, b.cid
+        HAVING count(*) >= {min_shared}
+        """
+    )
+    nc = con.execute("SELECT count(*) FROM cand").fetchone()[0]
+    echo(f"  cluster pairs sharing >= {min_shared} low-crowd (<= {crowd_cap} clusters) "
+         f"coins: {nc:,}")
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE coff AS
+        SELECT c.A, c.B, c.n_low, count(*) n,
+               median(b.t - a.t) med,
+               quantile_cont(b.t - a.t, 0.25) q1,
+               quantile_cont(b.t - a.t, 0.75) q3
+        FROM cand c
+        JOIN cfe a ON a.cid = c.A
+        JOIN cfe b ON b.cid = c.B AND b.mint = a.mint
+        GROUP BY c.A, c.B, c.n_low
+        """
+    )
+    lk = con.execute(
+        f"""SELECT * FROM coff WHERE (q3 - q1) <= {width_max} ORDER BY n DESC"""
+    ).fetchdf()
+    tot = con.execute("SELECT count(*) FROM coff").fetchone()[0]
+    echo(f"  pairs measured: {tot:,}   LOCKED (IQR width <= {width_max}s): {len(lk):,}")
+    z = lk[lk["med"].abs() <= 1]
+    nz = lk[lk["med"].abs() > 1]
+    echo(f"    zero-offset (co-triggered fleets)  : {len(z):,}")
+    echo(f"    NONZERO offset (LADDER RUNGS)      : {len(nz):,}")
+    if len(nz):
+        echo("\n  offset spectrum (|median|, s):")
+        spec = nz["med"].abs().round().astype(int).value_counts().sort_index()
+        for k, v in spec.items():
+            echo(f"    {k:>5}s : {v:>4} pairs {'#' * min(v, 60)}")
+        echo(f"\n  nonzero locked pairs (top 30 by shared coins):")
+        echo(f"  {'A':>7} {'B':>7} {'coins':>7} {'med off':>8} {'IQR':>15}")
+        for _, r in nz.head(30).iterrows():
+            echo(f"  {int(r.A):>7} {int(r.B):>7} {int(r.n):>7,} {r.med:>+7.0f}s "
+                 f"[{r.q1:>+5.0f},{r.q3:>+5.0f}]s")
+    # ladder assembly over nonzero locked pairs
+    echo("\n=== 10.2 ladders (components over nonzero locked cluster pairs) ===")
+    parent: dict[int, int] = {}
+
+    def find(x: int) -> int:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for _, r in nz.iterrows():
+        a, b = find(int(r.A)), find(int(r.B))
+        if a != b:
+            parent[a] = b
+    comp: dict[int, list] = defaultdict(list)
+    for c in parent:
+        comp[find(c)].append(c)
+    groups = sorted(comp.values(), key=len, reverse=True)
+    sizes = pd.read_parquet(cl_path).groupby("cid").size()
+    pair_map = {(int(r.A), int(r.B)): r for _, r in nz.iterrows()}
+    for gi, g in enumerate(groups[:15]):
+        gset = set(g)
+        ge = [r for (a, b), r in pair_map.items() if a in gset and b in gset]
+        deg = Counter()
+        for r in ge:
+            deg[int(r.A)] += 1
+            deg[int(r.B)] += 1
+        root = max(deg, key=deg.get)
+        pos = {root: 0.0}
+        for _ in range(len(g)):
+            for r in ge:
+                m = round(r.med)
+                if int(r.A) in pos and int(r.B) not in pos:
+                    pos[int(r.B)] = pos[int(r.A)] + m
+                if int(r.B) in pos and int(r.A) not in pos:
+                    pos[int(r.A)] = pos[int(r.B)] - m
+        mism = sum(
+            1 for r in ge
+            if abs((pos[int(r.B)] - pos[int(r.A)]) - round(r.med)) > 1
+        )
+        checks = len(ge) - (len(pos) - 1)
+        rungs = sorted(pos.items(), key=lambda kv: kv[1])
+        wal = sum(int(sizes.get(c, 0)) for c in g)
+        echo(f"\n  ladder {gi}: {len(g)} clusters, {wal} wallets, {len(ge)} locked pairs, "
+             f"{checks} independent checks, {mism} MISMATCHES")
+        echo("    " + "  ".join(f"{c}@{int(p):+d}s" for c, p in rungs))
+    lk.to_parquet(CACHE / f"resonance2_{source}.parquet", index=False)
+    echo(f"\n  -> {CACHE}/resonance2_{source}.parquet")
+    con.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--events", action="store_true")
@@ -1579,6 +2789,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--between", action="store_true")
     ap.add_argument("--operator", action="store_true")
     ap.add_argument("--probe", type=str, default="", help="comma-separated cluster ids")
+    ap.add_argument("--resonance", action="store_true")
+    ap.add_argument("--resonance2", action="store_true")
+    ap.add_argument("--selection", type=str, default="",
+                    help="comma-separated cluster ids for coin-selection analysis")
+    ap.add_argument("--deployer-territory", action="store_true")
+    ap.add_argument("--persistence", action="store_true")
+    ap.add_argument("--ecology", action="store_true")
+    ap.add_argument("--pvp", action="store_true")
+    ap.add_argument("--storms", action="store_true")
+    ap.add_argument("--storm-edge", action="store_true")
     ap.add_argument("--source", default="panel", choices=("panel", "bulk"))
     ap.add_argument("--thresh", type=float, default=0.10)
     ap.add_argument("--min-size", type=int, default=3)
@@ -1609,6 +2829,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.source, thresh=args.thresh, min_size=args.min_size,
             seed=args.seed, n_null=args.draws, top=args.top,
         )
+        return 0
+    if args.resonance:
+        cmd_resonance(args.source)
+        return 0
+    if args.resonance2:
+        cmd_resonance2(args.source, thresh=args.thresh, min_size=args.min_size,
+                       seed=args.seed)
+        return 0
+    if args.selection:
+        cmd_selection(
+            args.source, [int(x) for x in args.selection.split(",") if x.strip()],
+            thresh=args.thresh, min_size=args.min_size, seed=args.seed,
+        )
+        return 0
+    if args.deployer_territory:
+        cmd_deployer_territory(args.source, thresh=args.thresh, min_size=args.min_size,
+                               seed=args.seed)
+        return 0
+    if args.persistence:
+        cmd_persistence(args.source, thresh=args.thresh, min_size=args.min_size,
+                        seed=args.seed)
+        return 0
+    if args.ecology:
+        cmd_ecology(args.source, thresh=args.thresh, min_size=args.min_size,
+                    seed=args.seed, n_null=args.draws)
+        return 0
+    if args.pvp:
+        cmd_pvp()
+        return 0
+    if args.storms:
+        cmd_storms()
+        return 0
+    if args.storm_edge:
+        cmd_storm_edge(seed=args.seed)
         return 0
     if args.probe:
         cmd_probe(

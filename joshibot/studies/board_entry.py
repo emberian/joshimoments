@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 TAPE = Path(__file__).resolve().parent.parent / "state" / "boards"
-HORIZONS_S = (300, 900, 1800, 3600, 7200)
+HORIZONS_S = (300, 1800, 3600, 7200, 14400, 21600, 28800)
 
 
 def load(paths: str) -> list[dict[str, Any]]:
