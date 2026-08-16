@@ -355,6 +355,17 @@ Every one of these was violated by published work we read, with measurable conse
     activity and active wallets — exactly the population worth studying — Bonferroni FWER
     measured **0.600**, and BH produced **~99 confident clusters out of nothing in 30/30
     worlds**. The degree-preserving null deleted 100% of them.
+14. **Bursty data: the null resamples bursts, not rows.** Coordinated-wallet activity arrives
+    in bursts, so a t-statistic (robust or not) computed over slots/rows counts a handful of
+    independent events as thousands of observations and is wrong by **hundreds of orders of
+    magnitude**. The effective sample size is the number of independent bursts, never the row
+    or slot count. Measured here on real coordinated-wallet data: the same data gave a robust
+    **t = 40.4** while a **rotation null** — which resamples whole bursts, holding the burst
+    structure fixed and only shifting event times — returned **p = 0.011**. The rotation is
+    the honest number; the t-statistic is an artifact of pretending autocorrelated rows are
+    independent. Any test on a bursty or autocorrelated event stream (co-trading, callout
+    flow, fill timing) gets a rotation, block, or burst-permutation null; a Gaussian or
+    i.i.d.-row null is inadmissible and its p-value means nothing.
 
 **Instrument checks we owe ourselves.** Exponential-kernel Hawkes on a launch tape is biased in
 *both* directions: kernel misspecification pushes branching down (true kernels are power-law), while

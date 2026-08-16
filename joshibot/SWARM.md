@@ -280,6 +280,11 @@ mutation loops are on their own and every lane prompt should say so.
   whole compound command; backticks in a double-quoted `-m` get command-substituted (write prose
   commit messages to a file, `git commit -F`).
 - hbox is co-tenant (codex owns the datacake HOL build); build under `swarm-build`, keep waves small.
+- **Corpus mirrors go stale/incomplete silently.** The persvati and hbox copies of the bulk
+  corpus drop days and truncate parquets without any error — a remote fold then reports a clean
+  number computed over a subset. **Verify the file count (35294) before trusting any remote
+  fold**; a short mirror is a wrong answer that looks right. Three lanes were bitten by this
+  before it was written down. `scripts/corpus_verify.py` is the check.
 - **Billed-by-scan data: always dry-run the SUPERSET before buying the subset.** BigQuery bills
   bytes-scanned = columns × partitions; the WHERE clause is *free* if it filters on columns already
   read. We paid ~$54 for an 11-pool pull whose identical scan would have carried ALL of pump.fun
