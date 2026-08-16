@@ -238,6 +238,37 @@ external:
        It still sits at 42.7% same-slot with jackduvalcalls' buys, which is the reason to keep it: no future
        study should mistake same-slot co-occurrence for coordination."}
 
+# ---------------------------------------------------------------------------------
+# Competitor bot infrastructure on the cluster pools, 2026-08-15, from
+# studies/failure_stream.py §3 (RESULT_failure_stream.md Appendix B / §3.2). This is a
+# TOP-LEVEL section, not part of `external:` -- appending into the wrong section is the
+# exact mistake that broke this file twice; tests/test_wallet_labels.py now covers it.
+# DERIVED, never attested: each address is the fee payer behind >=99% of one behavioural-
+# fingerprint cell in a 2,266-transaction getTransaction sample; `program` is the program
+# at the failing instruction index. Every address is a full 44-char key read from
+# getTransaction, never a prefix completed by search, so the file's address-poisoning
+# resolution rule is satisfied by construction, and all eight are on-curve (checked; the
+# invariant test now includes this section).
+# HALF-LIFE: §6 measured 56% error-code-mix overlap across a two-day gap, so re-run
+# `failure_stream.py refresh` before trusting this roster's currency.
+bot_infrastructure:
+  - {address: FUJKrQhxWYu4z59G6JGVfZstjQKi1fY1BZNwoekgs9vL, label: arb_bot_3yGCLwQ, kind: bot, confidence: inferred,
+     note: "program 3yGCLwQWdeS6jQvPgPYb7eDW1TQ9otWnuyyZFRC9K6K6; 100% of that program's sampled failures; self-aborter (beaten 16%, uses 8% of requested compute, bids 2,768 ulamports/CU)"}
+  - {address: XUrKb2aK4jBm77q75EemchVUNRTJyeFQ5KebTJygPhF, label: arb_bot_CZr8VacF, kind: bot, confidence: inferred,
+     note: "program CZr8VacFkAVKXYgiB5VFmZWE42Bi7XTkNmsMwN5EyzhP; 100% of sampled failures; uses 73% of requested compute, bids 10,489"}
+  - {address: Bu79TNqnLb5Pgbn4JA2L5k6sXmmgie5cXyCXi4w5X9RY, label: arb_bot_DF3Ljmyz, kind: bot, confidence: inferred,
+     note: "program DF3LjmyzuMApbw55YeC52JJArKgQjygKWZFUB9TNqLWn; 100% of sampled failures; error i3:0x3 with an interquartile compute range of TWO units (1,637-1,639); bids a flat 40,000"}
+  - {address: 6WJfN1fqrEEMSVKnzZkR4vJTMTxBaqvka2KA7aQHJMfF, label: arb_bot_2VSNUquk, kind: bot, confidence: inferred,
+     note: "program 2VSNUquk7FqkbS27WJpm6J1175EhoLcGtxuExu3wrzVz; 100% of sampled failures; the router RESULT_execution_landing.md saw succeed 77% of the time while filling elsewhere"}
+  - {address: 4NHYHfeMKKWa77v9hSo7k4FxhGopGmwosxsC1baLsoAk, label: arb_bot_31KJbyd5, kind: bot, confidence: inferred,
+     note: "program 31KJbyd5umqKQ9a3NuFWuhV1MLUQkg3FBrn3vE7L9R1t; 100% of sampled failures; lowest bidder on the board at 537 ulamports/CU"}
+  - {address: 8TPWakvWw4xQbk7uAYdNjZiDKKHgv9GE5GebzsbtUaHr, label: arb_bot_6MWVTis8, kind: bot, confidence: inferred,
+     note: "program 6MWVTis8rmmk6Vt9zmAJJbmb3VuLpzoQ1aHH4N6wQEGh; 99% of sampled failures; bids 924"}
+  - {address: VLXFRyxhAndY21gS4ys6ZWyJKHeP9DQgoqHhq3ARs2H, label: arb_bot_VeLoXemE, kind: bot, confidence: inferred,
+     note: "program VeLoXemE5sA5Co5NnQM2SKYW5ovddcYrCytHX5gWDyV; 63% of sampled failures; vanity address matching its own program prefix"}
+  - {address: 9DnwXX7kQWkk3EsTDRvJc5GYutEeaJv3WuWFC4uyjPER, label: arb_bot_i3_0x1798, kind: bot, confidence: inferred,
+     note: "fails inside PumpSwap AMM itself with i3:0x1798; the most contested machine on the board (beaten in-block 54%) and the ONLY exposure whose effect survives the pre-registered §8 test"}
+
 # The namespace census behind the imposter entry above, so the hazard's SHAPE is recorded
 # and not re-derived. `/users/search?searchTerm=jackduval` returns THIRTEEN profiles, all
 # on-curve. Only one matters: the real caller holds 17,468 of the namespace's 17,529

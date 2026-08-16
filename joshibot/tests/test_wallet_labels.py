@@ -31,7 +31,7 @@ Pubkey = pubkey_mod.Pubkey
 LABELS_PATH = Path(__file__).resolve().parent.parent / "wallet_labels.yaml"
 
 #: Sections whose entries name a live address we might act on.
-LIVE_SECTIONS = ("own_wallets", "external")
+LIVE_SECTIONS = ("own_wallets", "external", "bot_infrastructure")
 
 
 @pytest.fixture(scope="module")
@@ -99,10 +99,13 @@ def test_entries_carry_a_confidence_outside_own_wallets(labels: dict) -> None:
     """`attested` / `probable` / `inferred` — an unlabelled confidence is an unusable label."""
 
     allowed = {"attested", "probable", "inferred"}
-    for entry in labels.get("external") or []:
-        assert entry.get("confidence") in allowed, (
-            f"{entry.get('label')}: confidence {entry.get('confidence')!r} not in {sorted(allowed)}"
-        )
+    for section in LIVE_SECTIONS:
+        if section == "own_wallets":
+            continue
+        for entry in labels.get(section) or []:
+            assert entry.get("confidence") in allowed, (
+                f"{entry.get('label')}: confidence {entry.get('confidence')!r} not in {sorted(allowed)}"
+            )
 
 
 def test_the_watched_caller_and_its_homoglyph_are_distinct_and_labelled(labels: dict) -> None:
