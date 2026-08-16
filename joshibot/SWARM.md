@@ -291,6 +291,10 @@ mutation loops are on their own and every lane prompt should say so.
   (mints end in `pump`, and the mint sits in the token-balance columns we were already reading).
   Before any billed pull, ask "what rides free on this scan?" and dry-run the widest useful WHERE —
   the check costs $0. ($54 lesson, 2026-08-15, caught by the operator thinking, not by the tools.)
+- **Shared scratch is a collision surface.** Concurrent lanes writing the *same* scratchpad
+  filename clobber one another silently. One lane lost 20 minutes to phantom pytest failures
+  that were really another lane's prose overwritten onto its test-output file, read back as if
+  it were pytest's. Rule: **per-run unique filenames or per-lane subdirs in shared scratch.**
 
 ---
 
