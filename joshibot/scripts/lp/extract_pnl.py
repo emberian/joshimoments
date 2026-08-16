@@ -48,7 +48,7 @@ for a,v in positions.items():
 rows.sort(key=lambda r:r[1])
 print(f"\ncleanly-attributable closed positions: {len([r for r in rows if r[2] is not None])}")
 print(f"{'position':13} {'opened':11} {'hrs':>6} {'net SOL':>10}  net token deltas")
-for a,op,dur,sol,tok,n in rows:
+for a,op,dur,sol,tok,_n in rows:
     d=datetime.datetime.fromtimestamp(op,datetime.UTC)
     ts=" ".join(f"{m[:6]}…{v/1e6:+,.0f}" for m,v in sorted(tok.items(),key=lambda kv:-abs(kv[1]))[:3])
     print(f"{a[:11]}… {d:%m-%d %H:%M} {dur if dur else 0:6.1f} {sol/1e9:+10.4f}  {ts}")

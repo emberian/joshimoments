@@ -556,7 +556,6 @@ def cmd_channels(source: str) -> None:
     """
     import itertools
 
-    import duckdb
 
     combos = {
         "exit-only": ("exit",),
@@ -753,8 +752,8 @@ def cmd_gate(source: str, seed: int = 20260815) -> bool:
         ok = one and not ctrl_in
         passed_any = passed_any or ok
         echo(
-            f"  {t:>6.2f} {len(present):>8}/{len(FLEET)} {str(one):>12} {size:>12,} "
-            f"{str(ctrl_in):>12} {'PASS' if ok else 'fail':>8}"
+            f"  {t:>6.2f} {len(present):>8}/{len(FLEET)} {one!s:>12} {size:>12,} "
+            f"{ctrl_in!s:>12} {'PASS' if ok else 'fail':>8}"
         )
     echo(f"\n  GATE: {'PASS' if passed_any else 'FAIL'}")
     return passed_any
@@ -845,7 +844,6 @@ def cmd_between(
     top: int = 25,
 ) -> None:
     import numpy as np
-    import pandas as pd
 
     rng = np.random.default_rng(seed)
     echo("\n=== 5.0 partition ===")
@@ -1512,7 +1510,7 @@ def cmd_probe(source: str, cids: list[int], thresh: float = 0.10,
                 [mint],
             ).fetchone()[0]
             echo(f"\n  {OPERATOR_COINS.get(mint, mint)}")
-            echo(f"    corpus-visible first crossing on this coin: t0")
+            echo("    corpus-visible first crossing on this coin: t0")
             echo(f"    {'cid':>7} {'entry vs t0':>12} {'entries':>8} {'exits':>7}")
             for _, r in g.sort_values("first_entry").iterrows():
                 off = (
@@ -1759,7 +1757,6 @@ def cmd_deployer_territory(source: str, thresh: float = 0.10, min_size: int = 3,
     show = pairs.sort_values("jc").head(10)
     for _, r in show.iterrows():
         echo(f"  {int(r.A):>7} {int(r.B):>7} {r.jc:>8.4f} {r.jd:>11.4f}")
-    import numpy as np
 
     lo = pairs[pairs.jc < 0.01]
     echo(
@@ -2112,7 +2109,6 @@ def cmd_storm_edge(seed: int = 20260815) -> None:
     (arrival rank, arrival offset, dev-buy share, mapped-fleet presence, ladder touch) --
     PROGRAM.md 3.9 says say so.
     """
-    import numpy as np
     import pandas as pd
 
     con = _duck()
@@ -2213,7 +2209,7 @@ def cmd_storm_edge(seed: int = 20260815) -> None:
     echo("  minute? (null: winner is a random instance, so P = 1/n_instances)")
     hits = tries = 0
     exp = 0.0
-    for sid, g in df.groupby("storm_id"):
+    for _sid, g in df.groupby("storm_id"):
         if len(g) < 5 or g["win"].sum() != 1:
             continue
         w = g[g["win"]].iloc[0]
@@ -2441,7 +2437,7 @@ def cmd_ecology(source: str, thresh: float = 0.10, min_size: int = 3,
             if len(shared) > 4000:
                 shared = list(rng.choice(shared, size=4000, replace=False))
             expo = sum(float(exl[(A, m)][1].sum()) for m in shared) or 1.0
-            obs_n, obs_v = hits(A, shared, {m: enl[(B, m)] for m in shared})
+            _obs_n, obs_v = hits(A, shared, {m: enl[(B, m)] for m in shared})
             nv = []
             for _ in range(n_null):
                 perm = {}
@@ -2667,7 +2663,6 @@ def cmd_resonance2(source: str, thresh: float = 0.10, min_size: int = 3,
     pair count); a coin entered by a handful is where a fixed offset can be seen. Offset
     stats are then computed over ALL shared coins of the surviving pairs.
     """
-    import numpy as np
     import pandas as pd
 
     cl_path, _ = build_cluster_table(source, thresh, min_size, seed)
@@ -2723,7 +2718,7 @@ def cmd_resonance2(source: str, thresh: float = 0.10, min_size: int = 3,
         spec = nz["med"].abs().round().astype(int).value_counts().sort_index()
         for k, v in spec.items():
             echo(f"    {k:>5}s : {v:>4} pairs {'#' * min(v, 60)}")
-        echo(f"\n  nonzero locked pairs (top 30 by shared coins):")
+        echo("\n  nonzero locked pairs (top 30 by shared coins):")
         echo(f"  {'A':>7} {'B':>7} {'coins':>7} {'med off':>8} {'IQR':>15}")
         for _, r in nz.head(30).iterrows():
             echo(f"  {int(r.A):>7} {int(r.B):>7} {int(r.n):>7,} {r.med:>+7.0f}s "

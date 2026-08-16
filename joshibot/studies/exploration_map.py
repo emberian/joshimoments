@@ -99,11 +99,10 @@ import collections
 import json
 import math
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -445,7 +444,7 @@ def selftest() -> int:
 
     print("\n-- BY multiplicity correction --")
     pn = np.random.default_rng(3).uniform(size=500)
-    qv, rej, cm = benjamini_yekutieli(pn)
+    _qv, rej, cm = benjamini_yekutieli(pn)
     check("BY rejects ~nothing on 500 uniform p-values", rej.sum() <= 1, f"{int(rej.sum())} rejected")
     check("BY constant c(m) is the harmonic sum", abs(cm - float(np.sum(1 / np.arange(1, 501)))) < 1e-9,
           f"c(500)={cm:.3f}")
@@ -865,7 +864,7 @@ def build_cohort(raw: dict[str, Any], cohort: str, times: list[int],
     step = lp - lag(lp, 1)
     # trailing realised vol over 5 minutes, from the 30s log steps
     rv = np.full_like(lp, np.nan)
-    if T > h5:
+    if h5 < T:
         s2 = np.where(np.isfinite(step), step, np.nan) ** 2
         cs = np.nancumsum(np.nan_to_num(s2, nan=0.0), axis=1)
         cn = np.cumsum(np.isfinite(s2), axis=1)
@@ -917,9 +916,7 @@ def build_cohort(raw: dict[str, Any], cohort: str, times: list[int],
     }
     for k in list(feats):
         feats[k] = np.where(alive, feats[k], np.nan).astype(np.float32)
-        if not np.isfinite(feats[k]).any():
-            del feats[k]
-        elif np.nanstd(feats[k]) < 1e-12:
+        if not np.isfinite(feats[k]).any() or np.nanstd(feats[k]) < 1e-12:
             del feats[k]
 
     # ---- targets ----
@@ -1159,7 +1156,7 @@ def build_tape() -> tuple[Panel | None, dict[str, Any]]:
     deep = max(pools, key=lambda p: len(swaps[p]))
     ex_r, vt_r = [], []
     srt = sorted(swaps[deep])
-    for (t0, p0, ds0, dt0), (t1, p1, ds1, dt1) in zip(srt, srt[1:]):
+    for (_t0, p0, ds0, dt0), (_t1, p1, ds1, dt1) in zip(srt, srt[1:]):
         if dt0 == 0 or dt1 == 0 or p0 <= 0 or p1 <= 0:
             continue
         e0, e1 = abs(ds0 / dt0), abs(ds1 / dt1)
@@ -1184,7 +1181,7 @@ def build_tape() -> tuple[Panel | None, dict[str, Any]]:
     nsw = np.zeros((M, T)); nfl = np.zeros((M, T))
     szs: dict[tuple[int, int], list[float]] = collections.defaultdict(list)
     for i, p in enumerate(pools):
-        for bt, price, d_sol, d_tok in swaps[p]:
+        for bt, price, d_sol, _d_tok in swaps[p]:
             j = ti.get(int(bt // TAPE_GRID_S * TAPE_GRID_S))
             if j is None:
                 continue
@@ -1225,7 +1222,7 @@ def build_tape() -> tuple[Panel | None, dict[str, Any]]:
     step = lp - lag(lp, 1)
     rv = np.full_like(lp, np.nan)
     w = 5
-    if T > w:
+    if w < T:
         s2 = np.nan_to_num(step ** 2, nan=0.0)
         cs = np.cumsum(s2, axis=1); cn = np.cumsum(np.isfinite(step), axis=1)
         num = cs[:, w:] - cs[:, :-w]; den = cn[:, w:] - cn[:, :-w]
@@ -2062,7 +2059,7 @@ def decile_spread(p: Panel, fname: str, tname: str, *, top: float = 0.10,
     """
     X, Y = p.feats[fname], p.targets[tname]
     ok = np.isfinite(X) & np.isfinite(Y)
-    M, T = X.shape
+    _M, T = X.shape
     picks_hi: list[float] = []
     picks_lo: list[float] = []
     allv: list[float] = []

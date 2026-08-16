@@ -22,7 +22,7 @@ def instrs(tx):
     for inner in (tx["meta"].get("innerInstructions") or []): out+= inner.get("instructions") or []
     return out
 dlmm_accts=set()
-for sig,tx in txs.items():
+for _sig,tx in txs.items():
     for ix in instrs(tx):
         if ix.get("programId")==DLMM: dlmm_accts.update(ix.get("accounts") or [])
 positions={k:v for k,v in created.items() if k in dlmm_accts}
@@ -37,7 +37,7 @@ for sig,tx in txs.items():
         for a in (ix.get("accounts") or []):
             if a in positions: bysig[a].append(sig)
 out={}
-for a,(bt,sig) in sorted(positions.items(), key=lambda kv: kv[1][0]):
+for a,(bt,_sig) in sorted(positions.items(), key=lambda kv: kv[1][0]):
     sigs=sorted(set(bysig[a]), key=lambda s: txs[s].get("blockTime") or 0)
     out[a]={"opened":bt,"closed":closed.get(a,(None,None))[0],"sigs":sigs}
 json.dump(out, open("positions.json","w"))

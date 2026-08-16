@@ -389,7 +389,6 @@ the volume-linked DREGG stream survives.  Decay fits above are on the surviving 
 # ---------------------------------------------------------------------------------------
 
 def cmd_tiers() -> dict[str, Any]:
-    import statsmodels.api as sm
 
     h = hourly_bars()
     live = pool_now()
@@ -404,7 +403,7 @@ def cmd_tiers() -> dict[str, Any]:
 
     now = time.time()
     out: dict[str, Any] = {}
-    print(f"\nvolume-weighted tier occupancy (hourly close FDV vs $300k):")
+    print("\nvolume-weighted tier occupancy (hourly close FDV vs $300k):")
     print(f"{'window':<8}{'vol below':>14}{'vol above':>14}{'share below':>13}{'implied take':>14}")
     for days in (7, 14, 30):
         w = h[h["ts"] > now - days * 86400]
@@ -446,10 +445,10 @@ def cmd_tiers() -> dict[str, Any]:
     wk = wk[wk["n"] == 7]  # only full weeks; partial buckets are censored, dropped
     wk["take"] = wk["fee_usd"] / wk["vol"]
     wk["pred"] = wk["pred_fee"] / wk["vol"]
-    print(f"\nweekly realized take = DREGG-vault claims / canonical-pool volume "
-          f"(claims lag accrual by hours; weekly buckets absorb that), against the take "
-          f"the published ladder PREDICTS (volume-weighted tier rate, hourly FDV where "
-          f"hourly bars exist, daily close before):")
+    print("\nweekly realized take = DREGG-vault claims / canonical-pool volume "
+          "(claims lag accrual by hours; weekly buckets absorb that), against the take "
+          "the published ladder PREDICTS (volume-weighted tier rate, hourly FDV where "
+          "hourly bars exist, daily close before):")
     print(f"{'week':<6}{'volume $':>14}{'claims $':>12}{'take':>9}{'ladder pred':>13}"
           f"{'meas/pred':>11}{'mean FDV $':>14}")
     for wknum, r in wk.iterrows():
@@ -508,7 +507,7 @@ def cmd_escrow() -> dict[str, Any]:
           f"impact B/(Y+B) = {impact:.2%}")
 
     take_mid = (REALIZED_TAKE_LO + REALIZED_TAKE_HI) / 2
-    print(f"\nexit-cost per tranche by channel (negative = the channel PAYS you):")
+    print("\nexit-cost per tranche by channel (negative = the channel PAYS you):")
     rows = [
         ("PumpSwap market-sell, outsider", PUMPSWAP_TOTAL_FEE + impact,
          "1.44% decoded fee + impact"),
@@ -605,7 +604,7 @@ def cmd_ladder() -> dict[str, Any]:
         s_sold, s_recv = SERIES[sold], SERIES[recv]
         fills = []
         skipped_liq = skipped_stale = 0
-        for sig, tx in txs.items():
+        for _sig, tx in txs.items():
             if tx["meta"].get("err") is not None:
                 continue
             dl = _pool_token_deltas(tx, pool)
@@ -672,12 +671,12 @@ def cmd_ladder() -> dict[str, Any]:
         print(f"  premium vs market cross rate (notional-weighted): {agg_premium:+.2%}   "
               f"median per-fill {f['premium'].median():+.2%}   at t+60s: "
               f"{f['premium_next'].median():+.2%}")
-        print(f"  advantage vs routing the same clip (2x1.44% + impact):")
+        print("  advantage vs routing the same clip (2x1.44% + impact):")
         print(f"    same-bar : mean {mu:+.2%} (cluster SE {se:.2%}, {f['hour'].nunique()} "
               f"hour clusters, t={tv:.2f});  notional-weighted {agg_adv:+.2%}")
         print(f"    t+60s    : mean {mu_n:+.2%} (cluster SE {se_n:.2%}, t={tv_n:.2f})   "
               f"<- conservative read")
-        out[tag] = {"n": int(len(f)), "premium_w": agg_premium, "adv_w": agg_adv,
+        out[tag] = {"n": len(f), "premium_w": agg_premium, "adv_w": agg_adv,
                     "adv_mean": mu, "adv_se_cluster": se, "t": tv,
                     "adv_next_mean": mu_n, "adv_next_t": tv_n,
                     "notional_sol": float(f["clip_sol"].sum()),
@@ -699,7 +698,7 @@ def cmd_ladder() -> dict[str, Any]:
         print(f"  operator adjustment: the routed alternative's DREGG leg pays ~{take_recapture:.1%} "
               f"creator fee BACK to this operator, so the operator-specific advantage is "
               f"~{res['adv_next'][0] - take_recapture:+.2%} (conservative read minus recapture)")
-        out["pooled"] = {"n": int(len(af)), "adv_mean": res["adv"][0], "se": res["adv"][1],
+        out["pooled"] = {"n": len(af), "adv_mean": res["adv"][0], "se": res["adv"][1],
                          "t": res["adv"][2], "adv_next_mean": res["adv_next"][0],
                          "adv_next_se": res["adv_next"][1], "adv_next_t": res["adv_next"][2],
                          "adv_operator": res["adv_next"][0] - take_recapture}
@@ -813,17 +812,17 @@ def cmd_joint() -> dict[str, Any]:
           f"-- the exit earns the toll instead of paying it.")
 
     # ---- lever 4: LP -----------------------------------------------------------------
-    print(f"\nLEVER 4 -- LP.  DREGG/SOL: eta = 0.235 vs best VR 0.438 at 48h -> -EV by "
-          f"1.9x at the most favourable horizon (RESULT_circuit_theory par.4.5).  "
-          f"Correct DREGG/SOL LP allocation as a YIELD position: ZERO.  The one LP form "
-          f"that pays here is the SELL LADDER (lever 3) -- an execution rebate on flow "
-          f"the desk had to move anyway, not a yield farm.")
+    print("\nLEVER 4 -- LP.  DREGG/SOL: eta = 0.235 vs best VR 0.438 at 48h -> -EV by "
+          "1.9x at the most favourable horizon (RESULT_circuit_theory par.4.5).  "
+          "Correct DREGG/SOL LP allocation as a YIELD position: ZERO.  The one LP form "
+          "that pays here is the SELL LADDER (lever 3) -- an execution rebate on flow "
+          "the desk had to move anyway, not a yield farm.")
 
     # ---- joint income statement ------------------------------------------------------
     monthly_fee_flat = fee_day * 30.4                       # if decay has stopped (RW null)
     monthly_fee_dec = fee_day * (1 - math.exp(30 * b)) / -b if b < 0 else monthly_fee_flat
     monthly_vest = rel_usd * 30.4 / RELEASE_PERIOD_D
-    print(f"\nJOINT INCOME STATEMENT, next 30 days (USD):")
+    print("\nJOINT INCOME STATEMENT, next 30 days (USD):")
     print(f"  creator fees        {monthly_fee_dec:>7,.0f} - {monthly_fee_flat:>7,.0f}   "
           f"low = fitted decay integrated; high = decay stops (the RW null that WON the "
           f"OOS test)")

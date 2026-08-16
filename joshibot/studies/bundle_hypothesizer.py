@@ -120,7 +120,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DAILY = os.path.join(REPO, "state", "bulk_pump", "daily")
@@ -535,7 +535,6 @@ def _load_portfolios():
 def _load_weights(mints):
     """Corpus-wide coin popularity -> the weight vector for the POP null."""
     import numpy as np
-    import pandas as pd
 
     con = _duck(threads=2, mem="3GB")
     pop = con.execute(f"""
@@ -646,7 +645,6 @@ def channel2_lifecycle(legs, uni):
     the corpus. Those are LEFT-CENSORED and counted, not silently dropped.
     """
     import numpy as np
-    import pandas as pd
 
     lo, hi = _corpus_slot_bounds()
     g = legs.sort_values("block_slot").groupby("owner")
@@ -681,7 +679,7 @@ def channel2_lifecycle(legs, uni):
         gaps = d[iu]
         out["bg_first_slot_gap_median"] = float(np.median(gaps))
         out["bg_pairs_exact_same_first_slot"] = int((gaps == 0).sum())
-        out["bg_pairs"] = int(len(gaps))
+        out["bg_pairs"] = len(gaps)
         out["bg_p_exact_tie"] = float((gaps == 0).sum() + 1) / (len(gaps) + 1)
     ps = sorted(out["positive_first_slots"].values())
     out["positive_first_slot_spread"] = int(ps[-1] - ps[0]) if ps else None
@@ -723,7 +721,7 @@ def channel3_size(legs, uni, anchor, min_buys: int = 20, cv_gate: float = 0.25):
         if mu > 0:
             rows.append((w, m, len(v), float(v.std() / mu)))
     self_cv = {}
-    for w, m, n, cv in rows:
+    for w, _m, _n, cv in rows:
         self_cv.setdefault(w, []).append(cv)
     self_stat = {w: {"legs_ge_min_buys": len(c),
                      "uniform_legs": int(sum(x < cv_gate for x in c)),
@@ -739,7 +737,7 @@ def channel3_size(legs, uni, anchor, min_buys: int = 20, cv_gate: float = 0.25):
                 continue
             both = np.log(med[w] / a).replace([np.inf, -np.inf], np.nan).dropna()
             if len(both) >= 20:
-                ratio_stat[w] = {"n_coins": int(len(both)),
+                ratio_stat[w] = {"n_coins": len(both),
                                  "log_ratio_sd": float(both.std()),
                                  "log_ratio_median": float(both.median())}
     return self_stat, ratio_stat, len(rows)
@@ -886,7 +884,7 @@ def channel5_timing(legs, anchor, cands, max_off: int = 4):
         obs_same = int(hist.get(0, 0))
         rot_mu = float(np.mean(rot_same)) if rot_same else float("nan")
         out[w] = {
-            "pairs_within": int(len(dn)),
+            "pairs_within": len(dn),
             "share_same_slot": float(hist.get(0, 0) / max(len(dn), 1)),
             "hist": hist,
             "sym_neg": neg, "sym_pos": pos,
@@ -1075,7 +1073,6 @@ def channel8_rotation(life, legs, window: int = 20_000, min_inherit: float = 0.3
     this from firing on every pair of wallets that happen to be adjacent in time -- on a
     corpus with thousands of wallets, temporal adjacency alone is guaranteed.
     """
-    import numpy as np
 
     early, late = {}, {}
     for w, g in legs.sort_values("block_slot").groupby("owner"):
@@ -1118,7 +1115,7 @@ def channel9_wash(legs, members, max_slot_gap: int = 2, tol: float = 0.05):
 
     sub = legs[legs.owner.isin(set(members))]
     matched, matched_vol, total_vol = 0, 0.0, float(np.abs(sub.delta).sum())
-    for m, g in sub.groupby("mint"):
+    for _m, g in sub.groupby("mint"):
         sells = g[g.delta < 0]
         buys = g[g.delta > 0]
         if sells.empty or buys.empty:
@@ -1157,7 +1154,6 @@ def _label_of(w: str, uni) -> str:
 def cmd_channel1(n_null: int = 200, burn: int = 8_000, thin: int = 400,
                  seed: int = 20260815) -> int:
     """Channel 1 against the anchor (the caller), for every universe wallet."""
-    import numpy as np
 
     uni = json.load(open(os.path.join(CACHE, "universe.json")))
     portfolios = _load_portfolios()
@@ -1248,7 +1244,7 @@ def cmd_controls(seed: int = 20260815, n_null: int = 200) -> int:
     effect = {w: set(s) for w, s in zero.items()}
     base = list(effect[anchor])
     planted = []
-    for i, w in enumerate(uni["positive"]):
+    for _i, w in enumerate(uni["positive"]):
         k = int(0.95 * len(real[w]))
         book = set(rng.choice(base, size=min(k, len(base)), replace=False))
         book |= set(rng.choice(len(all_mints), size=len(real[w]) - len(book),
@@ -1281,7 +1277,6 @@ def cmd_controls(seed: int = 20260815, n_null: int = 200) -> int:
 def cmd_channels(n_null: int = 200) -> int:
     """Run every channel on the known positive set and the control, side by side."""
     import numpy as np
-    import pandas as pd
 
     uni = json.load(open(os.path.join(CACHE, "universe.json")))
     anchor = uni["caller"]
@@ -1361,12 +1356,12 @@ def cmd_channels(n_null: int = 200) -> int:
         print(f"  {w[:10]:11} {c6.get(w)}")
 
     print("\n=== CHANNEL 7: supply parking / token spray (on the candidate set) ===")
-    flagged, pools = transfer_legs(_legs(universe_only=False))
+    flagged, _pools = transfer_legs(_legs(universe_only=False))
     mine = flagged[flagged.owner.isin(set(uni["positive"]) | {anchor, uni["control"]})]
     c7 = {}
     for w, g in mine.groupby("owner"):
         t = g[g.kind == "transfer"]
-        c7[w] = {"legs": int(len(g)), "transfer_legs": int(len(t)),
+        c7[w] = {"legs": len(g), "transfer_legs": len(t),
                  "transfer_share": float(len(t) / max(len(g), 1)),
                  "outbound_transfers": int((t.delta < 0).sum()),
                  "inbound_transfers": int((t.delta > 0).sum()),
@@ -1460,8 +1455,6 @@ def cmd_operator(top_n: int = 10) -> int:
     under Known anti-signals. This produces the input that would let
     shitcoims_intelligence/numerics.py:29 be bundle-corrected; it does NOT edit that file.
     """
-    import numpy as np
-    import pandas as pd
 
     con = _duck(threads=2, mem="3GB")
     raw = con.execute(f"""
@@ -1492,7 +1485,7 @@ def cmd_operator(top_n: int = 10) -> int:
         # transfer graph -> components -> collapse
         tr = d[(d.kind == "transfer") & (~d.is_pool)]
         raw_edges = []
-        for sig, g in tr.groupby("signature"):
+        for _sig, g in tr.groupby("signature"):
             src = g[g.delta < 0].owner.tolist()
             dst = g[g.delta > 0].owner.tolist()
             for a in src:
@@ -1539,7 +1532,7 @@ def cmd_operator(top_n: int = 10) -> int:
         hub_node = max(nbr, key=lambda k: len(nbr[k])) if nbr else None
 
         rec = {
-            "coverage": cov, "launch": launch, "legs": int(len(d)),
+            "coverage": cov, "launch": launch, "legs": len(d),
             "pool": pool,
             "giant_component_share": len(biggest) / max(len(bal), 1),
             "giant_component_hub_share": float(hub_share),
@@ -1551,7 +1544,7 @@ def cmd_operator(top_n: int = 10) -> int:
             "naive_top_n": naive["top_n_share"], "adjusted_top_n": adj["top_n_share"],
             "delta_pp": (adj["top_n_share"] - naive["top_n_share"]) * 100,
             "naive_gini": naive["gini"], "adjusted_gini": adj["gini"],
-            "transfer_legs": int(len(tr)), "transfer_edges": len(edges),
+            "transfer_legs": len(tr), "transfer_edges": len(edges),
             "transfer_edges_before_hub_exclusion": len(raw_edges),
             "hubs_excluded": sorted(hubs),
             "multi_wallet_components": len(multi),

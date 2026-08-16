@@ -81,7 +81,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -538,7 +537,7 @@ def cmd_rotation(args: argparse.Namespace) -> int:
         "hot_per_hour": args.hot,
         "k": args.k,
         "lookback_hours": args.lookback,
-        "hours": int(len(size)),
+        "hours": len(size),
         "cohort_size_median": float(size["n"].median()),
         "cohort_size_p10": float(size["n"].quantile(0.10)),
         "cohort_size_p90": float(size["n"].quantile(0.90)),
@@ -633,7 +632,7 @@ def cmd_panel(args: argparse.Namespace) -> int:
 
     # ---- per (mint, bucket) features -------------------------------------------------
     con.execute(
-        f"""
+        """
         CREATE OR REPLACE TABLE mb AS
         SELECT w.mint_id, w.b,
                sum(w.buy_sol) AS buy_sol, sum(w.sell_sol) AS sell_sol,
@@ -686,7 +685,7 @@ def cmd_panel(args: argparse.Namespace) -> int:
 
     # ---- forward outcomes ------------------------------------------------------------
     con.execute(
-        f"""
+        """
         CREATE OR REPLACE TABLE fwd AS
         SELECT p.mint_id, p.b,
                sum(q.gross_sol) FILTER (WHERE q.b > p.b AND q.b <= p.b + 3600) AS vol_1h,
@@ -805,7 +804,6 @@ def _fit_score(tr, te, cols, label, seed=0):
     """Gradient-boosted trees on tabular features -- PROGRAM.md §3.4's mandated baseline,
     and the class MELT measured as the winner on this problem. No class weighting: MELT's
     weighted BCE decalibrates the probabilities an EV decision needs (§1.3)."""
-    import numpy as np
     from sklearn.ensemble import HistGradientBoostingClassifier
 
     X, y = tr[list(cols)].to_numpy(float), tr[label].to_numpy(int)
@@ -913,11 +911,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
     tr = df[df.birth_time <= cut].copy()
     te = df[df.birth_time > cut].copy()
     res: dict = {
-        "rows": int(len(df)),
+        "rows": len(df),
         "mints": int(df.mint_id.nunique()),
         "split_birth_time": cut,
-        "train_rows": int(len(tr)),
-        "test_rows": int(len(te)),
+        "train_rows": len(tr),
+        "test_rows": len(te),
         "train_mints": int(tr.mint_id.nunique()),
         "test_mints": int(te.mint_id.nunique()),
     }
@@ -1026,7 +1024,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
         + te["log_age"].rank(pct=True).mul(5).astype(int).astype(str)
     )
     aucs = []
-    for d in range(args.null_draws):
+    for _d in range(args.null_draws):
         te2 = te.copy()
         for _, idx in te2.groupby(bins.values).groups.items():
             idx = np.asarray(idx)
@@ -1103,7 +1101,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
             a = _auc(y, s)
             # permutation p on the column, mint-clustered
             perm = []
-            for d in range(args.draws // 4):
+            for _d in range(args.draws // 4):
                 sp = rng.permutation(s)
                 perm.append(_auc(y, sp))
             p = (1 + sum(abs(x - 0.5) >= abs(a - 0.5) for x in perm)) / (1 + len(perm))
@@ -1156,7 +1154,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
         tr_hi[lab] = mk(tr_hi).fillna(0).astype(int)
         te_hi[lab] = mk(te_hi).fillna(0).astype(int)
         entry = {"base_rate_test": float(te_hi[lab].mean()),
-                 "n_train": int(len(tr_hi)), "n_test": int(len(te_hi))}
+                 "n_train": len(tr_hi), "n_test": len(te_hi)}
         if te_hi[lab].nunique() > 1 and tr_hi[lab].nunique() > 1:
             for nm, cols in (("free", FREE_COLS), ("free + PvP", FREE_COLS + PVP_COLS),
                              ("PvP only", PVP_COLS)):
@@ -1285,11 +1283,10 @@ def cmd_arena(args: argparse.Namespace) -> int:
         dead_4h=("dead_4h", "mean"),
         ret_1h=("ret_1h", "median"),
     ).reset_index()
-    res = {"fee_lp": FEE_LP, "fee_total": FEE_TOTAL, "rows": int(len(d)),
+    res = {"fee_lp": FEE_LP, "fee_total": FEE_TOTAL, "rows": len(d),
            "by_pvp_decile": json.loads(tbl.to_json(orient="records"))}
 
     # ---- the window: run length of the eta-favourable state, and how it ends -----------
-    import pandas as pd
 
     d = d.sort_values(["mint_id", "b"]).reset_index(drop=True)
     fav = d["paying_window"].to_numpy()
@@ -1320,7 +1317,7 @@ def cmd_arena(args: argparse.Namespace) -> int:
     if len(R):
         R["pvp_hi"] = R["pvp_at_entry"] >= R["pvp_at_entry"].median()
         res["window"] = {
-            "n_episodes": int(len(R)),
+            "n_episodes": len(R),
             "median_len_buckets": float(R.len_buckets.median()),
             "p90_len_buckets": float(R.len_buckets.quantile(0.90)),
             "median_len_minutes": float(R.len_buckets.median() * BUCKET / 60),
@@ -1406,7 +1403,7 @@ def cmd_transition(args: argparse.Namespace) -> int:
     res = {
         "pvp_threshold_quantile": args.pvp_q,
         "pvp_threshold": thr,
-        "qualifying_coins": int(len(qual)),
+        "qualifying_coins": len(qual),
         "cohort_coins": int(df.mint_id.nunique()),
     }
 
@@ -1427,8 +1424,8 @@ def cmd_transition(args: argparse.Namespace) -> int:
     L = pd.DataFrame(leads)
     if len(L):
         hit = L.dropna(subset=["lead_s"])
-        res["coins_that_broke"] = int(len(L))
-        res["pvp_fired_before_break"] = int(len(hit))
+        res["coins_that_broke"] = len(L)
+        res["pvp_fired_before_break"] = len(hit)
         res["pvp_fired_share"] = float(len(hit) / max(len(L), 1))
         res["lead_s"] = {
             q: float(hit.lead_s.quantile(q)) for q in (0.1, 0.25, 0.5, 0.75, 0.9)
@@ -1449,7 +1446,7 @@ def cmd_transition(args: argparse.Namespace) -> int:
                 s2.loc[idx, "pvp_score"] = sub.loc[rng.permutation(idx), "pvp_score"].to_numpy()
             fired, tot = 0, 0
             ls = []
-            for mid, grp in s2.groupby("mint_id"):
+            for _mid, grp in s2.groupby("mint_id"):
                 grp = grp.sort_values("b")
                 brk = grp[grp.dd <= math.log(1 - args.break_dd)]
                 if brk.empty:
@@ -1657,7 +1654,7 @@ def cmd_vamp(args: argparse.Namespace) -> int:
     rng = np.random.default_rng(args.seed)
     null_rows = {"naive": [], "rotation_matched": []}
     for kind in ("naive", "rotation_matched"):
-        for draw in range(args.null_draws):
+        for _draw in range(args.null_draws):
             sub = real[["family_id", "clone_id", "clone_t"]].copy()
             sub["b"] = (sub.clone_t // 1800).astype(int) * 1800
             hostinfo = real[["family_id", "clone_id", "host_sell_total", "host_sellers"]]
@@ -1728,7 +1725,7 @@ def cmd_vamp(args: argparse.Namespace) -> int:
     res = {
         "day": args.day, "window_s": W, "k": args.k,
         "families": len(fams),
-        "pairs_measured": int(len(real)),
+        "pairs_measured": len(real),
         "pairs_dropped_not_on_tape": int(
             sum(len(f.get("members") or []) - 1 for f in fams) - len(P)
         ),
@@ -1805,8 +1802,8 @@ def cmd_vamp(args: argparse.Namespace) -> int:
             return float(mannwhitneyu(a, b, alternative="two-sided").pvalue)
 
         res["host_deterioration"] = {
-            "hosts": int(len(hp)),
-            "high_drain_n": int(len(hi)), "low_drain_n": int(len(lo)),
+            "hosts": len(hp),
+            "high_drain_n": len(hi), "low_drain_n": len(lo),
             "dead_4h_high": float(hi.dead_4h.mean()), "dead_4h_low": float(lo.dead_4h.mean()),
             "median_ret_1h_high": float(hi.ret_1h.median(skipna=True)),
             "median_ret_1h_low": float(lo.ret_1h.median(skipna=True)),
@@ -1821,7 +1818,7 @@ def cmd_vamp(args: argparse.Namespace) -> int:
             "median_age_s_low": float(lo.age_s.median(skipna=True)),
         }
     else:
-        res["host_deterioration"] = {"hosts": int(len(hp)), "note": "too few to test"}
+        res["host_deterioration"] = {"hosts": len(hp), "note": "too few to test"}
 
     # ---- matched host comparison --------------------------------------------------------
     # High-drain hosts are BIGGER (2.1x the gross flow in the unmatched split), and size
@@ -1848,7 +1845,7 @@ def cmd_vamp(args: argparse.Namespace) -> int:
         if len(mt) >= 20:
             MT, MC = pd.DataFrame(mt), pd.DataFrame(mc)
             res["host_deterioration_matched"] = {
-                "pairs": int(len(MT)),
+                "pairs": len(MT),
                 "smd_log_gross_sol": float(
                     (MT.lg.mean() - MC.lg.mean())
                     / math.sqrt((MT.lg.var() + MC.lg.var()) / 2 + 1e-12)),
@@ -1866,7 +1863,7 @@ def cmd_vamp(args: argparse.Namespace) -> int:
                 "p_dead_4h": _mw(MT.dead_4h.astype(float), MC.dead_4h.astype(float)),
             }
         else:
-            res["host_deterioration_matched"] = {"pairs": int(len(mt)),
+            res["host_deterioration_matched"] = {"pairs": len(mt),
                                                  "note": "too few matched pairs"}
 
     real.to_parquet(OUT / "vamp_pairs.parquet")
@@ -1960,7 +1957,7 @@ def cmd_regimes(args: argparse.Namespace) -> int:
         median_gross_sol=("gross_sol", "median"),
     ).reset_index()
     res["A_market_wide_state"] = {
-        "hours": int(len(hourly)),
+        "hours": len(hourly),
         "board_pvp_autocorr": acf,
         "rotation_share_hourly": {
             "p10": float(hourly.rotation_share.quantile(0.10)),
@@ -2002,7 +1999,7 @@ def cmd_regimes(args: argparse.Namespace) -> int:
         if len(grp) < 500 or grp.dead_4h.nunique() < 2:
             continue
         within.append({
-            "age_bin": str(ageb), "n": int(len(grp)),
+            "age_bin": str(ageb), "n": len(grp),
             "auc_pvp_score": _auc(grp.dead_4h.astype(int), grp.pvp_score),
             "auc_recycled_30m": _auc(grp.dead_4h.astype(int), grp.recycled_30m),
             "base_rate": float(grp.dead_4h.mean()),
@@ -2032,7 +2029,7 @@ def cmd_regimes(args: argparse.Namespace) -> int:
         lvl["free_plus_pvp_plus_delta"] = _auc(y, p2)
     young = on[on.age_s <= 3600]
     lvl["young_coins_only"] = {
-        "n": int(len(young)),
+        "n": len(young),
         "onset_rate": float(young.onset.mean()),
         "dead_4h_after_onset": float(young[young.onset].dead_4h.mean()) if young.onset.any() else None,
         "dead_4h_no_onset": float(young[~young.onset].dead_4h.mean()),
@@ -2115,7 +2112,7 @@ def cmd_regimes(args: argparse.Namespace) -> int:
         lead[f"corr_packPnL_t_vs_buySol_t+{lag}"] = float(
             pack.pack_net_per_gross.corr(np.log1p(pack.buy_sol).shift(-lag)))
     res["E_pack_balance"] = {
-        "hours": int(len(pack)),
+        "hours": len(pack),
         "pack_net_sol_per_hour": {
             "p10": float(pack.pack_net_sol.quantile(0.10)),
             "median": float(pack.pack_net_sol.median()),
@@ -2145,7 +2142,6 @@ def cmd_regimes(args: argparse.Namespace) -> int:
 
 def cmd_opnow(args: argparse.Namespace) -> int:
     import numpy as np
-    import pandas as pd
 
     con = _duck(args.threads, args.memory)
     df = _load_panel(con, min_wallets=args.min_wallets)
@@ -2364,7 +2360,7 @@ def cmd_burst(args: argparse.Namespace) -> int:
                           for i, (k, v) in enumerate(pts))}
         FROM ev_{tag} e
         """
-        for i, (k, v) in enumerate(pts):
+        for i, (_k, v) in enumerate(pts):
             sql += (f" ASOF LEFT JOIN (SELECT mint_id, t, log_px FROM {T} "
                     f"WHERE log_px IS NOT NULL) a{i} "
                     f"ON a{i}.mint_id = e.mint_id AND a{i}.t <= e.t_fire + {v}\n")
@@ -2427,7 +2423,7 @@ def cmd_burst(args: argparse.Namespace) -> int:
             "min_sol_in_window": args.burst_min_sol, "min_age_s": args.burst_min_age,
             "cooldown_s": args.cooldown, "friction": FRICTION,
         },
-        "events": int(len(ev)), "coins": int(ev.mint_id.nunique()),
+        "events": len(ev), "coins": int(ev.mint_id.nunique()),
         "real": out["real"],
         "control_any_minute_same_coin": out["ctrl_any"],
         "control_active_minute_same_coin": out["ctrl_active"],
@@ -2657,8 +2653,9 @@ def _migration(rows_a, rows_b, t_lo, t_hi, delta: float):
     B moved 0.1 SOL of attention, not 5. This is the same conservative accounting the vamp
     stage uses on the bulk corpus, so the two numbers are comparable.
     """
-    import numpy as np
     from collections import defaultdict
+
+    import numpy as np
 
     sells = defaultdict(list)
     for r in rows_a:
@@ -2723,8 +2720,8 @@ def cmd_duel(args: argparse.Namespace) -> int:
         rows = tapes[m]
         lo = min(t_lo, min(r["t"] for r in rows))
         hi = max(t_hi, max(r["t"] for r in rows))
-        h2c, h2c_w = _migration(hr, rows, lo, hi, args.delta)
-        c2h, c2h_w = _migration(rows, hr, lo, hi, args.delta)
+        h2c, _h2c_w = _migration(hr, rows, lo, hi, args.delta)
+        c2h, _c2h_w = _migration(rows, hr, lo, hi, args.delta)
         wh = {r["w"] for r in hr}
         wc = {r["w"] for r in rows}
         pairs.append({

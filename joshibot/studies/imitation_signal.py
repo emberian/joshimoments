@@ -89,7 +89,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -207,7 +207,7 @@ class CandleStore:
     def fetched_at(self, mint: str) -> float:
         try:
             return float(json.loads(self.path(mint).read_text())["fetched_at"])
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0.0
 
     def put(self, mint: str, candles: list[list[Any]], fetched_at: float) -> None:
@@ -302,7 +302,7 @@ def fetch_all(
                 with lock:
                     stats[f"http_{exc.code}"] += 1
                 break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 time.sleep(1.0 * (attempt + 1))
                 with lock:
                     stats["retry"] += 1
@@ -1034,7 +1034,7 @@ def summarise(rows: Sequence[dict[str, Any]], h: int, label: str, out=sys.stdout
     trimmed = float(trim_mean(r, 0.05)) if len(r) >= 20 else float(r.mean())
     stat = {
         "label": label,
-        "n": int(len(r)),
+        "n": len(r),
         "mean": float(r.mean()),
         "trimmed_mean": trimmed,
         "median": float(np.median(r)),
@@ -1224,7 +1224,7 @@ def mannwhitney(a: Sequence[float], b: Sequence[float]) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 
-def report(  # noqa: C901 - a study report is a linear script by nature
+def report(
     *,
     k: int = 3,
     window_s: float = 1800.0,
@@ -1293,7 +1293,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     )
     tax_onset = Counter(o["taxonomy"] for o in onsets)
     host_rule = Counter(o.get("host_rule", "earliest") for o in onsets)
-    print(f"\n--- 0. TAXONOMY ---", file=out)
+    print("\n--- 0. TAXONOMY ---", file=out)
     print(f"  families size>=2: {len(fams)}   {dict(tax_fam)}", file=out)
     print(f"  onsets at k>={k}:  {len(onsets)}   {dict(tax_onset)}", file=out)
     print(f"  host rule fired:  {dict(host_rule)}", file=out)
@@ -1315,7 +1315,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     # ---- 1. onset lag -----------------------------------------------------
     import numpy as np
 
-    print(f"\n--- 1. ONSET LAG — how fast is 'fast'? ---", file=out)
+    print("\n--- 1. ONSET LAG — how fast is 'fast'? ---", file=out)
     lag_host = np.array([o["lag_from_host_s"] for o in onsets], dtype=float)
     lag_clone = np.array([o["lag_from_first_clone_s"] for o in onsets], dtype=float)
     if len(lag_host):
@@ -1355,7 +1355,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
 
     # ---- 2. the event study ----------------------------------------------
     treated, drops = build_cohort(launches, onsets, store, tape_end)
-    print(f"\n--- 2. EVENT STUDY — host forward return from ONSET (not from launch) ---", file=out)
+    print("\n--- 2. EVENT STUDY — host forward return from ONSET (not from launch) ---", file=out)
     print(f"  treated rows: {len(treated)}   dropped: {dict(drops)}", file=out)
     if len(treated) < 12:
         print("  cohort too small to say anything. Stop here.", file=out)
@@ -1393,7 +1393,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     result["by_lag"] = lag_rows
 
     # ---- 2a. dose-response, which is what the theory actually predicts ----
-    print(f"\n--- 2a. DOSE-RESPONSE — the sharpest form of the costly-signal claim ---", file=out)
+    print("\n--- 2a. DOSE-RESPONSE — the sharpest form of the costly-signal claim ---", file=out)
     print(
         "  Pre-declared from the theory, not chosen after looking: if a swarm is a costly\n"
         "  signal, its information content must scale with the number of INDEPENDENT parties\n"
@@ -1417,7 +1417,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
             if len(set(x)) < 3:
                 continue
             rho, p = spearmanr(x, y)
-            prho, pp, pn = partial_spearman(usable, name, f"r{h}", FREE_COLUMNS)
+            prho, pp, _pn = partial_spearman(usable, name, f"r{h}", FREE_COLUMNS)
             dose_rows.append(
                 {"h": h, "var": name, "rho": float(rho), "p": float(p), "n": len(y),
                  "partial_rho": prho, "partial_p": pp}
@@ -1432,7 +1432,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
 
     # ---- 2b. the other reading: buy the clones ---------------------------
     print(
-        f"\n--- 2b. THE CLONE ARM — buying the imitators at their own launch ---", file=out
+        "\n--- 2b. THE CLONE ARM — buying the imitators at their own launch ---", file=out
     )
     print(
         '  "positions that will massively gain from THEM" reads as easily as buy-the-clones\n'
@@ -1473,12 +1473,12 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                     cdiffs.append({"h": h, "diff_mean": ts["mean"] - cs["mean"], "p": p})
                     clone_out.setdefault("decompose", {})[h] = decompose(clones, clone_ctl, h, out)
         clone_out["diffs"] = cdiffs
-        print(f"\n  POWER FLOOR for the clone arm:", file=out)
+        print("\n  POWER FLOOR for the clone arm:", file=out)
         clone_out["mde"] = [mde(clones, clone_ctl, h, seed=seed, out=out) for h in HORIZONS_S]
     result["clone_arm"] = clone_out
 
     # ---- 3. matched controls ---------------------------------------------
-    print(f"\n--- 3. CONTROL ARM — matched, never-swarmed hosts at the same instant ---", file=out)
+    print("\n--- 3. CONTROL ARM — matched, never-swarmed hosts at the same instant ---", file=out)
     # A coin excluded from the control pool is one that reached ONSET size, not merely one
     # that shared a ticker with somebody. At k=2 roughly 70% of all launches are in some
     # family — the ambient collision rate — and excluding all of them would leave a control
@@ -1514,7 +1514,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                 f"below is\n  confounded by the covariate above and must not be read causally.",
                 file=out,
             )
-        print(f"\n  matched comparison at each horizon:", file=out)
+        print("\n  matched comparison at each horizon:", file=out)
         diffs = []
         for h in HORIZONS_S:
             ts = summarise(treated_m, h, f"treated ({h//60}m)", out)
@@ -1542,7 +1542,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
                     }
                 )
         result["control_diffs"] = diffs
-        print(f"\n  POWER FLOOR — what this cohort could have detected:", file=out)
+        print("\n  POWER FLOOR — what this cohort could have detected:", file=out)
         result["mde"] = [mde(treated_m, controls, h, seed=seed, out=out) for h in HORIZONS_S]
 
         # The hypothesis names PARASITES specifically. A farm's forty clones are one wallet's
@@ -1569,7 +1569,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
             result["parasite_diffs"] = pdiffs
 
     # ---- 4. conditional information --------------------------------------
-    print(f"\n--- 4. CONDITIONAL INFORMATION — does the swarm block beat the free columns? ---", file=out)
+    print("\n--- 4. CONDITIONAL INFORMATION — does the swarm block beat the free columns? ---", file=out)
     pooled_all = sorted(treated + controls, key=lambda r: r["t_post"])
     # Two labels, because the sign of §2 decides which one is the trade. `up` is the
     # operator's original long framing. `down` is the one a short book consumes, and it is
@@ -1588,11 +1588,11 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     result["model"] = model_out
 
     # ---- 5. survival ------------------------------------------------------
-    print(f"\n--- 5. SURVIVAL AND COMPETING RISKS — pricing the dead ---", file=out)
+    print("\n--- 5. SURVIVAL AND COMPETING RISKS — pricing the dead ---", file=out)
     result["survival"] = survival_block(treated, controls, horizon, out)
 
     # ---- 6. the two ambient nulls ----------------------------------------
-    print(f"\n--- 6. AMBIENT NULLS — the same detector on two kinds of scrambled stream ---", file=out)
+    print("\n--- 6. AMBIENT NULLS — the same detector on two kinds of scrambled stream ---", file=out)
     print(
         "  PROGRAM.md §3.13: one null is a knob, not a test. Both are run and compared.\n"
         "    SHUFFLE  — launch identity permuted i.i.d. over the whole tape. Every symbol\n"
@@ -1662,7 +1662,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     }
 
     # ---- 6b. the known-EFFECT control for the detector itself -------------
-    print(f"\n--- 6b. RECOVERY — can the detector find a swarm that is definitely there? ---", file=out)
+    print("\n--- 6b. RECOVERY — can the detector find a swarm that is definitely there? ---", file=out)
     print(
         "  §6 is only the zero side. A detector that finds nothing passes every "
         "false-positive\n  test perfectly, so 40 textbook parasite swarms (3 fresh deployers, "
@@ -1703,7 +1703,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     }
 
     # ---- 7. trials --------------------------------------------------------
-    print(f"\n--- 7. TRIALS ACCOUNTING ---", file=out)
+    print("\n--- 7. TRIALS ACCOUNTING ---", file=out)
     pvals, names = [], []
     for d in result.get("control_diffs", []):
         if d["p"] == d["p"]:
@@ -1747,7 +1747,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     )
 
     # ---- 7b. sensitivity to the two knobs that are not pinned by anything -------
-    print(f"\n--- 7b. SENSITIVITY — the detector's two free knobs ---", file=out)
+    print("\n--- 7b. SENSITIVITY — the detector's two free knobs ---", file=out)
     print(
         "  PROGRAM.md §3.7: report the threshold with every number. k and the matching window\n"
         "  are the only settings not fixed by an observable, so both are swept and the\n"
@@ -1757,7 +1757,7 @@ def report(  # noqa: C901 - a study report is a linear script by nature
     sweep = []
     for kk in (3, 4, 5):
         for ww in (900.0, 1800.0, 3600.0):
-            s_on, s_det = run_detector(launches, store, k=kk, window_s=ww)
+            s_on, _s_det = run_detector(launches, store, k=kk, window_s=ww)
             s_tr, _ = build_cohort(launches, s_on, store, tape_end)
             usable = [r for r in s_tr if not r[f"admin{horizon}"]]
             if not usable:
@@ -1911,7 +1911,6 @@ def survival_block(
     the callout cohort from −14.6% to +25%. So the dead are priced (mark-to-last-trade) in
     §2 and counted as their own state here.
     """
-    import pandas as pd
     from lifelines import KaplanMeierFitter
     from lifelines.statistics import logrank_test
 
@@ -2060,7 +2059,7 @@ def retro_fetch_set(
     of everything else to serve as the control pool. Random is load-bearing — a control pool
     chosen by any property of the coin would confound the very comparison it exists for.
     """
-    onsets, det = run_detector(launches, None, k=k, window_s=window_s)
+    onsets, _det = run_detector(launches, None, k=k, window_s=window_s)
     need: set[str] = set()
     # Only the members present AT ONSET, which is exactly k of them — that is the whole set
     # the traction probe reads and the only one a host can be chosen from. Taking every

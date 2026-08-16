@@ -750,7 +750,7 @@ leverage on a signal whose sign is set elsewhere.
 
     tracks: dict[str, list[float]] = {}
     for label in series:
-        ts, lv = levels(label)
+        _ts, lv = levels(label)
         tracks[label] = lv
         # aligned dict for ratio construction
     aligned: dict[str, dict[int, float]] = {
@@ -775,7 +775,7 @@ leverage on a signal whose sign is set elsewhere.
         row = []
         vr_table[name] = {}
         for h in horizons:
-            vr, m = variance_ratio(lv, h)
+            vr, _m = variance_ratio(lv, h)
             vr_table[name][h] = vr
             row.append("      ---" if vr != vr else f"{vr:>9.3f}")
         print(f"{name:>14} {len(lv):>5} " + "".join(row))
@@ -835,7 +835,7 @@ statistic, bounce-free, on a 5-minute grid, over the horizons the tape supports:
             t += 300
         row = []
         for q in qs:
-            vr, m = variance_ratio(grid, q)
+            vr, _m = variance_ratio(grid, q)
             row.append("     ---" if vr != vr else f"{vr:>10.3f}")
         ltv = vr_table.get(label, {})
         lt4 = ltv.get(4, float("nan"))
@@ -1206,7 +1206,7 @@ displacement is measurable.
             continue
         row = []
         for kf in kfracs:
-            a, k, se = hill_alpha(notional, kf)
+            a, _k, _se = hill_alpha(notional, kf)
             row.append(f"{a:>10.2f}")
             if kf == 0.10:
                 alphas.append(a)
@@ -1441,7 +1441,7 @@ RC = tau is the measured relaxation time and tau_d is the arbitrageur's reaction
           f"{'vs pi/2':>12} {'damping margin':>16}")
     for pair, thalf_h in (("DREGG/SOLVE", 7.2), ("weave/nosis", 8.9)):
         tau = thalf_h * 3600.0 / math.log(2.0)
-        for latency, lname in ((0.4, "1 slot"), (12.0, "12 s (ETH)")):
+        for latency, _lname in ((0.4, "1 slot"), (12.0, "12 s (ETH)")):
             ratio = latency / tau
             print(f"{pair:>14} {tau:>10,.0f}s {latency:>14,.1f}s {ratio:>12.3e} "
                   f"{ratio / (math.pi / 2):>12.3e} {(math.pi / 2) / ratio:>15,.0f}x")
