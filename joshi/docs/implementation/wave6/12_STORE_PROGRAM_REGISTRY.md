@@ -40,6 +40,19 @@ The ordinary/latest store migrates to V11. The Wave 5 G0 root path uses the expl
 V10 migration boundary, so its frozen V10 export contract does not silently change when Wave 6
 tables exist.
 
+Core exposes a bounded local witness:
+
+```bash
+cargo run --locked --offline -p joshi-core -- \
+  wave6-program-registration --state /tmp/joshi-wave6-program
+```
+
+It creates or reopens one V11 catalog, commits the checked fixture, makes an exact idempotent
+retry, drops the writer, and independently loads the registration through a read-only store. Its
+JSON report fixes `status=fixture_only`, the unverified ceiling, zero consumed gates/provider
+units/external mutation units, and false operational/empirical/product/live fields. A repeated
+invocation returns the same original commit identity.
+
 ## Refusals and ceiling
 
 This adapter does not accept or resolve a Wave 5 gate reference. It does not persist a campaign,
@@ -59,6 +72,7 @@ cargo clippy --locked --offline -p joshi-store --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline -p joshi-store --no-deps
 cargo test --locked --offline -p joshi-core \
   exact_source_and_publication_reopen_without_promoting_root_or_live --lib
+cargo test --locked --offline -p joshi-core wave6_registration --lib
 ```
 
 These gates cover V4-to-V11 upgrade, V9/V10 frozen migration boundaries, exact registration,

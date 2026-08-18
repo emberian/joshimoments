@@ -25,6 +25,7 @@ joshi-sources = { path = "../../crates/joshi-sources" }
 joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
 joshi-supervisor = { path = "../../crates/joshi-supervisor" }
+joshi-wave6-registry = { path = "../../crates/joshi-wave6-registry" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

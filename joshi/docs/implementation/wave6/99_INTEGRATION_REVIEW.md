@@ -10,7 +10,9 @@ N00 store-persistence re-audit on 2026-08-18: migration V11 and the sole-store a
 reparse and exact-reopen the canonical zero-provider/zero-mutation fixture registration. Exact
 retry is idempotent and identity/byte substitution refuses. This raises only the durability of the
 fixture contract: `consumedWave5Gates` remains empty, and the returned semantic ceiling remains
-`unverified_semantic_fixture_only`. No operational Wave 6 release or empirical authority follows.
+`unverified_semantic_fixture_only`. The bounded Core command exercises fresh commit, exact retry
+and read-only restart while emitting explicit false gate-resolution, operational, empirical,
+product and live fields. No operational Wave 6 release or empirical authority follows.
 
 Response-atlas repair re-audit on 2026-08-18 at HEAD
 `c32674a93a41351d9bef79ec25fa03d4da1a4b14` plus the current response-atlas worktree:

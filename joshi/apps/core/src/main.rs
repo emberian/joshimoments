@@ -59,6 +59,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Persist and reopen the exact fixture-only Wave 6 N00 registration.
+    Wave6ProgramRegistration {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Serve bounded local admission and immutable query endpoints on loopback only.
     Serve {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -122,6 +127,10 @@ async fn main() -> Result<(), CliError> {
         Some(Command::Wave5G0RootEvidence { state }) => {
             let report =
                 joshi_core::wave5_g0_root_evidence::run_wave5_g0_root_evidence(&state).await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave6ProgramRegistration { state }) => {
+            let report = joshi_core::wave6_registration::run_wave6_program_registration(&state)?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -273,6 +282,8 @@ enum CliError {
     G0InspectorSmoke(#[from] G0InspectorSmokeError),
     #[error(transparent)]
     Wave5G0RootEvidence(#[from] joshi_core::wave5_g0_root_evidence::Wave5G0RootEvidenceError),
+    #[error(transparent)]
+    Wave6Registration(#[from] joshi_core::wave6_registration::Wave6RegistrationError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

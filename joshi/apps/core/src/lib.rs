@@ -10,6 +10,7 @@ pub mod wave5_g0;
 mod wave5_g0_fault_map;
 pub mod wave5_g0_root_evidence;
 pub mod wave5_readiness;
+pub mod wave6_registration;
 
 use joshi_domain::{
     AsOfVector, BlobId, CommitSeq, CoverageId, ObservationId, RetrospectiveView, SceneId,

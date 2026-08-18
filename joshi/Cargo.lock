@@ -1193,6 +1193,7 @@ dependencies = [
  "joshi-spool",
  "joshi-store",
  "joshi-supervisor",
+ "joshi-wave6-registry",
  "serde",
  "serde_json",
  "sha2",

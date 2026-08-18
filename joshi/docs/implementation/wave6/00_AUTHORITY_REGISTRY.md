@@ -109,10 +109,11 @@ upgrade their semantic ceiling.
 
 The one-way store adapter in `joshi-store` now persists and independently reparses the exact N00
 document under the V11 append-only table. Store commit order, commit time, batch identity, exact
-document bytes and both semantic/document digests survive read-only reopen. The adapter accepts
-only the checked contract shape with an empty Wave 5 gate set and zero provider/external-mutation
-budgets. This is durable storage of an unverified fixture contract, not resolution of the gates it
-deliberately omits. See [12_STORE_PROGRAM_REGISTRY.md](12_STORE_PROGRAM_REGISTRY.md).
+document bytes and both semantic/document digests survive read-only reopen. A bounded Core command
+walks the commit, exact retry and read-only restart. The adapter accepts only the checked contract
+shape with an empty Wave 5 gate set and zero provider/external-mutation budgets. This is durable
+storage of an unverified fixture contract, not resolution of the gates it deliberately omits. See
+[12_STORE_PROGRAM_REGISTRY.md](12_STORE_PROGRAM_REGISTRY.md).
 
 Per the Wave 6 master plan, a future sole-store adapter may be considered only after the exact
 external gates close. The current offline Wave 5 G0 component evidence does not satisfy `W5-G1`,
