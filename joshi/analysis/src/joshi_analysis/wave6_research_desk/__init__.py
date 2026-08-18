@@ -21,10 +21,18 @@ from .contracts import (
     ResearchProposal,
 )
 from .desk import ResearchDeskLedger, human_disposition, propose, supersession
+from .fixture_packet import (
+    FIXTURE_PACKET_AUTHORITY,
+    FixtureProgramRegistration,
+    FixtureResearchPacket,
+    build_fixture_research_packet,
+    parse_fixture_program_registration_exact,
+)
 
 __all__ = [
     "AUTHORITY",
     "CLAIM_SCOPE",
+    "FIXTURE_PACKET_AUTHORITY",
     "SCHEMA_ID",
     "ArtifactDescriptor",
     "ArtifactRole",
@@ -36,13 +44,17 @@ __all__ = [
     "ExperimentManifest",
     "Falsifier",
     "Feature",
+    "FixtureProgramRegistration",
+    "FixtureResearchPacket",
     "HumanDisposition",
     "ProposalKind",
     "ProposalRevision",
     "ProposalSpec",
     "ResearchDeskLedger",
     "ResearchProposal",
+    "build_fixture_research_packet",
     "human_disposition",
+    "parse_fixture_program_registration_exact",
     "propose",
     "supersession",
 ]
