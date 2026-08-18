@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, memo, Suspense } from "react";
 import { AlertTriangle, CircleDot, Clock3, Eye, Radio, WalletCards } from "lucide-react";
 
 import type { Candidate, Episode, SocialEvent } from "../contract/v1";
@@ -7,7 +7,7 @@ import type { ChartAnchor } from "../operator/contract";
 
 const MarketChart = lazy(() => import("./MarketChart").then((module) => ({ default: module.MarketChart })));
 
-export function CoinWorkbench({
+export const CoinWorkbench = memo(function CoinWorkbench({
   candidate,
   episode,
   socialEvents,
@@ -127,4 +127,4 @@ export function CoinWorkbench({
       </section>
     </section>
   );
-}
+});

@@ -108,7 +108,7 @@ npm test -- --run
 npm run build
 ```
 
-Current result: TypeScript passed, 20 test files / 147 tests passed, and the production Vite build
+Current result: TypeScript passed, 20 test files / 148 tests passed, and the production Vite build
 passed. The build reports one non-fatal main-chunk size warning (>500 KiB); code splitting remains a
 performance follow-up rather than an authority or correctness claim.
 

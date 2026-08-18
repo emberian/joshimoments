@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Activity, Bookmark, RefreshCw, Radio, Users } from "lucide-react";
 
@@ -17,7 +17,7 @@ const boards: Array<{ id: BoardFilter; label: string }> = [
   { id: "watch", label: "Watch" },
 ];
 
-export function AttentionFeed({
+export const AttentionFeed = memo(function AttentionFeed({
   candidates,
   selectedId,
   onSelect,
@@ -216,4 +216,4 @@ export function AttentionFeed({
       </div>
     </section>
   );
-}
+});
