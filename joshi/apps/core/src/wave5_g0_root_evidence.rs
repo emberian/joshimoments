@@ -149,7 +149,7 @@ pub async fn run_wave5_g0_root_evidence(
     join_reports(component, inspector, final_recovery)
 }
 
-fn join_reports(
+pub(crate) fn join_reports(
     component: Wave5G0SourcePublicationReport,
     inspector: G0InspectorSmokeReport,
     final_recovery: G0FinalRecoveryReport,
@@ -359,7 +359,7 @@ struct FinalReadbackMaterial<'a> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn run_final_recovery(
+pub(crate) fn run_final_recovery(
     state: &Path,
     component: &Wave5G0SourcePublicationReport,
     inspector: &G0InspectorSmokeReport,
@@ -368,7 +368,7 @@ fn run_final_recovery(
 }
 
 #[allow(clippy::too_many_lines)]
-fn run_final_recovery_with_fault(
+pub(crate) fn run_final_recovery_with_fault(
     state: &Path,
     component: &Wave5G0SourcePublicationReport,
     inspector: &G0InspectorSmokeReport,

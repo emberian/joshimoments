@@ -62,6 +62,18 @@ eighteen post-transition kill points. The deterministic schedule uses one
 baseline plus exactly one injected process-kill/power-loss/panic scenario on
 each side of each seam; no schedule may silently omit or duplicate a boundary.
 
+Core now also exposes `wave5-g0-fault-ledger` and the wrapper
+`scripts/wave5-g0-fault-ledger EMPTY_STATE_DIRECTORY`. It executes all 37
+frozen rows on distinct fresh state roots, observes the mapped deterministic
+interruption, attempts recovery on that same state, and records either the
+complete eighteen-role root evidence bundle or a typed, hashed recovery
+refusal. A deep verification run completed all 37 rows in 788.68 seconds.
+This is materially stronger than the old adapter map, but its execution kind is
+explicitly `deterministic_in_process_error_injection`: it does not impersonate
+the schedule's literal process-kill, power-loss, or panic modes and therefore
+still emits `fullOfflineFaultWalk:false`. It is intentionally excluded from the
+ordinary fast readiness command.
+
 For every injected crash, the future adapter must prove all of these from
 durable producer/store readback rather than booleans:
 

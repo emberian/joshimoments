@@ -192,8 +192,16 @@ The frozen schedule now has an exact typed adapter map for all 36 transition cas
 Export maps to the private backup-bound V10 commit, import maps to the post-export restricted CAS
 readback, and status maps to `RecoveryVerified/Ready` over the exact export binding. Real child
 processes are killed immediately before/after durable reservation and local-spool fsync; restart
-then proves respectively empty, explicit-gap, or exact-evidence recovery. No root runner emits one
-result and evidence bundle per schedule scenario yet, so `fullOfflineFaultWalk` remains false.
+then proves respectively empty, explicit-gap, or exact-evidence recovery. The ordinary readiness
+runner does not execute or emit the scenario ledger, so `fullOfflineFaultWalk` remains false.
+
+The explicit `wave5-g0-fault-ledger` deep command now removes the map-only part
+of that blocker: it executes all 37 schedule rows against fresh state roots and
+retains per-row interruption and recovery evidence. It remains a nonqualifying
+diagnostic ledger because the adapters inject in-process errors rather than the
+declared OS-kill/power-loss/panic modes, and because a refused same-state
+recovery is retained as a refusal instead of converted into an evidence
+bundle. The fast readiness witness still keeps `fullOfflineFaultWalk:false`.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
@@ -222,9 +230,9 @@ each maps one-to-one to
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
 fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second
 segment is generated. The root join supplies the three remaining baseline roles—pairing exchange,
-Glass API read and reopen readback—for an exact eighteen-item bundle. These are baseline artifacts,
-not 37 executed scenario results: the embedded, joined and outer `fullOfflineFaultWalk` fields all
-remain false.
+Glass API read and reopen readback—for an exact eighteen-item bundle. These are baseline artifacts;
+the separate deep ledger contains the 37 scenario results. The embedded, joined and outer
+`fullOfflineFaultWalk` fields all remain false.
 
 ## Explicit nonclaims
 

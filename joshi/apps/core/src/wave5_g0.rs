@@ -4,8 +4,10 @@
 //! fault walk, product use, live source coverage, or execution authority.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -38,14 +40,18 @@ use joshi_store::{
     Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1,
 };
 use joshi_supervisor::{
-    CollectorRuntime, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
-    SyntheticRuntimeOutcomeAdapter, synthetic_c0_json_runner,
+    CollectorRuntime, FaultInjector, FaultPoint, QueueLimits, RetryPolicy, RuntimeDocumentSet,
+    Supervisor, SupervisorConfig, SupervisorError, SyntheticRuntimeOutcomeAdapter,
+    synthetic_c0_json_runner,
 };
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    wave5_circulation::{RegisteredWave5Run, circulate_supervisor_public_c0},
+    wave5_circulation::{
+        CirculationFaultPoint, RegisteredWave5Run, Wave5CirculationError,
+        circulate_supervisor_public_c0,
+    },
     wave5_readiness::{
         config, fixture_provider_plan, fixture_registration_bundles, now, store_bundle,
     },
@@ -106,6 +112,30 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterBackup,
     BeforeRestore,
     AfterRestore,
+}
+
+/// Exact fault domains reachable by the joined source-to-publication component.
+///
+/// This is an in-process deterministic interruption adapter. It does not claim to be an OS kill,
+/// power loss, or panic and therefore cannot by itself qualify the frozen G0 fault schedule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Wave5G0SourceChainFaultPoint {
+    Supervisor(FaultPoint),
+    Catalog(CirculationFaultPoint),
+    Component(Wave5G0SourcePublicationFaultPoint),
+}
+
+#[derive(Debug)]
+struct ExactSupervisorFault(FaultPoint);
+
+impl FaultInjector for ExactSupervisorFault {
+    fn check(&self, point: FaultPoint) -> Result<(), SupervisorError> {
+        if point == self.0 {
+            Err(SupervisorError::Injected(point))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Exact component evidence. Every positive field is reverified after a read-only reopen.
@@ -196,10 +226,10 @@ pub struct Wave5G0SourcePublicationReport {
 pub fn run_wave5_g0_source_publication(
     state: &Path,
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
-    run_wave5_g0_source_publication_with_fault(state, None)
+    run_wave5_g0_source_publication_with_chain_fault(state, None)
 }
 
-/// Execute the component with one deterministic process-loss injection.
+/// Execute the component with one deterministic in-process interruption.
 ///
 /// Reinvoking [`run_wave5_g0_source_publication`] on the same state after an injected error must
 /// converge to the exact baseline report.
@@ -211,6 +241,17 @@ pub fn run_wave5_g0_source_publication(
 pub fn run_wave5_g0_source_publication_with_fault(
     state: &Path,
     fault: Option<Wave5G0SourcePublicationFaultPoint>,
+) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
+    run_wave5_g0_source_publication_with_chain_fault(
+        state,
+        fault.map(Wave5G0SourceChainFaultPoint::Component),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_wave5_g0_source_publication_with_chain_fault(
+    state: &Path,
+    fault: Option<Wave5G0SourceChainFaultPoint>,
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
     let (registration, bundle, _) = fixture_registration_bundles()?;
     seed_baseline_catalog(state)?;
@@ -313,13 +354,14 @@ pub fn run_wave5_g0_source_publication_with_fault(
         1,
     )?;
     let plan = fixture_provider_plan(&registration)?;
-    let supervisor = Supervisor::open(supervisor_config(state))?;
-    let existing = supervisor.reservations_for_run(run_id.as_str())?;
-    if existing.len() > 1 {
-        return Err(Wave5G0SourcePublicationError::Invariant(
-            "supervisor retained more than one C0 reservation for the run",
-        ));
-    }
+    let supervisor = match fault {
+        Some(Wave5G0SourceChainFaultPoint::Supervisor(point)) => Supervisor::open_with_faults(
+            supervisor_config(state),
+            BTreeMap::new(),
+            Arc::new(ExactSupervisorFault(point)),
+        )?,
+        _ => Supervisor::open(supervisor_config(state))?,
+    };
     let mut runtime = CollectorRuntime::open(
         RuntimeDocumentSet {
             exact_registration: &bundle.registration,
@@ -335,7 +377,15 @@ pub fn run_wave5_g0_source_publication_with_fault(
         committed_at,
         0,
     )?;
-    if existing.is_empty() {
+    let completed_before_retry = runtime
+        .supervisor()
+        .completed_no_gap_reservations_for_run(run_id.as_str())?;
+    if completed_before_retry.len() > 1 {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor retained more than one completed C0 reservation for the run",
+        ));
+    }
+    if completed_before_retry.is_empty() {
         let mut runner =
             synthetic_c0_json_runner(plan.clone(), DIRECT_C0_FILE.to_vec(), committed_at)?;
         let mut adapter = SyntheticRuntimeOutcomeAdapter::for_exact_fixture_batch(
@@ -406,12 +456,19 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &local_spool_receipt,
         catalog_admission_id,
         env!("CARGO_PKG_VERSION"),
-        None,
-    )
-    .map_err(|error| Wave5G0SourcePublicationError::Circulation(error.to_string()))?;
+        match fault {
+            Some(Wave5G0SourceChainFaultPoint::Catalog(point)) => Some(point),
+            _ => None,
+        },
+    )?;
+
+    let component_fault = match fault {
+        Some(Wave5G0SourceChainFaultPoint::Component(point)) => Some(point),
+        _ => None,
+    };
 
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeSemanticFact,
     )?;
     let source_context = store.begin_wave5_commit(
@@ -422,7 +479,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &circulation.catalog_receipt_bytes,
         &source_context,
     )?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterSemanticFact)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterSemanticFact,
+    )?;
     let source = store
         .load_wave5_source_occurrence_v1(&source_receipt.occurrence_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -447,7 +507,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
 
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforePublicationPrepare,
     )?;
     let prepare_context = store.begin_wave5_commit(
@@ -457,7 +517,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let prepare_receipt =
         store.prepare_cockpit_v2_from_store_v1(&source_receipt.occurrence_id, &prepare_context)?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterPublicationPrepare,
     )?;
     let preparation = store
@@ -468,7 +528,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let publication_id = CockpitPublicationId::new("cockpit-v2-wave5-g0-offline-0001")
         .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid static publication ID"))?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforePublicationBody,
     )?;
     let publication_context = store.begin_wave5_commit(
@@ -482,11 +542,11 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &publication_context,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterPublicationBody,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforePublicationHead,
     )?;
     let head_context = store.begin_wave5_commit(
@@ -495,7 +555,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     )?;
     let head_receipt = store.append_cockpit_v2_head_v1(&publication_id, &head_context)?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterPublicationHead,
     )?;
     let publication = store
@@ -519,16 +579,22 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
 
     let memory_fixture = memory_fixture(&publication)?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeMemoryAct)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeMemoryAct,
+    )?;
     let act_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:memory-act")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     )?;
     let act_receipt =
         store.commit_scientific_memory_occurrence_v1(&memory_fixture.act, &act_context)?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterMemoryAct)?;
     inject(
-        fault,
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterMemoryAct,
+    )?;
+    inject(
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeMemoryEpisode,
     )?;
     let episode_context = store.begin_wave5_commit(
@@ -538,7 +604,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let episode_receipt =
         store.commit_scientific_memory_occurrence_v1(&memory_fixture.episode, &episode_context)?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
     )?;
     let act = store
@@ -562,7 +628,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeMemoryClosure,
     )?;
     let mut memory_closure_receipts = Vec::with_capacity(memory_fixture.closure.len());
@@ -596,7 +662,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_closure_receipts.push(receipt);
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterMemoryClosure,
     )?;
     let memory_terminal_receipt =
@@ -625,7 +691,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "store status view omitted the run or spool/catalog progress",
         ));
     }
-    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeStatus)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeStatus,
+    )?;
     let status_id = StableString::new("status:wave5-g0-export-stale-0001")?;
     let degraded_status =
         if let Some(existing) = store.load_wave5_g0_status_occurrence_v1(&status_id)? {
@@ -667,14 +736,17 @@ pub fn run_wave5_g0_source_publication_with_fault(
             }
             stored
         };
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterStatus)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterStatus,
+    )?;
     if memory_terminal.commit_seq >= degraded_status.available_commit_seq {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "degraded status does not strictly follow the memory prefix",
         ));
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryStart,
     )?;
     let export_recovery_start = ensure_v10_export_recovery_started(
@@ -684,7 +756,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &degraded_status,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryStart,
     )?;
     if degraded_status.available_commit_seq >= export_recovery_start.available_commit_seq {
@@ -693,7 +765,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeExportInputBackup,
     )?;
     let export_input_backup_id = StableString::new("backup:wave5-g0-export-input-0001")?;
@@ -709,7 +781,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &export_input_backup_context,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterExportInputBackup,
     )?;
     if export_recovery_start.available_commit_seq >= export_input_backup.source_max_commit_seq
@@ -726,7 +798,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         1,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     );
-    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeV10Export)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeV10Export,
+    )?;
     let v10_export = store.commit_wave5_g0_operational_export_v2(
         &baseline.import.import_id,
         &export_input_backup_id,
@@ -734,7 +809,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &StableString::new("export-validation:wave5-g0-v10-0001")?,
         &v10_export_context,
     )?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterV10Export)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterV10Export,
+    )?;
     if v10_export.catalog_schema().as_str() != "joshi.sqlite.v10"
         || !matches!(
             v10_export.status(),
@@ -746,7 +824,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeV10ExportBinding,
     )?;
     let v10_export_binding = ensure_v10_export_binding(
@@ -756,11 +834,11 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &v10_export,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterV10ExportBinding,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeImportReadback,
     )?;
     let post_export_import = store
@@ -774,11 +852,11 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterImportReadback,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryReady,
     )?;
     let recovered_status = ensure_v10_export_recovered(
@@ -789,7 +867,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &v10_export_binding,
     )?;
     inject(
-        fault,
+        component_fault,
         Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryReady,
     )?;
     if v10_export.commit_seq() >= v10_export_binding.available_commit_seq
@@ -810,7 +888,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "recovered V10 export is absent from store-derived progress",
         ));
     }
-    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeBackup)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeBackup,
+    )?;
     let backup_id = StableString::new("backup:wave5-g0-partial-0001")?;
     let backup_catalog = state.join("g0-backup/catalog.sqlite");
     let backup_artifacts = state.join("g0-backup/artifacts");
@@ -825,7 +906,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &backup_artifacts,
         &backup_context,
     )?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterBackup)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterBackup,
+    )?;
     if backup.artifact_count == 0
         || recovered_status.available_commit_seq >= backup.source_max_commit_seq
         || backup.source_max_commit_seq >= backup.commit_seq
@@ -834,7 +918,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "backup did not close a nonempty post-status immutable inventory",
         ));
     }
-    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeRestore)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeRestore,
+    )?;
     let restore_id = StableString::new("restore:wave5-g0-partial-0001")?;
     let restored_catalog = state.join("g0-restore/catalog.sqlite");
     let restored_artifacts = state.join("g0-restore/artifacts");
@@ -849,7 +936,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &restored_artifacts,
         &restore_context,
     )?;
-    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterRestore)?;
+    inject(
+        component_fault,
+        Wave5G0SourcePublicationFaultPoint::AfterRestore,
+    )?;
     if restore.restored_catalog_digest != backup.catalog_digest
         || restore.artifact_inventory_digest != backup.artifact_inventory_digest
         || restore.restored_max_commit_seq != backup.source_max_commit_seq
@@ -1948,8 +2038,8 @@ pub enum Wave5G0SourcePublicationError {
     Wire(#[from] WireStringError),
     #[error(transparent)]
     Readiness(#[from] crate::wave5_readiness::Wave5ReadinessError),
-    #[error("Wave 5 G0 circulation failed: {0}")]
-    Circulation(String),
+    #[error(transparent)]
+    Circulation(#[from] Wave5CirculationError),
     #[error("invalid static Wave 5 G0 memory fixture: {0}")]
     MemoryFixture(String),
     #[error(transparent)]

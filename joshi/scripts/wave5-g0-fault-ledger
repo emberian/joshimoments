@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: $0 EMPTY_STATE_DIRECTORY" >&2
+  exit 64
+fi
+
+exec cargo run --locked --offline -p joshi-core -- \
+  wave5-g0-fault-ledger --state "$1"

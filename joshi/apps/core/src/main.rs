@@ -59,6 +59,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Execute all 37 frozen G0 rows using non-qualifying in-process fault injection.
+    Wave5G0FaultLedger {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Persist and reopen the exact fixture-only Wave 6 N00 registration.
     Wave6ProgramRegistration {
         #[arg(long)]
@@ -101,6 +106,7 @@ struct FixtureArguments {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // The CLI keeps each bounded offline subcommand visibly routed.
 async fn main() -> Result<(), CliError> {
     let arguments = Arguments::parse();
     match arguments.command {
@@ -127,6 +133,11 @@ async fn main() -> Result<(), CliError> {
         Some(Command::Wave5G0RootEvidence { state }) => {
             let report =
                 joshi_core::wave5_g0_root_evidence::run_wave5_g0_root_evidence(&state).await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0FaultLedger { state }) => {
+            let report =
+                joshi_core::wave5_g0_fault_root::run_wave5_g0_executed_fault_ledger(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Wave6ProgramRegistration { state }) => {
@@ -282,6 +293,8 @@ enum CliError {
     G0InspectorSmoke(#[from] G0InspectorSmokeError),
     #[error(transparent)]
     Wave5G0RootEvidence(#[from] joshi_core::wave5_g0_root_evidence::Wave5G0RootEvidenceError),
+    #[error(transparent)]
+    Wave5G0FaultLedger(#[from] joshi_core::wave5_g0_fault_root::G0ExecutedFaultLedgerError),
     #[error(transparent)]
     Wave6Registration(#[from] joshi_core::wave6_registration::Wave6RegistrationError),
     #[error(transparent)]

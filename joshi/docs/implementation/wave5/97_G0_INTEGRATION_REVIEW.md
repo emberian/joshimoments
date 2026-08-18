@@ -67,8 +67,8 @@ artifact index rather than a completed root occurrence and keeps every qualifica
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS as a joined durable offline-fixture component; BLOCKED complete root/live** | Core copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the restricted manifest plus Parquet CAS. It then creates an immutable input backup, runs the private backup-bound 24-table V10 wrapper, independently validates Rust/Python readback, commits the exact snapshot, and captures it in the final backup. This remains fixture-only and does not imply status recovery, product use, or root completion. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS as a joined durable offline-fixture export recovery; BLOCKED root/live** | Core commits `export_stale`, starts recovery before the immutable input backup, commits the V10 snapshot, and adds a canonical same-run export binding. `RecoveryVerified/Ready` cites only that binding's exact commit sequence and commit digest; store semantics reject a production receipt or unrelated commit. The full chain reopens exactly but does not imply product, live, or root readiness. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS as one complete offline-fixture baseline recovery set; BLOCKED fault/root** | The store writer backs up the post-pairing catalog and every catalog-referenced blob/export, while the root join separately copies and exact-hashes all supervisor journal, health, identity, origin and ACK files except the process lock. It restores both trees, makes the original catalog/blob/export/supervisor paths unavailable during verification, and reopens the exact run/source/publication/memory/export/import/status/pairing/origin solely from restored roots. The composite supervisor copy has no injected crash/retry adapter, so this remains baseline recovery evidence rather than the 37-scenario root result. |
-| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + 36/36 mapped package-prefix recovery; BLOCKED executable root result** | Real child processes are killed at the exact before/after reservation and local-spool-fsync boundaries; restart proves empty, explicit-gap, or exact-evidence recovery. The shared origin/store closure passes before/after store receipt, catalog binding and ACK on six fresh catalogs. The source/publication/memory/status/export/backup implementation passes thirty-two component interruptions, including V10 export, post-export restricted-import CAS readback and final recovery status. Pairing/open and final recovery cover their exact scheduled boundaries. The typed map covers all 36 frozen transitions, but no root runner emits one result/evidence bundle per 37-scenario entry, so no fault-walk qualification follows. |
-| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as one eighteen-role partial baseline bundle; BLOCKED fault-root** | `wave5-g0-root-evidence` runs the component and pairing/open/restart smoke over one catalog, exact-matches run registration, source occurrence, publication semantic/byte digests and head, and extends the fifteen component artifacts with consumed pairing, exact HTTP read and a final composite store+supervisor restored-root readback. The schema-V5 readiness witness binds the resulting eighteen-item bundle and both nested report digests. This is one baseline conjunction, not 37 executed scenario results, and every qualification bit remains false. |
+| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS for strict false contract + 37-row in-process execution ledger; BLOCKED qualifying process-loss root result** | Real child processes are killed in the focused supervisor tests, and all 36 schedule transitions retain package-prefix recovery coverage. The new Core deep runner additionally executes the baseline plus every mapped transition on fresh roots and records per-scenario injected-error and same-state recovery evidence; its first full run completed in 788.68 seconds. It truthfully retains a recovery refusal instead of fabricating a complete bundle. The joined execution kind is still in-process error injection, not the schedule's literal process-kill/power-loss/panic mode, so `fullOfflineFaultWalk` remains false. |
+| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS for one eighteen-role baseline plus a 37-row nonqualifying diagnostic ledger; BLOCKED fault-root** | `wave5-g0-root-evidence` runs the component and pairing/open/restart smoke over one catalog, exact-matches run registration, source occurrence, publication semantic/byte digests and head, and extends the fifteen component artifacts with consumed pairing, exact HTTP read and a final composite store+supervisor restored-root readback. The schema-V5 readiness witness binds that baseline. The separate deep ledger carries one exact result per frozen scenario, but keeps process-loss qualification false and retains missing same-state bundles as typed refusals. |
 
 ## Red-team invariants for landing components
 
@@ -379,7 +379,8 @@ raises backup/restore to an **isolated durable component pass**. Core now also e
 at four component-local before/after interruption points and joins its exact manifest/readback to
 the partial evidence bundle. It remains **BLOCKED for the full fault walk and W5-G0**: that joined
 backup does not cover the separate supervisor spool inventory, remove the original roots, or execute
-the harness's complete 37-scenario schedule.
+the harness's qualifying 37-scenario process-loss schedule. The deep diagnostic runner executes all
+rows with in-process interruption instead.
 
 No backup status or manifest row may qualify without enumerating every reachable origin,
 publication, export and CAS object and reopening their bytes under a distinct restored root with
@@ -391,8 +392,9 @@ fifteen artifact digests rederived from its owner/store objects; the harness map
 one-to-one to `observed_partial` and refuses hidden/duplicate/missing-role evidence. This is a
 **PASS for strict partial baseline accounting only**. The harness does not independently open the
 artifacts, and no positive authority follows from its digest. Unimplemented seams remain typed,
-the authority stays `fixture_harness_no_execution`, the full schedule is not executed, and result
-validation unconditionally rejects a positive root Boolean.
+the authority stays `fixture_harness_no_execution`, and result validation unconditionally rejects
+a positive root Boolean. The separate Core deep ledger executes every row without changing this V1
+harness ceiling.
 
 ## Targeted verification during this review
 
@@ -498,13 +500,14 @@ than that statement:
   remains a separate independent synthetic format witness.
 - **Backup/restore: isolated durable component PASS; fault/root BLOCKED.** Nonempty inventory,
   exact reservation/staging settlement, fsynced copies, independent reachability, distinct-root
-  restore, no-original-root restart and tamper refusal pass. No harness adapter executes all
-  before/after crash points.
+  restore, no-original-root restart and tamper refusal pass. The Core diagnostic adapter executes
+  all before/after rows in process, but no qualifying process-loss adapter does.
 
 ## Current root decision
 
 **W5-G0: BLOCKED.** Origin/catalog, source/denominator/publication, deliberately partial memory,
 export/import/status/backup, paired API read and final restored-root reopen now form one
-eighteen-role baseline evidence bundle, but it cannot raise the fault/root or product gate. No
-implementation reviewed at this point emits exact results across all 37 required scenarios or a
-real product presentation, and no Boolean readiness claim may say otherwise.
+eighteen-role baseline evidence bundle, and the deep ledger emits exact diagnostic results across
+all 37 required rows, but neither raises the fault/root or product gate. The ledger does not execute
+literal process-loss modes or a real product presentation, and no Boolean readiness claim may say
+otherwise.
