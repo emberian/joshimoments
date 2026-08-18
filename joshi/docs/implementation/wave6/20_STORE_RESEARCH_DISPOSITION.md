@@ -19,10 +19,16 @@ and require the disposition clock to follow proposal creation.
 
 The row fixes `identity_authority` to `caller_fed_fixture_unverified` and structurally fixes
 `human_review_verified`, `approval_authority`, `execution_authority`, and `result_authority` to
-false. The public receipt repeats those false values. Persistence therefore proves exact append,
+false. The public receipt exposes one closed no-authority state whose accessors return those false
+values. Persistence therefore proves exact append,
 proposal lineage, idempotent retry, and restart readback—not that the named reviewer exists or made
 a decision. Changed bytes, a missing proposal, a second batch for one identity, and backdated or
 foreign proposal binding refuse.
+
+Core report `joshi.core.wave6_program_registration_report.v8` and root witness
+`joshi.wave6.fixture_foundation_witness.v7` now carry the exact disposition/proposal binding and
+retain authenticated human review, proposal execution, and research-result qualification as
+false.
 
 ## Verification
 

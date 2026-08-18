@@ -4,10 +4,11 @@ use std::{fs, path::Path, time::Duration};
 
 use joshi_domain::StableString;
 use joshi_store::{
-    IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, StoredWave6FixtureResearchProposal,
+    IdempotencyStatus, ResearchDispositionAuthorityV1, SqliteStore, StoreConfig, StoreMode,
+    StoredWave6FixtureResearchDisposition, StoredWave6FixtureResearchProposal,
     Wave6FixtureCampaignBundleBytes,
 };
-use joshi_wave6_registry::SemanticCeilingV1;
+use joshi_wave6_registry::{ResearchDispositionKindV1, SemanticCeilingV1};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -16,6 +17,8 @@ const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag
 const DECISION_LEDGER: &[u8] = include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
 const RESEARCH_PROPOSAL: &[u8] =
     include_bytes!("../../../fixtures/wave6/research_proposal_v1.json");
+const RESEARCH_DISPOSITION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/research_disposition_v1.json");
 const CAMPAIGN_REGISTRATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/campaign/registration_v1.json");
 const CAMPAIGN_ENROLLMENT: &[u8] =
@@ -139,6 +142,24 @@ pub struct Wave6FixtureResearchProposalReport {
     pub commit_seq: String,
 }
 
+/// One exact caller-fed fixture disposition retained after its proposal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureResearchDispositionReport {
+    pub disposition_id: String,
+    pub proposal_id: String,
+    pub proposal_digest: String,
+    pub proposal_content_digest: String,
+    pub disposition: &'static str,
+    pub reviewer_id: String,
+    pub decided_at: String,
+    pub reason: String,
+    pub content_digest: String,
+    pub identity_authority: &'static str,
+    pub authority_boundary: &'static str,
+    pub commit_seq: String,
+}
+
 /// Machine-readable, non-promoting result of the N00 durable fixture walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,6 +200,9 @@ pub struct Wave6ProgramRegistrationReport {
     pub fixture_research_proposal: Wave6FixtureResearchProposalReport,
     pub fixture_research_proposal_persisted: bool,
     pub fixture_research_proposal_restart_reverified: bool,
+    pub fixture_research_disposition: Wave6FixtureResearchDispositionReport,
+    pub fixture_research_disposition_persisted: bool,
+    pub fixture_research_disposition_restart_reverified: bool,
     pub human_research_review: bool,
     pub proposal_executed: bool,
     pub research_result: bool,
@@ -247,6 +271,8 @@ pub fn run_wave6_program_registration(
     let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
     let research_proposal =
         commit_research_proposal(&mut store, &accepted.program_id, &writer_build)?;
+    let research_disposition =
+        commit_research_disposition(&mut store, &research_proposal, &writer_build)?;
     let dag_report = commit_artifact_dag(&mut store, &accepted.program_id, &writer_build)?;
     let decision_report = commit_decision_ledger(&mut store, &dag_report, &writer_build)?;
     let campaign_report = commit_campaign_bundle(&mut store, &accepted.program_id, &writer_build)?;
@@ -274,13 +300,14 @@ pub fn run_wave6_program_registration(
     verify_schemas(&reopened, &program_id, &schema_reports)?;
     verify_artifacts(&reopened, &artifact_reports)?;
     verify_research_proposal(&reopened, &research_proposal)?;
+    verify_research_disposition(&reopened, &research_disposition)?;
     verify_artifact_dag(&reopened, &dag_report)?;
     verify_decision_ledger(&reopened, &decision_report)?;
     verify_campaign_bundle(&reopened, &campaign_report)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v7",
-        schema_version: 7,
+        contract: "joshi.core.wave6_program_registration_report.v8",
+        schema_version: 8,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -314,6 +341,9 @@ pub fn run_wave6_program_registration(
         fixture_research_proposal: research_proposal,
         fixture_research_proposal_persisted: true,
         fixture_research_proposal_restart_reverified: true,
+        fixture_research_disposition: research_disposition,
+        fixture_research_disposition_persisted: true,
+        fixture_research_disposition_restart_reverified: true,
         human_research_review: false,
         proposal_executed: false,
         research_result: false,
@@ -460,6 +490,122 @@ fn verify_research_proposal(
         ));
     }
     Ok(())
+}
+
+fn commit_research_disposition(
+    store: &mut SqliteStore,
+    proposal: &Wave6FixtureResearchProposalReport,
+    writer_build: &StableString,
+) -> Result<Wave6FixtureResearchDispositionReport, Wave6RegistrationError> {
+    let proposal_id = StableString::new(proposal.proposal_id.clone())?;
+    let batch_id = StableString::new("wave6:research-disposition:fixture-001")?;
+    let accepted = store.commit_wave6_fixture_research_disposition_v1(
+        &proposal_id,
+        RESEARCH_DISPOSITION,
+        batch_id.clone(),
+        writer_build.clone(),
+    )?;
+    let expected_authority = ResearchDispositionAuthorityV1::
+        CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult;
+    if !matches!(
+        accepted.status,
+        IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+    ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        || accepted.authority_boundary != expected_authority
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research disposition returned an impossible first receipt",
+        ));
+    }
+    let retry = store.commit_wave6_fixture_research_disposition_v1(
+        &proposal_id,
+        RESEARCH_DISPOSITION,
+        batch_id,
+        writer_build.clone(),
+    )?;
+    if retry.status != IdempotencyStatus::Idempotent
+        || retry.disposition_id != accepted.disposition_id
+        || retry.proposal_id != accepted.proposal_id
+        || retry.proposal_digest != accepted.proposal_digest
+        || retry.proposal_content_digest != accepted.proposal_content_digest
+        || retry.disposition != accepted.disposition
+        || retry.reviewer_id != accepted.reviewer_id
+        || retry.decided_at != accepted.decided_at
+        || retry.content_digest != accepted.content_digest
+        || retry.commit_seq != accepted.commit_seq
+        || retry.commit_digest != accepted.commit_digest
+        || retry.authority_boundary != expected_authority
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "exact Wave 6 research disposition retry changed durable identity",
+        ));
+    }
+    let stored = store
+        .load_wave6_fixture_research_disposition_v1(&accepted.disposition_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research disposition was absent after commit",
+        ))?;
+    if stored.exact_bytes != RESEARCH_DISPOSITION
+        || stored.commit_seq != accepted.commit_seq
+        || stored.commit_digest != accepted.commit_digest
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 research disposition readback differed from its receipt",
+        ));
+    }
+    Ok(research_disposition_report(&stored))
+}
+
+fn research_disposition_report(
+    stored: &StoredWave6FixtureResearchDisposition,
+) -> Wave6FixtureResearchDispositionReport {
+    Wave6FixtureResearchDispositionReport {
+        disposition_id: stored.disposition_id.to_string(),
+        proposal_id: stored.proposal_id.to_string(),
+        proposal_digest: stored.proposal_digest.to_string(),
+        proposal_content_digest: stored.proposal_content_digest.to_string(),
+        disposition: disposition_kind(stored.disposition),
+        reviewer_id: stored.reviewer_id.to_string(),
+        decided_at: stored.decided_at.to_string(),
+        reason: stored.reason.clone(),
+        content_digest: stored.content_digest.to_string(),
+        identity_authority: "caller_fed_fixture_unverified",
+        authority_boundary: "no_verified_human_review_approval_execution_result_or_release_authority",
+        commit_seq: stored.commit_seq.get().to_string(),
+    }
+}
+
+fn verify_research_disposition(
+    store: &SqliteStore,
+    report: &Wave6FixtureResearchDispositionReport,
+) -> Result<(), Wave6RegistrationError> {
+    let disposition_id = StableString::new(report.disposition_id.clone())?;
+    let stored = store
+        .load_wave6_fixture_research_disposition_v1(&disposition_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research disposition was absent after restart",
+        ))?;
+    if stored.exact_bytes != RESEARCH_DISPOSITION
+        || research_disposition_report(&stored) != *report
+        || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        || stored.authority_boundary
+            != ResearchDispositionAuthorityV1::
+                CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research disposition changed across read-only reopen",
+        ));
+    }
+    Ok(())
+}
+
+const fn disposition_kind(value: ResearchDispositionKindV1) -> &'static str {
+    match value {
+        ResearchDispositionKindV1::Accept => "accept",
+        ResearchDispositionKindV1::Reject => "reject",
+        ResearchDispositionKindV1::Hold => "hold",
+        ResearchDispositionKindV1::Supersede => "supersede",
+    }
 }
 
 fn commit_campaign_bundle(
@@ -1048,6 +1194,17 @@ mod tests {
         assert_eq!(first.fixture_research_proposal.artifact_bindings.len(), 3);
         assert!(first.fixture_research_proposal_persisted);
         assert!(first.fixture_research_proposal_restart_reverified);
+        assert_eq!(first.fixture_research_disposition.disposition, "hold");
+        assert_eq!(
+            first.fixture_research_disposition.reviewer_id,
+            "fixture-reviewer-unverified"
+        );
+        assert_eq!(
+            first.fixture_research_disposition.identity_authority,
+            "caller_fed_fixture_unverified"
+        );
+        assert!(first.fixture_research_disposition_persisted);
+        assert!(first.fixture_research_disposition_restart_reverified);
         assert!(!first.human_research_review);
         assert!(!first.proposal_executed);
         assert!(!first.research_result);
@@ -1079,6 +1236,10 @@ mod tests {
         assert_eq!(
             repeated.fixture_research_proposal,
             first.fixture_research_proposal
+        );
+        assert_eq!(
+            repeated.fixture_research_disposition,
+            first.fixture_research_disposition
         );
     }
 }
