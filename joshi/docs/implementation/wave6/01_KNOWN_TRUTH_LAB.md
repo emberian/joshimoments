@@ -1,9 +1,9 @@
 # Wave 6 known-truth and counterexample lab
 
-Status: generic and first protocol-specific `N01/W6-K` batteries implemented at fixture-only
-authority. They test an exact signed-flow probe plus frozen Pump, PumpSwap, and DLMM arithmetic;
-they are not a market estimator, store-resolved release, quote service, or completion of all
-venue-specific Wave 6 counterexamples.
+Status: generic, first protocol-specific, and first structural `N01/W6-K` batteries implemented at
+fixture-only authority. They test an exact signed-flow probe, frozen Pump/PumpSwap/DLMM arithmetic,
+and synthetic migration/order/identity-revision boundaries; they are not a market estimator,
+store-resolved release, identity claim, quote service, or completion of all Wave 6 counterexamples.
 
 The implementation lives in
 [`analysis/src/joshi_analysis/wave6_known_truth`](../../../analysis/src/joshi_analysis/wave6_known_truth)
@@ -26,6 +26,7 @@ The current candidate families are deliberately small:
 ```text
 exact_signed_flow_fixture_probe_v1
 python_protocol_exact_reference
+python_structural_exact_reference
 ```
 
 That scope makes failures legible. It does not imply that signed flow or the frozen protocol
@@ -68,6 +69,30 @@ binds the exact suite, raw fixture digest, case truth digest, candidate disposit
 output or typed refusal, and fixed fixture-only authority. Missing, duplicate, substituted, or
 boolean-as-integer results refuse.
 
+## Three structural adversaries
+
+The structural battery pins the exact canonical fixture
+`fixtures/wave6/structural_known_truth_v1.json` at:
+
+```text
+sha256:806bf5668a0de0f113677f5aad6947074cb463aa1dc9776794e22a2b491be154
+```
+
+It recomputes three separately typed boundaries:
+
+- a migration splice sums the Pump-curve and PumpSwap within-gauge deltas (`50 + 20 = 70`) and
+  retains the invalid direct cross-gauge subtraction (`-80`) only as a negative control;
+- two same-slot CPMM events follow transaction index even though their display IDs sort in the
+  opposite order, while an unindexed projection retains both distinct order-result digests as a
+  compatible set; and
+- an identity revision selects only assertions available at each knowledge/commit cut. A future
+  revision, including a malformed future payload, cannot alter the earlier input digest or entity
+  symbol.
+
+Every output has a closed carrier (`decimal_integer`, `identifier`, `sha256`, or `disposition`).
+The identity symbols are synthetic fixture labels. They do not claim common control, intent, or a
+real wallet/account mapping.
+
 ## Executable leakage rule
 
 Availability and commit coordinates are checked before semantic payload. A future row may contain
@@ -105,14 +130,14 @@ uv --directory analysis run --locked pytest -q
 uv --directory analysis run --locked ruff check src tests
 ```
 
-Focused result: 19 tests pass across the generic and protocol batteries. The complete locked
-analysis suite and Ruff also pass.
+Focused result: 26 tests pass across the generic, protocol, and structural batteries. The complete
+locked analysis suite and Ruff also pass.
 
 ## Remaining `N01` work
 
-This is the shared generic spine plus the first Pump/PumpSwap/DLMM arithmetic battery, not the full
-domain battery. The master plan still requires separate exact fixtures for migration splice,
-same-slot reorder, identity revision, broader venue profiles, platform-wide burst, operator-label
-induction, runner mark/liquidation divergence, self-routed fee wash, and frozen-future
-exit/re-entry. Each later candidate must name the subset it actually passed; generic signed-flow or
-basic protocol arithmetic success cannot promote a venue/mechanics/operator lane.
+This is the shared generic spine plus first protocol-arithmetic and structural batteries, not the
+full domain battery. The master plan still requires broader venue profiles, platform-wide burst,
+same-shaped-chart/different-mechanism, operator-label induction, runner mark/liquidation
+divergence, self-routed fee wash, and frozen-future exit/re-entry fixtures. Each later candidate
+must name the subset it actually passed; generic, basic protocol, or synthetic structural success
+cannot promote a venue/mechanics/identity/operator lane.
