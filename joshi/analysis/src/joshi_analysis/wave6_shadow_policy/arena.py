@@ -28,6 +28,7 @@ from .contracts import (
     PolicySpec,
     QuoteStatus,
     ShadowQuote,
+    ValuationStatus,
     _content_id,
     _iso,
     amount_map,
@@ -46,11 +47,14 @@ class RefusalCode(StrEnum):
     INVENTORY_CONSTRAINT = "inventory_constraint"
     DUPLICATE_QUOTE_USE = "duplicate_quote_use"
     ADVERSE_SELECTION_CONFLICT = "adverse_selection_conflict"
+    ILLEGAL_POLICY_TRANSITION = "illegal_policy_transition"
+    LP_POSITION_MISMATCH = "lp_position_mismatch"
 
 
 class BranchStatus(StrEnum):
     COMPLETE = "complete"
     COMPLETE_WITH_REFUSALS = "complete_with_refusals"
+    STARTING_VALUE_UNKNOWN = "starting_value_unknown"
     TERMINAL_VALUE_UNKNOWN = "terminal_value_unknown"
 
 
@@ -272,7 +276,7 @@ class BranchResult:
     liquidation_legs: tuple[LiquidationLeg, ...]
     terminal_balances: tuple[tuple[str, int], ...]
     terminal_subject_basis: BasisProjection
-    starting_value_numeraire_atoms: int
+    starting_value_numeraire_atoms: int | None
     terminal_wealth_numeraire_atoms: int | None
     net_pnl_numeraire_atoms: int | None
     episode_states: tuple[str, ...]
@@ -296,7 +300,11 @@ class BranchResult:
             "liquidation_legs": [leg.as_dict() for leg in self.liquidation_legs],
             "terminal_balances": _wire_balances(self.terminal_balances),
             "terminal_subject_basis": self.terminal_subject_basis.as_dict(),
-            "starting_value_numeraire_atoms": str(self.starting_value_numeraire_atoms),
+            "starting_value_numeraire_atoms": (
+                None
+                if self.starting_value_numeraire_atoms is None
+                else str(self.starting_value_numeraire_atoms)
+            ),
             "terminal_wealth_numeraire_atoms": (
                 None
                 if self.terminal_wealth_numeraire_atoms is None
@@ -307,6 +315,26 @@ class BranchResult:
             ),
             "episode_states": list(self.episode_states),
             "accounting_identity": ACCOUNTING_IDENTITY,
+            "double_counting_audit": {
+                "included_in_effect_diagnostic_ids": sorted(
+                    item.diagnostic_id
+                    for item in self.diagnostics
+                    if item.treatment is AccountingTreatment.INCLUDED_IN_BALANCE_EFFECT
+                ),
+                "internal_non_posting_diagnostic_ids": sorted(
+                    item.diagnostic_id
+                    for item in self.diagnostics
+                    if item.treatment is AccountingTreatment.INTERNAL_NON_POSTING
+                ),
+                "counterfactual_non_posting_diagnostic_ids": sorted(
+                    item.diagnostic_id
+                    for item in self.diagnostics
+                    if item.treatment is AccountingTreatment.COUNTERFACTUAL_NON_POSTING
+                ),
+                "diagnostics_added_to_net_pnl": False,
+                "opportunity_cost_posted_to_net_pnl": False,
+                "lvr_and_itr_additive": False,
+            },
             "authority": AUTHORITY,
         }
 
@@ -665,6 +693,12 @@ def _action_is_sequence_eligible(
     return policy.family is PolicyFamily.LP_ROUTED_LIQUIDITY_SHADOW
 
 
+def _lp_transition_is_eligible(action_kind: ActionKind, installed: bool) -> bool:
+    if action_kind is ActionKind.LP_INSTALL:
+        return not installed
+    return installed
+
+
 def _quote_size_matches(
     quote: ShadowQuote,
     action_kind: ActionKind,
@@ -737,10 +771,36 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
         for point in episode.decision_points
         if point.status is not EvidenceStatus.OBSERVED
     ]
+    refused_valuations = tuple(
+        component
+        for component in episode.starting_valuation.components
+        if component.status is ValuationStatus.REFUSED
+    )
+    for component in refused_valuations:
+        reason = component.refusal_reason or "starting valuation refused"
+        uncertainties.append(
+            UncertaintyRecord(
+                uncertainty_id=_record_id(
+                    "shadow-uncertainty",
+                    {
+                        "asset_id": component.asset_id,
+                        "kind": "starting_valuation_refused",
+                        "reason": reason,
+                    },
+                ),
+                kind="starting_valuation_refused",
+                point_id=None,
+                reason=reason,
+                gap_ids=(),
+            )
+        )
     diagnostics: list[EconomicDiagnostic] = []
     diagnostic_ids: set[str] = set()
     used_quotes: set[str] = set()
     states = ["starting_snapshot"]
+    lp_installed = False
+    lp_position_id: str | None = None
+    lp_install_event_id: str | None = None
 
     if policy.family is PolicyFamily.ABSTAIN:
         if episode.decision_points:
@@ -756,7 +816,29 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
         state = "flat" if balances.get(episode.subject_asset_id, 0) == 0 else "exposed_epoch_0"
         for point in episode.decision_points:
             action_kind = action_map.get(point.cue)
-            if action_kind is None or not _action_is_sequence_eligible(
+            if action_kind is None:
+                continue
+            if policy.family is PolicyFamily.LP_ROUTED_LIQUIDITY_SHADOW:
+                if not _lp_transition_is_eligible(action_kind, lp_installed):
+                    action = _action(policy, point, ActionKind.REFUSE, balances)
+                    refusal = _refusal(
+                        policy,
+                        point,
+                        RefusalCode.ILLEGAL_POLICY_TRANSITION,
+                        "LP flow/maintenance requires an active exact installed-capital event",
+                    )
+                    actions.append(action)
+                    refusals.append(refusal)
+                    executions.append(
+                        _execution(
+                            action,
+                            quote_id=None,
+                            status="refused_illegal_lp_transition",
+                            refusal_id=refusal.refusal_id,
+                        )
+                    )
+                    continue
+            elif not _action_is_sequence_eligible(
                 action_kind, balances, policy, episode.subject_asset_id
             ):
                 continue
@@ -910,6 +992,33 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
                     )
                 )
                 continue
+            if policy.family is PolicyFamily.LP_ROUTED_LIQUIDITY_SHADOW:
+                liquidity = quote.liquidity_evidence
+                if liquidity is None or (
+                    action_kind is not ActionKind.LP_INSTALL
+                    and (
+                        liquidity.position_id != lp_position_id
+                        or liquidity.installed_capital_event_id != lp_install_event_id
+                    )
+                ):
+                    refusal = _refusal(
+                        policy,
+                        point,
+                        RefusalCode.LP_POSITION_MISMATCH,
+                        "LP quote does not bind the active position/install occurrence",
+                        quote.quote_id,
+                    )
+                    refusals.append(refusal)
+                    executions.append(
+                        _execution(
+                            action,
+                            quote_id=quote.quote_id,
+                            projected_at=_iso(quote.available_at, "quote.available_at"),
+                            status="refused_lp_position_mismatch",
+                            refusal_id=refusal.refusal_id,
+                        )
+                    )
+                    continue
             if not _adverse_measure_is_compatible(policy, quote):
                 refusal = _refusal(
                     policy,
@@ -954,6 +1063,12 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
                 diagnostics.append(diagnostic)
             state = _state_after(action_kind, state)
             states.append(state)
+            if action_kind is ActionKind.LP_INSTALL:
+                lp_installed = True
+                lp_position_id = quote.liquidity_evidence.position_id
+                lp_install_event_id = quote.liquidity_evidence.installed_capital_event_id
+            elif action_kind is ActionKind.LP_REMOVE:
+                lp_installed = False
 
     pre_liquidation = _frozen_balances(balances)
     pre_liquidation_basis = _basis_projection(
@@ -1044,13 +1159,18 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
     terminal_basis = _basis_projection(
         episode.subject_asset_id, balances.get(episode.subject_asset_id, 0), basis
     )
+    starting_value = episode.starting_valuation.total_numeraire_atoms
     if residual_assets:
         status = BranchStatus.TERMINAL_VALUE_UNKNOWN
         terminal_wealth = None
         net_pnl = None
+    elif starting_value is None:
+        status = BranchStatus.STARTING_VALUE_UNKNOWN
+        terminal_wealth = balances.get(numeraire, 0)
+        net_pnl = None
     else:
         terminal_wealth = balances.get(numeraire, 0)
-        net_pnl = terminal_wealth - episode.starting_valuation.total_numeraire_atoms
+        net_pnl = terminal_wealth - starting_value
         status = BranchStatus.COMPLETE_WITH_REFUSALS if refusals else BranchStatus.COMPLETE
     provisional = BranchResult(
         branch_id="pending-content-identity",
@@ -1070,7 +1190,7 @@ def _evaluate_branch(plan: ArenaPlan, policy: PolicySpec) -> BranchResult:
         liquidation_legs=tuple(liquidation_legs),
         terminal_balances=terminal_balances,
         terminal_subject_basis=terminal_basis,
-        starting_value_numeraire_atoms=episode.starting_valuation.total_numeraire_atoms,
+        starting_value_numeraire_atoms=starting_value,
         terminal_wealth_numeraire_atoms=terminal_wealth,
         net_pnl_numeraire_atoms=net_pnl,
         episode_states=tuple(states),
@@ -1093,6 +1213,8 @@ def _opportunity_comparisons(
         if (
             baseline.terminal_wealth_numeraire_atoms is None
             or candidate.terminal_wealth_numeraire_atoms is None
+            or baseline.starting_value_numeraire_atoms is None
+            or candidate.starting_value_numeraire_atoms is None
         ):
             comparison = OpportunityComparison(
                 "pending-content-identity",
@@ -1101,7 +1223,7 @@ def _opportunity_comparisons(
                 "unknown",
                 None,
                 None,
-                "one or both branches lack complete terminal liquidation",
+                "one or both branches lack complete starting valuation or terminal liquidation",
             )
             content = {"plan_digest": plan.digest, **comparison.as_dict()}
             content.pop("comparison_id")

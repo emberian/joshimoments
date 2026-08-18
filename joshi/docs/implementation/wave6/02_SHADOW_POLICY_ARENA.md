@@ -1,8 +1,8 @@
 # Wave 6 — read-only shadow-policy arena
 
-Status: deterministic analysis prototype; focused tests pass. No durable-store adapter, provider,
-wallet, transaction builder, signer, submission path, live authority, or profitability claim is
-included.
+Status: deterministic intrinsic-contract/fixture prototype after the adversarial repairs required
+by `99_INTEGRATION_REVIEW.md`; no ceiling promotion. No durable-store adapter, provider, wallet,
+transaction builder, signer, submission path, live authority, or profitability claim is included.
 
 ## Delivered boundary
 
@@ -36,7 +36,7 @@ starting valuation, terminal horizon, and liquidation manifest.
 The episode retains:
 
 - a snapshot with exact asset atoms, known-at clock, commit sequence, evidence closure, and digest;
-- a complete starting valuation by asset rather than an unexplained scalar;
+- a clocked, commit-ordered starting valuation closure by asset rather than an unexplained scalar;
 - known reduced-rational or explicitly unknown aggregate subject basis tied to exact quantity;
 - prospective decision points ordered by `(available_at, commit_seq, point_id)`;
 - event, availability, and commit clocks plus observed/stale/conflicting/missing/unsupported state;
@@ -46,10 +46,12 @@ The episode retains:
 - a common whole-position terminal-liquidation method and horizon.
 
 Decision material marked outcome-visible is rejected. A point or quote beyond the as-known commit
-closure is rejected. A quote cannot be requested before its policy decision, arrive after the next
-decision while being applied before it, or arrive after the terminal horizon. Policy decisions can
-use only the point currently exposed by chronological replay. Terminal quotes are isolated from
-the decision tape and used only after the prospective path ends.
+closure is rejected. A quote cannot be requested before its policy decision, commit at or before
+that decision, sort at or after the next decision under
+`(available_at, commit_seq, occurrence_id)`, or arrive after the terminal horizon. Thus a later
+same-time quote commit cannot affect the earlier decision. Policy decisions can use only the point
+currently exposed by chronological replay. Terminal quotes are isolated from the decision tape
+and used only after the prospective path ends.
 
 This follows the Wave 5
 [scientific-memory episode boundary](../wave5/06_SCIENTIFIC_MEMORY.md): exact flat does not end an
@@ -102,22 +104,45 @@ effect, at the pre-liquidation runner, and after terminal liquidation. Unknown b
 through a partial disposal; exact flat can close the remainder at zero without retroactively making
 the disposed clip known. A re-entry after flat begins with its new exact acquisition basis.
 
+Starting valuation is no longer a free normalization scalar. Its as-of state must equal the
+starting snapshot; its known-at/commit order must follow that snapshot and precede the episode;
+its exact evidence closure and digest remain visible. A known component must carry an
+`ExactValuationArtifact`, not merely a caller-selected method label and amount. That artifact binds
+a recognized source kind (`numeraire_identity`, `exact_sized_quote`, or `exact_sized_mark`), source
+artifact ID and digest, carrier, the fixed `asset_atoms_exact_integer` unit, exact unit input/output,
+exact whole-holding sized input/output, availability clock, and commit sequence. The sized output
+must recompute by exact integer ratio from the unit amounts and sized input, name the episode
+numeraire, equal the component amount, and precede the valuation decision in both availability and
+commit order. The completed valuation commit must itself precede the first policy-decision commit.
+Its source artifact ID must occur in the component and manifest evidence closure.
+
+Numeraire inventory is valued strictly 1:1 through the intrinsic identity carrier. An unknown or
+custom method such as `caller_asserted_positive_quote` cannot authorize a known amount; it must be
+represented as a typed refusal without a numeric value or source artifact. Every positive starting
+holding therefore has either a positive recomputable exact value from the strict artifact shape or
+a typed refusal. Zero valuation of positive inventory is invalid. A typed refusal preserves
+terminal inventory and wealth arithmetic but makes starting value, net PnL, opportunity cost, and
+candidate surplus unknown rather than manufacturing a scalar result.
+
 At the common horizon, every positive non-numeraire holding requires one unique exact
 whole-position quote using the declared terminal method. The arena applies those quotes in stable
 asset order. A missing, refused, ambiguous, or state-mismatched terminal leg remains an exact
 residual and makes scalar terminal wealth and PnL unknown. It is never assigned zero recovery and
-is never valued at a mark.
+is never valued at a mark. A projected positive-input terminal disposal must return a positive
+exact numeraire delta; zero output is invalid and must instead be represented as a typed refused
+quote/residual.
 
 When terminal closure is complete, the sole PnL identity is:
 
 ```text
-net PnL = terminal numeraire wealth - complete starting valuation
+net PnL, when defined = terminal numeraire wealth - exact complete starting valuation
 ```
 
 The result carries this literal identity:
 
 ```text
-net_pnl_equals_terminal_wealth_minus_starting_value;
+net_pnl_when_defined_equals_terminal_wealth_minus_exact_starting_value;
+refused_starting_or_terminal_value_yields_no_scalar_pnl;
 diagnostics_and_opportunity_cost_are_non_posting
 ```
 
@@ -129,8 +154,25 @@ identity. Exact quote balance deltas already contain the branch's consolidated e
 The LP family is grounded in the
 [routed-liquidity option/control/accounting model](../../research/routed_liquidity/04_OPTION_CONTROL_ACCOUNTING.md).
 It does not turn an LP tenure into a round-trip cycle or assume that an uninstalled edge would have
-attracted historical flow. Each routed action retains its independent decision and effect. The
-prototype supports explicit non-posting/attribution diagnostics:
+attracted historical flow. LP flow, self-flow, rebalance, and removal are refused until a
+successfully projected install names an exact position and installed-capital occurrence. Later
+events must bind that same pair; flow after removal is refused. Each routed action retains its
+independent decision and effect.
+
+Every projected LP quote carries `LiquidityEffectEvidence` with an exact event/position/install
+identity, evidence closure/digest, and separated principal, external fee, external cost, self-payer,
+and owned-LP counterlegs. These components must reconcile exactly to the quote balance delta:
+
+- install requires a capital-decreasing principal leg;
+- external flow requires both give and receive principal legs;
+- external fee diagnostics equal the positive evidenced controlled accrual by asset;
+- irreversible-cost diagnostics equal the negative household deltas by asset;
+- self payer and owned-LP legs consolidate to zero, with matching exact paid/owned fee evidence;
+- a self-flow quote may post only evidenced negative external costs, never the internal owned fee;
+  and
+- maintenance cannot create positive inventory without a corresponding input.
+
+The prototype then supports explicit non-posting/attribution diagnostics:
 
 - external LP fee: already included in the consolidated balance effect;
 - self-routed owned fee: internal and non-posting, never external service revenue;
@@ -142,6 +184,9 @@ it reports; a quote containing the other measure is refused. Diagnostic IDs cann
 one branch. LVR/ITR values are signed and are never clipped at zero. The arena therefore cannot
 manufacture consolidated wealth by adding fees twice,
 adding an internal owned fee, deducting both adverse-selection measures, or posting a saved loss.
+Each branch emits a `double_counting_audit` partitioning diagnostic IDs into already-in-effect,
+internal non-posting, and counterfactual non-posting sets. It states explicitly that diagnostics
+and opportunity cost are not added to PnL and that LVR/ITR are not additive.
 
 Opportunity cost is calculated only after terminal closure:
 
@@ -151,8 +196,8 @@ candidate_surplus           = -opportunity_cost(candidate)
 ```
 
 It is a signed, mutually exclusive branch comparison and remains `counterfactual_non_posting`.
-It does not alter either branch's PnL. If either terminal value is unknown, the comparison is also
-unknown.
+It does not alter either branch's PnL. If either starting valuation or terminal value is unknown,
+the comparison is also unknown.
 
 ## Refusal and uncertainty
 
@@ -161,6 +206,7 @@ artifact with typed branch state:
 
 - `complete`;
 - `complete_with_refusals`; or
+- `starting_value_unknown`; or
 - `terminal_value_unknown`.
 
 Every non-observed decision point produces an `UncertaintyRecord` with its gap IDs and the literal
@@ -203,10 +249,16 @@ or live authority.
 - stable canonical bytes and content-derived IDs;
 - action/execution/effect separation and absence of actual-ledger posting;
 - external versus self-routed LP fee treatment;
+- exact LP principal/fee/cost reconciliation and installed-position transition ordering;
 - non-posting ITR and opportunity comparison;
+- explicit double-counting audit partitions;
 - stale evidence refusal with preserved gap identity;
-- unrouteable terminal inventory remaining unknown rather than zero;
+- unrouteable and zero-output terminal inventory refusing rather than becoming zero recovery;
+- 1:1 numeraire valuation, a recomputable exact-sized non-numeraire fixture, and typed baseline
+  refusal;
+- rejection of caller-asserted valuation labels/amounts and late source commits;
 - outcome leakage, late policy registration, and pre-decision quote rejection;
+- quote-after-decision and same-time quote/next-decision commit ordering;
 - ambiguous and wrong-state quote refusal;
 - LVR/ITR conflict and self-fee misclassification rejection; and
 - negative inventory and incomplete pre-state rejection.
@@ -227,6 +279,15 @@ model route-choice endogeneity, synthesize quotes, infer operator cues, adjudica
 policy, estimate support, perform named lot/tax allocation, allocate shared attention cost, or
 simulate adaptive market response.
 Its fixed cue rules are deliberately legible falsifiers, not the final operator ontology.
+
+All evidence bytes/digests, clocks, registrations, quote effects, position events, valuation source
+artifacts, and carriers remain caller-authored fixtures checked only by this pure contract. Known
+valuation method labels are now a closed recognized set and their numeric result is recomputed, but
+the source digest is not store-resolved and the carrier is not externally certified.
+Content-derived prefix IDs are not collision-checked durable store occurrences. The repairs close
+the accepted arithmetic, valuation-authority, and ordering counterexamples; they do not establish
+store resolution, protocol parity, route-choice support, prospective registration, household
+economic truth, or a Wave 6 release.
 
 A later adapter must resolve immutable store evidence, projection versions, quote/protocol formula
 profiles, coverage closure, and terminal manifests without weakening these types. Any tiny-live

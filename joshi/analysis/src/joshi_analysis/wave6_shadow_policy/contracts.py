@@ -14,7 +14,8 @@ SCHEMA_ID = "joshi.analysis.shadow-policy-arena/v1"
 CALCULATOR_VERSION = "joshi.shadow-policy-arena.v1"
 AUTHORITY = "read_only_evidence_only_no_signing_or_submission"
 ACCOUNTING_IDENTITY = (
-    "net_pnl_equals_terminal_wealth_minus_starting_value;"
+    "net_pnl_when_defined_equals_terminal_wealth_minus_exact_starting_value;"
+    "refused_starting_or_terminal_value_yields_no_scalar_pnl;"
     "diagnostics_and_opportunity_cost_are_non_posting"
 )
 MAX_ATOMS = 2**128 - 1
@@ -108,6 +109,25 @@ class AdverseSelectionMeasure(StrEnum):
 class BasisQuality(StrEnum):
     KNOWN = "known"
     UNKNOWN = "unknown"
+
+
+class ValuationStatus(StrEnum):
+    KNOWN = "known"
+    REFUSED = "refused"
+
+
+class ValuationSourceKind(StrEnum):
+    NUMERAIRE_IDENTITY = "numeraire_identity"
+    EXACT_SIZED_QUOTE = "exact_sized_quote"
+    EXACT_SIZED_MARK = "exact_sized_mark"
+
+
+class LiquidityEventKind(StrEnum):
+    INSTALL = "install"
+    EXTERNAL_FLOW = "external_flow"
+    SELF_FLOW = "self_flow"
+    REBALANCE = "rebalance"
+    REMOVE = "remove"
 
 
 def _aware(value: datetime, field: str) -> datetime:
@@ -253,25 +273,164 @@ class PortfolioSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ExactValuationArtifact:
+    source_kind: ValuationSourceKind
+    source_artifact_id: str
+    source_artifact_digest: str
+    carrier_id: str
+    unit_id: str
+    unit_input: AssetAmount
+    unit_output: AssetAmount
+    sized_input: AssetAmount
+    sized_output: AssetAmount
+    available_at: datetime
+    commit_seq: int
+
+    def validate(self) -> None:
+        if not isinstance(self.source_kind, ValuationSourceKind):
+            raise ManifestError("valuation source kind is not recognized")
+        _stable(self.source_artifact_id, "valuation source_artifact_id")
+        require_qualified_sha256(
+            self.source_artifact_digest, "valuation source_artifact_digest"
+        )
+        _stable(self.carrier_id, "valuation carrier_id")
+        if self.unit_id != "asset_atoms_exact_integer":
+            raise ManifestError("valuation source must use exact integer asset atoms")
+        self.unit_input.validate()
+        self.unit_output.validate()
+        self.sized_input.validate()
+        self.sized_output.validate()
+        if self.unit_input.atoms == 0 or self.unit_output.atoms == 0:
+            raise ManifestError("valuation unit amounts must be positive")
+        if self.unit_input.asset_id != self.sized_input.asset_id:
+            raise ManifestError("valuation unit and sized input assets differ")
+        if self.unit_output.asset_id != self.sized_output.asset_id:
+            raise ManifestError("valuation unit and sized output assets differ")
+        scaled_output = self.sized_input.atoms * self.unit_output.atoms
+        if scaled_output % self.unit_input.atoms:
+            raise ManifestError("valuation sized output is not exact under its unit ratio")
+        if scaled_output // self.unit_input.atoms != self.sized_output.atoms:
+            raise ManifestError("valuation sized output does not recompute from its unit ratio")
+        _aware(self.available_at, "valuation source available_at")
+        _positive_commit(self.commit_seq, "valuation source commit_seq")
+        if self.source_kind is ValuationSourceKind.NUMERAIRE_IDENTITY:
+            if self.carrier_id != "intrinsic:numeraire-identity-v1":
+                raise ManifestError("numeraire identity requires the intrinsic identity carrier")
+            if (
+                self.unit_input.asset_id != self.unit_output.asset_id
+                or self.unit_input.atoms != self.unit_output.atoms
+                or self.sized_input.asset_id != self.sized_output.asset_id
+                or self.sized_input.atoms != self.sized_output.atoms
+            ):
+                raise ManifestError("numeraire identity artifact must be exact 1:1")
+
+    def _canonical_payload(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "source_kind": self.source_kind.value,
+            "source_artifact_id": self.source_artifact_id,
+            "source_artifact_digest": self.source_artifact_digest,
+            "carrier_id": self.carrier_id,
+            "unit_id": self.unit_id,
+            "unit_input": self.unit_input.as_dict(),
+            "unit_output": self.unit_output.as_dict(),
+            "sized_input": self.sized_input.as_dict(),
+            "sized_output": self.sized_output.as_dict(),
+            "available_at": _iso(self.available_at, "valuation source available_at"),
+            "commit_seq": str(self.commit_seq),
+        }
+
+    @property
+    def artifact_digest(self) -> str:
+        return qualified_sha256_bytes(canonical_json_bytes(self._canonical_payload()))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {**self._canonical_payload(), "artifact_digest": self.artifact_digest}
+
+
+@dataclass(frozen=True, slots=True)
 class ValuationComponent:
     asset_id: str
     holding_atoms: int
-    numeraire_atoms: int
+    numeraire_atoms: int | None
     evidence_ids: tuple[str, ...]
+    evidence_digest: str
+    valuation_method_id: str
+    status: ValuationStatus
+    refusal_reason: str | None = None
+    source_artifact: ExactValuationArtifact | None = None
 
     def validate(self) -> None:
         _stable(self.asset_id, "valuation asset_id")
         _atoms(self.holding_atoms, "valuation holding_atoms")
-        _atoms(self.numeraire_atoms, "valuation numeraire_atoms")
         _sorted_unique(self.evidence_ids, "valuation evidence_ids", nonempty=True)
+        require_qualified_sha256(self.evidence_digest, "valuation component evidence_digest")
+        _stable(self.valuation_method_id, "valuation_method_id")
+        if self.status is ValuationStatus.KNOWN:
+            recognized_methods = {
+                "numeraire_identity_1_to_1": ValuationSourceKind.NUMERAIRE_IDENTITY,
+                "exact_sized_quote_v1": ValuationSourceKind.EXACT_SIZED_QUOTE,
+                "exact_sized_mark_v1": ValuationSourceKind.EXACT_SIZED_MARK,
+            }
+            expected_source_kind = recognized_methods.get(self.valuation_method_id)
+            if expected_source_kind is None:
+                raise ManifestError(
+                    "known valuation requires a recognized exact valuation method"
+                )
+            if self.source_artifact is None:
+                raise ManifestError("known valuation requires an exact source artifact")
+            self.source_artifact.validate()
+            if self.source_artifact.source_kind is not expected_source_kind:
+                raise ManifestError("valuation method and source artifact kind differ")
+            if (
+                self.source_artifact.sized_input.asset_id != self.asset_id
+                or self.source_artifact.sized_input.atoms != self.holding_atoms
+            ):
+                raise ManifestError(
+                    "valuation source sized input must equal the complete starting holding"
+                )
+            if self.numeraire_atoms is None:
+                raise ManifestError("known valuation component needs exact numeraire atoms")
+            _atoms(self.numeraire_atoms, "valuation numeraire_atoms")
+            if self.holding_atoms == 0 and self.numeraire_atoms != 0:
+                raise ManifestError("zero starting inventory must have zero starting value")
+            if self.holding_atoms > 0 and self.numeraire_atoms == 0:
+                raise ManifestError(
+                    "positive starting inventory needs positive exact value or typed refusal"
+                )
+            if self.source_artifact.sized_output.atoms != self.numeraire_atoms:
+                raise ManifestError(
+                    "valuation amount must equal the recomputable source sized output"
+                )
+            if self.refusal_reason is not None:
+                raise ManifestError("known valuation component cannot carry a refusal reason")
+        else:
+            if self.holding_atoms == 0:
+                raise ManifestError("zero starting inventory is exactly valued, not refused")
+            if self.numeraire_atoms is not None:
+                raise ManifestError("refused valuation component cannot carry a numeric value")
+            if not self.refusal_reason:
+                raise ManifestError("refused valuation component needs a reason")
+            _stable(self.refusal_reason, "valuation refusal_reason")
+            if self.source_artifact is not None:
+                raise ManifestError("refused valuation component cannot carry a source artifact")
 
     def as_dict(self) -> dict[str, Any]:
         self.validate()
         return {
             "asset_id": self.asset_id,
             "holding_atoms": str(self.holding_atoms),
-            "numeraire_atoms": str(self.numeraire_atoms),
+            "numeraire_atoms": (
+                None if self.numeraire_atoms is None else str(self.numeraire_atoms)
+            ),
             "evidence_ids": list(self.evidence_ids),
+            "evidence_digest": self.evidence_digest,
+            "valuation_method_id": self.valuation_method_id,
+            "status": self.status.value,
+            "refusal_reason": self.refusal_reason,
+            "source_artifact": (
+                None if self.source_artifact is None else self.source_artifact.as_dict()
+            ),
         }
 
 
@@ -279,11 +438,23 @@ class ValuationComponent:
 class StartingValuation:
     manifest_id: str
     numeraire_asset_id: str
+    as_of: datetime
+    known_at: datetime
+    commit_seq: int
+    evidence_ids: tuple[str, ...]
+    evidence_digest: str
     components: tuple[ValuationComponent, ...]
 
     def validate(self, snapshot: PortfolioSnapshot) -> None:
         _stable(self.manifest_id, "starting valuation manifest_id")
         _stable(self.numeraire_asset_id, "starting valuation numeraire_asset_id")
+        if _aware(self.as_of, "starting valuation as_of") > _aware(
+            self.known_at, "starting valuation known_at"
+        ):
+            raise TemporalLeakageError("starting valuation cannot be known before its as-of state")
+        _positive_commit(self.commit_seq, "starting valuation commit_seq")
+        _sorted_unique(self.evidence_ids, "starting valuation evidence_ids", nonempty=True)
+        require_qualified_sha256(self.evidence_digest, "starting valuation evidence_digest")
         if not self.components:
             raise ManifestError("starting valuation needs one component per snapshot asset")
         assets: dict[str, ValuationComponent] = {}
@@ -292,6 +463,22 @@ class StartingValuation:
             if component.asset_id in assets:
                 raise ManifestError("starting valuation repeats an asset")
             assets[component.asset_id] = component
+            if not set(component.evidence_ids).issubset(self.evidence_ids):
+                raise ManifestError(
+                    "valuation component evidence must be in the valuation evidence closure"
+                )
+            if component.source_artifact is not None:
+                source = component.source_artifact
+                if source.source_artifact_id not in component.evidence_ids:
+                    raise ManifestError(
+                        "valuation component must bind its source artifact in evidence"
+                    )
+                if _aware(source.available_at, "valuation source available_at") > _aware(
+                    self.known_at, "starting valuation known_at"
+                ) or source.commit_seq >= self.commit_seq:
+                    raise TemporalLeakageError(
+                        "valuation source must precede its starting valuation decision"
+                    )
         if tuple(assets) != tuple(sorted(assets)):
             raise ManifestError("starting valuation components must be sorted by asset_id")
         balances = amount_map(snapshot.balances, "snapshot balances")
@@ -300,10 +487,32 @@ class StartingValuation:
         for asset_id, atoms in balances.items():
             if assets[asset_id].holding_atoms != atoms:
                 raise ManifestError("starting valuation holding does not match the snapshot")
+            component = assets[asset_id]
+            if (
+                component.source_artifact is not None
+                and component.source_artifact.sized_output.asset_id
+                != self.numeraire_asset_id
+            ):
+                raise ManifestError("valuation source output must use the episode numeraire")
+        numeraire = assets.get(self.numeraire_asset_id)
+        if numeraire is None:
+            raise ManifestError("starting valuation must contain its numeraire asset")
+        if (
+            numeraire.status is not ValuationStatus.KNOWN
+            or numeraire.numeraire_atoms != numeraire.holding_atoms
+            or numeraire.valuation_method_id != "numeraire_identity_1_to_1"
+        ):
+            raise ManifestError("numeraire holdings require exact 1:1 identity valuation")
 
     @property
-    def total_numeraire_atoms(self) -> int:
-        total = sum(component.numeraire_atoms for component in self.components)
+    def total_numeraire_atoms(self) -> int | None:
+        if any(component.status is ValuationStatus.REFUSED for component in self.components):
+            return None
+        total = sum(
+            component.numeraire_atoms
+            for component in self.components
+            if component.numeraire_atoms is not None
+        )
         return _atoms(total, "starting valuation total")
 
     def as_dict(self, snapshot: PortfolioSnapshot) -> dict[str, Any]:
@@ -311,8 +520,17 @@ class StartingValuation:
         return {
             "manifest_id": self.manifest_id,
             "numeraire_asset_id": self.numeraire_asset_id,
+            "as_of": _iso(self.as_of, "starting valuation as_of"),
+            "known_at": _iso(self.known_at, "starting valuation known_at"),
+            "commit_seq": str(self.commit_seq),
+            "evidence_ids": list(self.evidence_ids),
+            "evidence_digest": self.evidence_digest,
             "components": [component.as_dict() for component in self.components],
-            "total_numeraire_atoms": str(self.total_numeraire_atoms),
+            "total_numeraire_atoms": (
+                None
+                if self.total_numeraire_atoms is None
+                else str(self.total_numeraire_atoms)
+            ),
         }
 
 
@@ -463,6 +681,170 @@ class EconomicDiagnostic:
         }
 
 
+def _sum_delta_groups(*groups: tuple[AssetDelta, ...]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for index, group in enumerate(groups):
+        for asset_id, atoms in delta_map(group, f"liquidity delta group {index}").items():
+            result[asset_id] = result.get(asset_id, 0) + atoms
+            _signed_atoms(result[asset_id], "liquidity reconciled delta")
+    return {asset_id: atoms for asset_id, atoms in sorted(result.items()) if atoms != 0}
+
+
+def _diagnostic_amounts(
+    diagnostics: tuple[EconomicDiagnostic, ...], kind: DiagnosticKind
+) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        if diagnostic.kind is kind:
+            result[diagnostic.asset_id] = result.get(diagnostic.asset_id, 0) + diagnostic.atoms
+            _signed_atoms(result[diagnostic.asset_id], "diagnostic aggregate")
+    return dict(sorted(result.items()))
+
+
+@dataclass(frozen=True, slots=True)
+class LiquidityEffectEvidence:
+    event_id: str
+    event_kind: LiquidityEventKind
+    position_id: str
+    installed_capital_event_id: str
+    evidence_ids: tuple[str, ...]
+    evidence_digest: str
+    principal_deltas: tuple[AssetDelta, ...] = ()
+    external_fee_deltas: tuple[AssetDelta, ...] = ()
+    external_cost_deltas: tuple[AssetDelta, ...] = ()
+    self_payer_deltas: tuple[AssetDelta, ...] = ()
+    self_lp_deltas: tuple[AssetDelta, ...] = ()
+    self_paid_fee: AssetAmount | None = None
+    self_owned_fee: AssetAmount | None = None
+
+    def validate(self) -> None:
+        _stable(self.event_id, "liquidity event_id")
+        _stable(self.position_id, "liquidity position_id")
+        _stable(self.installed_capital_event_id, "installed capital event_id")
+        _sorted_unique(self.evidence_ids, "liquidity evidence_ids", nonempty=True)
+        require_qualified_sha256(self.evidence_digest, "liquidity evidence_digest")
+        principal = delta_map(self.principal_deltas, "liquidity principal_deltas")
+        fees = delta_map(self.external_fee_deltas, "liquidity external_fee_deltas")
+        costs = delta_map(self.external_cost_deltas, "liquidity external_cost_deltas")
+        payer = delta_map(self.self_payer_deltas, "liquidity self_payer_deltas")
+        owned = delta_map(self.self_lp_deltas, "liquidity self_lp_deltas")
+        if any(atoms <= 0 for atoms in fees.values()):
+            raise ManifestError("external LP fee deltas must be positive controlled accruals")
+        if any(atoms >= 0 for atoms in costs.values()):
+            raise ManifestError("external liquidity costs must be negative household deltas")
+        if self.event_kind is LiquidityEventKind.INSTALL:
+            if self.installed_capital_event_id != self.event_id:
+                raise ManifestError("LP install event must be its installed-capital occurrence")
+            if not principal or not any(atoms < 0 for atoms in principal.values()):
+                raise ManifestError("LP install needs an exact capital-decreasing principal leg")
+            if fees or costs or payer or owned or self.self_paid_fee or self.self_owned_fee:
+                raise ManifestError(
+                    "LP install cannot carry flow fees, self legs, or external costs"
+                )
+        elif self.event_kind is LiquidityEventKind.EXTERNAL_FLOW:
+            if not principal or not any(atoms < 0 for atoms in principal.values()) or not any(
+                atoms > 0 for atoms in principal.values()
+            ):
+                raise ManifestError("external LP flow needs exact give and receive principal legs")
+            if payer or owned or self.self_paid_fee or self.self_owned_fee:
+                raise ManifestError("external LP flow cannot carry household self-flow legs")
+        elif self.event_kind is LiquidityEventKind.SELF_FLOW:
+            if principal or fees:
+                raise ManifestError(
+                    "self-flow principal and owned fee cannot post to household deltas"
+                )
+            if not payer or not owned:
+                raise ManifestError("self-flow needs exact payer and owned-LP counterlegs")
+            if _sum_delta_groups(self.self_payer_deltas, self.self_lp_deltas):
+                raise ManifestError("self-flow payer and owned-LP legs must consolidate to zero")
+            if self.self_paid_fee is None or self.self_owned_fee is None:
+                raise ManifestError("self-flow needs exact paid and owned fee evidence")
+            self.self_paid_fee.validate()
+            self.self_owned_fee.validate()
+            if self.self_paid_fee.atoms == 0 or self.self_paid_fee != self.self_owned_fee:
+                raise ManifestError("self-paid and self-owned fee evidence must match exactly")
+            fee_asset = self.self_paid_fee.asset_id
+            if (
+                payer.get(fee_asset, 0) > -self.self_paid_fee.atoms
+                or owned.get(fee_asset, 0) < self.self_owned_fee.atoms
+            ):
+                raise ManifestError(
+                    "self-paid/owned fee must be contained in the exact route counterlegs"
+                )
+        else:
+            if fees or payer or owned or self.self_paid_fee or self.self_owned_fee:
+                raise ManifestError("schedule maintenance cannot carry routed-flow fee attribution")
+            if any(atoms > 0 for atoms in principal.values()) and not any(
+                atoms < 0 for atoms in principal.values()
+            ):
+                raise ManifestError(
+                    "schedule action cannot create positive inventory without input"
+                )
+
+    def reconcile(
+        self,
+        balance_deltas: tuple[AssetDelta, ...],
+        diagnostics: tuple[EconomicDiagnostic, ...],
+    ) -> None:
+        self.validate()
+        expected = (
+            _sum_delta_groups(self.external_cost_deltas)
+            if self.event_kind is LiquidityEventKind.SELF_FLOW
+            else _sum_delta_groups(
+                self.principal_deltas, self.external_fee_deltas, self.external_cost_deltas
+            )
+        )
+        if expected != delta_map(balance_deltas, "liquidity quote balance_deltas"):
+            raise ManifestError("liquidity accounting components do not reconcile to quote effect")
+        for diagnostic in diagnostics:
+            if not set(diagnostic.evidence_ids).issubset(self.evidence_ids):
+                raise ManifestError("LP diagnostic evidence is outside the flow evidence closure")
+        fee_diagnostics = _diagnostic_amounts(diagnostics, DiagnosticKind.EXTERNAL_LP_FEE)
+        if fee_diagnostics != dict(sorted(delta_map(
+            self.external_fee_deltas, "liquidity external_fee_deltas"
+        ).items())):
+            raise ManifestError("external LP fee diagnostics must equal evidenced fee deltas")
+        self_diagnostics = _diagnostic_amounts(
+            diagnostics, DiagnosticKind.SELF_ROUTED_OWNED_FEE
+        )
+        expected_self = (
+            {}
+            if self.self_owned_fee is None
+            else {self.self_owned_fee.asset_id: self.self_owned_fee.atoms}
+        )
+        if self_diagnostics != expected_self:
+            raise ManifestError("self-fee diagnostic must equal exact paid/owned fee evidence")
+        cost_diagnostics = _diagnostic_amounts(diagnostics, DiagnosticKind.IRREVERSIBLE_COST)
+        expected_costs = {
+            asset_id: -atoms
+            for asset_id, atoms in delta_map(
+                self.external_cost_deltas, "liquidity external_cost_deltas"
+            ).items()
+        }
+        if cost_diagnostics != expected_costs:
+            raise ManifestError("irreversible-cost diagnostics must equal external cost deltas")
+
+    def as_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "event_id": self.event_id,
+            "event_kind": self.event_kind.value,
+            "position_id": self.position_id,
+            "installed_capital_event_id": self.installed_capital_event_id,
+            "evidence_ids": list(self.evidence_ids),
+            "evidence_digest": self.evidence_digest,
+            "principal_deltas": [item.as_dict() for item in self.principal_deltas],
+            "external_fee_deltas": [item.as_dict() for item in self.external_fee_deltas],
+            "external_cost_deltas": [item.as_dict() for item in self.external_cost_deltas],
+            "self_payer_deltas": [item.as_dict() for item in self.self_payer_deltas],
+            "self_lp_deltas": [item.as_dict() for item in self.self_lp_deltas],
+            "self_paid_fee": None if self.self_paid_fee is None else self.self_paid_fee.as_dict(),
+            "self_owned_fee": (
+                None if self.self_owned_fee is None else self.self_owned_fee.as_dict()
+            ),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ShadowQuote:
     quote_id: str
@@ -481,6 +863,7 @@ class ShadowQuote:
     evidence_ids: tuple[str, ...]
     evidence_digest: str
     terminal_asset_id: str | None = None
+    liquidity_evidence: LiquidityEffectEvidence | None = None
     diagnostics: tuple[EconomicDiagnostic, ...] = ()
     refusal_reason: str | None = None
 
@@ -514,6 +897,29 @@ class ShadowQuote:
                 measures.add(diagnostic.kind)
         if len(measures) > 1:
             raise ManifestError("one quote cannot report both LVR_grid and ITR")
+        lp_actions = {
+            ActionKind.LP_INSTALL: LiquidityEventKind.INSTALL,
+            ActionKind.LP_ROUTE_EXTERNAL: LiquidityEventKind.EXTERNAL_FLOW,
+            ActionKind.LP_ROUTE_SELF: LiquidityEventKind.SELF_FLOW,
+            ActionKind.LP_REBALANCE: LiquidityEventKind.REBALANCE,
+            ActionKind.LP_REMOVE: LiquidityEventKind.REMOVE,
+        }
+        expected_lp_kind = lp_actions.get(self.action_kind)
+        if self.liquidity_evidence is not None:
+            self.liquidity_evidence.validate()
+            if (
+                expected_lp_kind is None
+                or self.liquidity_evidence.event_kind is not expected_lp_kind
+            ):
+                raise ManifestError("liquidity evidence kind does not match the quote action")
+            if not set(self.liquidity_evidence.evidence_ids).issubset(self.evidence_ids):
+                raise ManifestError("liquidity evidence must be in the quote evidence closure")
+        if any(
+            diagnostic.kind
+            in {DiagnosticKind.EXTERNAL_LP_FEE, DiagnosticKind.SELF_ROUTED_OWNED_FEE}
+            for diagnostic in self.diagnostics
+        ) and self.liquidity_evidence is None:
+            raise ManifestError("LP fee labels require exact liquidity accounting evidence")
         if self.status is QuoteStatus.PROJECTED:
             if not deltas:
                 raise ManifestError("projected quote needs a deterministic balance effect")
@@ -528,6 +934,12 @@ class ShadowQuote:
                     raise ManifestError(
                         "quote effect would create negative or overflowing inventory"
                     )
+            if expected_lp_kind is not None:
+                if self.liquidity_evidence is None:
+                    raise ManifestError("projected LP action needs exact position/capital evidence")
+                self.liquidity_evidence.reconcile(self.balance_deltas, self.diagnostics)
+            elif self.liquidity_evidence is not None:
+                raise ManifestError("non-LP action cannot carry liquidity effect evidence")
         else:
             if deltas or self.diagnostics:
                 raise ManifestError("refused quote cannot contain an effect or economic diagnostic")
@@ -570,6 +982,9 @@ class ShadowQuote:
             "evidence_ids": list(self.evidence_ids),
             "evidence_digest": self.evidence_digest,
             "terminal_asset_id": self.terminal_asset_id,
+            "liquidity_evidence": (
+                None if self.liquidity_evidence is None else self.liquidity_evidence.as_dict()
+            ),
             "diagnostics": [
                 item.as_dict()
                 for item in sorted(self.diagnostics, key=lambda item: item.diagnostic_id)
@@ -612,6 +1027,12 @@ class TerminalLiquidationManifest:
                 for asset_id in deltas
             ):
                 raise ManifestError("terminal quote can change only its asset and the numeraire")
+            if quote.status is QuoteStatus.PROJECTED and deltas.get(
+                self.numeraire_asset_id, 0
+            ) <= 0:
+                raise ManifestError(
+                    "terminal disposal needs positive exact numeraire output or typed refusal"
+                )
             if _aware(quote.available_at, "terminal quote available_at") > horizon:
                 raise TemporalLeakageError("terminal quote must be available by the common horizon")
             if _aware(quote.valid_through, "terminal quote valid_through") < horizon:
@@ -672,6 +1093,24 @@ class EvidenceEpisode:
         self.starting_valuation.validate(self.starting_snapshot)
         if self.starting_valuation.numeraire_asset_id != self.numeraire_asset_id:
             raise ManifestError("starting valuation and episode numeraires differ")
+        if _aware(self.starting_valuation.as_of, "starting valuation as_of") != _aware(
+            self.starting_snapshot.as_of, "snapshot.as_of"
+        ):
+            raise ManifestError("starting valuation and snapshot must share one as-of state")
+        if _aware(self.starting_valuation.known_at, "starting valuation known_at") < _aware(
+            self.starting_snapshot.known_at, "snapshot.known_at"
+        ) or self.starting_valuation.commit_seq <= self.starting_snapshot.commit_seq:
+            raise TemporalLeakageError(
+                "starting valuation knowledge/commit must follow its exact snapshot"
+            )
+        if not set(self.starting_snapshot.evidence_ids).issubset(
+            self.starting_valuation.evidence_ids
+        ):
+            raise ManifestError("starting valuation must bind the snapshot evidence closure")
+        if _aware(self.starting_valuation.known_at, "starting valuation known_at") > starts:
+            raise TemporalLeakageError("starting valuation was not known when the episode began")
+        if self.starting_valuation.commit_seq > self.as_known_commit_seq:
+            raise TemporalLeakageError("starting valuation exceeds the as-known commit cutoff")
         self.starting_subject_basis.validate()
         if self.starting_subject_basis.asset_id != self.subject_asset_id:
             raise ManifestError("starting basis must name the episode subject asset")
@@ -700,6 +1139,10 @@ class EvidenceEpisode:
         )
         if self.decision_points != expected_order:
             raise ManifestError("decision points must be in deterministic as-known order")
+        if expected_order and self.starting_valuation.commit_seq >= expected_order[0].commit_seq:
+            raise TemporalLeakageError(
+                "starting valuation commit must precede the first policy decision commit"
+            )
         quote_ids: set[str] = set()
         points_by_id = {point.point_id: point for point in self.decision_points}
         point_indexes = {point.point_id: index for index, point in enumerate(self.decision_points)}
@@ -717,15 +1160,29 @@ class EvidenceEpisode:
                 point.available_at, "point.available_at"
             ):
                 raise TemporalLeakageError("quote cannot be requested before its policy decision")
+            if quote.commit_seq <= point.commit_seq:
+                raise TemporalLeakageError(
+                    "execution quote commit must follow its policy decision commit"
+                )
             if _aware(quote.available_at, "quote.available_at") > horizon:
                 raise TemporalLeakageError("execution quote arrives after the terminal horizon")
             next_index = point_indexes[point.point_id] + 1
-            if next_index < len(self.decision_points) and _aware(
-                quote.available_at, "quote.available_at"
-            ) > _aware(self.decision_points[next_index].available_at, "next point.available_at"):
-                raise TemporalLeakageError(
-                    "execution quote arrives after the next chronological decision point"
+            if next_index < len(self.decision_points):
+                next_point = self.decision_points[next_index]
+                quote_order = (
+                    _aware(quote.available_at, "quote.available_at"),
+                    quote.commit_seq,
+                    quote.quote_id,
                 )
+                next_order = (
+                    _aware(next_point.available_at, "next point.available_at"),
+                    next_point.commit_seq,
+                    next_point.point_id,
+                )
+                if quote_order >= next_order:
+                    raise TemporalLeakageError(
+                        "execution quote must precede the next decision in as-known order"
+                    )
             if quote.commit_seq > self.as_known_commit_seq:
                 raise TemporalLeakageError("execution quote exceeds the as-known commit cutoff")
         self.terminal_manifest.validate()
