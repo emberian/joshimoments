@@ -118,7 +118,7 @@ evidence occurrences, not booleans a package test may self-assert.
 
 | Gate | Required Wave 5 evidence | What it authorizes in this plan |
 | --- | --- | --- |
-| `W5-G0 root_fault_witness` | the complete fake source → spool → catalog → semantic fact → immutable Cockpit V2 → paired Glass → memory → nonempty V9 export/import → status → backup/restore fault walk from the current integration acceptance matrix | store adapter integration against fixture authority; no market claim |
+| `W5-G0 root_fault_witness` | the complete fake source → spool → catalog → semantic fact → immutable Cockpit V2 → paired Glass → memory → nonempty V10 export/import → status → backup/restore fault walk from the current integration acceptance matrix | store adapter integration against fixture authority; no market claim |
 | `W5-G1 operational_witness` | one registered bounded nonfixture occurrence with pre-I/O reservation, real source evidence or typed gap, origin segment, store/catalog receipt and ACK, store-resolved broad denominator/hot control, two immutable cockpit cuts, paired read, nonempty validated export/import, and restart readback | production point-in-time releases and descriptive nonfixture studies |
 | `W5-G2 memory_witness` | one exact scene/actual presentation-or-gap/act/episode/outcome-or-censoring chain, durable ACK/restart, reproducible research release, and earlier-only retrieval closure | prospective operator, response, and claim campaigns consuming scenes |
 | `W5-G3 operator_use_witness` | exact-build ordinary-use acknowledgment plus the task/accessibility evidence required by the campaign; `repeated_ember_use` is required when repeated natural use is part of the estimand | natural-use or consented prospective presentation/operator studies |
@@ -486,7 +486,7 @@ narrowing, or unjustified certainty. The estimator remains fixture-only or is re
 
 ### W6-X — production release factory
 
-Extend the existing manifested Snapshot V2/V9 work rather than making a second registry. Materialize
+Extend the existing manifested Snapshot V2/V10 work rather than making a second registry. Materialize
 separate point-in-time relations for market events, state at event, topology epochs, route cuts,
 field rows, response rows, operator scenes/acts, episodes, claim occurrences, assignments, and
 outcomes. Features and labels remain separate releases.
