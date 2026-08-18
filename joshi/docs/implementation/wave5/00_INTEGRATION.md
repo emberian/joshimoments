@@ -130,15 +130,16 @@ The final script output must continue to state `useful_partial`,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk may report
 `public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because complete
-memory, V10 export/import, status recovery and backup/restore crash boundaries remain open. The
+memory, positive status recovery, default product mount, and the full backup/restore crash
+boundary remain open. The
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
-then binds its receipt to the run before the supervisor spool records the ACK. The full crash
-matrix, default product mount, complete memory closure, nonempty V10 export/import, positive status
-recovery and final no-original-root reopen remain outside that component.
+then binds its receipt to the run before the supervisor spool records the ACK. The full 37-scenario
+crash matrix, default product mount, complete memory closure, positive status recovery and final
+no-original-root reopen remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
 interview memory closure remains outside it. This component exercises the canonical Pump policy
@@ -148,9 +149,13 @@ Before the V10 G0 prefix, the same command copies the checked V8 operational cat
 referenced blob/export files into private state, migrates through V9, independently regenerates and
 validates its real fourteen-table Snapshot V2 in Rust and locked Python, commits that snapshot plus
 a same-run export binding, advances forward once to V10, then admits and reopens the exact restricted
-manifest and Parquet artifact in external CAS. Exact retry reuses the export/import occurrence
-identities. This closes the historical bootstrap only; it is not the required nonempty V10 G0
-snapshot or a recovered status.
+manifest and Parquet artifact in external CAS. After the source/publication/memory/status prefix,
+the store creates a second immutable input backup, privately resolves that backup plus the
+registered CAS import, executes the exact 24-table V10 exporter with independent Rust and
+locked-Python validation, commits and reopens the production snapshot, and includes its immutable
+files in the final backup/restore inventory. Exact retry derives export time from the durable input
+backup commit, so it reproduces the same snapshot and operation digest. This is a real nonempty V10
+component export/import closure, but it is not a recovered status or complete root walk.
 After the memory prefix, the component also persists and reopens one exact same-run `export_stale`
 degradation. It first resolves the store-derived run-registration and spool-catalog progress rows,
 then records the negative operational fact after the episode commit. This proves a durable degraded
@@ -170,7 +175,8 @@ recorded as Glass use or as a completed root occurrence.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
-prepare, head, act, episode, baseline export, restricted import, status, backup, and restore), and
+prepare, head, act, episode, committed V10 export manifest, restricted import, status, backup, and
+restore), and
 each maps one-to-one to
 `observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime

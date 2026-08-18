@@ -146,6 +146,10 @@ Export/import/status and backup:
   are ignored; the last is taken from the opaque store commit context.
   Direct snapshot commit is crate-private. V8/V9 retain the exact legacy 14-table set; V10 requires
   the exact 24-table set (14 base plus ten occurrence relations), with no extras or omissions.
+  The Core G0 component exercises this path from a store-created input backup and registered CAS
+  import, then reopens the committed snapshot and captures its manifest/tables in a later nonempty
+  backup. Export time is the immutable backup-commit time, so exact retry cannot mutate the
+  content-derived snapshot under a fixed operation identity.
 - `commit_wave5_g0_backup_v1` creates an online catalog backup, independently rederives all
   reachable external objects, and reserves exact initially absent destinations before file I/O.
   A private stage is regenerated until its exact digest/cutoff has its own durable settlement;

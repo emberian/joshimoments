@@ -232,6 +232,7 @@ pub struct Wave5G0ExportOccurrence {
     pub binding_byte_length: u64,
     pub truth_fingerprint_digest: ValueDigest,
     pub available_commit_seq: CommitSeq,
+    pub available_commit_digest: ValueDigest,
 }
 
 /// Neutral V9 restricted-import identity and exact part descriptor.
@@ -1693,13 +1694,26 @@ impl SqliteStore {
         &self,
         export_binding_id: &StableString,
     ) -> Result<Option<Wave5G0ExportOccurrence>> {
-        type Row = (String, String, String, String, Vec<u8>, i64, String, i64);
+        type Row = (
+            String,
+            String,
+            String,
+            String,
+            Vec<u8>,
+            i64,
+            String,
+            i64,
+            String,
+        );
         let row: Option<Row> = self
             .connection
             .query_row(
                 "SELECT b.run_registration_id,b.export_request_id,b.validation_id,b.snapshot_id,
-                    b.binding_bytes,b.binding_byte_length,b.binding_sha256,b.created_commit_seq
-             FROM wave5_export_validation_binding_v1 b WHERE b.export_binding_id=?1",
+                    b.binding_bytes,b.binding_byte_length,b.binding_sha256,b.created_commit_seq,
+                    c.commit_digest
+             FROM wave5_export_validation_binding_v1 b
+             JOIN ingest_commit c ON c.commit_seq=b.created_commit_seq
+             WHERE b.export_binding_id=?1",
                 [export_binding_id.as_str()],
                 |row| {
                     Ok((
@@ -1711,11 +1725,14 @@ impl SqliteStore {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((run, request, validation, snapshot, bytes, length, raw, seq)) = row else {
+        let Some((run, request, validation, snapshot, bytes, length, raw, seq, commit_digest)) =
+            row
+        else {
             return Ok(None);
         };
         let binding: crate::Wave5ExportValidationBindingV1 = serde_json::from_slice(&bytes)?;
@@ -1761,6 +1778,7 @@ impl SqliteStore {
             binding_byte_length: as_u64(length, "export binding bytes")?,
             truth_fingerprint_digest: qualified_raw_digest(&truth_raw, "truth fingerprint")?,
             available_commit_seq: CommitSeq::new(as_u64(seq, "export binding commit")?),
+            available_commit_digest: qualified_raw_digest(&commit_digest, "export binding commit")?,
         }))
     }
 
@@ -4160,6 +4178,7 @@ pub struct Wave5G0BackupOccurrence {
     pub manifest_bytes: Vec<u8>,
     pub inventory_bytes: Vec<u8>,
     pub commit_seq: CommitSeq,
+    pub committed_at: UtcTimestamp,
     pub status: IdempotencyStatus,
 }
 
@@ -4337,6 +4356,7 @@ impl SqliteStore {
             i64,
             i64,
             i64,
+            i64,
         );
         let row: Option<Row> = self
             .connection
@@ -4344,8 +4364,11 @@ impl SqliteStore {
                 "SELECT run_registration_id,source_max_commit_seq,catalog_sha256,
                     manifest_sha256,manifest_bytes,manifest_byte_length,
                     artifact_inventory_sha256,artifact_inventory_bytes,
-                    artifact_inventory_byte_length,artifact_count,created_commit_seq
-             FROM wave5_g0_backup_v1 WHERE backup_id=?1",
+                    artifact_inventory_byte_length,artifact_count,backup.created_commit_seq,
+                    ingest.committed_wall_us
+             FROM wave5_g0_backup_v1 backup
+             JOIN ingest_commit ingest ON ingest.commit_seq=backup.created_commit_seq
+             WHERE backup.backup_id=?1",
                 [backup_id.as_str()],
                 |row| {
                     Ok((
@@ -4360,6 +4383,7 @@ impl SqliteStore {
                         row.get(8)?,
                         row.get(9)?,
                         row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -4376,6 +4400,7 @@ impl SqliteStore {
             inventory_len,
             count,
             seq,
+            committed_wall_us,
         )) = row
         else {
             return Ok(None);
@@ -4495,6 +4520,7 @@ impl SqliteStore {
             manifest_bytes,
             inventory_bytes,
             commit_seq: CommitSeq::new(as_u64(seq, "G0 backup commit")?),
+            committed_at: timestamp_from_us(committed_wall_us, "G0 backup commit time")?,
             status: IdempotencyStatus::Accepted,
         }))
     }

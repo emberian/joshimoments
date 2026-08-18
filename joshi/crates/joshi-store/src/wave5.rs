@@ -1825,11 +1825,7 @@ impl SqliteStore {
                 kind: "Wave 5 G0 restricted import",
                 identity: import_id.to_string(),
             })?;
-        let manifest: DerivedManifestWire = parse_canonical(
-            &stored.manifest_bytes,
-            MAX_ARTIFACT_BYTES,
-            "G0 restricted artifact manifest",
-        )?;
+        let manifest = parse_derived_manifest(&stored.manifest_bytes)?;
         if manifest.artifacts.len() != 1 {
             return Err(StoreError::InvalidBatch(
                 "G0 restricted import must retain exactly one independently validated part".into(),
