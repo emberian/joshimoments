@@ -14,8 +14,12 @@ use crate::{
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
 const CAMPAIGN_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json");
+const KNOWN_TRUTH_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/known_truth_evaluation_v1.json");
 const MARKET_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/market_atlas_snapshot_v1.json");
+const PROTOCOL_TRUTH_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json");
 const RESEARCH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json");
 
@@ -199,17 +203,25 @@ fn exact_fixture_roundtrips_at_unverified_ceiling() {
         SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     );
     assert_eq!(parsed.value().consumed_wave5_gates.len(), 0);
-    assert_eq!(parsed.value().artifact_kinds.len(), 3);
+    assert_eq!(parsed.value().artifact_kinds.len(), 5);
     assert_eq!(
         parsed.value().artifact_kinds[0].schema_digest,
         digest_bytes(CAMPAIGN_SCHEMA).expect("campaign schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[1].schema_digest,
-        digest_bytes(MARKET_SCHEMA).expect("market schema digest")
+        digest_bytes(KNOWN_TRUTH_SCHEMA).expect("known-truth schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[2].schema_digest,
+        digest_bytes(MARKET_SCHEMA).expect("market schema digest")
+    );
+    assert_eq!(
+        parsed.value().artifact_kinds[3].schema_digest,
+        digest_bytes(PROTOCOL_TRUTH_SCHEMA).expect("protocol-truth schema digest")
+    );
+    assert_eq!(
+        parsed.value().artifact_kinds[4].schema_digest,
         digest_bytes(RESEARCH_SCHEMA).expect("research schema digest")
     );
     assert_eq!(parsed.value().budgets.provider_units, WireU64::new(0));
