@@ -1,0 +1,136 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_W6_CREATED_STATE=0
+if [ "${JOSHI_W6_STATE:-}" = "" ]; then
+  JOSHI_W6_STATE=$(mktemp -d /tmp/joshi-wave6-foundation.XXXXXX)
+  JOSHI_W6_CREATED_STATE=1
+fi
+case "$JOSHI_W6_STATE" in
+  /tmp/joshi-wave6-foundation.*) ;;
+  *)
+    echo "JOSHI_W6_STATE must be an explicit /tmp/joshi-wave6-foundation.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_W6_STATE
+
+cleanup() {
+  if [ "$JOSHI_W6_CREATED_STATE" -eq 1 ]; then
+    echo "Wave 6 fixture witness retained at $JOSHI_W6_STATE/wave6-foundation-witness.json" >&2
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+./schema/validate.sh
+cargo test --locked --offline -p joshi-wave6-registry --all-targets
+cargo test --locked --offline -p joshi-store wave6 --lib
+cargo test --locked --offline -p joshi-core wave6_registration --lib
+
+mkdir -p "$JOSHI_W6_STATE/catalog"
+cargo run --locked --offline -q -p joshi-core -- wave6-program-registration \
+  --state "$JOSHI_W6_STATE/catalog" > "$JOSHI_W6_STATE/program-first.json"
+cargo run --locked --offline -q -p joshi-core -- wave6-program-registration \
+  --state "$JOSHI_W6_STATE/catalog" > "$JOSHI_W6_STATE/program-retry.json"
+
+jq -e '
+  .contract == "joshi.core.wave6_program_registration_report.v2"
+  and .schemaVersion == 2
+  and .status == "fixture_only"
+  and .authority == "read_record_replay_propose_shadow_only"
+  and .semanticCeiling == "unverified_semantic_fixture_only"
+  and .catalogSchema == "joshi.sqlite.v12"
+  and .programId == "w6-program-fixture-001"
+  and (.registrationDigest | test("^sha256:[0-9a-f]{64}$"))
+  and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+  and (.acceptedCommitSeq | test("^[1-9][0-9]*$"))
+  and (.firstStatus == "accepted" or .firstStatus == "idempotent")
+  and .retryStatus == "idempotent"
+  and .registrationPersisted == true
+  and .restartReverified == true
+  and .registeredSchemaCount == "6"
+  and [.schemas[].kindId] == [
+    "campaign_registration_fixture",
+    "known_truth_evaluation_fixture",
+    "market_atlas_fixture",
+    "protocol_known_truth_evaluation_fixture",
+    "research_proposal_fixture",
+    "structural_known_truth_evaluation_fixture"
+  ]
+  and ([.schemas[].schemaDigest]
+    | all(test("^sha256:[0-9a-f]{64}$")))
+  and ([.schemas[].commitSeq]
+    | all(test("^[1-9][0-9]*$")))
+  and .schemaCatalogPersisted == true
+  and .schemaCatalogRestartReverified == true
+  and .consumedWave5GateCount == "0"
+  and .providerUnits == "0"
+  and .externalMutationUnits == "0"
+  and .wave5GatesResolved == false
+  and .operationalRelease == false
+  and .empiricalClaim == false
+  and .productQualified == false
+  and .liveQualified == false
+' "$JOSHI_W6_STATE/program-first.json" > /dev/null
+
+jq -e --slurpfile first "$JOSHI_W6_STATE/program-first.json" '
+  .firstStatus == "idempotent"
+  and .retryStatus == "idempotent"
+  and .acceptedCommitSeq == $first[0].acceptedCommitSeq
+  and .registrationDigest == $first[0].registrationDigest
+  and .documentDigest == $first[0].documentDigest
+  and .schemas == $first[0].schemas
+  and .wave5GatesResolved == false
+  and .operationalRelease == false
+  and .empiricalClaim == false
+  and .productQualified == false
+  and .liveQualified == false
+' "$JOSHI_W6_STATE/program-retry.json" > /dev/null
+
+JOSHI_W6_PROGRAM_SHA=$(shasum -a 256 "$JOSHI_W6_STATE/program-first.json" | awk '{print $1}')
+JOSHI_W6_PROGRAM_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0011_wave6_program_registry.sql | awk '{print $1}')
+JOSHI_W6_SCHEMA_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0012_wave6_artifact_schemas.sql | awk '{print $1}')
+
+jq -cn \
+  --arg report "sha256:$JOSHI_W6_PROGRAM_SHA" \
+  --arg program_migration "sha256:$JOSHI_W6_PROGRAM_MIGRATION_SHA" \
+  --arg schema_migration "sha256:$JOSHI_W6_SCHEMA_MIGRATION_SHA" \
+  --slurpfile program "$JOSHI_W6_STATE/program-first.json" '
+  {
+    contract: "joshi.wave6.fixture_foundation_witness.v1",
+    schemaVersion: 1,
+    authority: "read_record_replay_propose_shadow_only",
+    status: "fixture_only",
+    semanticCeiling: "unverified_semantic_fixture_only",
+    catalogSchema: $program[0].catalogSchema,
+    programId: $program[0].programId,
+    registrationDigest: $program[0].registrationDigest,
+    programReportDigest: $report,
+    programMigrationDigest: $program_migration,
+    schemaMigrationDigest: $schema_migration,
+    registeredSchemaCount: $program[0].registeredSchemaCount,
+    schemas: $program[0].schemas,
+    attainedCapabilities: [
+      "exact_fixture_program_restart",
+      "exact_fixture_schema_catalog_restart"
+    ],
+    qualification: {
+      wave5GatesResolved: false,
+      operationalRelease: false,
+      artifactOccurrence: false,
+      empiricalClaim: false,
+      providerIo: false,
+      externalMutation: false,
+      productQualified: false,
+      liveQualified: false
+    },
+    claim: "fixture_program_and_schema_catalog_only"
+  }
+' > "$JOSHI_W6_STATE/wave6-foundation-witness.json"
+
+cat "$JOSHI_W6_STATE/wave6-foundation-witness.json"

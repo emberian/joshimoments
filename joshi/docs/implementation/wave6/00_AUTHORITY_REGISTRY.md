@@ -120,6 +120,10 @@ kind registry. Each kind/schema/digest triple must be present in the exact store
 That closes the schema catalog, not an artifact occurrence. See
 [13_STORE_ARTIFACT_SCHEMAS.md](13_STORE_ARTIFACT_SCHEMAS.md).
 
+The bounded root command that verifies these two durable fixture capabilities is documented in
+[14_FOUNDATION_READINESS.md](14_FOUNDATION_READINESS.md). It is explicitly not an operational Wave
+6 readiness or model-result witness.
+
 Per the Wave 6 master plan, a future sole-store adapter may be considered only after the exact
 external gates close. The current offline Wave 5 G0 component evidence does not satisfy `W5-G1`,
 so no `W6-X1`, market-field, response, operator, sensing, routed, or production-release adapter is

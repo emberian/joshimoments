@@ -16,6 +16,11 @@ schema commits, exact retries and read-only restart while emitting explicit fals
 operational, empirical, product and live fields. No artifact occurrence, operational release or
 empirical authority follows.
 
+The root `wave6-foundation-readiness` runner independently repeats the migration, registry, store
+and Core gates and emits only the two named fixture-restart capabilities. Its qualification object
+fixes gate resolution, operational release, artifact occurrence, empirical claim, provider I/O,
+external mutation, product and live status to false.
+
 Response-atlas repair re-audit on 2026-08-18 at HEAD
 `c32674a93a41351d9bef79ec25fa03d4da1a4b14` plus the current response-atlas worktree:
 the four originally reproduced cases and the subsequent R1/R2 pairs now **PASS at the
