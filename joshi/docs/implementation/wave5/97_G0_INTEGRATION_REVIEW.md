@@ -61,11 +61,11 @@ root evidence bundle.
 | Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The opt-in Core route then returns those exact body/head bytes under a durable scoped session, but the default server and product remain unmounted and the other root seams are absent. |
 | Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication protocol; BLOCKED default/product/root G0** | The SQLite exchange now opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. `Serve` never selects the constructor, the production Glass shell remains unavailable, and no product presentation occurrence or complete root evidence bundle exists. |
 | Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable act + partial episode prefix; BLOCKED complete chain/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap plus one partial unresolved/no-trade episode in strict queue order. The store intentionally refuses the later session/outcome/reveal/interview states, so the required complete chain remains absent. |
-| Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS only as synthetic cross-runtime format; BLOCKED store/root** | The regenerated 24-relation V10 fixture passes exact Rust/Python readback against frozen 0010 and has ten nonempty G0 rows. The private wrapper overrides catalog identity/path/range from an exact backup and resolves CAS, closing the inspected foreign-catalog gap, but no test invokes it or the 24-table store commit branch. |
+| Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS for the joined legacy bootstrap and synthetic V10 format; BLOCKED V10 store/root** | Core now copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the exact restricted manifest plus Parquet CAS. The regenerated 24-relation V10 fixture also passes exact Rust/Python readback and has ten nonempty G0 rows, but the backup-bound V10 wrapper and 24-table store commit remain outside the root witness. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS only for one exact durable degradation; BLOCKED Ready/recovery/root** | Core resolves the same-run store-registration and spool-catalog progress rows, then commits and reopens an exact `export_stale` degradation after the partial memory episode. The record carries no self-authored recovery evidence and makes no Ready, recovered, export-complete, live, or root claim. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS as isolated durable and joined partial store backup/restore; BLOCKED complete inventory/fault/root** | The public-API test still proves original-root removal and tamper refusal. Core now additionally joins the actual writer to the same partial occurrence, with a 1 KiB external source object, nonempty inventory, distinct backup/restore roots, exact retry and restart readback. That joined path does not hide the original roots or include the separate supervisor spool inventory, so it is not the final recovery set. |
-| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + partial baseline mapping; BLOCKED full executable/root** | The source/publication/memory/status/backup implementation passes eighteen exact before/after component interruptions. The root-workspace harness now maps thirteen exact baseline artifacts to `observed_partial`, but reservation fault injection and the other required steps are incomplete and it does not execute all 37 scenarios. |
-| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as a thirteen-role partial artifact bundle; BLOCKED root** | The component report binds reservation, origin, receipt, binding, ACK, fact, prepare, head, act, episode, degraded status, backup and restore identities/digests, with one exact role per observed step. Paired-read fault evidence, export/import, positive status recovery and final no-original-root reopen remain absent; both qualification bits stay false. |
+| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + partial baseline mapping; BLOCKED full executable/root** | The source/publication/memory/status/backup implementation passes eighteen exact before/after component interruptions. The root-workspace harness now maps fifteen exact baseline artifacts to `observed_partial`, but reservation fault injection and the other required steps are incomplete and it does not execute all 37 scenarios. |
+| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as a fifteen-role partial artifact bundle; BLOCKED root** | The component report binds reservation, origin, receipt, binding, ACK, fact, prepare, head, act, episode, legacy export, restricted import, degraded status, backup and restore identities/digests, with one exact role per observed step. Paired-read fault evidence, nonempty V10 export, positive status recovery and final no-original-root reopen remain absent; both qualification bits stay false. |
 
 ## Red-team invariants for landing components
 
@@ -389,7 +389,7 @@ validation unconditionally rejects a positive root Boolean.
 ## Targeted verification during this review
 
 - Final store/schema audit used frozen migration 0010 SHA-256
-  `50ef33b8660b5060244b2fe1fa6bc6285fb4b5ff21934c2bfd03f84573dbc29d`.
+  `2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800`.
   `cargo fmt --all -- --check`, schema validation, store all-target tests (14 unit plus one
   authority integration), strict store Clippy and store rustdoc all pass on that frozen tree.
 - `cargo check --locked --offline -p joshi-store -p joshi-export -p joshi-core
@@ -428,14 +428,14 @@ validation unconditionally rejects a positive root Boolean.
 - That combined result initially predated the backup reservation/snapshot edits to migration 0010,
   and this review reproduced its migration-hash refusal. After store freeze, the fixture was
   regenerated with the exact migration hash
-  `50ef33b8660b5060244b2fe1fa6bc6285fb4b5ff21934c2bfd03f84573dbc29d`.
+  `2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800`.
   The focused Rust G0 export tests now pass 2/2, including lower-bound/CAS adversaries and the
   positive cross-runtime reopen. Focused locked/offline Python tests pass; root's complete rerun
   reports export/artifact 30/30, focused Python 36, and direct validation of 24 tables/10 rows.
   Checked fixture identities are catalog
-  `sha256:917a163a49c25b6517336b0e89bd0805f497544a26e429676e4c86891ce26b81`,
-  snapshot `sha256:b95c19cdd63de7ed08953d7a9cad6d9c5f9118b93d1cb9a5fa0d9083b6ab8b07`
-  and manifest `sha256:d28e8406094ab91a883fed0b092040b381a742926751d85f16e498866d7dde15`.
+  `sha256:7d8d6b677ddf215ae81b0c6be9bd6e359a9b7d4748db585a2eb63a0b89b4593d`,
+  snapshot `sha256:fe6facdcf91733f5bb483a53fbda60ed54d40e4ea1384bcdd8111fadc92ecac0`
+  and manifest `sha256:c3ec855a838a32d3467122170f2e2113a854e169020adf1f1e29783db6a3be2f`.
 - The focused backup helper regression passes after the restored inventory-entry repair, strict
   store Clippy is green, and the public authority integration test passes the complete nonempty
   backup/restore/retry/no-original-root/restart/tamper lifecycle. This qualifies the isolated
@@ -478,11 +478,13 @@ than that statement:
   Exact SQLite lifecycle, expiry/reopen, origin, rate-window, restart-count and ordinal tests pass,
   and a scoped capability opens the exact G0 Cockpit V2 body/head. The CLI and production Glass
   shell remain deliberately unmounted.
-- **Export store boundary: BLOCKED.** The private wrapper loads an exact backup and import,
+- **Export store boundary: joined legacy bootstrap PASS; V10 wrapper BLOCKED.** Core now exercises
+  the store-owned fourteen-table V8/V9 commit branch, same-run export binding, forward V10
+  migration, and exact restricted manifest/Parquet CAS readback. The private V10 wrapper loads an exact backup and import,
   overwrites catalog path/identity/schema/range with the backup closure, resolves CAS before and
   after export, and reopens the backup. The commit branch requires exact ordered 14-table V8/V9 or
-  24-table V10 closures and headed V2 publications for V10. Only the 14-table store branch is
-  exercised; no test invokes the wrapper or 24-table store branch. The regenerated direct-SQL
+  24-table V10 closures and headed V2 publications for V10. No test invokes the wrapper or 24-table
+  store branch. The regenerated direct-SQL
   24-table fixture passes at the synthetic format ceiling only.
 - **Backup/restore: isolated durable component PASS; fault/root BLOCKED.** Nonempty inventory,
   exact reservation/staging settlement, fsynced copies, independent reachability, distinct-root

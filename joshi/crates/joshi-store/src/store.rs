@@ -145,6 +145,15 @@ impl SqliteStore {
         )
     }
 
+    /// Returns the exact applied catalog-schema identity without changing migration state.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a catalog with no positive applied schema version or an invalid identity.
+    pub fn catalog_schema(&self) -> Result<StableString> {
+        self.catalog_schema_id()
+    }
+
     /// Registers a versioned source contract, idempotently for an exact retry.
     ///
     /// # Errors

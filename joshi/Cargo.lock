@@ -1181,6 +1181,7 @@ dependencies = [
  "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
+ "joshi-export",
  "joshi-g0-harness",
  "joshi-operational-status",
  "joshi-operator",

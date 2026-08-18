@@ -558,7 +558,6 @@ BEGIN
           AND blob.storage_mode='external'
           AND blob.stored_sha256=NEW.manifest_sha256
           AND blob.stored_length=NEW.manifest_byte_length
-          AND blob.created_commit_seq=NEW.created_commit_seq
     ) THEN RAISE(ABORT, 'G0 import manifest CAS differs from exact restricted import') END;
 END;
 

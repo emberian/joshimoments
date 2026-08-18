@@ -79,9 +79,9 @@ relations and parsed again after restart by both Rust and locked offline Python.
 G0 relations. Pairing and backup are deliberately absent; they are separate store/root witnesses,
 not analysis relations. Exact fixture identities are:
 
-- catalog: `sha256:917a163a49c25b6517336b0e89bd0805f497544a26e429676e4c86891ce26b81`;
-- snapshot: `sha256:b95c19cdd63de7ed08953d7a9cad6d9c5f9118b93d1cb9a5fa0d9083b6ab8b07`;
-- manifest: `sha256:d28e8406094ab91a883fed0b092040b381a742926751d85f16e498866d7dde15`.
+- catalog: `sha256:7d8d6b677ddf215ae81b0c6be9bd6e359a9b7d4748db585a2eb63a0b89b4593d`;
+- snapshot: `sha256:fe6facdcf91733f5bb483a53fbda60ed54d40e4ea1384bcdd8111fadc92ecac0`;
+- manifest: `sha256:c3ec855a838a32d3467122170f2e2113a854e169020adf1f1e29783db6a3be2f`.
 
 Regenerate only into absent paths:
 

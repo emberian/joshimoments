@@ -1,7 +1,7 @@
 # Wave 5 integration — Living Instrument authority spine
 
 Status: **implementation in progress / useful partial**. No full Phase-0 fault walk, live,
-product-parity, publication, export/import, repeated-use, or remote qualification is claimed by
+product-parity, complete publication, nonempty V10 export/import, repeated-use, or remote qualification is claimed by
 this document. The runnable Wave 5 readiness target now closes registration plus one public C0
 origin-segment/store-receipt/catalog-binding/ACK/reopen component walk; it must not be promoted
 beyond the explicit closed boundaries and open joins below.
@@ -129,21 +129,28 @@ The final script output must continue to state `useful_partial`,
 `qualification.fullOfflineFaultWalk: false`, and false for bounded-nonfixture,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk may report
-`public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because source-fact,
-publication, export/import, status recovery and backup/restore crash boundaries remain open. The
+`public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because complete
+memory, V10 export/import, status recovery and backup/restore crash boundaries remain open. The
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
 then binds its receipt to the run before the supervisor spool records the ACK. The full crash
-matrix, default product mount, complete memory closure, export/import, positive status recovery and
-final no-original-root reopen remain outside that component.
+matrix, default product mount, complete memory closure, nonempty V10 export/import, positive status
+recovery and final no-original-root reopen remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
 interview memory closure remains outside it. This component exercises the canonical Pump policy
 bytes without network I/O. The supervisor's separate generic synthetic adapter still uses the
 fixture-only `joshi.store.policy.v1` contract and does not qualify production circulation.
+Before the V10 G0 prefix, the same command copies the checked V8 operational catalog and its exact
+referenced blob/export files into private state, migrates through V9, independently regenerates and
+validates its real fourteen-table Snapshot V2 in Rust and locked Python, commits that snapshot plus
+a same-run export binding, advances forward once to V10, then admits and reopens the exact restricted
+manifest and Parquet artifact in external CAS. Exact retry reuses the export/import occurrence
+identities. This closes the historical bootstrap only; it is not the required nonempty V10 G0
+snapshot or a recovered status.
 After the memory prefix, the component also persists and reopens one exact same-run `export_stale`
 degradation. It first resolves the store-derived run-registration and spool-catalog progress rows,
 then records the negative operational fact after the episode commit. This proves a durable degraded
@@ -161,9 +168,10 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 `Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
 recorded as Glass use or as a completed root occurrence.
 
-The component report now embeds a strict G0 V1 partial fault result. Thirteen baseline artifacts are
+The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
-prepare, head, act, episode, status, backup, and restore), and each maps one-to-one to
+prepare, head, act, episode, baseline export, restricted import, status, backup, and restore), and
+each maps one-to-one to
 `observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
 fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second

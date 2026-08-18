@@ -3,10 +3,18 @@
 //! This remains an offline fixture-only partial. It deliberately cannot claim the complete G0
 //! fault walk, product use, live source coverage, or execution authority.
 
-use std::{path::Path, time::Duration};
+use std::{
+    fs::{self, File},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use joshi_admission::{Sha256Digest, operational::AUTHORITY};
-use joshi_domain::{StableString, WireStringError};
+use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest, WireStringError};
+use joshi_export::{
+    OperationalExportRequestV2, OperationalPublicationV2, ProjectionPublicationInputV2,
+    PythonValidatorV2, export_operational_snapshot_v2,
+};
 use joshi_g0_harness::{
     AUTHORITY_CEILING as FAULT_AUTHORITY_CEILING, EVIDENCE_CONTRACT, EvidenceBundle, EvidenceItem,
     EvidenceRole, FakeFaultSchedule, G0Result, G0RunManifest, MANIFEST_CONTRACT, REQUIRED_STEPS,
@@ -22,8 +30,9 @@ use joshi_scientific_memory::{
 };
 use joshi_spool::SpoolConfig;
 use joshi_store::{
-    IdempotencyStatus, SqliteStore, StoreMode, Wave5OperationalRecordKind,
-    Wave5OperationalRecordV1, Wave5OperationalState,
+    IdempotencyStatus, OperationalCommitContext, SqliteStore, StoreMode,
+    Wave5ExportValidationBindingV1, Wave5OperationalRecordKind, Wave5OperationalRecordV1,
+    Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1,
 };
 use joshi_supervisor::{
     CollectorRuntime, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
@@ -43,6 +52,20 @@ const DIRECT_C0_FILE: &[u8] =
     include_bytes!("../../../fixtures/pump-api/direct-fetch-outcome.synthetic.json");
 const OFFLINE_SELECTION_FILE: &[u8] =
     include_bytes!("../../../fixtures/pump-api/offline-fixture-selection-v1.json");
+const BASELINE_ARTIFACT_MANIFEST: &[u8] = include_bytes!(
+    "../../../fixtures/artifact/derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55/manifest.json"
+);
+const BASELINE_ARTIFACT_PART: &[u8] = include_bytes!(
+    "../../../fixtures/artifact/derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55/descriptive_chart_shapes.parquet"
+);
+const BASELINE_EXPORT_BINDING_ID: &str = "export-binding:wave5-g0-baseline-0001";
+const BASELINE_IMPORT_ID: &str = "import:wave5-g0-baseline-0001";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BaselineExportImportClosure {
+    export: joshi_store::Wave5G0ExportOccurrence,
+    import: joshi_store::Wave5G0ImportOccurrence,
+}
 
 /// Deterministic component-local interruption points. These do not cover the full G0 schedule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +125,10 @@ pub struct Wave5G0SourcePublicationReport {
     pub memory_episode_id: String,
     pub memory_episode_digest: String,
     pub memory_queue_through: u64,
+    pub baseline_export_binding_id: String,
+    pub baseline_export_snapshot_id: String,
+    pub baseline_import_id: String,
+    pub baseline_import_artifact_id: String,
     pub status_record_id: String,
     pub status_record_digest: String,
     pub store_progress_count: usize,
@@ -118,6 +145,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub supervisor_origin_handoff_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
+    pub baseline_export_import_closed: bool,
     pub partial_status_closed: bool,
     pub partial_backup_restore_closed: bool,
     pub restart_reverified: bool,
@@ -155,11 +183,13 @@ pub fn run_wave5_g0_source_publication_with_fault(
     fault: Option<Wave5G0SourcePublicationFaultPoint>,
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
     let (registration, bundle, _) = fixture_registration_bundles()?;
-    let mut store_config = config(state)?;
-    store_config.inline_blob_max_bytes = 1024;
-    let mut store = SqliteStore::open(store_config, StoreMode::SingleWriter)?;
-    store.migrate(now()?)?;
+    seed_baseline_catalog(state)?;
+    let mut store = SqliteStore::open(store_config(state)?, StoreMode::SingleWriter)?;
     let run_id = StableString::new(registration.run_id.clone())?;
+    let schema = store.catalog_schema()?;
+    if schema.as_str() != "joshi.sqlite.v10" {
+        store.migrate_wave5_baseline_v9(now()?)?;
+    }
     let registration_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:registration")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
@@ -172,6 +202,51 @@ pub fn run_wave5_g0_source_publication_with_fault(
     ) {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "run registration returned an unsupported status",
+        ));
+    }
+    let export_binding_id = StableString::new(BASELINE_EXPORT_BINDING_ID)?;
+    let baseline_export =
+        if let Some(export) = store.load_wave5_g0_export_occurrence_v1(&export_binding_id)? {
+            export
+        } else {
+            if schema.as_str() == "joshi.sqlite.v10" {
+                return Err(Wave5G0SourcePublicationError::Invariant(
+                    "V10 catalog is missing its required baseline export",
+                ));
+            }
+            bootstrap_baseline_export_binding(
+                &mut store,
+                state,
+                &run_id,
+                registration_receipt.exact_document_digest.as_str(),
+            )?
+        };
+    store.migrate(now()?)?;
+    let baseline_import_id = StableString::new(BASELINE_IMPORT_ID)?;
+    let baseline_import =
+        if let Some(import) = store.load_wave5_g0_import_occurrence_v1(&baseline_import_id)? {
+            import
+        } else {
+            bootstrap_baseline_import(
+                &mut store,
+                &run_id,
+                registration_receipt.exact_document_digest.as_str(),
+                &baseline_export,
+            )?
+        };
+    let baseline = BaselineExportImportClosure {
+        export: baseline_export,
+        import: baseline_import,
+    };
+    if baseline.export.run_registration_id != run_id
+        || baseline.import.run_registration_id != run_id
+        || baseline.import.export_binding_id != baseline.export.export_binding_id
+        || baseline.import.export_request_id != baseline.export.export_request_id
+        || baseline.import.snapshot_id != baseline.export.snapshot_id
+        || baseline.export.available_commit_seq >= baseline.import.available_commit_seq
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "baseline export/import does not close the exact Wave 5 run",
         ));
     }
 
@@ -539,9 +614,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
     drop(store);
 
-    let mut reopened_config = config(state)?;
-    reopened_config.inline_blob_max_bytes = 1024;
-    let reopened = SqliteStore::open(reopened_config, StoreMode::ReadOnly)?;
+    let reopened = SqliteStore::open(store_config(state)?, StoreMode::ReadOnly)?;
     let reopened_registration = reopened.load_wave5_run_registration_v1(&run_id)?.ok_or(
         Wave5G0SourcePublicationError::Invariant("run registration was absent after restart"),
     )?;
@@ -573,6 +646,16 @@ pub fn run_wave5_g0_source_publication_with_fault(
         .ok_or(Wave5G0SourcePublicationError::Invariant(
             "memory episode was absent after restart",
         ))?;
+    let reopened_export = reopened
+        .load_wave5_g0_export_occurrence_v1(&baseline.export.export_binding_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "baseline export was absent after restart",
+        ))?;
+    let reopened_import = reopened
+        .load_wave5_g0_import_occurrence_v1(&baseline.import.import_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "baseline import was absent after restart",
+        ))?;
     let reopened_status = reopened
         .load_wave5_g0_status_occurrence_v1(&status_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -597,6 +680,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         || reopened_head != head
         || reopened_act != act
         || reopened_episode != episode
+        || reopened_export != baseline.export
+        || reopened_import != baseline.import
         || reopened_status != status
         || reopened_store_status_view != store_status_view
         || reopened_backup != expected_backup
@@ -622,6 +707,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         act_receipt.occurrence_digest(),
         episode_receipt.occurrence_id(),
         episode_receipt.occurrence_digest(),
+        &baseline.export,
+        &baseline.import,
         &status,
         &backup,
         &restore,
@@ -632,7 +719,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         schema_version: 1,
         authority: AUTHORITY,
         status: "useful_partial",
-        catalog_schema: registration_receipt.catalog_schema.to_string(),
+        catalog_schema: source_receipt.catalog_schema.to_string(),
         run_registration_id: run_id.to_string(),
         run_registration_digest: registration_receipt.exact_document_digest.to_string(),
         catalog_admission_id: catalog_admission_id.into(),
@@ -658,6 +745,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_episode_id: episode_receipt.occurrence_id().to_string(),
         memory_episode_digest: episode_receipt.occurrence_digest().to_string(),
         memory_queue_through: episode_receipt.queue_generation(),
+        baseline_export_binding_id: baseline.export.export_binding_id.to_string(),
+        baseline_export_snapshot_id: baseline.export.snapshot_id.to_string(),
+        baseline_import_id: baseline.import.import_id.to_string(),
+        baseline_import_artifact_id: baseline.import.artifact_id.to_string(),
         status_record_id: status.record_id.to_string(),
         status_record_digest: status.record_bytes_digest.to_string(),
         store_progress_count: store_status_view.durable_progress.len(),
@@ -674,6 +765,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         supervisor_origin_handoff_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
+        baseline_export_import_closed: true,
         partial_status_closed: true,
         partial_backup_restore_closed: true,
         restart_reverified: true,
@@ -684,7 +776,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn partial_fault_result(
     run_id: &StableString,
     build_bytes: &[u8],
@@ -700,6 +792,8 @@ fn partial_fault_result(
     act_digest: &joshi_domain::ValueDigest,
     episode_id: &StableString,
     episode_digest: &joshi_domain::ValueDigest,
+    export: &joshi_store::Wave5G0ExportOccurrence,
+    import: &joshi_store::Wave5G0ImportOccurrence,
     status: &joshi_store::Wave5G0StatusOccurrence,
     backup: &joshi_store::Wave5G0BackupOccurrence,
     restore: &joshi_store::Wave5G0BackupRestoreOccurrence,
@@ -778,6 +872,16 @@ fn partial_fault_result(
                 content_digest: episode_digest.to_string(),
             },
             EvidenceItem {
+                role: EvidenceRole::ExportManifest,
+                evidence_id: export.export_binding_id.to_string(),
+                content_digest: export.binding_bytes_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::ImportReceipt,
+                evidence_id: import.import_id.to_string(),
+                content_digest: import.registration_bytes_digest.to_string(),
+            },
+            EvidenceItem {
                 role: EvidenceRole::StatusReadback,
                 evidence_id: status.record_id.to_string(),
                 content_digest: status.record_bytes_digest.to_string(),
@@ -799,6 +903,265 @@ fn partial_fault_result(
     Ok(run_partial_schedule(&manifest, &schedule, evidence)?)
 }
 
+fn seed_baseline_catalog(state: &Path) -> Result<(), Wave5G0SourcePublicationError> {
+    fs::create_dir_all(state)?;
+    let catalog = state.join("catalog.sqlite");
+    match fs::symlink_metadata(&catalog) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(Wave5G0SourcePublicationError::Invariant(
+                    "G0 catalog path is not a real regular file",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::copy(
+                workspace().join("fixtures/export/operational_catalog_v8.sqlite"),
+                &catalog,
+            )?;
+            File::open(&catalog)?.sync_all()?;
+            File::open(state)?.sync_all()?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    seed_baseline_blob_fixtures(state)?;
+    seed_baseline_export_fixtures(state)?;
+    Ok(())
+}
+
+fn seed_baseline_blob_fixtures(state: &Path) -> Result<(), Wave5G0SourcePublicationError> {
+    seed_baseline_fixture_directory(
+        &workspace().join("fixtures/tape/blobs/sha256"),
+        &state.join("blobs/fixtures/tape/blobs/sha256"),
+        "baseline blob fixture contains a non-regular entry",
+        "baseline blob fixture destination differs",
+    )
+}
+
+fn seed_baseline_export_fixtures(state: &Path) -> Result<(), Wave5G0SourcePublicationError> {
+    seed_baseline_fixture_directory(
+        &workspace().join("fixtures/tape/exports"),
+        &state.join("exports/fixtures/tape/exports"),
+        "baseline export fixture contains a non-regular entry",
+        "baseline export fixture destination differs",
+    )
+}
+
+fn seed_baseline_fixture_directory(
+    source: &Path,
+    destination: &Path,
+    invalid_entry: &'static str,
+    changed_destination: &'static str,
+) -> Result<(), Wave5G0SourcePublicationError> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() || entry.file_type()?.is_symlink() {
+            return Err(Wave5G0SourcePublicationError::Invariant(invalid_entry));
+        }
+        let target = destination.join(entry.file_name());
+        if target.try_exists()? {
+            let target_metadata = fs::symlink_metadata(&target)?;
+            if !target_metadata.file_type().is_file()
+                || target_metadata.file_type().is_symlink()
+                || fs::read(entry.path())? != fs::read(&target)?
+            {
+                return Err(Wave5G0SourcePublicationError::Invariant(
+                    changed_destination,
+                ));
+            }
+        } else {
+            fs::copy(entry.path(), &target)?;
+            File::open(&target)?.sync_all()?;
+        }
+    }
+    File::open(destination)?.sync_all()?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn bootstrap_baseline_export_binding(
+    store: &mut SqliteStore,
+    state: &Path,
+    run_id: &StableString,
+    run_registration_digest: &str,
+) -> Result<joshi_store::Wave5G0ExportOccurrence, Wave5G0SourcePublicationError> {
+    let destination = next_baseline_export_destination(state)?;
+    let snapshot = export_operational_snapshot_v2(&baseline_export_request(destination)?)?;
+    let validation_id = StableString::new("export-validation:wave5-g0-baseline-0001")?;
+    let export_context = OperationalCommitContext::new(
+        StableString::new("wave5:g0:baseline-export")?,
+        now()?,
+        StableString::new("wave5-g0-baseline-export-clock")?,
+        1,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    );
+    let export_receipt = store.commit_wave5_baseline_export_snapshot_v2(
+        &validation_id,
+        &snapshot,
+        &export_context,
+    )?;
+    let truth_fingerprint =
+        Sha256Digest::of_bytes(&serde_json::to_vec(snapshot.truth_fingerprint())?).to_string();
+    let export_binding = Wave5ExportValidationBindingV1 {
+        contract: "joshi.wave5.export_validation_binding.v1".into(),
+        schema_version: 1,
+        export_binding_id: BASELINE_EXPORT_BINDING_ID.into(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: run_registration_digest.into(),
+        export_request_id: export_receipt.export_request_id().to_string(),
+        validation_id: export_receipt.validation_id().to_string(),
+        snapshot_id: export_receipt.snapshot_id().to_string(),
+        manifest_digest: export_receipt.manifest_digest().to_string(),
+        rust_validation_digest: export_receipt.rust_validation_digest().to_string(),
+        python_validation_digest: export_receipt.python_validation_digest().to_string(),
+        validation_digest: export_receipt.validation_digest().to_string(),
+        truth_fingerprint,
+        authority: AUTHORITY.into(),
+    };
+    let export_binding_bytes = serde_json::to_vec(&export_binding)?;
+    let binding_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:baseline-export-binding")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    store.commit_wave5_export_validation_binding_v1(&export_binding_bytes, &binding_context)?;
+    store
+        .load_wave5_g0_export_occurrence_v1(&StableString::new(BASELINE_EXPORT_BINDING_ID)?)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "baseline export binding was absent after commit",
+        ))
+}
+
+fn bootstrap_baseline_import(
+    store: &mut SqliteStore,
+    run_id: &StableString,
+    run_registration_digest: &str,
+    export: &joshi_store::Wave5G0ExportOccurrence,
+) -> Result<joshi_store::Wave5G0ImportOccurrence, Wave5G0SourcePublicationError> {
+    let artifact_registration = Wave5RestrictedArtifactRegistrationV1 {
+        contract: "joshi.wave5.restricted_artifact_registration.v1".into(),
+        schema_version: 1,
+        import_id: BASELINE_IMPORT_ID.into(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: run_registration_digest.into(),
+        export_binding_id: BASELINE_EXPORT_BINDING_ID.into(),
+        export_request_id: export.export_request_id.to_string(),
+        analysis_run_id: "analysis-run-production-fixture-001".into(),
+        artifact_id: "sha256:759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55"
+            .into(),
+        artifact_contract: "joshi.analysis.derived-artifact/v2".into(),
+        manifest_digest: Sha256Digest::of_bytes(BASELINE_ARTIFACT_MANIFEST).to_string(),
+        snapshot_id: export.snapshot_id.to_string(),
+        claim_scope: "descriptive_noncausal".into(),
+        truth_fingerprint: export.truth_fingerprint_digest.to_string(),
+        maximum_input_available_at: baseline_timestamp("1970-01-01T00:00:02.001150Z")?,
+        authority: AUTHORITY.into(),
+    };
+    let artifact_registration_bytes = serde_json::to_vec(&artifact_registration)?;
+    let artifact_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:baseline-import")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    store.commit_wave5_restricted_artifact_v1(
+        &artifact_registration_bytes,
+        BASELINE_ARTIFACT_MANIFEST,
+        BASELINE_ARTIFACT_PART,
+        &artifact_context,
+    )?;
+
+    let import_id = StableString::new(BASELINE_IMPORT_ID)?;
+    store.load_wave5_g0_import_occurrence_v1(&import_id)?.ok_or(
+        Wave5G0SourcePublicationError::Invariant(
+            "baseline restricted import was absent after commit",
+        ),
+    )
+}
+
+fn next_baseline_export_destination(
+    state: &Path,
+) -> Result<PathBuf, Wave5G0SourcePublicationError> {
+    let attempts = state.join("baseline-export-attempts");
+    fs::create_dir_all(&attempts)?;
+    for ordinal in 1..=64_u8 {
+        let candidate = attempts.join(format!("attempt-{ordinal:02}"));
+        if !candidate.try_exists()? {
+            return Ok(candidate);
+        }
+    }
+    Err(Wave5G0SourcePublicationError::Invariant(
+        "baseline export retry bound is exhausted",
+    ))
+}
+
+fn baseline_export_request(
+    destination: PathBuf,
+) -> Result<OperationalExportRequestV2, Wave5G0SourcePublicationError> {
+    Ok(OperationalExportRequestV2 {
+        catalog_snapshot_path: workspace().join("fixtures/export/operational_catalog_v8.sqlite"),
+        catalog_id: StableString::new("catalog-publication-test")?,
+        catalog_schema: StableString::new("joshi.sqlite.v8")?,
+        from_commit_seq: CommitSeq::new(1),
+        through_commit_seq: CommitSeq::new(13),
+        export_request_id: StableString::new("export-production-fixture-001")?,
+        producer_build: StableString::new("joshi-export-operational-fixture-v2")?,
+        created_at: baseline_timestamp("2026-08-17T12:00:00.000000Z")?,
+        producer_projection_publication_id: StableString::new("publication-001")?,
+        publications: vec![OperationalPublicationV2::Projection(
+            ProjectionPublicationInputV2 {
+                publication_id: StableString::new("publication-001")?,
+                publication_contract: StableString::new("joshi.projection_publication")?,
+                publication_digest: baseline_digest(
+                    "sha256:1524b025b3e615358a53ac410600d0c386b6f18a93d9c1e19708ab034f87cb8d",
+                )?,
+                publication_bytes_digest: baseline_digest(
+                    "sha256:3b2019584418c9a521e6bb4434733b70916d30a86a7a1f52621ce7a7e429a8b6",
+                )?,
+                projection_id: StableString::new("projection-001")?,
+                projection_name: StableString::new("joshi.read_projection")?,
+                projection_version: StableString::new("joshi.projection.v1")?,
+                result_digest: baseline_digest(
+                    "sha256:d7c6cbaf0736069a895d126fabeb94ec204bc22285611ba5f5d97098ee34a69b",
+                )?,
+                artifact_digest: baseline_digest(
+                    "sha256:54a044671521c467a312dd1b66853cda14afd8bf3f430fcc2c00919a91e7f583",
+                )?,
+                input_closure_digest: baseline_digest(
+                    "sha256:b57ebaf6f3c0edfbc06f63241a0ec52d9cd6330beedfba7cf8bb545b3b949d9b",
+                )?,
+                through_commit_seq: CommitSeq::new(10),
+                published_commit_seq: CommitSeq::new(11),
+            },
+        )],
+        coverage_window_ids: vec![StableString::new("cov_export_wall")?],
+        destination,
+        python_validator: PythonValidatorV2 {
+            program: PathBuf::from("uv"),
+            analysis_directory: workspace().join("analysis"),
+        },
+        g0_import_artifact: None,
+    })
+}
+
+fn workspace() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("Core crate remains two levels below the workspace")
+        .to_owned()
+}
+
+fn baseline_timestamp(value: &str) -> Result<UtcTimestamp, Wave5G0SourcePublicationError> {
+    value
+        .parse()
+        .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid baseline timestamp"))
+}
+
+fn baseline_digest(value: &str) -> Result<ValueDigest, Wave5G0SourcePublicationError> {
+    ValueDigest::new(value.to_owned())
+        .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid baseline digest"))
+}
+
 fn supervisor_config(state: &Path) -> SupervisorConfig {
     let root = state.join("supervisor");
     SupervisorConfig {
@@ -816,6 +1179,15 @@ fn supervisor_config(state: &Path) -> SupervisorConfig {
         shutdown_deadline: Duration::from_secs(30),
         maximum_spool_bytes_per_utc_day: 4 * 1024 * 1024,
     }
+}
+
+pub(crate) fn store_config(
+    state: &Path,
+) -> Result<joshi_store::StoreConfig, Wave5G0SourcePublicationError> {
+    let mut value = config(state)?;
+    value.inline_blob_max_bytes = 1024;
+    value.catalog_id = StableString::new("catalog-publication-test")?;
+    Ok(value)
 }
 
 fn memory_fixture(
@@ -897,6 +1269,10 @@ fn inject(
 #[derive(Debug, Error)]
 pub enum Wave5G0SourcePublicationError {
     #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Export(#[from] joshi_export::ExportError),
+    #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]
     Pump(#[from] joshi_pump_adapter::PumpAdapterError),
@@ -927,6 +1303,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn exact_source_and_publication_reopen_without_promoting_root_or_live() {
         let state = tempfile::tempdir().expect("temporary G0 component state");
         let report = run_wave5_g0_source_publication(state.path()).expect("G0 component witness");
@@ -937,6 +1314,7 @@ mod tests {
         assert!(report.source_semantics_closed);
         assert!(report.publication_prepare_body_head_closed);
         assert!(report.partial_memory_chain_closed);
+        assert!(report.baseline_export_import_closed);
         assert!(report.partial_status_closed);
         assert!(report.partial_backup_restore_closed);
         assert_eq!(report.memory_queue_through, 2);
@@ -963,6 +1341,25 @@ mod tests {
             .expect("status evidence");
         assert_eq!(status_evidence.evidence_id, report.status_record_id);
         assert_eq!(status_evidence.content_digest, report.status_record_digest);
+        let export_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::ExportManifest)
+            .expect("export evidence");
+        assert_eq!(
+            export_evidence.evidence_id,
+            report.baseline_export_binding_id
+        );
+        let import_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::ImportReceipt)
+            .expect("import evidence");
+        assert_eq!(import_evidence.evidence_id, report.baseline_import_id);
         let backup_evidence = report
             .partial_fault_result
             .evidence_bundle
@@ -983,7 +1380,7 @@ mod tests {
             restore_evidence.content_digest,
             report.restore_readback_digest
         );
-        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 13);
+        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 15);
         assert_eq!(
             report
                 .partial_fault_result
@@ -993,7 +1390,7 @@ mod tests {
                     value.disposition == joshi_g0_harness::StepDisposition::ObservedPartial
                 })
                 .count(),
-            13
+            15
         );
         assert!(
             !report

@@ -1502,7 +1502,7 @@ mod tests {
         let report = crate::wave5_g0::run_wave5_g0_source_publication(root.path()).unwrap();
         let publication_id =
             joshi_publication::CockpitPublicationId::new(report.publication_id).unwrap();
-        let config = crate::wave5_readiness::config(root.path()).unwrap();
+        let config = crate::wave5_g0::store_config(root.path()).unwrap();
         let store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
         let publication = store
             .load_cockpit_v2_publication_v1(&publication_id)
