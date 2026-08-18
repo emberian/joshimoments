@@ -132,7 +132,7 @@ impl SqliteStore {
     ///
     /// # Errors
     ///
-    /// Fails in read-only mode, on migration drift, after V10, or when `SQLite` rejects a migration.
+    /// Fails in read-only mode, on migration drift, after V9, or when `SQLite` rejects a migration.
     pub fn migrate_wave5_baseline_v9(
         &mut self,
         applied_at: UtcTimestamp,
@@ -142,6 +142,24 @@ impl SqliteStore {
             &mut self.connection,
             positive_timestamp_us(applied_at, "migration applied_at")?,
             9,
+        )
+    }
+
+    /// Applies the forward-only ledger through the frozen Wave 5 G0 V10 schema.
+    ///
+    /// This preserves reproducibility of the V10 Snapshot V2 contract after later Wave 6
+    /// migrations exist. It refuses a catalog that has already advanced beyond V10.
+    ///
+    /// # Errors
+    ///
+    /// Fails in read-only mode, on migration drift, after V10, or when `SQLite` rejects a
+    /// migration.
+    pub fn migrate_wave5_g0_v10(&mut self, applied_at: UtcTimestamp) -> Result<MigrationReport> {
+        self.require_writer()?;
+        migration::migrate_through(
+            &mut self.connection,
+            positive_timestamp_us(applied_at, "migration applied_at")?,
+            10,
         )
     }
 
@@ -4073,7 +4091,7 @@ mod tests {
         let report = store
             .migrate(time("2026-08-16T16:00:00.000000Z"))
             .expect("migrate test store");
-        assert_eq!(report.current, 10);
+        assert_eq!(report.current, 11);
         store
     }
 
@@ -4096,7 +4114,7 @@ mod tests {
         let json = serde_json::to_value(&accepted).expect("receipt JSON");
         assert_eq!(json["contract"], "joshi.store.ingest_receipt");
         assert_eq!(json["schemaVersion"], 1);
-        assert_eq!(json["catalogSchema"], "joshi.sqlite.v10");
+        assert_eq!(json["catalogSchema"], "joshi.sqlite.v11");
         assert_eq!(json["admitted"]["observations"], "0");
         assert!(json.get("storeAdmissionDigest").is_some());
 
@@ -4382,7 +4400,7 @@ mod tests {
         let receipt_json = serde_json::to_value(&receipt).expect("operator receipt JSON");
         assert_eq!(receipt_json["contract"], "joshi.store.command_receipt");
         assert_eq!(receipt_json["schemaVersion"], 1);
-        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v10");
+        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v11");
         assert_eq!(receipt_json["scene"]["sceneId"], "scene-golden-1");
         assert_eq!(receipt_json["scene"]["viewDigest"], view.digest().as_str());
         assert_eq!(

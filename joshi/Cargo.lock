@@ -1553,6 +1553,7 @@ dependencies = [
  "joshi-publication",
  "joshi-scientific-memory",
  "joshi-surface",
+ "joshi-wave6-registry",
  "rusqlite",
  "serde",
  "serde_json",

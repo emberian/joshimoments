@@ -59,6 +59,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0010_wave5_g0_store_spine.sql",
         sql: include_str!("../../../schema/migrations/0010_wave5_g0_store_spine.sql"),
     },
+    Migration {
+        id: 11,
+        name: "0011_wave6_program_registry.sql",
+        sql: include_str!("../../../schema/migrations/0011_wave6_program_registry.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -307,12 +312,17 @@ mod tests {
         assert_eq!(retry.current, 9);
         assert!(retry.applied.is_empty());
 
-        let current = migrate(&mut connection, 1_786_000_000_000_002).expect("advance to V10");
-        assert_eq!(current.current, 10);
-        assert_eq!(current.applied, vec![10]);
+        let g0 = migrate_through(&mut connection, 1_786_000_000_000_002, 10)
+            .expect("advance to frozen G0 V10");
+        assert_eq!(g0.current, 10);
+        assert_eq!(g0.applied, vec![10]);
 
-        let error = migrate_through(&mut connection, 1_786_000_000_000_003, 9)
-            .expect_err("baseline migration cannot downgrade V10");
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V11");
+        assert_eq!(current.current, 11);
+        assert_eq!(current.applied, vec![11]);
+
+        let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
+            .expect_err("G0 migration cannot downgrade V11");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
     }
 }

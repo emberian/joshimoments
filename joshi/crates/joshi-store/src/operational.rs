@@ -2071,7 +2071,7 @@ mod tests {
         assert_eq!(accepted.catalog_schema().as_str(), "joshi.sqlite.v9");
 
         let current = store
-            .migrate(
+            .migrate_wave5_g0_v10(
                 "2026-08-18T12:02:00.000000Z"
                     .parse()
                     .expect("V10 timestamp"),

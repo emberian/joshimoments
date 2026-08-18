@@ -1,7 +1,8 @@
 # Wave 6 authority and fixture registry
 
-Status: `N00/W6-0` authority/registry foundation implemented at
-`unverified_semantic_fixture_only`; no store-resolved program or Wave 6 operational release exists.
+Status: `N00/W6-0` authority/registry foundation and exact V11 store persistence implemented at
+`unverified_semantic_fixture_only`; no Wave 5 gate-resolved program or Wave 6 operational release
+exists.
 
 The implementation lives in
 [`crates/joshi-wave6-registry`](../../../crates/joshi-wave6-registry). Its checked-in exact
@@ -101,10 +102,17 @@ sensing, presentation, evidence collection, reveal, scoring, or execution.
 
 ## Authority boundary
 
-The crate has no dependency on `joshi-store` and defines no durable receipt, commit sequence,
-provider client, filesystem path, campaign runner, Glass hook, wallet, reservation, or execution
-API. Its validated wrappers expose their exact bytes and document digests but cannot upgrade their
-semantic ceiling.
+The registry crate has no dependency on `joshi-store` and defines no durable receipt, commit
+sequence, provider client, filesystem path, campaign runner, Glass hook, wallet, reservation, or
+execution API. Its validated wrappers expose their exact bytes and document digests but cannot
+upgrade their semantic ceiling.
+
+The one-way store adapter in `joshi-store` now persists and independently reparses the exact N00
+document under the V11 append-only table. Store commit order, commit time, batch identity, exact
+document bytes and both semantic/document digests survive read-only reopen. The adapter accepts
+only the checked contract shape with an empty Wave 5 gate set and zero provider/external-mutation
+budgets. This is durable storage of an unverified fixture contract, not resolution of the gates it
+deliberately omits. See [12_STORE_PROGRAM_REGISTRY.md](12_STORE_PROGRAM_REGISTRY.md).
 
 Per the Wave 6 master plan, a future sole-store adapter may be considered only after the exact
 external gates close. The current offline Wave 5 G0 component evidence does not satisfy `W5-G1`,
@@ -128,8 +136,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline \
 The honest current statement is:
 
 ```text
-Wave 6 has an exact fixture-only program registry, artifact-lineage validator,
-typed H0-H5 claim grammar, and append-only fixture disposition ledger.
-It has no store-resolved program, operational release, prospective campaign,
-live/product conclusion, or economic authority.
+Wave 6 has an exact, restart-safe fixture-only program registration,
+artifact-lineage validator, typed H0-H5 claim grammar, and append-only fixture
+disposition ledger. Its program has no resolved Wave 5 gates and therefore no
+operational release, prospective campaign, live/product conclusion, or economic authority.
 ```

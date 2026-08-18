@@ -13,6 +13,7 @@ mod operational;
 mod store;
 mod wave5;
 mod wave5_status;
+mod wave6;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
 pub use error::{Result, StoreError};
@@ -46,6 +47,7 @@ pub use wave5::{
     Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1, Wave5RunRegistrationByteBundle,
     Wave5SpoolCatalogBindingV1,
 };
+pub use wave6::{StoredWave6ProgramRegistration, Wave6ProgramRegistrationReceipt};
 
 /// `SQLite` application identifier (`JOSH` in ASCII).
 pub const APPLICATION_ID: i32 = 0x4a4f_5348;

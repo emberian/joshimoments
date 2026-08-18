@@ -271,7 +271,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "baseline ready status lost its exact export evidence",
         ));
     }
-    store.migrate(now()?)?;
+    store.migrate_wave5_g0_v10(now()?)?;
     let baseline_import_id = StableString::new(BASELINE_IMPORT_ID)?;
     let baseline_import =
         if let Some(import) = store.load_wave5_g0_import_occurrence_v1(&baseline_import_id)? {
