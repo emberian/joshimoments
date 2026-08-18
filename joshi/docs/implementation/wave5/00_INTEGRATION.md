@@ -137,13 +137,17 @@ prepare/body/head for one exact offline fixture and reports their artifact ident
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
 then binds its receipt to the run before the supervisor spool records the ACK. The full crash
-matrix, default product mount, complete memory closure, export/import, status and backup/restore
-remain outside that component.
+matrix, default product mount, complete memory closure, export/import, positive status recovery and
+backup/restore remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
 interview memory closure remains outside it. This component exercises the canonical Pump policy
 bytes without network I/O. The supervisor's separate generic synthetic adapter still uses the
 fixture-only `joshi.store.policy.v1` contract and does not qualify production circulation.
+After the memory prefix, the component also persists and reopens one exact same-run `export_stale`
+degradation. It first resolves the store-derived run-registration and spool-catalog progress rows,
+then records the negative operational fact after the episode commit. This proves a durable degraded
+status only; it neither records `Ready` nor claims recovery, export completion, or root readiness.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
@@ -151,9 +155,9 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 `Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
 recorded as Glass use or as a completed root occurrence.
 
-The component report now embeds a strict G0 V1 partial fault result. Ten baseline artifacts are
+The component report now embeds a strict G0 V1 partial fault result. Eleven baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
-prepare, head, act, and episode), and each maps one-to-one to `observed_partial`. The provider plan
+prepare, head, act, episode, and status), and each maps one-to-one to `observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
 fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second
 segment is generated. The remaining roles and full 37-scenario matrix are absent, and both the embedded and outer

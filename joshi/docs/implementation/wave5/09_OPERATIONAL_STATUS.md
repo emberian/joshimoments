@@ -1,7 +1,8 @@
 # Wave 5 I6 — durable operational status
 
 Status: pure adapters, bounded query models, and append-only degradation/recovery journal complete;
-route mounting and store integration remain owned by the integrator.
+one exact G0 degraded occurrence is store-integrated, while route mounting and positive
+Ready/recovery qualification remain open.
 
 Owned paths:
 
@@ -85,6 +86,13 @@ This crate requests shared occurrence, run, catalog commit, and artifact IDs fro
 publication owners; it creates no parallel identity authority. Health/status adapters must not write
 SQLite, call a provider, ACK a spool, advance a cursor, mount publication, import artifacts, or
 promote readiness.
+
+The offline `wave5-g0-source-publication` component now exercises the narrow negative half of this
+boundary. It loads the store-derived run-registration and spool-catalog progress rows, persists one
+same-run `export_stale` degradation after the partial memory episode, and requires the exact record
+and progress view to survive read-only reopen. The status record itself does not self-author a
+recovery evidence receipt. This is deliberately a durable degraded fact: no `Ready`, recovered,
+export-complete, live, or root qualification follows from it.
 
 The authenticated query seam is represented by `OperationalStatusQueryV1` and
 `OperationalStatusQueryResultV1`. `decode_query_result_v1` enforces the requested page size, the

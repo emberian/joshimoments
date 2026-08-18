@@ -21,7 +21,10 @@ use joshi_scientific_memory::{
     PresentationGapReason, SceneBinding, SceneId, SceneRef, SegmentId, SessionId,
 };
 use joshi_spool::SpoolConfig;
-use joshi_store::{IdempotencyStatus, SqliteStore, StoreMode};
+use joshi_store::{
+    IdempotencyStatus, SqliteStore, StoreMode, Wave5OperationalRecordKind,
+    Wave5OperationalRecordV1, Wave5OperationalState,
+};
 use joshi_supervisor::{
     CollectorRuntime, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
     SyntheticRuntimeOutcomeAdapter, synthetic_c0_json_runner,
@@ -56,6 +59,8 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterMemoryAct,
     BeforeMemoryEpisode,
     AfterMemoryEpisode,
+    BeforeStatus,
+    AfterStatus,
 }
 
 /// Exact component evidence. Every positive field is reverified after a read-only reopen.
@@ -93,12 +98,16 @@ pub struct Wave5G0SourcePublicationReport {
     pub memory_episode_id: String,
     pub memory_episode_digest: String,
     pub memory_queue_through: u64,
+    pub status_record_id: String,
+    pub status_record_digest: String,
+    pub store_progress_count: usize,
     pub partial_fault_result: G0Result,
     pub source_semantics_closed: bool,
     pub supervisor_reservation_closed: bool,
     pub supervisor_origin_handoff_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
+    pub partial_status_closed: bool,
     pub restart_reverified: bool,
     pub full_offline_fault_walk: bool,
     pub provider_io: bool,
@@ -412,6 +421,59 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "memory act/episode commit or queue order is not strict",
         ));
     }
+    let store_status_view = store.load_wave5_store_status_view_v1(&run_id)?;
+    if store_status_view.durable_progress.len() < 2
+        || !store_status_view
+            .durable_progress
+            .iter()
+            .any(|value| value.progress_id.as_str().starts_with("run:"))
+        || !store_status_view
+            .durable_progress
+            .iter()
+            .any(|value| value.progress_id.as_str().starts_with("spool_catalog:"))
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "store status view omitted the run or spool/catalog progress",
+        ));
+    }
+    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeStatus)?;
+    let status_record = Wave5OperationalRecordV1 {
+        contract: "joshi.wave5.operational_record.v1".into(),
+        schema_version: 1,
+        record_id: "status:wave5-g0-export-stale-0001".into(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: registration_receipt.exact_document_digest.to_string(),
+        component: "export".into(),
+        kind: Wave5OperationalRecordKind::Degradation,
+        state: Wave5OperationalState::Degraded,
+        cause: Some("export_stale".into()),
+        predecessor_record_id: None,
+        evidence_commit_seq: None,
+        observed_at: committed_at,
+        detail_digest: None,
+        authority: AUTHORITY.into(),
+    };
+    let status_bytes = serde_json::to_vec(&status_record)?;
+    let status_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:source-publication:status")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let status_receipt =
+        store.commit_wave5_operational_record_v1(&status_bytes, &status_context)?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterStatus)?;
+    let status_id = StableString::new(status_record.record_id.clone())?;
+    let status = store
+        .load_wave5_g0_status_occurrence_v1(&status_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "degraded status occurrence was absent immediately after commit",
+        ))?;
+    if episode.commit_seq >= status.available_commit_seq
+        || status_receipt.commit_seq != status.available_commit_seq
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "degraded status does not strictly follow the memory prefix",
+        ));
+    }
     drop(store);
 
     let reopened = SqliteStore::open(config(state)?, StoreMode::ReadOnly)?;
@@ -446,12 +508,20 @@ pub fn run_wave5_g0_source_publication_with_fault(
         .ok_or(Wave5G0SourcePublicationError::Invariant(
             "memory episode was absent after restart",
         ))?;
+    let reopened_status = reopened
+        .load_wave5_g0_status_occurrence_v1(&status_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "degraded status occurrence was absent after restart",
+        ))?;
+    let reopened_store_status_view = reopened.load_wave5_store_status_view_v1(&run_id)?;
     if reopened_source != source
         || reopened_preparation != preparation
         || reopened_publication != publication
         || reopened_head != head
         || reopened_act != act
         || reopened_episode != episode
+        || reopened_status != status
+        || reopened_store_status_view != store_status_view
     {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "restart changed source/publication exact truth",
@@ -473,6 +543,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         act_receipt.occurrence_digest(),
         episode_receipt.occurrence_id(),
         episode_receipt.occurrence_digest(),
+        &status,
     )?;
 
     Ok(Wave5G0SourcePublicationReport {
@@ -506,12 +577,16 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_episode_id: episode_receipt.occurrence_id().to_string(),
         memory_episode_digest: episode_receipt.occurrence_digest().to_string(),
         memory_queue_through: episode_receipt.queue_generation(),
+        status_record_id: status.record_id.to_string(),
+        status_record_digest: status.record_bytes_digest.to_string(),
+        store_progress_count: store_status_view.durable_progress.len(),
         partial_fault_result,
         source_semantics_closed: true,
         supervisor_reservation_closed: true,
         supervisor_origin_handoff_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
+        partial_status_closed: true,
         restart_reverified: true,
         full_offline_fault_walk: false,
         provider_io: false,
@@ -536,6 +611,7 @@ fn partial_fault_result(
     act_digest: &joshi_domain::ValueDigest,
     episode_id: &StableString,
     episode_digest: &joshi_domain::ValueDigest,
+    status: &joshi_store::Wave5G0StatusOccurrence,
 ) -> Result<G0Result, Wave5G0SourcePublicationError> {
     let schedule: FakeFaultSchedule = serde_json::from_slice(include_bytes!(
         "../../../fixtures/g0-fault/fake_fault_schedule.json"
@@ -609,6 +685,11 @@ fn partial_fault_result(
                 role: EvidenceRole::MemoryEpisode,
                 evidence_id: episode_id.to_string(),
                 content_digest: episode_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::StatusReadback,
+                evidence_id: status.record_id.to_string(),
+                content_digest: status.record_bytes_digest.to_string(),
             },
         ],
         digest: String::new(),
@@ -755,7 +836,9 @@ mod tests {
         assert!(report.source_semantics_closed);
         assert!(report.publication_prepare_body_head_closed);
         assert!(report.partial_memory_chain_closed);
+        assert!(report.partial_status_closed);
         assert_eq!(report.memory_queue_through, 2);
+        assert!(report.store_progress_count >= 2);
         assert!(report.supervisor_reservation_closed);
         assert!(report.supervisor_origin_handoff_closed);
         assert!(report.origin_segment_id.starts_with("segment-attempt-"));
@@ -768,7 +851,16 @@ mod tests {
             .expect("origin evidence");
         assert_eq!(origin_evidence.evidence_id, report.origin_segment_id);
         assert_eq!(origin_evidence.content_digest, report.origin_segment_digest);
-        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 10);
+        let status_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::StatusReadback)
+            .expect("status evidence");
+        assert_eq!(status_evidence.evidence_id, report.status_record_id);
+        assert_eq!(status_evidence.content_digest, report.status_record_digest);
+        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 11);
         assert_eq!(
             report
                 .partial_fault_result
@@ -778,7 +870,7 @@ mod tests {
                     value.disposition == joshi_g0_harness::StepDisposition::ObservedPartial
                 })
                 .count(),
-            10
+            11
         );
         assert!(
             !report
@@ -811,6 +903,8 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterMemoryAct,
             Wave5G0SourcePublicationFaultPoint::BeforeMemoryEpisode,
             Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
+            Wave5G0SourcePublicationFaultPoint::BeforeStatus,
+            Wave5G0SourcePublicationFaultPoint::AfterStatus,
         ];
         for point in points {
             let state = tempfile::tempdir().expect("temporary G0 fault state");
