@@ -22,6 +22,8 @@ const PROTOCOL_TRUTH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json");
 const RESEARCH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json");
+const STRUCTURAL_TRUTH_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json");
 
 fn fixture() -> Wave6ProgramRegistrationV1 {
     serde_json::from_slice(FIXTURE).expect("checked-in registration fixture")
@@ -203,7 +205,7 @@ fn exact_fixture_roundtrips_at_unverified_ceiling() {
         SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     );
     assert_eq!(parsed.value().consumed_wave5_gates.len(), 0);
-    assert_eq!(parsed.value().artifact_kinds.len(), 5);
+    assert_eq!(parsed.value().artifact_kinds.len(), 6);
     assert_eq!(
         parsed.value().artifact_kinds[0].schema_digest,
         digest_bytes(CAMPAIGN_SCHEMA).expect("campaign schema digest")
@@ -223,6 +225,10 @@ fn exact_fixture_roundtrips_at_unverified_ceiling() {
     assert_eq!(
         parsed.value().artifact_kinds[4].schema_digest,
         digest_bytes(RESEARCH_SCHEMA).expect("research schema digest")
+    );
+    assert_eq!(
+        parsed.value().artifact_kinds[5].schema_digest,
+        digest_bytes(STRUCTURAL_TRUTH_SCHEMA).expect("structural-truth schema digest")
     );
     assert_eq!(parsed.value().budgets.provider_units, WireU64::new(0));
 }

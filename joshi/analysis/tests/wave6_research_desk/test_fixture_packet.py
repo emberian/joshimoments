@@ -22,8 +22,10 @@ KNOWN_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/known_truth_evaluation_v1.js
 MARKET_SCHEMA = ROOT / "fixtures/wave6/schemas/market_atlas_snapshot_v1.json"
 PROTOCOL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
 RESEARCH_SCHEMA = ROOT / "fixtures/wave6/schemas/research_proposal_v1.json"
+STRUCTURAL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
 PUMP_FIXTURE = ROOT / "fixtures/protocol/pump_quotes.json"
 DLMM_FIXTURE = ROOT / "fixtures/protocol/dlmm.json"
+STRUCTURAL_FIXTURE = ROOT / "fixtures/wave6/structural_known_truth_v1.json"
 
 
 def _schemas() -> dict[str, bytes]:
@@ -33,6 +35,7 @@ def _schemas() -> dict[str, bytes]:
         "market_atlas_fixture": MARKET_SCHEMA.read_bytes(),
         "protocol_known_truth_evaluation_fixture": PROTOCOL_TRUTH_SCHEMA.read_bytes(),
         "research_proposal_fixture": RESEARCH_SCHEMA.read_bytes(),
+        "structural_known_truth_evaluation_fixture": STRUCTURAL_TRUTH_SCHEMA.read_bytes(),
     }
 
 
@@ -42,11 +45,17 @@ def _build_packet():
         _schemas(),
         PUMP_FIXTURE.read_bytes(),
         DLMM_FIXTURE.read_bytes(),
+        STRUCTURAL_FIXTURE.read_bytes(),
     )
 
 
 def _validate_packet(packet) -> None:
-    packet.validate(_schemas(), PUMP_FIXTURE.read_bytes(), DLMM_FIXTURE.read_bytes())
+    packet.validate(
+        _schemas(),
+        PUMP_FIXTURE.read_bytes(),
+        DLMM_FIXTURE.read_bytes(),
+        STRUCTURAL_FIXTURE.read_bytes(),
+    )
 
 
 def test_registered_schema_bytes_are_exact_and_packet_is_deterministic() -> None:
@@ -62,12 +71,23 @@ def test_registered_schema_bytes_are_exact_and_packet_is_deterministic() -> None
     assert not first.executable
     assert len(first.known_truth_evaluation.passed_case_ids) == 8
     assert len(first.protocol_known_truth_evaluation.passed_case_ids) == 7
-    assert first.proposal.artifact_descriptors[0].provenance_digest == (
-        first.known_truth_evaluation.evaluation_digest
+    assert len(first.structural_known_truth_evaluation.passed_case_ids) == 3
+    assert tuple(
+        descriptor.provenance_digest for descriptor in first.proposal.artifact_descriptors
+    ) == (
+        first.known_truth_evaluation.evaluation_digest,
+        first.protocol_known_truth_evaluation.evaluation_digest,
+        first.structural_known_truth_evaluation.evaluation_digest,
     )
-    packet = first.as_dict(_schemas(), PUMP_FIXTURE.read_bytes(), DLMM_FIXTURE.read_bytes())
+    packet = first.as_dict(
+        _schemas(),
+        PUMP_FIXTURE.read_bytes(),
+        DLMM_FIXTURE.read_bytes(),
+        STRUCTURAL_FIXTURE.read_bytes(),
+    )
     assert packet["claim_scope"].endswith("not_result_release_or_live_decision")
     assert packet["proposal"]["specification"]["experiments"][0]["query_count"] == 0
+    assert len(packet["proposal"]["specification"]["counterexamples"]) == 18
 
 
 def test_python_independently_reparses_rust_registration_and_schema_closure() -> None:
@@ -122,12 +142,38 @@ def test_packet_refuses_protocol_fixture_or_evaluation_substitution() -> None:
         evaluation_digest="sha256:" + "2" * 64,
     )
     with pytest.raises(ManifestError, match="protocol known-truth closure"):
-        _validate_packet(
-            replace(packet, protocol_known_truth_evaluation=changed_protocol)
-        )
+        _validate_packet(replace(packet, protocol_known_truth_evaluation=changed_protocol))
 
     changed_pump = PUMP_FIXTURE.read_bytes().replace(
         b'"raw_quote_atoms": "501"', b'"raw_quote_atoms": "500"', 1
     )
     with pytest.raises(ManifestError, match="frozen N01 digest"):
-        packet.validate(_schemas(), changed_pump, DLMM_FIXTURE.read_bytes())
+        packet.validate(
+            _schemas(),
+            changed_pump,
+            DLMM_FIXTURE.read_bytes(),
+            STRUCTURAL_FIXTURE.read_bytes(),
+        )
+
+
+def test_packet_refuses_structural_fixture_or_evaluation_substitution() -> None:
+    packet = _build_packet()
+    changed_evaluation = replace(
+        packet.structural_known_truth_evaluation,
+        evaluation_digest="sha256:" + "3" * 64,
+    )
+    with pytest.raises(ManifestError, match="structural known-truth closure"):
+        _validate_packet(replace(packet, structural_known_truth_evaluation=changed_evaluation))
+
+    changed_fixture = STRUCTURAL_FIXTURE.read_bytes().replace(
+        b'"spliced_delta_quote_atoms":"70"',
+        b'"spliced_delta_quote_atoms":"71"',
+        1,
+    )
+    with pytest.raises(ManifestError, match="frozen N01 digest"):
+        packet.validate(
+            _schemas(),
+            PUMP_FIXTURE.read_bytes(),
+            DLMM_FIXTURE.read_bytes(),
+            changed_fixture,
+        )

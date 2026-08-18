@@ -20,10 +20,15 @@ from ..wave6_known_truth import (
     ProtocolBatteryEvaluation,
     ProtocolCandidateResult,
     ProtocolKnownTruthBattery,
+    StructuralBatteryEvaluation,
+    StructuralCandidateResult,
+    StructuralKnownTruthBattery,
     build_protocol_known_truth_battery,
     build_signed_flow_known_truth_suite,
+    build_structural_known_truth_battery,
     evaluate_candidate_suite,
     evaluate_protocol_candidate,
+    evaluate_structural_candidate,
 )
 from ..wave6_known_truth.lab import derive_truth
 from .contracts import (
@@ -54,6 +59,8 @@ KNOWN_TRUTH_KIND_ID = "known_truth_evaluation_fixture"
 KNOWN_TRUTH_SCHEMA_ID = "joshi.analysis.wave6-known-truth/v1"
 PROTOCOL_TRUTH_KIND_ID = "protocol_known_truth_evaluation_fixture"
 PROTOCOL_TRUTH_SCHEMA_ID = "joshi.analysis.wave6-protocol-known-truth/v1"
+STRUCTURAL_TRUTH_KIND_ID = "structural_known_truth_evaluation_fixture"
+STRUCTURAL_TRUTH_SCHEMA_ID = "joshi.analysis.wave6-structural-known-truth/v1"
 
 _TOP_LEVEL_KEYS = (
     "contract",
@@ -153,6 +160,12 @@ _EXPECTED_ARTIFACT_KIND_BOUNDARIES = {
         "h5_policy",
         "non_executable_research_design_proposal",
         "study_result_or_policy_value",
+    ),
+    "structural_known_truth_evaluation_fixture": (
+        STRUCTURAL_TRUTH_SCHEMA_ID,
+        "h1_protocol_kinematics",
+        "fixture_structural_transition_or_ambiguity",
+        "identity_market_causal_or_economic_claim",
     ),
 }
 _RESEARCH_SCHEMA_DESCRIPTOR = {
@@ -417,12 +430,27 @@ def _protocol_known_truth_evaluation(
     )
 
 
+def _structural_known_truth_evaluation(
+    structural_fixture_bytes: bytes,
+) -> tuple[StructuralKnownTruthBattery, StructuralBatteryEvaluation]:
+    battery = build_structural_known_truth_battery(structural_fixture_bytes)
+    results = tuple(StructuralCandidateResult.build(case) for case in battery.cases)
+    return battery, evaluate_structural_candidate(
+        battery, "candidate:python-structural-exact-reference", results
+    )
+
+
 def _proposal(
     suite: KnownTruthSuite,
     evaluation: KnownTruthEvaluation,
     protocol_battery: ProtocolKnownTruthBattery,
     protocol_evaluation: ProtocolBatteryEvaluation,
-) -> tuple[ResearchProposal, tuple[ArtifactDescriptor, ArtifactDescriptor]]:
+    structural_battery: StructuralKnownTruthBattery,
+    structural_evaluation: StructuralBatteryEvaluation,
+) -> tuple[
+    ResearchProposal,
+    tuple[ArtifactDescriptor, ArtifactDescriptor, ArtifactDescriptor],
+]:
     t0 = datetime(2026, 8, 18, tzinfo=UTC)
     artifact_id = f"known-truth-evaluation-{evaluation.evaluation_digest[7:39]}"
     known_truth_descriptor = ArtifactDescriptor(
@@ -456,7 +484,24 @@ def _proposal(
         "known-truth-suite",
         "n01-fixture-battery-v2",
     )
-    descriptors = (known_truth_descriptor, protocol_descriptor)
+    structural_artifact_id = (
+        f"structural-truth-evaluation-{structural_evaluation.evaluation_digest[7:39]}"
+    )
+    structural_descriptor = ArtifactDescriptor(
+        structural_artifact_id,
+        ArtifactRole.DESIGN,
+        t0 + timedelta(minutes=7),
+        t0 + timedelta(minutes=10),
+        12,
+        structural_evaluation.evaluation_digest,
+        CoverageStatus.COMPLETE,
+        1_000_000,
+        (),
+        "fixture_case_fraction_ppm",
+        "known-truth-suite",
+        "n01-fixture-battery-v2",
+    )
+    descriptors = (known_truth_descriptor, protocol_descriptor, structural_descriptor)
     policy = DeskPolicy(
         "desk-policy-known-truth-fixture-v1",
         t0 + timedelta(minutes=11),
@@ -465,10 +510,10 @@ def _proposal(
         "fixture_case_fraction_ppm",
         "known-truth-suite",
         "n01-fixture-battery-v2",
-        2,
+        3,
         1,
-        2,
-        2,
+        3,
+        3,
     )
     specification = ProposalSpec(
         ProposalKind.EXPERIMENT_MANIFEST,
@@ -477,11 +522,11 @@ def _proposal(
             "a separately implemented candidate either reproduces every frozen fixture "
             "disposition or is refused"
         ),
-        (artifact_id, protocol_artifact_id),
+        (artifact_id, protocol_artifact_id, structural_artifact_id),
         Estimand(
             "fixture-recovery-fraction",
             "exactly reproduced frozen case dispositions",
-            "fifteen preregistered generic and protocol adversary cases",
+            "eighteen preregistered generic, protocol, and structural adversary cases",
             "fixture_recovery_fraction",
             "fixture_case_fraction_ppm",
         ),
@@ -495,17 +540,18 @@ def _proposal(
         (
             Feature(
                 "adversary-family",
-                "one of the fifteen frozen generic or protocol recovery/refusal families",
+                (
+                    "one of the eighteen frozen generic, protocol, or structural "
+                    "recovery/refusal families"
+                ),
                 "categorical_case_family",
             ),
         ),
         tuple(
             sorted(
                 [f"counterexample:{case.adversary.value}" for case in suite.cases]
-                + [
-                    f"counterexample:{case.adversary.value}"
-                    for case in protocol_battery.cases
-                ]
+                + [f"counterexample:{case.adversary.value}" for case in protocol_battery.cases]
+                + [f"counterexample:{case.adversary.value}" for case in structural_battery.cases]
             )
         ),
         (
@@ -513,7 +559,8 @@ def _proposal(
                 "any-case-mismatch",
                 (
                     "candidate changes a disposition, exact value, compatible set, refusal, "
-                    "cut, evidence membership, protocol arithmetic, or capacity boundary"
+                    "cut, evidence membership, protocol arithmetic, migration splice, "
+                    "same-slot order set, or identity revision boundary"
                 ),
                 "reject the candidate for this registered fixture suite",
             ),
@@ -522,8 +569,8 @@ def _proposal(
             ExperimentManifest(
                 "offline-candidate-comparison",
                 "compare immutable candidate bytes without query or execution",
-                (artifact_id, protocol_artifact_id),
-                2,
+                (artifact_id, protocol_artifact_id, structural_artifact_id),
+                3,
             ),
         ),
     )
@@ -548,6 +595,8 @@ class FixtureResearchPacket:
     known_truth_evaluation: KnownTruthEvaluation
     protocol_known_truth_battery: ProtocolKnownTruthBattery
     protocol_known_truth_evaluation: ProtocolBatteryEvaluation
+    structural_known_truth_battery: StructuralKnownTruthBattery
+    structural_known_truth_evaluation: StructuralBatteryEvaluation
     proposal: ResearchProposal
     status: str = "protocol_draft"
     authority: str = FIXTURE_PACKET_AUTHORITY
@@ -569,6 +618,11 @@ class FixtureResearchPacket:
             "protocol_known_truth_evaluation_digest": (
                 self.protocol_known_truth_evaluation.evaluation_digest
             ),
+            "structural_known_truth_suite_id": self.structural_known_truth_battery.suite_id,
+            "structural_known_truth_suite_digest": self.structural_known_truth_battery.suite_digest,
+            "structural_known_truth_evaluation_digest": (
+                self.structural_known_truth_evaluation.evaluation_digest
+            ),
             "proposal": self.proposal.as_dict(),
             "status": self.status,
             "authority": self.authority,
@@ -582,6 +636,7 @@ class FixtureResearchPacket:
         schema_bytes_by_kind: dict[str, bytes],
         pump_fixture_bytes: bytes,
         dlmm_fixture_bytes: bytes,
+        structural_fixture_bytes: bytes,
     ) -> None:
         registration = parse_fixture_program_registration_exact(
             self.registration.exact_bytes, schema_bytes_by_kind
@@ -592,10 +647,11 @@ class FixtureResearchPacket:
         if research_kind["schemaId"] != RESEARCH_SCHEMA_ID:
             raise ManifestError("research proposal kind does not match the registered schema")
         if (
-            registration.artifact_kind(KNOWN_TRUTH_KIND_ID)["schemaId"]
-            != KNOWN_TRUTH_SCHEMA_ID
+            registration.artifact_kind(KNOWN_TRUTH_KIND_ID)["schemaId"] != KNOWN_TRUTH_SCHEMA_ID
             or registration.artifact_kind(PROTOCOL_TRUTH_KIND_ID)["schemaId"]
             != PROTOCOL_TRUTH_SCHEMA_ID
+            or registration.artifact_kind(STRUCTURAL_TRUTH_KIND_ID)["schemaId"]
+            != STRUCTURAL_TRUTH_SCHEMA_ID
         ):
             raise ManifestError("N01 evaluation kind does not match the registered schema")
         suite, evaluation = _known_truth_evaluation()
@@ -611,8 +667,23 @@ class FixtureResearchPacket:
             raise ManifestError(
                 "packet protocol known-truth closure is not the deterministic N01 fixture"
             )
+        structural_battery, structural_evaluation = _structural_known_truth_evaluation(
+            structural_fixture_bytes
+        )
+        if (
+            structural_battery != self.structural_known_truth_battery
+            or structural_evaluation != self.structural_known_truth_evaluation
+        ):
+            raise ManifestError(
+                "packet structural known-truth closure is not the deterministic N01 fixture"
+            )
         expected_proposal, expected_descriptors = _proposal(
-            suite, evaluation, protocol_battery, protocol_evaluation
+            suite,
+            evaluation,
+            protocol_battery,
+            protocol_evaluation,
+            structural_battery,
+            structural_evaluation,
         )
         self.proposal.validate()
         if (
@@ -640,8 +711,14 @@ class FixtureResearchPacket:
         schema_bytes_by_kind: dict[str, bytes],
         pump_fixture_bytes: bytes,
         dlmm_fixture_bytes: bytes,
+        structural_fixture_bytes: bytes,
     ) -> dict[str, Any]:
-        self.validate(schema_bytes_by_kind, pump_fixture_bytes, dlmm_fixture_bytes)
+        self.validate(
+            schema_bytes_by_kind,
+            pump_fixture_bytes,
+            dlmm_fixture_bytes,
+            structural_fixture_bytes,
+        )
         return {
             "packet_id": self.packet_id,
             "packet_digest": self.packet_digest,
@@ -654,6 +731,7 @@ def build_fixture_research_packet(
     schema_bytes_by_kind: dict[str, bytes],
     pump_fixture_bytes: bytes,
     dlmm_fixture_bytes: bytes,
+    structural_fixture_bytes: bytes,
 ) -> FixtureResearchPacket:
     """Build one deterministic no-query N00/N01-bound research protocol draft."""
 
@@ -664,7 +742,17 @@ def build_fixture_research_packet(
     protocol_battery, protocol_evaluation = _protocol_known_truth_evaluation(
         pump_fixture_bytes, dlmm_fixture_bytes
     )
-    proposal, _ = _proposal(suite, evaluation, protocol_battery, protocol_evaluation)
+    structural_battery, structural_evaluation = _structural_known_truth_evaluation(
+        structural_fixture_bytes
+    )
+    proposal, _ = _proposal(
+        suite,
+        evaluation,
+        protocol_battery,
+        protocol_evaluation,
+        structural_battery,
+        structural_evaluation,
+    )
     provisional = FixtureResearchPacket(
         "fixture-research-packet-pending",
         "sha256:" + "0" * 64,
@@ -673,6 +761,8 @@ def build_fixture_research_packet(
         evaluation,
         protocol_battery,
         protocol_evaluation,
+        structural_battery,
+        structural_evaluation,
         proposal,
     )
     digest = qualified_sha256_bytes(canonical_json_bytes(provisional.content()))
@@ -684,7 +774,14 @@ def build_fixture_research_packet(
         evaluation,
         protocol_battery,
         protocol_evaluation,
+        structural_battery,
+        structural_evaluation,
         proposal,
     )
-    packet.validate(schema_bytes_by_kind, pump_fixture_bytes, dlmm_fixture_bytes)
+    packet.validate(
+        schema_bytes_by_kind,
+        pump_fixture_bytes,
+        dlmm_fixture_bytes,
+        structural_fixture_bytes,
+    )
     return packet
