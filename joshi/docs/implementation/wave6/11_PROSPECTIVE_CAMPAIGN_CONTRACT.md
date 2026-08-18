@@ -9,6 +9,9 @@ The Rust contract lives in
 [`crates/joshi-wave6-campaign`](../../../crates/joshi-wave6-campaign). N00 registers its checked
 schema bytes at
 [`fixtures/wave6/schemas/campaign_registration_v1.json`](../../../fixtures/wave6/schemas/campaign_registration_v1.json).
+The deterministic five-document chain is now checked in under
+[`fixtures/wave6/campaign`](../../../fixtures/wave6/campaign) and cross-parsed byte-for-byte by the
+crate; repository presence still grants no durable or prospective authority.
 
 ## Exact N00 boundary
 
@@ -105,7 +108,7 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline \
   -p joshi-wave6-campaign --no-deps
 ```
 
-Current focused result: 11 tests pass. The honest statement is:
+Current focused result: 12 tests pass. The honest statement is:
 
 ```text
 Wave 6 has an exact, caller-fed, fixture-only prospective campaign protocol.

@@ -19,6 +19,15 @@ use crate::{
 
 const PROGRAM_FIXTURE: &[u8] =
     include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
+const CAMPAIGN_REGISTRATION_FIXTURE: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/registration_v1.json");
+const ENROLLMENT_FIXTURE: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/enrollment_v1.json");
+const ASSIGNMENT_FIXTURE: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/assignment_v1.json");
+const SEAL_FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/campaign/seal_v1.json");
+const ADJUDICATION_FIXTURE: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/adjudication_v1.json");
 
 fn stable(value: &str) -> StableString {
     StableString::new(value).expect("stable string")
@@ -429,6 +438,93 @@ fn exact_registration_and_enrollment_roundtrip_at_fixture_ceiling() {
             .count(),
         2
     );
+}
+
+#[test]
+fn checked_campaign_chain_exactly_matches_the_fixture_builders() {
+    let program = program();
+    let built_registration = registration();
+    assert_eq!(
+        canonical_bytes(&built_registration).expect("registration bytes"),
+        CAMPAIGN_REGISTRATION_FIXTURE
+    );
+    let parsed_registration =
+        parse_campaign_registration_exact(CAMPAIGN_REGISTRATION_FIXTURE, &program)
+            .expect("checked registration");
+    let built_enrollment = enrollment(parsed_registration.value());
+    assert_eq!(
+        canonical_bytes(&built_enrollment).expect("enrollment bytes"),
+        ENROLLMENT_FIXTURE
+    );
+    let parsed_enrollment = parse_frozen_enrollment_exact(ENROLLMENT_FIXTURE, &parsed_registration)
+        .expect("checked enrollment");
+    let built_assignment = assignment(parsed_registration.value(), parsed_enrollment.value());
+    assert_eq!(
+        canonical_bytes(&built_assignment).expect("assignment bytes"),
+        ASSIGNMENT_FIXTURE
+    );
+    let parsed_assignment = parse_campaign_assignment_exact(
+        ASSIGNMENT_FIXTURE,
+        &parsed_registration,
+        &parsed_enrollment,
+    )
+    .expect("checked assignment");
+    let built_seal = seal(
+        parsed_registration.value(),
+        parsed_enrollment.value(),
+        parsed_assignment.value(),
+    );
+    assert_eq!(
+        canonical_bytes(&built_seal).expect("seal bytes"),
+        SEAL_FIXTURE
+    );
+    let parsed_seal = parse_campaign_seal_exact(
+        SEAL_FIXTURE,
+        &parsed_registration,
+        &parsed_enrollment,
+        &parsed_assignment,
+    )
+    .expect("checked seal");
+    let built_adjudication = adjudication(
+        parsed_registration.value(),
+        parsed_enrollment.value(),
+        parsed_seal.value(),
+    );
+    assert_eq!(
+        canonical_bytes(&built_adjudication).expect("adjudication bytes"),
+        ADJUDICATION_FIXTURE
+    );
+    let parsed_adjudication = parse_campaign_adjudication_exact(
+        ADJUDICATION_FIXTURE,
+        &parsed_registration,
+        &parsed_enrollment,
+        &parsed_seal,
+    )
+    .expect("checked adjudication");
+    for (parsed, expected) in [
+        (
+            parsed_registration.document_digest().as_str(),
+            "sha256:031aaf113ba5f9040c5a93a7676d270d560ee9292e4b4999fcc9794f77eda758",
+        ),
+        (
+            parsed_enrollment.document_digest().as_str(),
+            "sha256:9148f4f55b50547522e51630f4adac9ea87fa56de108673daa5c94d76957d328",
+        ),
+        (
+            parsed_assignment.document_digest().as_str(),
+            "sha256:83531d5e40452fe6ef66f178f53282cbaf245e3a4fa740671d5449487ebe5f11",
+        ),
+        (
+            parsed_seal.document_digest().as_str(),
+            "sha256:350aa570de39c56b60ad1a4561f7cbfcb25f87794e2ca63c0f7c9fa03771dabe",
+        ),
+        (
+            parsed_adjudication.document_digest().as_str(),
+            "sha256:6f4f10f7f6329e350d65ce1af13ffa2521f2496973bcf8ed6b56adc0c49f220b",
+        ),
+    ] {
+        assert_eq!(parsed, expected);
+    }
 }
 
 #[test]
