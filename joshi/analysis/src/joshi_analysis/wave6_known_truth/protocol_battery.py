@@ -427,10 +427,89 @@ class ProtocolCandidateResult:
 class ProtocolBatteryEvaluation:
     suite_id: str
     suite_digest: str
+    pump_fixture_digest: str
+    dlmm_fixture_digest: str
     candidate_id: str
     passed_case_ids: tuple[str, ...]
+    result_digests: tuple[str, ...]
     evaluation_digest: str
     authority: str = PROTOCOL_BATTERY_AUTHORITY
+
+    def __post_init__(self) -> None:
+        _stable(self.suite_id, "protocol evaluation suite_id")
+        _stable(self.candidate_id, "protocol evaluation candidate_id")
+        if self.passed_case_ids != tuple(sorted(set(self.passed_case_ids))) or not (
+            self.passed_case_ids
+        ):
+            raise ManifestError("protocol passed case IDs must be sorted, unique, and nonempty")
+        for case_id in self.passed_case_ids:
+            _stable(case_id, "protocol passed case ID")
+        if len(self.result_digests) != len(self.passed_case_ids):
+            raise ManifestError("protocol evaluation must bind one result digest per passed case")
+        for field, digest in (
+            ("protocol suite digest", self.suite_digest),
+            ("protocol Pump fixture digest", self.pump_fixture_digest),
+            ("protocol DLMM fixture digest", self.dlmm_fixture_digest),
+            ("protocol evaluation digest", self.evaluation_digest),
+        ):
+            _qualified_digest(digest, field)
+        for digest in self.result_digests:
+            _qualified_digest(digest, "protocol result digest")
+        if (
+            self.pump_fixture_digest != PUMP_FIXTURE_DIGEST
+            or self.dlmm_fixture_digest != DLMM_FIXTURE_DIGEST
+            or self.authority != PROTOCOL_BATTERY_AUTHORITY
+        ):
+            raise ManifestError("protocol evaluation changed fixture or authority boundary")
+        if self.evaluation_digest != qualified_sha256_bytes(
+            canonical_json_bytes(_evaluation_material(self))
+        ):
+            raise ManifestError("protocol evaluation self-digest mismatch")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the exact registered protocol-evaluation artifact fields."""
+
+        return {
+            "suite_id": self.suite_id,
+            "suite_digest": self.suite_digest,
+            "pump_fixture_digest": self.pump_fixture_digest,
+            "dlmm_fixture_digest": self.dlmm_fixture_digest,
+            "candidate_id": self.candidate_id,
+            "passed_case_ids": list(self.passed_case_ids),
+            "result_digests": list(self.result_digests),
+            "evaluation_digest": self.evaluation_digest,
+            "authority": self.authority,
+        }
+
+    def exact_bytes(self) -> bytes:
+        """Serialize the exact canonical checked-artifact representation."""
+
+        return canonical_json_bytes(self.as_dict(), newline=True)
+
+
+def _qualified_digest(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 71
+        or not value.startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise ManifestError(f"{field} must be sha256:<64 lowercase hex>")
+    return value
+
+
+def _evaluation_material(evaluation: ProtocolBatteryEvaluation) -> dict[str, Any]:
+    return {
+        "schema_id": PROTOCOL_BATTERY_SCHEMA,
+        "suite_id": evaluation.suite_id,
+        "suite_digest": evaluation.suite_digest,
+        "pump_fixture_digest": evaluation.pump_fixture_digest,
+        "dlmm_fixture_digest": evaluation.dlmm_fixture_digest,
+        "candidate_id": evaluation.candidate_id,
+        "passed_case_ids": list(evaluation.passed_case_ids),
+        "result_digests": list(evaluation.result_digests),
+        "authority": evaluation.authority,
+    }
 
 
 def _candidate_material(result: ProtocolCandidateResult) -> dict[str, Any]:
@@ -483,24 +562,29 @@ def evaluate_protocol_candidate(
     for case in battery.cases:
         validate_protocol_candidate_result(case, by_id[case.case_id])
     passed = tuple(case.case_id for case in battery.cases)
-    digest = qualified_sha256_bytes(
-        canonical_json_bytes(
-            {
-                "schema_id": PROTOCOL_BATTERY_SCHEMA,
-                "suite_id": battery.suite_id,
-                "suite_digest": battery.suite_digest,
-                "candidate_id": candidate_id,
-                "result_digests": [by_id[case_id].result_digest for case_id in passed],
-                "passed_case_ids": list(passed),
-                "authority": PROTOCOL_BATTERY_AUTHORITY,
-            }
-        )
-    )
+    result_digests = tuple(by_id[case_id].result_digest for case_id in passed)
+    provisional = ProtocolBatteryEvaluation.__new__(ProtocolBatteryEvaluation)
+    for field, value in (
+        ("suite_id", battery.suite_id),
+        ("suite_digest", battery.suite_digest),
+        ("pump_fixture_digest", battery.pump_fixture_digest),
+        ("dlmm_fixture_digest", battery.dlmm_fixture_digest),
+        ("candidate_id", candidate_id),
+        ("passed_case_ids", passed),
+        ("result_digests", result_digests),
+        ("authority", PROTOCOL_BATTERY_AUTHORITY),
+    ):
+        object.__setattr__(provisional, field, value)
+    object.__setattr__(provisional, "evaluation_digest", "sha256:" + "0" * 64)
+    digest = qualified_sha256_bytes(canonical_json_bytes(_evaluation_material(provisional)))
     return ProtocolBatteryEvaluation(
         battery.suite_id,
         battery.suite_digest,
+        battery.pump_fixture_digest,
+        battery.dlmm_fixture_digest,
         candidate_id,
         passed,
+        result_digests,
         digest,
     )
 

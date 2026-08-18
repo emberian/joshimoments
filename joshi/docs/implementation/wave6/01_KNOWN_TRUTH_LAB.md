@@ -93,6 +93,21 @@ Every output has a closed carrier (`decimal_integer`, `identifier`, `sha256`, or
 The identity symbols are synthetic fixture labels. They do not claim common control, intent, or a
 real wallet/account mapping.
 
+## Exact evaluation artifacts
+
+The three evaluated candidates now materialize the complete fields promised by their registered
+V12 schemas. Each canonical artifact binds the suite digest, candidate, sorted exact passed-case
+denominator, one ordered result digest per case, its pinned source-fixture digest(s) where
+applicable, fixed fixture authority and a recomputed evaluation self-digest. Exact checked bytes
+live under [`fixtures/wave6/artifacts`](../../../fixtures/wave6/artifacts).
+
+Strict parsers reject unknown or duplicate fields, noncanonical JSON, malformed digests, changed
+source-fixture identities, missing results, changed authority and self-digest substitution. The
+tests regenerate all three outputs from their exact case batteries, require byte equality with the
+checked fixtures, and independently reparse them. These are real evaluated fixture outputs, but
+they remain caller-fed checked artifacts: they have not yet been admitted by the sole store and
+carry no durable receipt, market observation or estimator-performance authority.
+
 ## Executable leakage rule
 
 Availability and commit coordinates are checked before semantic payload. A future row may contain
@@ -130,8 +145,8 @@ uv --directory analysis run --locked pytest -q
 uv --directory analysis run --locked ruff check src tests
 ```
 
-Focused result: 26 tests pass across the generic, protocol, and structural batteries. The complete
-locked analysis suite and Ruff also pass.
+The focused generic, protocol, structural and exact-artifact tests pass. The complete locked
+analysis suite and Ruff also pass.
 
 ## Remaining `N01` work
 

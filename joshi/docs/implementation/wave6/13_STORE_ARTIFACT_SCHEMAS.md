@@ -46,6 +46,12 @@ was useful. The store returns only `unverified_semantic_fixture_only`; it does n
 gate or introduce provider, presentation, wallet, signing, transaction, deployment or mutation
 authority.
 
+The three checked evaluation artifacts under `fixtures/wave6/artifacts` now exactly implement
+their registered schema fields and are independently regenerated and reparsed by the Python
+known-truth suite. V12 still stores only their schemas. Persisting those exact output bytes and
+binding a later artifact DAG requires a separate store occurrence and receipt; their repository
+presence alone does not raise this catalog's ceiling.
+
 ## Verification
 
 ```bash

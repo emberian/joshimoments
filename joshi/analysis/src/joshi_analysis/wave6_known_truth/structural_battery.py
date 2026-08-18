@@ -337,10 +337,84 @@ class StructuralBatteryEvaluation:
 
     suite_id: str
     suite_digest: str
+    fixture_digest: str
     candidate_id: str
     passed_case_ids: tuple[str, ...]
+    result_digests: tuple[str, ...]
     evaluation_digest: str
     authority: str = STRUCTURAL_BATTERY_AUTHORITY
+
+    def __post_init__(self) -> None:
+        _stable(self.suite_id, "structural evaluation suite_id")
+        _stable(self.candidate_id, "structural evaluation candidate_id")
+        if self.passed_case_ids != tuple(sorted(set(self.passed_case_ids))) or not (
+            self.passed_case_ids
+        ):
+            raise ManifestError("structural passed case IDs must be sorted, unique, and nonempty")
+        for case_id in self.passed_case_ids:
+            _stable(case_id, "structural passed case ID")
+        if len(self.result_digests) != len(self.passed_case_ids):
+            raise ManifestError("structural evaluation must bind one result digest per passed case")
+        for field, digest in (
+            ("structural suite digest", self.suite_digest),
+            ("structural fixture digest", self.fixture_digest),
+            ("structural evaluation digest", self.evaluation_digest),
+        ):
+            _qualified_digest(digest, field)
+        for digest in self.result_digests:
+            _qualified_digest(digest, "structural result digest")
+        if (
+            self.fixture_digest != STRUCTURAL_FIXTURE_DIGEST
+            or self.authority != STRUCTURAL_BATTERY_AUTHORITY
+        ):
+            raise ManifestError("structural evaluation changed fixture or authority boundary")
+        if self.evaluation_digest != qualified_sha256_bytes(
+            canonical_json_bytes(_evaluation_material(self))
+        ):
+            raise ManifestError("structural evaluation self-digest mismatch")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the exact registered structural-evaluation artifact fields."""
+
+        return {
+            "suite_id": self.suite_id,
+            "suite_digest": self.suite_digest,
+            "fixture_digest": self.fixture_digest,
+            "candidate_id": self.candidate_id,
+            "passed_case_ids": list(self.passed_case_ids),
+            "result_digests": list(self.result_digests),
+            "evaluation_digest": self.evaluation_digest,
+            "authority": self.authority,
+        }
+
+    def exact_bytes(self) -> bytes:
+        """Serialize the exact canonical checked-artifact representation."""
+
+        return canonical_json_bytes(self.as_dict(), newline=True)
+
+
+def _qualified_digest(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 71
+        or not value.startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise ManifestError(f"{field} must be sha256:<64 lowercase hex>")
+    return value
+
+
+def _evaluation_material(evaluation: StructuralBatteryEvaluation) -> dict[str, Any]:
+    return {
+        "schema_id": STRUCTURAL_BATTERY_SCHEMA,
+        "suite_id": evaluation.suite_id,
+        "suite_digest": evaluation.suite_digest,
+        "fixture_digest": evaluation.fixture_digest,
+        "candidate_id": evaluation.candidate_id,
+        "passed_case_ids": list(evaluation.passed_case_ids),
+        "result_digests": list(evaluation.result_digests),
+        "authority": evaluation.authority,
+    }
 
 
 def validate_structural_candidate_result(
@@ -377,24 +451,27 @@ def evaluate_structural_candidate(
     for case in battery.cases:
         validate_structural_candidate_result(case, by_id[case.case_id])
     passed = tuple(case.case_id for case in battery.cases)
-    digest = qualified_sha256_bytes(
-        canonical_json_bytes(
-            {
-                "schema_id": STRUCTURAL_BATTERY_SCHEMA,
-                "suite_id": battery.suite_id,
-                "suite_digest": battery.suite_digest,
-                "candidate_id": candidate_id,
-                "result_digests": [by_id[case_id].result_digest for case_id in passed],
-                "passed_case_ids": list(passed),
-                "authority": STRUCTURAL_BATTERY_AUTHORITY,
-            }
-        )
-    )
+    result_digests = tuple(by_id[case_id].result_digest for case_id in passed)
+    provisional = StructuralBatteryEvaluation.__new__(StructuralBatteryEvaluation)
+    for field, value in (
+        ("suite_id", battery.suite_id),
+        ("suite_digest", battery.suite_digest),
+        ("fixture_digest", battery.fixture_digest),
+        ("candidate_id", candidate_id),
+        ("passed_case_ids", passed),
+        ("result_digests", result_digests),
+        ("authority", STRUCTURAL_BATTERY_AUTHORITY),
+    ):
+        object.__setattr__(provisional, field, value)
+    object.__setattr__(provisional, "evaluation_digest", "sha256:" + "0" * 64)
+    digest = qualified_sha256_bytes(canonical_json_bytes(_evaluation_material(provisional)))
     return StructuralBatteryEvaluation(
         battery.suite_id,
         battery.suite_digest,
+        battery.fixture_digest,
         candidate_id,
         passed,
+        result_digests,
         digest,
     )
 

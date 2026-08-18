@@ -298,10 +298,68 @@ class CandidateResult:
 @dataclass(frozen=True, slots=True)
 class KnownTruthEvaluation:
     suite_id: str
+    suite_digest: str
     candidate_id: str
     passed_case_ids: tuple[str, ...]
+    result_digests: tuple[str, ...]
     evaluation_digest: str
     authority: str = AUTHORITY
+
+    def __post_init__(self) -> None:
+        _stable(self.suite_id, "evaluation suite_id")
+        _stable(self.candidate_id, "evaluation candidate_id")
+        _sorted_unique(self.passed_case_ids, "evaluation passed case IDs", nonempty=True)
+        if len(self.result_digests) != len(self.passed_case_ids):
+            raise ManifestError("evaluation must bind one result digest per passed case")
+        _qualified_digest(self.suite_digest, "evaluation suite digest")
+        for digest in self.result_digests:
+            _qualified_digest(digest, "evaluation result digest")
+        if self.authority != AUTHORITY:
+            raise ManifestError("evaluation widened its fixture-only authority")
+        _qualified_digest(self.evaluation_digest, "evaluation digest")
+        if self.evaluation_digest != _digest(_evaluation_material(self)):
+            raise ManifestError("evaluation self-digest mismatch")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the exact registered evaluation artifact fields."""
+
+        return {
+            "suite_id": self.suite_id,
+            "suite_digest": self.suite_digest,
+            "candidate_id": self.candidate_id,
+            "passed_case_ids": list(self.passed_case_ids),
+            "result_digests": list(self.result_digests),
+            "evaluation_digest": self.evaluation_digest,
+            "authority": self.authority,
+        }
+
+    def exact_bytes(self) -> bytes:
+        """Serialize the exact canonical checked-artifact representation."""
+
+        return canonical_json_bytes(self.as_dict(), newline=True)
+
+
+def _qualified_digest(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 71
+        or not value.startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise ManifestError(f"{field} must be sha256:<64 lowercase hex>")
+    return value
+
+
+def _evaluation_material(evaluation: KnownTruthEvaluation) -> dict[str, Any]:
+    return {
+        "schema_id": SCHEMA_ID,
+        "suite_id": evaluation.suite_id,
+        "suite_digest": evaluation.suite_digest,
+        "candidate_id": evaluation.candidate_id,
+        "passed_case_ids": list(evaluation.passed_case_ids),
+        "result_digests": list(evaluation.result_digests),
+        "authority": evaluation.authority,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,18 +568,27 @@ def evaluate_candidate_suite(
     for case in suite.cases:
         validate_candidate_result(case, by_id[case.case_id])
     passed = tuple(case.case_id for case in suite.cases)
-    evaluation_digest = _digest(
-        {
-            "schema_id": SCHEMA_ID,
-            "suite_id": suite.suite_id,
-            "suite_digest": suite.suite_digest,
-            "candidate_id": candidate_id,
-            "result_digests": [by_id[case_id].result_digest for case_id in passed],
-            "passed_case_ids": list(passed),
-            "authority": AUTHORITY,
-        }
+    result_digests = tuple(by_id[case_id].result_digest for case_id in passed)
+    provisional = KnownTruthEvaluation.__new__(KnownTruthEvaluation)
+    for field, value in (
+        ("suite_id", suite.suite_id),
+        ("suite_digest", suite.suite_digest),
+        ("candidate_id", candidate_id),
+        ("passed_case_ids", passed),
+        ("result_digests", result_digests),
+        ("authority", AUTHORITY),
+    ):
+        object.__setattr__(provisional, field, value)
+    object.__setattr__(provisional, "evaluation_digest", "sha256:" + "0" * 64)
+    evaluation_digest = _digest(_evaluation_material(provisional))
+    return KnownTruthEvaluation(
+        suite.suite_id,
+        suite.suite_digest,
+        candidate_id,
+        passed,
+        result_digests,
+        evaluation_digest,
     )
-    return KnownTruthEvaluation(suite.suite_id, candidate_id, passed, evaluation_digest)
 
 
 def build_signed_flow_known_truth_suite() -> KnownTruthSuite:

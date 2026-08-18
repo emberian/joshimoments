@@ -128,21 +128,17 @@ def test_packet_proposal_evaluation_authority_and_digest_substitution_refuse() -
         _validate_packet(replace(packet, packet_digest="sha256:" + "0" * 64))
     with pytest.raises(ManifestError, match="widened"):
         _validate_packet(replace(packet, authority="may_query_and_trade"))
-    changed_evaluation = replace(
-        packet.known_truth_evaluation, evaluation_digest="sha256:" + "1" * 64
-    )
-    with pytest.raises(ManifestError, match="known-truth closure"):
-        _validate_packet(replace(packet, known_truth_evaluation=changed_evaluation))
+    with pytest.raises(ManifestError, match="self-digest"):
+        replace(packet.known_truth_evaluation, evaluation_digest="sha256:" + "1" * 64)
 
 
 def test_packet_refuses_protocol_fixture_or_evaluation_substitution() -> None:
     packet = _build_packet()
-    changed_protocol = replace(
-        packet.protocol_known_truth_evaluation,
-        evaluation_digest="sha256:" + "2" * 64,
-    )
-    with pytest.raises(ManifestError, match="protocol known-truth closure"):
-        _validate_packet(replace(packet, protocol_known_truth_evaluation=changed_protocol))
+    with pytest.raises(ManifestError, match="self-digest"):
+        replace(
+            packet.protocol_known_truth_evaluation,
+            evaluation_digest="sha256:" + "2" * 64,
+        )
 
     changed_pump = PUMP_FIXTURE.read_bytes().replace(
         b'"raw_quote_atoms": "501"', b'"raw_quote_atoms": "500"', 1
@@ -158,12 +154,11 @@ def test_packet_refuses_protocol_fixture_or_evaluation_substitution() -> None:
 
 def test_packet_refuses_structural_fixture_or_evaluation_substitution() -> None:
     packet = _build_packet()
-    changed_evaluation = replace(
-        packet.structural_known_truth_evaluation,
-        evaluation_digest="sha256:" + "3" * 64,
-    )
-    with pytest.raises(ManifestError, match="structural known-truth closure"):
-        _validate_packet(replace(packet, structural_known_truth_evaluation=changed_evaluation))
+    with pytest.raises(ManifestError, match="self-digest"):
+        replace(
+            packet.structural_known_truth_evaluation,
+            evaluation_digest="sha256:" + "3" * 64,
+        )
 
     changed_fixture = STRUCTURAL_FIXTURE.read_bytes().replace(
         b'"spliced_delta_quote_atoms":"70"',

@@ -1,5 +1,10 @@
 """Fixture-only known-truth and counterexample laboratory for Wave 6."""
 
+from .evaluation_artifacts import (
+    parse_known_truth_evaluation_exact,
+    parse_protocol_evaluation_exact,
+    parse_structural_evaluation_exact,
+)
 from .lab import (
     AdversaryKind,
     CandidateDisposition,
@@ -78,6 +83,9 @@ __all__ = [
     "evaluate_candidate_suite",
     "evaluate_protocol_candidate",
     "evaluate_structural_candidate",
+    "parse_known_truth_evaluation_exact",
+    "parse_protocol_evaluation_exact",
+    "parse_structural_evaluation_exact",
     "validate_protocol_candidate_result",
     "validate_structural_candidate_result",
 ]
