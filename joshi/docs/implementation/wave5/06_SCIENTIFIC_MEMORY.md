@@ -3,6 +3,13 @@
 Status: pure unverified semantic memory kernel delivered; durable store, Glass transport, and release
 materialization remain integration-owned.
 
+The current kernel pass remains deliberately below durable qualification. Before promotion, the
+store/Glass seam must mint a real reveal/outcome occurrence rather than treating the hidden replay
+ID as the reveal relation, enforce `revealed_at <= retrospective.recorded_at`, and witness the
+actual append/receipt clock so cross-append recorded/commit rollback cannot be hidden behind a
+semantic occurrence-time order. Opaque replay bytes and provenance remain caller assertions until
+the store resolves them.
+
 ## Contract ceiling
 
 `joshi-scientific-memory` owns no store handle, renderer, network client, wallet, transaction
