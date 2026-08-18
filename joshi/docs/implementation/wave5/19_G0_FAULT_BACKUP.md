@@ -123,6 +123,11 @@ but not the separate supervisor spool inventory, and does not make the original 
 The component-local recovery matrix now includes before/after interruption points around the
 censored memory closure, for thirty exact points total. This does not add a harness step or turn the
 separate 37-scenario root matrix true.
+The one-shot paired route has its own six exact component-local interruptions: before/after
+exchange, before/after exact Cockpit read, and before/after pairing reopen. Each injected run is
+followed by a fresh-session recovery on the same catalog and an identical response-body check.
+Together with the thirty source/publication/memory/export points this is 36 package-local fault
+checks, not a mapping of all 36 schedule transitions and not a root qualification.
 
 ## Backup, restore, and reopen requirements
 

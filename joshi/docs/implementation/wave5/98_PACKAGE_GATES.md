@@ -5,6 +5,8 @@ Status: the root gate run was anchored at committed HEAD
 readiness gates pass. The resulting witnesses are deliberately
 `useful_partial`; they do not qualify live providers, sustained nonfixture supervision,
 publication/product parity, product Glass use, retention, scientific, or economic capabilities.
+The subsequent focused supplement at `2632bf1` passed all six paired-route prefix recoveries; it
+does not alter the exact root witness below.
 
 The root run includes the reviewed Wave 6 Python tree only as a package/test fact: 187 tests and
 Ruff pass. It does not use those fixture-only analysis contracts to raise any Wave 5 or Wave 6
@@ -39,7 +41,7 @@ All commands used `--locked --offline` and covered this focused set:
 | Formatting | PASS | `cargo fmt --all -- --check`. |
 | Workspace check | PASS | `cargo check --locked --offline --workspace --all-targets --all-features`. |
 | Workspace tests | PASS (build/test fact) | `cargo test --locked --offline --workspace --all-targets --all-features`. |
-| Focused Wave 5 tests | PASS (build/test fact) | 15-package `cargo test --locked --offline ... --all-targets`; all reported tests passed, including scientific-memory (15), surface (13), publication (16), supervisor (19), sources (43 + 4 golden), retention (9), and store-linked restart/fault tests. |
+| Focused Wave 5 tests | PASS (build/test fact) | 15-package `cargo test --locked --offline ... --all-targets`; all reported tests passed, including scientific-memory (15), surface (13), publication (16), supervisor (19), sources (43 + 4 golden), retention (9), store-linked restart/fault tests, and the six paired-route prefix recoveries. |
 | Clippy | PASS | `cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings`. |
 | Rustdoc | PASS | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --workspace --all-features --no-deps` generated 38 package docs. |
 | Schema | PASS | `./schema/validate.sh`; all checks passed, including SQLite 3.53.2 validation (10 migrations, 13 commits, 6 observations, 7 assertions). |
