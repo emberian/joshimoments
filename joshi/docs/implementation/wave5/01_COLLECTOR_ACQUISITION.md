@@ -158,3 +158,9 @@ reason, one local-spool receipt and progress/usage row per C0 fixture step, fina
 and shutdown report. It is a local spool witness only. Catalog admission, catalog ACK, source fact,
 publication, export/import and live-provider qualification remain separate I2/I4/I5 integration
 work and are not implied by this report.
+
+The offline G0 Core component now supplies the exact reviewed Pump fixture batch to this sealed C0
+carrier, then admits the supervisor's fsynced segment bytes through the sole store and records the
+catalog ACK only after the run binding commits. That composition closes one fixture-only
+reservation→origin→catalog handoff, but does not change this package report's authority or enable a
+provider, live source, or product route.

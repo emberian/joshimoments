@@ -8,7 +8,6 @@ use crate::{
 use joshi_admission::wave5::Wave5RunReferenceV1;
 use joshi_domain::{
     BatchDigest, CoverageId, OpenVariant, SourceId as DomainSourceId, StableString, UtcTimestamp,
-    ValueDigest,
 };
 use joshi_evidence::{Boundary, CoverageScope, CoverageWindow, DurableIngestBatch, EvidenceDraft};
 use joshi_sources::{
@@ -114,14 +113,79 @@ pub fn synthetic_c0_json_runner(
 }
 
 /// Built-in semantic adapter for the only executable Wave 5 profile: sealed, no-network C0.
-/// It has no customization seam, so a caller cannot relabel unrelated bytes as a progress kind.
+/// Callers cannot implement a competing adapter. Its optional exact-batch carrier requires the
+/// captured fixture bytes verbatim and grants no source/store authority by itself.
 #[derive(Default)]
-pub struct SyntheticRuntimeOutcomeAdapter;
+pub struct SyntheticRuntimeOutcomeAdapter {
+    exact_fixture: Option<ExactFixtureBatch>,
+}
+
+struct ExactFixtureBatch {
+    expected_frame_body: Vec<u8>,
+    batch: DurableIngestBatch,
+    exact_batch_bytes: Vec<u8>,
+    policy_contract: String,
+    exact_policy_bytes: Vec<u8>,
+}
 
 impl SyntheticRuntimeOutcomeAdapter {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            exact_fixture: None,
+        }
+    }
+
+    /// Build the sealed C0 carrier for one already validated exact semantic batch.
+    ///
+    /// This constructor grants no source or store authority. At the attempt boundary it still
+    /// requires one exact fixture frame with `expected_frame_body`; the sole store must later
+    /// parse and admit the retained batch and policy bytes independently.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty frame bytes or a noncanonical, digest-mismatched, or byte-mismatched batch.
+    pub fn for_exact_fixture_batch(
+        expected_frame_body: Vec<u8>,
+        batch: DurableIngestBatch,
+        exact_batch_bytes: Vec<u8>,
+        policy_contract: impl Into<String>,
+        exact_policy_bytes: Vec<u8>,
+    ) -> Result<Self> {
+        if expected_frame_body.is_empty() {
+            return Err(SupervisorError::InvalidValue(
+                "exact fixture frame body must be nonempty".into(),
+            ));
+        }
+        let _: serde_json::Value = serde_json::from_slice(&expected_frame_body).map_err(|_| {
+            SupervisorError::InvalidValue("exact fixture frame body must be JSON".into())
+        })?;
+        // Construct once without retaining the temporary entry. This validates the canonical
+        // digest and exact batch encoding at the capability boundary.
+        let policy_contract = policy_contract.into();
+        StableString::new(policy_contract.clone())
+            .map_err(|error| SupervisorError::InvalidValue(error.to_string()))?;
+        if exact_policy_bytes.is_empty() {
+            return Err(SupervisorError::InvalidValue(
+                "exact fixture policy bytes must be nonempty".into(),
+            ));
+        }
+        EvidenceBatchEntry::from_exact_bytes(
+            &batch,
+            exact_batch_bytes.clone(),
+            policy_contract.clone(),
+            exact_policy_bytes.clone(),
+            None,
+        )?;
+        Ok(Self {
+            exact_fixture: Some(ExactFixtureBatch {
+                expected_frame_body,
+                batch,
+                exact_batch_bytes,
+                policy_contract,
+                exact_policy_bytes,
+            }),
+        })
     }
 
     #[allow(clippy::unused_self)] // The sealed adapter is passed as capability, not policy state.
@@ -130,6 +194,33 @@ impl SyntheticRuntimeOutcomeAdapter {
         reservation: &AttemptReservation,
         outcome: ProviderAttemptOutcome,
     ) -> Result<PendingSegment> {
+        if let Some(fixture) = &self.exact_fixture {
+            let ProviderAttemptOutcome::Captured { outputs } = outcome else {
+                return Err(SupervisorError::InvalidValue(
+                    "exact fixture batch requires captured progress".into(),
+                ));
+            };
+            let [SourceOutput::Frame(frame)] = outputs.as_slice() else {
+                return Err(SupervisorError::InvalidValue(
+                    "exact fixture batch requires one raw frame".into(),
+                ));
+            };
+            if frame.transport != Transport::Fixture
+                || frame.content_type != ContentType::Json
+                || frame.body.as_ref() != fixture.expected_frame_body
+            {
+                return Err(SupervisorError::InvalidValue(
+                    "captured frame differs from the exact fixture batch ingress".into(),
+                ));
+            }
+            return crate::prepare_evidence_batch(
+                reservation.clone(),
+                &fixture.batch,
+                fixture.exact_batch_bytes.clone(),
+                fixture.policy_contract.clone(),
+                fixture.exact_policy_bytes.clone(),
+            );
+        }
         match outcome {
             ProviderAttemptOutcome::Captured { outputs } => captured_item(reservation, outputs),
             ProviderAttemptOutcome::BoundedEmpty {
@@ -1481,14 +1572,7 @@ fn evidence_item(
     batch.expected_digest = joshi_store::SqliteStore::canonical_batch_digest(&batch)
         .map_err(|error| SupervisorError::InvalidValue(error.to_string()))?;
     let policy = br#"{"observationStorage":{"fixture":"public_source"},"coverageGapSeverity":{"synthetic":"informational"}}"#.to_vec();
-    let mut digest = Sha256::new();
-    digest.update(b"joshi.supervisor.synthetic-runtime-admission.v1\0");
-    digest.update(batch.expected_digest.as_str().as_bytes());
-    digest.update(b"\0");
-    digest.update(&policy);
-    let admission = ValueDigest::new(format!("sha256:{:x}", digest.finalize()))?;
-    let entry =
-        EvidenceBatchEntry::from_batch(&batch, "joshi.store.policy.v1", policy, Some(&admission))?;
+    let entry = EvidenceBatchEntry::from_batch(&batch, "joshi.store.policy.v1", policy, None)?;
     PendingSegment::new(
         reservation.clone(),
         SpoolEntry::EvidenceBatch(entry),
@@ -1864,6 +1948,54 @@ mod tests {
             reopened.run_one(&mut fresh, &mut adapter, at(), 0),
             Err(SupervisorError::InvalidState(message)) if message.contains("terminal")
         ));
+    }
+
+    #[test]
+    fn exact_fixture_batch_refuses_a_different_captured_frame_before_positive_durability() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let (docs, plan) = runtime_fixture();
+        let run_id = plan.plan().run.run_id.clone();
+        let mut runtime = open_runtime(root.path(), &docs, &plan);
+        let mut batch = DurableIngestBatch {
+            contract_version: StableString::new(
+                joshi_evidence::DURABLE_INGEST_BATCH_CONTRACT_VERSION,
+            )
+            .expect("contract"),
+            batch_id: StableString::new("batch:exact-fixture-mismatch").expect("batch"),
+            expected_digest: BatchDigest::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("placeholder"),
+            observations: Vec::new(),
+            source_events: Vec::new(),
+            assertions: Vec::new(),
+            coverage_windows: Vec::new(),
+            coverage_gaps: Vec::new(),
+            coverage_recoveries: Vec::new(),
+            cursor_advances: Vec::new(),
+        };
+        batch.expected_digest =
+            joshi_store::SqliteStore::canonical_batch_digest(&batch).expect("digest");
+        let exact_batch_bytes = serde_json::to_vec(&batch).expect("batch bytes");
+        let mut adapter = SyntheticRuntimeOutcomeAdapter::for_exact_fixture_batch(
+            br#"{"expected":true}"#.to_vec(),
+            batch,
+            exact_batch_bytes,
+            "joshi.test.exact_fixture_policy.v1",
+            br#"{"retention":"public"}"#.to_vec(),
+        )
+        .expect("adapter");
+        let mut runner =
+            synthetic_c0_json_runner(plan, br#"{"actual":true}"#.to_vec(), at()).expect("runner");
+        assert!(matches!(
+            runtime.run_to_completion(&mut runner, &mut adapter, at(), 0),
+            Err(SupervisorError::InvalidValue(message))
+                if message.contains("differs from the exact fixture batch ingress")
+        ));
+        assert!(
+            runtime
+                .supervisor()
+                .completed_no_gap_reservations_for_run(&run_id)
+                .is_err()
+        );
     }
 
     fn reserve_without_execution(

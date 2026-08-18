@@ -134,15 +134,16 @@ publication, export/import, status recovery and backup/restore crash boundaries 
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
-reservation/accounting prefix before the Pump adapter, but those two durable segments are not an
-atomic handoff. The full crash matrix, default product mount, complete memory closure,
-export/import, status and backup/restore remain outside that component.
+reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
+adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
+then binds its receipt to the run before the supervisor spool records the ACK. The full crash
+matrix, default product mount, complete memory closure, export/import, status and backup/restore
+remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
-interview memory closure remains outside it. A fixture may
-exercise canonical Pump policy bytes without network I/O; the supervisor fake
-`joshi.store.policy.v1` is not a production physical-policy contract and cannot qualify spool
-circulation.
+interview memory closure remains outside it. This component exercises the canonical Pump policy
+bytes without network I/O. The supervisor's separate generic synthetic adapter still uses the
+fixture-only `joshi.store.policy.v1` contract and does not qualify production circulation.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
@@ -154,8 +155,8 @@ The component report now embeds a strict G0 V1 partial fault result. Ten baselin
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
 prepare, head, act, and episode), and each maps one-to-one to `observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
-and Pump/catalog adapters still create separate durable segments rather than one atomic handoff;
-the remaining roles and full 37-scenario matrix are absent, and both the embedded and outer
+fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second
+segment is generated. The remaining roles and full 37-scenario matrix are absent, and both the embedded and outer
 `fullOfflineFaultWalk` fields remain false.
 
 ## Explicit nonclaims

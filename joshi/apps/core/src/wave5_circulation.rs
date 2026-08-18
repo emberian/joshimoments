@@ -6,15 +6,16 @@
 use joshi_admission::{
     PublicStatus, PublicStoreReceiptV1, Sha256Digest,
     operational::{
-        AUTHORITY, ExactByteClosureV1, OperationalStatus, PublicProtectionClass,
-        SPOOL_CATALOG_RECEIPT_CONTRACT, SpoolBatchClosureV1, SpoolCatalogReceiptV1,
+        AUTHORITY, ExactByteClosureV1, LocalSpoolReceiptV1, OperationalStatus,
+        PublicProtectionClass, SPOOL_CATALOG_RECEIPT_CONTRACT, SpoolBatchClosureV1,
+        SpoolCatalogReceiptV1,
     },
 };
 use joshi_domain::{StableString, UtcTimestamp};
 use joshi_pump_adapter::PreparedPumpAdmission;
 use joshi_spool::{
     CatalogAdmissionAck, LocalSpool, ProtectionDomainId, ProtectionRequest, SegmentClosure,
-    SegmentId, SpoolEntry, encode_segment,
+    SegmentId, SpoolEntry, decode_segment, encode_segment,
 };
 use joshi_store::{IdempotencyStatus, SqliteStore, Wave5CommitReceipt, Wave5SpoolCatalogBindingV1};
 use thiserror::Error;
@@ -63,8 +64,6 @@ pub(crate) fn circulate_public_c0(
             "origin segment contains a postcommit admission digest",
         ));
     }
-    let exact_batch_bytes = prepared.exact_batch_bytes();
-    let exact_policy_bytes = prepared.exact_policy_bytes();
     let (origin_segment_bytes, segment) = encode_segment(
         SegmentId::new(segment_id)?,
         created_at,
@@ -81,6 +80,104 @@ pub(crate) fn circulate_public_c0(
         ));
     }
 
+    close_public_c0_origin(
+        store,
+        spool,
+        registered_run,
+        prepared,
+        origin_segment_bytes,
+        segment,
+        precommit_entry,
+        binding_id,
+        writer_build,
+        fault,
+    )
+}
+
+/// Admit the exact public C0 segment already fsynced by the supervisor. The segment is never
+/// regenerated: its local receipt, physical closure, decoded batch entry, Pump batch/policy bytes,
+/// store receipt, run binding, and postcommit ACK must all close exactly.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn circulate_supervisor_public_c0(
+    store: &mut SqliteStore,
+    spool: &LocalSpool,
+    registered_run: RegisteredWave5Run<'_>,
+    prepared: &PreparedPumpAdmission,
+    local_receipt: &LocalSpoolReceiptV1,
+    binding_id: &str,
+    writer_build: &str,
+    fault: Option<CirculationFaultPoint>,
+) -> Result<Wave5CirculationClosure, Wave5CirculationError> {
+    local_receipt.validate()?;
+    if local_receipt.protection_class != PublicProtectionClass::PublicIntegrity
+        || !matches!(
+            local_receipt.status,
+            OperationalStatus::Accepted | OperationalStatus::Idempotent
+        )
+    {
+        return Err(Wave5CirculationError::Invariant(
+            "supervisor receipt is not one accepted public-integrity segment",
+        ));
+    }
+    let segment_id = SegmentId::new(&local_receipt.segment_id)?;
+    let segment = spool
+        .list_segments()?
+        .into_iter()
+        .find(|value| value.segment_id == segment_id)
+        .ok_or(Wave5CirculationError::Invariant(
+            "supervisor receipt segment is absent from its spool",
+        ))?;
+    if segment.domain.as_str() != local_receipt.protection_domain
+        || segment.exact_segment.digest != local_receipt.exact_segment.digest.to_string()
+        || segment.exact_segment.byte_len.to_string() != local_receipt.exact_segment.byte_length
+    {
+        return Err(Wave5CirculationError::Invariant(
+            "supervisor local receipt differs from the retained segment closure",
+        ));
+    }
+    let origin_segment_bytes = spool.read_segment(&segment)?;
+    local_receipt.exact_segment.verify(&origin_segment_bytes)?;
+    let entries = decode_segment(&origin_segment_bytes, None)?;
+    let [SpoolEntry::EvidenceBatch(precommit_entry)] = entries.as_slice() else {
+        return Err(Wave5CirculationError::Invariant(
+            "supervisor segment is not exactly one evidence batch",
+        ));
+    };
+    let expected = prepared.spool_entry(None)?;
+    if precommit_entry != &expected || precommit_entry.closure.admission_digest.is_some() {
+        return Err(Wave5CirculationError::Invariant(
+            "supervisor segment differs from the exact precommit Pump batch",
+        ));
+    }
+    close_public_c0_origin(
+        store,
+        spool,
+        registered_run,
+        prepared,
+        origin_segment_bytes,
+        segment,
+        precommit_entry.clone(),
+        binding_id,
+        writer_build,
+        fault,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn close_public_c0_origin(
+    store: &mut SqliteStore,
+    spool: &LocalSpool,
+    registered_run: RegisteredWave5Run<'_>,
+    prepared: &PreparedPumpAdmission,
+    origin_segment_bytes: Vec<u8>,
+    segment: SegmentClosure,
+    precommit_entry: joshi_spool::EvidenceBatchEntry,
+    binding_id: &str,
+    writer_build: &str,
+    fault: Option<CirculationFaultPoint>,
+) -> Result<Wave5CirculationClosure, Wave5CirculationError> {
+    let exact_batch_bytes = prepared.exact_batch_bytes();
+    let exact_policy_bytes = prepared.exact_policy_bytes();
     for source in &prepared.admission_batch().registrations {
         store.register_source(source)?;
     }
@@ -242,6 +339,89 @@ mod tests {
             joshi_pump_adapter::prepare_direct(DIRECT_C0, "batch:test-c0", committed_at, 10)
                 .expect("prepare C0");
         (prepared, committed_at)
+    }
+
+    fn supervisor_origin(
+        spool: &LocalSpool,
+        prepared: &PreparedPumpAdmission,
+        committed_at: UtcTimestamp,
+    ) -> LocalSpoolReceiptV1 {
+        let entry = prepared.spool_entry(None).expect("precommit entry");
+        let (bytes, closure) = encode_segment(
+            SegmentId::new("segment:supervisor-test-c0").expect("segment ID"),
+            committed_at,
+            &[SpoolEntry::EvidenceBatch(entry)],
+            &ProtectionRequest::Public {
+                domain: ProtectionDomainId::new("supervisor-public-test").expect("domain"),
+            },
+            None,
+        )
+        .expect("segment");
+        spool
+            .append_segment(&bytes, &closure)
+            .expect("durable supervisor origin");
+        LocalSpoolReceiptV1 {
+            contract: joshi_admission::operational::LOCAL_SPOOL_RECEIPT_CONTRACT.into(),
+            schema_version: 1,
+            segment_id: closure.segment_id.to_string(),
+            protection_domain: closure.domain.to_string(),
+            protection_class: PublicProtectionClass::PublicIntegrity,
+            exact_segment: ExactByteClosureV1::new(&bytes).expect("closure"),
+            status: OperationalStatus::Accepted,
+            authority: AUTHORITY.into(),
+        }
+    }
+
+    #[test]
+    fn supervisor_origin_is_consumed_exactly_and_receipt_substitution_refuses() {
+        let state = tempfile::tempdir().expect("state");
+        let (mut store, run_id, run_digest) = registered(state.path());
+        let spool = LocalSpool::open(spool_config(state.path())).expect("spool");
+        let (prepared, committed_at) = prepared();
+        let local_receipt = supervisor_origin(&spool, &prepared, committed_at);
+        let mut substituted = local_receipt.clone();
+        substituted.exact_segment.digest =
+            Sha256Digest::parse(format!("sha256:{}", "f".repeat(64))).expect("wrong digest");
+        assert!(
+            circulate_supervisor_public_c0(
+                &mut store,
+                &spool,
+                RegisteredWave5Run {
+                    run_id: &run_id,
+                    registration_digest: &run_digest,
+                },
+                &prepared,
+                &substituted,
+                "catalog-admission:supervisor-test-c0",
+                "test-build",
+                None,
+            )
+            .is_err()
+        );
+        let original = spool
+            .list_segments()
+            .expect("segments")
+            .into_iter()
+            .next()
+            .expect("origin");
+        let original_bytes = spool.read_segment(&original).expect("origin bytes");
+        let closed = circulate_supervisor_public_c0(
+            &mut store,
+            &spool,
+            RegisteredWave5Run {
+                run_id: &run_id,
+                registration_digest: &run_digest,
+            },
+            &prepared,
+            &local_receipt,
+            "catalog-admission:supervisor-test-c0",
+            "test-build",
+            None,
+        )
+        .expect("supervisor circulation");
+        assert_eq!(closed.origin_segment_bytes, original_bytes);
+        assert_eq!(closed.segment, original);
+        assert_eq!(spool.list_segments().expect("segments").len(), 1);
     }
 
     #[test]

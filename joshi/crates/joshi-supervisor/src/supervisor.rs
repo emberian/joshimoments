@@ -191,6 +191,46 @@ impl Supervisor {
         Ok(reservations)
     }
 
+    /// Reopen the exact local-spool receipt for one completed gap-free reservation.
+    ///
+    /// The returned idempotent status describes this readback invocation; it does not rewrite the
+    /// retained segment or its original journal outcome.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a reservation without an exact completed lifecycle, a mismatched journal value,
+    /// a missing attempt segment, or a segment which is not exactly one evidence batch.
+    pub fn local_spool_receipt_for_completed_reservation(
+        &self,
+        reservation: &AttemptReservation,
+    ) -> Result<LocalSpoolReceiptV1> {
+        let run_id = reservation.run.as_ref().ok_or_else(|| {
+            SupervisorError::InvalidState("completed reservation lost its run binding".into())
+        })?;
+        if !self
+            .completed_no_gap_reservations_for_run(&run_id.run_id)?
+            .iter()
+            .any(|value| value == reservation)
+        {
+            return Err(SupervisorError::InvalidState(
+                "reservation is not the exact completed journal value".into(),
+            ));
+        }
+        let Some((closure, entry_kinds)) =
+            self.transport.find_attempt(&reservation.reservation_id)?
+        else {
+            return Err(SupervisorError::InvalidState(
+                "completed reservation lost its local attempt segment".into(),
+            ));
+        };
+        if entry_kinds.len() != 1 || entry_kinds[0] != "evidence_batch" {
+            return Err(SupervisorError::InvalidState(
+                "completed reservation segment is not one evidence batch".into(),
+            ));
+        }
+        local_receipt(&closure, DurableOutcome::Idempotent)
+    }
+
     /// Open with caller-owned private-domain protectors. Keys are never serialized into config,
     /// health, journal, or spool metadata.
     ///

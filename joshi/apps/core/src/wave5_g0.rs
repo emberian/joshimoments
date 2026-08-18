@@ -13,14 +13,14 @@ use joshi_g0_harness::{
     SCHEMA_VERSION as FAULT_SCHEMA_VERSION, run_partial_schedule,
 };
 use joshi_publication::{CockpitPublicationId, CockpitV2MembershipKind};
-use joshi_pump_adapter::prepare_direct_with_offline_fixture_selection;
+use joshi_pump_adapter::{PUMP_POLICY_CONTRACT, prepare_direct_with_offline_fixture_selection};
 use joshi_scientific_memory::{
     ActId, ActKind, CatalogCommitSeq, Digest as MemoryDigest, EffectStatus, Episode,
     EpisodeCompleteness, EpisodeId, EpisodePath, EpisodeSegment, LogicalSessionTick,
     LotAssociation, MemoryOccurrence, OperatorAct, PresentationBinding, PresentationGap,
     PresentationGapReason, SceneBinding, SceneId, SceneRef, SegmentId, SessionId,
 };
-use joshi_spool::{LocalSpool, SpoolConfig};
+use joshi_spool::SpoolConfig;
 use joshi_store::{IdempotencyStatus, SqliteStore, StoreMode};
 use joshi_supervisor::{
     CollectorRuntime, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
@@ -30,10 +30,9 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    wave5_circulation::{RegisteredWave5Run, circulate_public_c0},
+    wave5_circulation::{RegisteredWave5Run, circulate_supervisor_public_c0},
     wave5_readiness::{
-        config, fixture_provider_plan, fixture_registration_bundles, now, spool_config,
-        store_bundle,
+        config, fixture_provider_plan, fixture_registration_bundles, now, store_bundle,
     },
 };
 
@@ -72,6 +71,8 @@ pub struct Wave5G0SourcePublicationReport {
     pub run_registration_id: String,
     pub run_registration_digest: String,
     pub catalog_admission_id: String,
+    pub origin_segment_id: String,
+    pub origin_segment_digest: String,
     pub reservation_id: String,
     pub reservation_digest: String,
     pub supervisor_plan_digest: String,
@@ -95,6 +96,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub partial_fault_result: G0Result,
     pub source_semantics_closed: bool,
     pub supervisor_reservation_closed: bool,
+    pub supervisor_origin_handoff_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
     pub restart_reverified: bool,
@@ -155,6 +157,13 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let committed_at = "2026-08-17T12:00:00.020000Z"
         .parse()
         .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid static fixture clock"))?;
+    let prepared = prepare_direct_with_offline_fixture_selection(
+        DIRECT_C0_FILE,
+        OFFLINE_SELECTION_FILE,
+        "batch:wave5-g0-source-publication-0001",
+        committed_at,
+        1,
+    )?;
     let plan = fixture_provider_plan(&registration)?;
     let supervisor = Supervisor::open(supervisor_config(state))?;
     let existing = supervisor.reservations_for_run(run_id.as_str())?;
@@ -181,7 +190,13 @@ pub fn run_wave5_g0_source_publication_with_fault(
     if existing.is_empty() {
         let mut runner =
             synthetic_c0_json_runner(plan.clone(), DIRECT_C0_FILE.to_vec(), committed_at)?;
-        let mut adapter = SyntheticRuntimeOutcomeAdapter::new();
+        let mut adapter = SyntheticRuntimeOutcomeAdapter::for_exact_fixture_batch(
+            DIRECT_C0_FILE.to_vec(),
+            prepared.admission_batch().store.evidence.clone(),
+            prepared.exact_batch_bytes().to_vec(),
+            PUMP_POLICY_CONTRACT,
+            prepared.exact_policy_bytes().to_vec(),
+        )?;
         let runtime_report =
             runtime.run_to_completion(&mut runner, &mut adapter, committed_at, 0)?;
         if runtime_report.steps.len() != 1
@@ -227,27 +242,20 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
     let reservation_bytes = serde_json::to_vec(reservation)?;
     let reservation_digest = Sha256Digest::of_bytes(&reservation_bytes);
+    let local_spool_receipt = runtime
+        .supervisor()
+        .local_spool_receipt_for_completed_reservation(reservation)?;
 
-    let prepared = prepare_direct_with_offline_fixture_selection(
-        DIRECT_C0_FILE,
-        OFFLINE_SELECTION_FILE,
-        "batch:wave5-g0-source-publication-0001",
-        committed_at,
-        1,
-    )?;
-    let spool = LocalSpool::open(spool_config(state))?;
     let catalog_admission_id = "catalog-admission:wave5-g0-source-publication-0001";
-    let circulation = circulate_public_c0(
+    let circulation = circulate_supervisor_public_c0(
         &mut store,
-        &spool,
+        runtime.supervisor().spool(),
         RegisteredWave5Run {
             run_id: run_id.as_str(),
             registration_digest: registration_receipt.exact_document_digest.as_str(),
         },
         &prepared,
-        "segment:wave5-g0-source-publication-0001",
-        "public-fixture-wave5-g0-source-publication",
-        committed_at,
+        &local_spool_receipt,
         catalog_admission_id,
         env!("CARGO_PKG_VERSION"),
         None,
@@ -476,6 +484,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         run_registration_id: run_id.to_string(),
         run_registration_digest: registration_receipt.exact_document_digest.to_string(),
         catalog_admission_id: catalog_admission_id.into(),
+        origin_segment_id: circulation.segment.segment_id.to_string(),
+        origin_segment_digest: circulation.segment.exact_segment.digest.clone(),
         reservation_id: reservation.reservation_id.to_string(),
         reservation_digest: reservation_digest.to_string(),
         supervisor_plan_digest: plan.plan_digest().to_owned(),
@@ -499,6 +509,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         partial_fault_result,
         source_semantics_closed: true,
         supervisor_reservation_closed: true,
+        supervisor_origin_handoff_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
         restart_reverified: true,
@@ -746,6 +757,17 @@ mod tests {
         assert!(report.partial_memory_chain_closed);
         assert_eq!(report.memory_queue_through, 2);
         assert!(report.supervisor_reservation_closed);
+        assert!(report.supervisor_origin_handoff_closed);
+        assert!(report.origin_segment_id.starts_with("segment-attempt-"));
+        let origin_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::OriginSegment)
+            .expect("origin evidence");
+        assert_eq!(origin_evidence.evidence_id, report.origin_segment_id);
+        assert_eq!(origin_evidence.content_digest, report.origin_segment_digest);
         assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 10);
         assert_eq!(
             report

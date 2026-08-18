@@ -108,8 +108,9 @@ The current Core component result carries ten exact roles: supervisor reservatio
 origin segment, store receipt, catalog binding, catalog ACK, semantic fact,
 publication prepare, publication head, memory act, and memory episode. Their identities may contain
 the colon separators used by actual store/spool contracts. The reservation and later origin are
-bound to the same run/fixture/plan but remain separate durable adapters. Pairing/Glass fault
-evidence, export/import, status, backup, restore, and final
+now one ordered handoff: the supervisor fsyncs the exact Pump batch and the store consumes that
+same immutable segment before the run binding and ACK. Pairing/Glass fault evidence,
+export/import, status, backup, restore, and final
 root reopen remain absent and therefore cannot appear `observed_partial`.
 
 ## Backup, restore, and reopen requirements
