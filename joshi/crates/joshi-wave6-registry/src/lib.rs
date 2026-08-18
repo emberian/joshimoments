@@ -50,8 +50,8 @@ pub use model::{
     SemanticCeilingV1, Wave5GateRefV1, Wave5GateV1, Wave6ProgramRegistrationV1,
 };
 pub use research::{
-    RESEARCH_PROPOSAL_KIND, RESEARCH_PROPOSAL_SCHEMA, ResearchProposalV1,
-    ValidatedResearchProposal, parse_research_proposal_exact,
+    RESEARCH_PROPOSAL_KIND, RESEARCH_PROPOSAL_SCHEMA, ResearchArtifactDescriptorV1,
+    ResearchProposalV1, ValidatedResearchProposal, parse_research_proposal_exact,
 };
 
 /// Exact wire contract for the fixture-only Wave 6 program registration.

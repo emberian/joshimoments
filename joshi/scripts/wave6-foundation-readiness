@@ -43,7 +43,7 @@ jq -e '
   and .status == "fixture_only"
   and .authority == "read_record_replay_propose_shadow_only"
   and .semanticCeiling == "unverified_semantic_fixture_only"
-  and .catalogSchema == "joshi.sqlite.v16"
+  and .catalogSchema == "joshi.sqlite.v17"
   and .programId == "w6-program-fixture-001"
   and (.registrationDigest | test("^sha256:[0-9a-f]{64}$"))
   and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))

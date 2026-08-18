@@ -6,16 +6,17 @@ campaign-bundle restart witness; not a Wave 6 operational readiness claim.**
 [`scripts/wave6-foundation-readiness`](../../../scripts/wave6-foundation-readiness) is the first
 root runner for the Wave 6 foundation. It runs:
 
-- all schema migrations and the V4-to-V16 upgrade check;
+- all schema migrations and the V4-to-V17 upgrade check;
 - the exact `joshi-wave6-registry` and `joshi-wave6-campaign` suites;
 - the store's Wave 6 program/schema/artifact-content/DAG/decision/campaign-bundle tests;
 - the Core program/schema/artifact-content/DAG/decision/campaign-bundle restart test; and
-- two invocations of the real `wave6-program-registration` command over the same V16 catalog.
+- two invocations of the real `wave6-program-registration` command over the same V17 catalog.
 
 The second invocation must reproduce the original program, six schema, three evaluation-content,
 one fixture-DAG, one decision-ledger and one atomic campaign-bundle commit identities. The script
 emits `joshi.wave6.fixture_foundation_witness.v5` with the exact report and V11-V16 migration
-digests.
+digests while the schema gate verifies V17. V17 proposal evidence joins the witness only when the
+Core root walk is extended.
 
 Run it with:
 
