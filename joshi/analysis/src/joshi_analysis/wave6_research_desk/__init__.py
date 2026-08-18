@@ -1,0 +1,48 @@
+"""Bounded, proposal-only Wave 6 research desk."""
+
+from .contracts import (
+    AUTHORITY,
+    CLAIM_SCOPE,
+    SCHEMA_ID,
+    ArtifactDescriptor,
+    ArtifactRole,
+    Control,
+    CoverageStatus,
+    DeskPolicy,
+    DispositionKind,
+    Estimand,
+    ExperimentManifest,
+    Falsifier,
+    Feature,
+    HumanDisposition,
+    ProposalKind,
+    ProposalRevision,
+    ProposalSpec,
+    ResearchProposal,
+)
+from .desk import ResearchDeskLedger, human_disposition, propose, supersession
+
+__all__ = [
+    "AUTHORITY",
+    "CLAIM_SCOPE",
+    "SCHEMA_ID",
+    "ArtifactDescriptor",
+    "ArtifactRole",
+    "Control",
+    "CoverageStatus",
+    "DeskPolicy",
+    "DispositionKind",
+    "Estimand",
+    "ExperimentManifest",
+    "Falsifier",
+    "Feature",
+    "HumanDisposition",
+    "ProposalKind",
+    "ProposalRevision",
+    "ProposalSpec",
+    "ResearchDeskLedger",
+    "ResearchProposal",
+    "human_disposition",
+    "propose",
+    "supersession",
+]
