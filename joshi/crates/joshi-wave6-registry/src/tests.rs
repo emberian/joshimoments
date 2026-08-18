@@ -12,6 +12,10 @@ use crate::{
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
+const MARKET_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/market_atlas_snapshot_v1.json");
+const RESEARCH_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json");
 
 fn fixture() -> Wave6ProgramRegistrationV1 {
     serde_json::from_slice(FIXTURE).expect("checked-in registration fixture")
@@ -194,6 +198,14 @@ fn exact_fixture_roundtrips_at_unverified_ceiling() {
     );
     assert_eq!(parsed.value().consumed_wave5_gates.len(), 0);
     assert_eq!(parsed.value().artifact_kinds.len(), 2);
+    assert_eq!(
+        parsed.value().artifact_kinds[0].schema_digest,
+        digest_bytes(MARKET_SCHEMA).expect("market schema digest")
+    );
+    assert_eq!(
+        parsed.value().artifact_kinds[1].schema_digest,
+        digest_bytes(RESEARCH_SCHEMA).expect("research schema digest")
+    );
     assert_eq!(parsed.value().budgets.provider_units, WireU64::new(0));
 }
 
