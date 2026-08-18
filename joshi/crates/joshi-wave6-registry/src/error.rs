@@ -59,4 +59,7 @@ pub enum RegistryError {
     /// A checked research proposal widened authority, broke its commitment, or used future input.
     #[error("fixture research proposal failure: {0}")]
     Research(&'static str),
+    /// A caller-fed research disposition was malformed, backdated, or rebound.
+    #[error("fixture research disposition failure: {0}")]
+    Review(&'static str),
 }

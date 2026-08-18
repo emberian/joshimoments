@@ -18,6 +18,7 @@ mod error;
 mod evaluation;
 mod model;
 mod research;
+mod review;
 mod validate;
 
 pub use campaign::{
@@ -52,6 +53,10 @@ pub use model::{
 pub use research::{
     RESEARCH_PROPOSAL_KIND, RESEARCH_PROPOSAL_SCHEMA, ResearchArtifactDescriptorV1,
     ResearchProposalV1, ValidatedResearchProposal, parse_research_proposal_exact,
+};
+pub use review::{
+    ResearchDispositionKindV1, ResearchDispositionV1, ValidatedResearchDisposition,
+    parse_research_disposition_exact,
 };
 
 /// Exact wire contract for the fixture-only Wave 6 program registration.

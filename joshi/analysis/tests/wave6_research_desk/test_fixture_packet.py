@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from joshi_analysis.errors import ManifestError
 from joshi_analysis.wave6_market_atlas.contracts import ATLAS_SNAPSHOT_SCHEMA
 from joshi_analysis.wave6_research_desk import (
     FIXTURE_PACKET_AUTHORITY,
+    DispositionKind,
     build_fixture_research_packet,
+    human_disposition,
     parse_fixture_program_registration_exact,
 )
 from joshi_analysis.wave6_research_desk.fixture_packet import research_proposal_schema_bytes
@@ -23,6 +26,7 @@ MARKET_SCHEMA = ROOT / "fixtures/wave6/schemas/market_atlas_snapshot_v1.json"
 PROTOCOL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
 RESEARCH_SCHEMA = ROOT / "fixtures/wave6/schemas/research_proposal_v1.json"
 RESEARCH_PROPOSAL = ROOT / "fixtures/wave6/research_proposal_v1.json"
+RESEARCH_DISPOSITION = ROOT / "fixtures/wave6/research_disposition_v1.json"
 STRUCTURAL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
 PUMP_FIXTURE = ROOT / "fixtures/protocol/pump_quotes.json"
 DLMM_FIXTURE = ROOT / "fixtures/protocol/dlmm.json"
@@ -92,6 +96,20 @@ def test_registered_schema_bytes_are_exact_and_packet_is_deterministic() -> None
     assert packet["claim_scope"].endswith("not_result_release_or_live_decision")
     assert packet["proposal"]["specification"]["experiments"][0]["query_count"] == 0
     assert len(packet["proposal"]["specification"]["counterexamples"]) == 18
+
+
+def test_fixture_disposition_is_exactly_python_authored_but_not_identity_authority() -> None:
+    packet = _build_packet()
+    disposition = human_disposition(
+        packet.proposal.proposal_id,
+        DispositionKind.HOLD,
+        "fixture-reviewer-unverified",
+        datetime(2026, 8, 18, 0, 13, tzinfo=UTC),
+        "fixture-only hold pending an independently authenticated human review",
+    )
+    assert RESEARCH_DISPOSITION.read_bytes() == canonical_json_bytes(
+        disposition.as_dict(), newline=True
+    )
 
 
 def test_python_independently_reparses_rust_registration_and_schema_closure() -> None:
