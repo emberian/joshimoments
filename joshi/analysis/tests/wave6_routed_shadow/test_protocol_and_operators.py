@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from joshi_analysis.wave6_routed_shadow import (
@@ -12,6 +14,7 @@ from joshi_analysis.wave6_routed_shadow import (
     FlowOrigin,
     ProtocolQuoteRefusal,
     PumpFeeSchedule,
+    SourceCut,
     canonical_bytes,
     decimal_atoms,
     dlmm_dynamic_fee_rate,
@@ -25,7 +28,9 @@ from joshi_analysis.wave6_routed_shadow import (
     pumpswap_sell_exact_base_in,
 )
 from joshi_analysis.wave6_routed_shadow.arithmetic import Q64
-from joshi_analysis.wave6_routed_shadow.contracts import ExactQuote, QuoteRefusal
+from joshi_analysis.wave6_routed_shadow.contracts import ExactQuote, QuoteLeg, QuoteRefusal
+
+SOURCE_CUT = SourceCut("cut:101", 101, "profile:v1", "topology:1")
 
 
 def test_pump_formulas_match_pinned_rounding_boundaries() -> None:
@@ -137,6 +142,7 @@ def test_nonlinear_bins_are_finite_and_state_dependent() -> None:
             FixedBin(-1, Q64, 0, 100),
             FixedBin(0, 2 * Q64, 0, 100),
         ),
+        source_cut=SOURCE_CUT,
     )
     quote = edge.quote(Direction.X_TO_Y, 100)
     assert isinstance(quote, ExactQuote)
@@ -156,6 +162,31 @@ def test_nonlinear_bins_are_finite_and_state_dependent() -> None:
     dormant = edge.with_active_bin(-2, "state:dormant").quote(Direction.X_TO_Y, 1)
     assert isinstance(dormant, QuoteRefusal)
     assert dormant.reason == "insufficient_finite_capacity"
+
+
+def test_state_digest_alone_cannot_authorize_a_forged_quote_transition() -> None:
+    edge = DlmmBinEdge(
+        edge_id="ghost",
+        schedule_id="schedule:forgery",
+        state_id="state:forgery",
+        asset_x="X",
+        asset_y="Y",
+        active_bin_id=0,
+        fee_policy=DlmmFeePolicy(0, 0),
+        bins=(FixedBin(0, Q64, 0, 500),),
+        source_cut=SOURCE_CUT,
+    )
+    quote = edge.quote(Direction.X_TO_Y, 1)
+    assert isinstance(quote, ExactQuote)
+    forged = replace(
+        quote,
+        output_atoms=400,
+        legs=(QuoteLeg("0", quote.trade_input_atoms, 400),),
+    )
+    assert forged.pre_state_digest == edge.state_digest
+    with pytest.raises(ValueError, match="recomputation"):
+        edge.apply(forged, FlowOrigin.EXTERNAL)
+    assert edge.inventory().y_atoms == 500
 
 
 def test_wire_atoms_and_artifacts_refuse_implicit_decimal_or_float_coercion() -> None:

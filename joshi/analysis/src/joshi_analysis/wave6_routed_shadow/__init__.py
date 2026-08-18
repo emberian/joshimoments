@@ -1,11 +1,13 @@
 """Pure, read-only Wave 6 routed-liquidity shadow study."""
 
 from .accounting import (
+    AdverseSelectionAudit,
     BranchScore,
     Falsifier,
     FalsifierReport,
     InventoryTransferRegret,
     JointBranchSurplus,
+    LiquidationManifest,
     LiquidationQuote,
     LiquidationStatus,
     LvrLikeDiagnostic,
@@ -13,6 +15,7 @@ from .accounting import (
     ToxicityDiagnostic,
     assess_falsifiers,
     assess_scenario_signs,
+    audit_adverse_selection,
     inventory_transfer_regret,
     joint_branch_surplus,
     lvr_like_diagnostic,
@@ -22,6 +25,7 @@ from .accounting import (
 )
 from .arithmetic import ExactArithmeticError, canonical_bytes, decimal_atoms, digest
 from .contracts import (
+    AdverseSelectionAttribution,
     ArbitrageOrdering,
     ArbitrageResponse,
     ArbitrageSpec,
@@ -31,11 +35,14 @@ from .contracts import (
     DlmmFeePolicy,
     ExternalStateTreatment,
     FlowOrigin,
+    HouseholdSelfRouteCounterleg,
     JupiterWitness,
     LandedFill,
     QuoteIntent,
+    RouteDecisionStatus,
     ShadowRun,
     ShadowScenario,
+    SourceCut,
 )
 from .operators import ConstantProductEdge, DlmmBinEdge, FixedBin
 from .protocol import (
@@ -56,6 +63,8 @@ from .protocol import (
 from .study import run_shadow_study
 
 __all__ = [
+    "AdverseSelectionAttribution",
+    "AdverseSelectionAudit",
     "ArbitrageOrdering",
     "ArbitrageResponse",
     "ArbitrageSpec",
@@ -73,10 +82,12 @@ __all__ = [
     "FalsifierReport",
     "FixedBin",
     "FlowOrigin",
+    "HouseholdSelfRouteCounterleg",
     "InventoryTransferRegret",
     "JointBranchSurplus",
     "JupiterWitness",
     "LandedFill",
+    "LiquidationManifest",
     "LiquidationQuote",
     "LiquidationStatus",
     "LvrLikeDiagnostic",
@@ -84,12 +95,15 @@ __all__ = [
     "ProtocolQuoteRefusal",
     "PumpFeeSchedule",
     "QuoteIntent",
+    "RouteDecisionStatus",
     "ShadowRun",
     "ShadowScenario",
+    "SourceCut",
     "TerminalLiquidation",
     "ToxicityDiagnostic",
     "assess_falsifiers",
     "assess_scenario_signs",
+    "audit_adverse_selection",
     "canonical_bytes",
     "decimal_atoms",
     "digest",

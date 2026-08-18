@@ -7,6 +7,8 @@ from .contracts import (
     ArbitrageOrdering,
     ArbitrageResponse,
     ArbitrageSpec,
+    Coverage,
+    Direction,
     ExactQuote,
     ExternalStateTreatment,
     FlowOrigin,
@@ -14,6 +16,7 @@ from .contracts import (
     QuoteIntent,
     QuoteRefusal,
     RouteDecision,
+    RouteDecisionStatus,
     ShadowEvent,
     ShadowRun,
     ShadowScenario,
@@ -50,14 +53,51 @@ def _transfer(intent_id: str, direction, quote: ExactQuote, post_digest: str) ->
 def _apply_arbitrage(
     ghost: DlmmBinEdge,
     spec: ArbitrageSpec,
+    request_slot: int,
+    *,
+    blocked_reason: str | None = None,
 ) -> tuple[DlmmBinEdge, ArbitrageResponse]:
+    arrival_slot = atoms(request_slot + spec.latency_slots, name="arbitrage arrival slot")
+    expected_assets = (
+        (ghost.asset_x, ghost.asset_y)
+        if spec.direction is Direction.X_TO_Y
+        else (ghost.asset_y, ghost.asset_x)
+    )
+    if (spec.input_asset_id, spec.output_asset_id) != expected_assets:
+        reason = "arbitrage_asset_unit_mismatch"
+        refusal = QuoteRefusal(ghost.edge_id, ghost.current_state_id, reason)
+        return ghost, ArbitrageResponse(
+            spec, refusal, False, None, None, request_slot, arrival_slot, reason
+        )
+    if blocked_reason is not None:
+        refusal = QuoteRefusal(ghost.edge_id, ghost.current_state_id, blocked_reason)
+        return ghost, ArbitrageResponse(
+            spec, refusal, False, None, None, request_slot, arrival_slot, blocked_reason
+        )
+    if spec.latency_slots != 0:
+        reason = "latency_state_unavailable"
+        refusal = QuoteRefusal(ghost.edge_id, ghost.current_state_id, reason)
+        return ghost, ArbitrageResponse(
+            spec, refusal, False, None, None, request_slot, arrival_slot, reason
+        )
     quote = ghost.quote(spec.direction, spec.input_atoms)
     if isinstance(quote, QuoteRefusal):
-        return ghost, ArbitrageResponse(spec, quote, False, None, None)
+        return ghost, ArbitrageResponse(
+            spec, quote, False, None, None, request_slot, arrival_slot, quote.reason
+        )
     gross_profit = spec.external_unwind_atoms - spec.input_atoms
     profit = gross_profit - spec.priority_and_route_cost_atoms
     if profit < spec.minimum_profit_atoms:
-        return ghost, ArbitrageResponse(spec, quote, False, profit, None)
+        return ghost, ArbitrageResponse(
+            spec,
+            quote,
+            False,
+            profit,
+            None,
+            request_slot,
+            arrival_slot,
+            "below_minimum_profit",
+        )
     updated = ghost.apply(quote, FlowOrigin.EXTERNAL)
     transfer = _transfer(
         f"arbitrage:{spec.after_intent_id}:{spec.ordering.value}",
@@ -65,7 +105,9 @@ def _apply_arbitrage(
         quote,
         updated.state_digest,
     )
-    return updated, ArbitrageResponse(spec, quote, True, profit, transfer)
+    return updated, ArbitrageResponse(
+        spec, quote, True, profit, transfer, request_slot, arrival_slot, None
+    )
 
 
 def run_shadow_study(
@@ -96,9 +138,7 @@ def run_shadow_study(
         raise ValueError("baseline edge ids must be unique")
     if ghost.edge_id in {item.edge_id for item in baselines}:
         raise ValueError("ghost and baseline edge identities must be distinct")
-    if any(
-        (item.asset_x, item.asset_y) != (ghost.asset_x, ghost.asset_y) for item in baselines
-    ):
+    if any((item.asset_x, item.asset_y) != (ghost.asset_x, ghost.asset_y) for item in baselines):
         raise ValueError("all direct controls must use the ghost's oriented asset pair")
 
     initial_ghost = ghost
@@ -110,11 +150,6 @@ def run_shadow_study(
     for intent in intents:
         before = ghost.inventory()
         responses: list[ArbitrageResponse] = []
-        before_spec = specs.get((intent.intent_id, ArbitrageOrdering.BEFORE_REQUEST))
-        if before_spec is not None:
-            ghost, response = _apply_arbitrage(ghost, before_spec)
-            responses.append(response)
-
         quote_sources: tuple[BaselineEdge, ...]
         if scenario.state_treatment is ExternalStateTreatment.FIXED_WITNESSED_STATE:
             quote_sources = initial_baselines
@@ -123,42 +158,110 @@ def run_shadow_study(
         venue_quotes = tuple(
             VenueQuote(
                 observation_id=item.current_state_id,
-                slot=intent.jupiter.slot,
+                slot=item.source_cut.slot,
+                source_cut=item.source_cut,
                 outcome=item.quote(intent.direction, intent.input_atoms),
                 coverage=intent.jupiter.coverage,
             )
             for item in quote_sources
         )
-        baseline = _best_quote(venue_quotes, intent.jupiter.candidate_venue_ids)
+        provided_ids = {item.outcome.venue_id for item in venue_quotes}
+        missing_candidates = set(intent.jupiter.candidate_venue_ids) - provided_ids
+        incompatible_reference_cuts = {
+            item.outcome.venue_id
+            for item in venue_quotes
+            if item.source_cut != intent.jupiter.source_cut
+        }
+        ghost_cut_incompatible = (
+            scenario.ghost_assumed_candidate and ghost.source_cut != intent.jupiter.source_cut
+        )
+        structurally_complete = (
+            intent.jupiter.universe_complete
+            and intent.jupiter.coverage is Coverage.OBSERVED_COMPLETE
+            and all(item.coverage is Coverage.OBSERVED_COMPLETE for item in venue_quotes)
+        )
+        baseline = (
+            _best_quote(venue_quotes, intent.jupiter.candidate_venue_ids)
+            if structurally_complete
+            and not missing_candidates
+            and not incompatible_reference_cuts
+            and not ghost_cut_incompatible
+            else None
+        )
+        if not structurally_complete:
+            unknown_status = RouteDecisionStatus.UNKNOWN_INCOMPLETE_UNIVERSE
+            unknown_reason = "route_universe_incomplete_or_gapped"
+        elif missing_candidates:
+            unknown_status = RouteDecisionStatus.UNKNOWN_MISSING_CANDIDATE
+            unknown_reason = "candidate_quote_or_refusal_missing"
+        elif incompatible_reference_cuts or ghost_cut_incompatible:
+            unknown_status = RouteDecisionStatus.UNKNOWN_INCOMPATIBLE_SOURCE_CUT
+            unknown_reason = "venue_or_ghost_source_cut_incompatible_with_jupiter"
+        elif baseline is None:
+            unknown_status = RouteDecisionStatus.UNKNOWN_NO_COMPARABLE_BASELINE
+            unknown_reason = "no_successful_comparable_baseline_quote"
+        else:
+            unknown_status = None
+            unknown_reason = None
+
+        before_spec = specs.get((intent.intent_id, ArbitrageOrdering.BEFORE_REQUEST))
+        if before_spec is not None:
+            ghost, response = _apply_arbitrage(
+                ghost,
+                before_spec,
+                intent.jupiter.slot,
+                blocked_reason=unknown_reason,
+            )
+            responses.append(response)
         ghost_outcome = ghost.quote(intent.direction, intent.input_atoms)
-        would_quote = WouldQuote(ghost.schedule_id, ghost_outcome)
+        would_quote = WouldQuote(ghost.schedule_id, ghost.source_cut, ghost_outcome)
         ghost_quote = ghost_outcome if isinstance(ghost_outcome, ExactQuote) else None
 
         baseline_output = baseline.output_atoms if baseline is not None else None
         ghost_margin = (
             None
-            if ghost_quote is None
-            else ghost_quote.output_atoms - (baseline_output if baseline_output is not None else 0)
+            if (
+                ghost_quote is None
+                or baseline_output is None
+                or not scenario.ghost_assumed_candidate
+            )
+            else ghost_quote.output_atoms - baseline_output
         )
         # The control wins ties. This is deliberately conservative and version-stable.
         ghost_selected = bool(
-            scenario.ghost_assumed_candidate
+            unknown_status is None
+            and scenario.ghost_assumed_candidate
             and ghost_quote is not None
-            and (
-                baseline_output is None
-                or ghost_quote.output_atoms > baseline_output + scenario.minimum_margin_atoms
+            and ghost_quote.output_atoms > baseline_output + scenario.minimum_margin_atoms
+        )
+        selected = (
+            None if unknown_status is not None else (ghost_quote if ghost_selected else baseline)
+        )
+        if unknown_status is not None:
+            decision = RouteDecision(
+                status=unknown_status,
+                selected_venue_id=None,
+                baseline_venue_id=None,
+                baseline_output_atoms=None,
+                selected_output_atoms=None,
+                ghost_assumed_candidate=scenario.ghost_assumed_candidate,
+                ghost_selected=False,
+                margin_atoms=None,
+                unknown_reason=unknown_reason,
             )
-        )
-        selected = ghost_quote if ghost_selected else baseline
-        decision = RouteDecision(
-            selected_venue_id=selected.venue_id if selected is not None else None,
-            baseline_venue_id=baseline.venue_id if baseline is not None else None,
-            baseline_output_atoms=baseline_output,
-            selected_output_atoms=selected.output_atoms if selected is not None else None,
-            ghost_assumed_candidate=scenario.ghost_assumed_candidate,
-            ghost_selected=ghost_selected,
-            margin_atoms=ghost_margin,
-        )
+        else:
+            assert selected is not None
+            decision = RouteDecision(
+                status=RouteDecisionStatus.MODELED_SELECTION,
+                selected_venue_id=selected.venue_id,
+                baseline_venue_id=baseline.venue_id,
+                baseline_output_atoms=baseline_output,
+                selected_output_atoms=selected.output_atoms,
+                ghost_assumed_candidate=scenario.ghost_assumed_candidate,
+                ghost_selected=ghost_selected,
+                margin_atoms=ghost_margin,
+                unknown_reason=None,
+            )
         modeled_transfer = None
         if selected is not None and ghost_selected:
             ghost = ghost.apply(selected, intent.origin)
@@ -174,7 +277,12 @@ def run_shadow_study(
 
         after_spec = specs.get((intent.intent_id, ArbitrageOrdering.AFTER_REQUEST))
         if after_spec is not None:
-            ghost, response = _apply_arbitrage(ghost, after_spec)
+            ghost, response = _apply_arbitrage(
+                ghost,
+                after_spec,
+                intent.jupiter.slot,
+                blocked_reason=unknown_reason,
+            )
             responses.append(response)
 
         events.append(

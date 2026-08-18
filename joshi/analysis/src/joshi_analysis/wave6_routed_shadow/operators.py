@@ -13,9 +13,11 @@ from .contracts import (
     ExactQuote,
     FeeComponent,
     FlowOrigin,
+    HouseholdSelfRouteCounterleg,
     QuoteLeg,
     QuoteOutcome,
     QuoteRefusal,
+    SourceCut,
 )
 
 
@@ -74,15 +76,21 @@ class DlmmBinEdge:
     active_bin_id: int
     fee_policy: DlmmFeePolicy
     bins: tuple[FixedBin, ...]
+    source_cut: SourceCut
     transition_count: int = 0
     external_fee_x_atoms: int = 0
     external_fee_y_atoms: int = 0
     self_fee_x_atoms: int = 0
     self_fee_y_atoms: int = 0
+    household_counterparty_x_atoms: int = 0
+    household_counterparty_y_atoms: int = 0
+    self_route_counterlegs: tuple[HouseholdSelfRouteCounterleg, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.edge_id or not self.schedule_id or not self.state_id:
             raise ValueError("edge, schedule, and state identities are required")
+        if not isinstance(self.source_cut, SourceCut):
+            raise ValueError("DLMM edge requires an exact source cut")
         if not self.asset_x or not self.asset_y or self.asset_x == self.asset_y:
             raise ValueError("the edge requires two distinct assets")
         if (
@@ -103,6 +111,12 @@ class DlmmBinEdge:
             "self_fee_y_atoms",
         ):
             atoms(getattr(self, name), name=name)
+        for name in ("household_counterparty_x_atoms", "household_counterparty_y_atoms"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be signed integer atoms")
+            if not -((1 << 128) - 1) <= value <= (1 << 128) - 1:
+                raise ValueError(f"{name} exceeds the signed study envelope")
 
     @property
     def current_state_id(self) -> str:
@@ -120,6 +134,9 @@ class DlmmBinEdge:
             external_fee_y_atoms=self.external_fee_y_atoms,
             self_fee_x_atoms=self.self_fee_x_atoms,
             self_fee_y_atoms=self.self_fee_y_atoms,
+            household_counterparty_x_atoms=self.household_counterparty_x_atoms,
+            household_counterparty_y_atoms=self.household_counterparty_y_atoms,
+            self_route_counterlegs=self.self_route_counterlegs,
         )
 
     def with_active_bin(self, active_bin_id: int, state_id: str) -> DlmmBinEdge:
@@ -176,11 +193,15 @@ class DlmmBinEdge:
         )
 
     def apply(self, quote: ExactQuote, origin: FlowOrigin) -> DlmmBinEdge:
-        if quote.venue_id != self.edge_id or quote.pre_state_digest != self.state_digest:
-            raise ValueError("quote is not bound to this copied edge state")
-        direction = (
-            Direction.X_TO_Y if quote.input_asset == self.asset_x else Direction.Y_TO_X
-        )
+        if (quote.input_asset, quote.output_asset) == (self.asset_x, self.asset_y):
+            direction = Direction.X_TO_Y
+        elif (quote.input_asset, quote.output_asset) == (self.asset_y, self.asset_x):
+            direction = Direction.Y_TO_X
+        else:
+            raise ValueError("quote asset orientation does not match this edge")
+        expected = self.quote(direction, quote.input_atoms)
+        if not isinstance(expected, ExactQuote) or quote != expected:
+            raise ValueError("quote content does not exactly match a recomputation from this state")
         by_id = {item.bin_id: item for item in self.bins}
         for leg in quote.legs:
             bin_id = int(leg.segment_id)
@@ -202,11 +223,40 @@ class DlmmBinEdge:
                     y_atoms=atoms(current.y_atoms + leg.input_atoms),
                 )
         lp_fee = next(component.atoms for component in quote.fees if component.owner == "lp")
-        changes: dict[str, int] = {"transition_count": self.transition_count + 1}
+        changes: dict[str, object] = {"transition_count": self.transition_count + 1}
         fee_prefix = "external_fee" if origin is FlowOrigin.EXTERNAL else "self_fee"
         fee_side = "x_atoms" if quote.input_asset == self.asset_x else "y_atoms"
         field_name = f"{fee_prefix}_{fee_side}"
         changes[field_name] = atoms(getattr(self, field_name) + lp_fee)
+        if origin is FlowOrigin.HOUSEHOLD:
+            protocol_fee = next(
+                component.atoms for component in quote.fees if component.owner == "protocol"
+            )
+            changes["self_route_counterlegs"] = (
+                *self.self_route_counterlegs,
+                HouseholdSelfRouteCounterleg(
+                    quote_digest=digest(quote),
+                    direction=direction,
+                    gross_input_atoms=quote.input_atoms,
+                    output_atoms=quote.output_atoms,
+                    lp_fee_atoms=lp_fee,
+                    protocol_fee_atoms=protocol_fee,
+                ),
+            )
+            if direction is Direction.X_TO_Y:
+                changes["household_counterparty_x_atoms"] = (
+                    self.household_counterparty_x_atoms - quote.input_atoms
+                )
+                changes["household_counterparty_y_atoms"] = (
+                    self.household_counterparty_y_atoms + quote.output_atoms
+                )
+            else:
+                changes["household_counterparty_x_atoms"] = (
+                    self.household_counterparty_x_atoms + quote.output_atoms
+                )
+                changes["household_counterparty_y_atoms"] = (
+                    self.household_counterparty_y_atoms - quote.input_atoms
+                )
         return replace(self, bins=tuple(by_id[item.bin_id] for item in self.bins), **changes)
 
     def _eligible_bins(self, direction: Direction) -> tuple[FixedBin, ...]:
@@ -245,10 +295,13 @@ class ConstantProductEdge:
     asset_y: str
     reserve_x: int
     reserve_y: int
+    source_cut: SourceCut
     fee_rate_1e9: int = 0
     transition_count: int = 0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.source_cut, SourceCut):
+            raise ValueError("constant-product edge requires an exact source cut")
         for name in ("reserve_x", "reserve_y", "fee_rate_1e9", "transition_count"):
             atoms(getattr(self, name), name=name)
         if self.reserve_x == 0 or self.reserve_y == 0:
@@ -298,9 +351,16 @@ class ConstantProductEdge:
 
     def apply(self, quote: ExactQuote, origin: FlowOrigin) -> ConstantProductEdge:
         del origin
-        if quote.venue_id != self.edge_id or quote.pre_state_digest != self.state_digest:
-            raise ValueError("quote is not bound to this copied edge state")
-        if quote.input_asset == self.asset_x:
+        if (quote.input_asset, quote.output_asset) == (self.asset_x, self.asset_y):
+            direction = Direction.X_TO_Y
+        elif (quote.input_asset, quote.output_asset) == (self.asset_y, self.asset_x):
+            direction = Direction.Y_TO_X
+        else:
+            raise ValueError("quote asset orientation does not match this edge")
+        expected = self.quote(direction, quote.input_atoms)
+        if not isinstance(expected, ExactQuote) or quote != expected:
+            raise ValueError("quote content does not exactly match a recomputation from this state")
+        if direction is Direction.X_TO_Y:
             return replace(
                 self,
                 reserve_x=atoms(self.reserve_x + quote.input_atoms),

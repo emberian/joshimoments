@@ -43,11 +43,7 @@ def _checked_u128_product(left: int, right: int) -> int:
 
 
 def _i128(value: int, name: str) -> int:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not MIN_I128 <= value <= MAX_I128
-    ):
+    if isinstance(value, bool) or not isinstance(value, int) or not MIN_I128 <= value <= MAX_I128:
         raise ProtocolQuoteRefusal(f"{name}_outside_i128")
     return value
 
@@ -64,9 +60,9 @@ class PumpFeeSchedule:
             if isinstance(rate, bool) or not isinstance(rate, int) or not 0 <= rate <= BPS:
                 raise ValueError(f"{name} is outside basis-point precision")
         if self.creator_bps is not None and (
-                isinstance(self.creator_bps, bool)
-                or not isinstance(self.creator_bps, int)
-                or not 0 <= self.creator_bps <= BPS
+            isinstance(self.creator_bps, bool)
+            or not isinstance(self.creator_bps, int)
+            or not 0 <= self.creator_bps <= BPS
         ):
             raise ValueError("creator_bps is outside basis-point precision")
 
