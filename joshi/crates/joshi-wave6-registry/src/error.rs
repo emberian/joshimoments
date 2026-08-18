@@ -41,4 +41,13 @@ pub enum RegistryError {
     /// A mandatory forbidden capability was not explicitly frozen out.
     #[error("registration does not explicitly prohibit {0}")]
     MissingProhibition(&'static str),
+    /// A claim did not use the exact rung-specific grammar registered for its artifact kind.
+    #[error("claim language does not match its registered artifact kind and H0-H5 rung")]
+    ClaimLanguage,
+    /// An artifact DAG contained an unknown kind, duplicate, future edge, or broken reference.
+    #[error("artifact DAG closure failure: {0}")]
+    Dag(&'static str),
+    /// A fixture decision branched, backdated, widened authority, or referenced unknown evidence.
+    #[error("fixture decision ledger failure: {0}")]
+    Decision(&'static str),
 }

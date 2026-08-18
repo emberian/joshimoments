@@ -10,12 +10,25 @@
 #![forbid(unsafe_code)]
 
 mod canonical;
+mod claim;
+mod dag;
+mod decision;
 mod error;
 mod model;
 mod validate;
 
 pub use canonical::{
-    ValidatedProgramRegistration, canonical_bytes, digest_bytes, parse_program_registration_exact,
+    ValidatedExactArtifact, ValidatedProgramRegistration, canonical_bytes, digest_bytes,
+    parse_artifact_dag_exact, parse_decision_ledger_exact, parse_program_registration_exact,
+};
+pub use claim::{
+    ClaimCausalityV1, ClaimEconomicMeaningV1, ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimVerbV1,
+    UnverifiedClaimLanguage, validate_claim_language,
+};
+pub use dag::{ArtifactDagDigestMaterialV1, ArtifactDagV1, ArtifactOccurrenceV1, ArtifactRefV1};
+pub use decision::{
+    ArtifactDecisionKindV1, ArtifactDecisionV1, FixtureDecisionLedgerDigestMaterialV1,
+    FixtureDecisionLedgerV1,
 };
 pub use error::{RegistryError, Result};
 pub use model::{
@@ -26,6 +39,10 @@ pub use model::{
 
 /// Exact wire contract for the fixture-only Wave 6 program registration.
 pub const PROGRAM_REGISTRATION_CONTRACT: &str = "joshi.wave6.program-registration.v1";
+/// Exact wire contract for a fixture-only artifact DAG.
+pub const ARTIFACT_DAG_CONTRACT: &str = "joshi.wave6.artifact-dag.v1";
+/// Exact wire contract for append-only fixture dispositions.
+pub const FIXTURE_DECISION_LEDGER_CONTRACT: &str = "joshi.wave6.fixture-decision-ledger.v1";
 
 #[cfg(test)]
 mod tests;

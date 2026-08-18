@@ -32,7 +32,7 @@ const REQUIRED_SIDE_EFFECT_PROHIBITIONS: &[&str] = &[
     "transaction_construction_signing_or_submission",
 ];
 
-fn validate_sha256(value: &ValueDigest, field: &'static str) -> Result<()> {
+pub(crate) fn validate_sha256_public(value: &ValueDigest, field: &'static str) -> Result<()> {
     let value = value.as_str();
     let Some(hex) = value.strip_prefix("sha256:") else {
         return Err(RegistryError::DigestFormat { field });
@@ -88,11 +88,11 @@ impl Wave6ProgramRegistrationV1 {
             return Err(RegistryError::Authority);
         }
 
-        validate_sha256(&self.source_tree_digest, "sourceTreeDigest")?;
-        validate_sha256(&self.build_digest, "buildDigest")?;
-        validate_sha256(&self.environment_digest, "environmentDigest")?;
-        validate_sha256(&self.config_digest, "configDigest")?;
-        validate_sha256(&self.registration_digest, "registrationDigest")?;
+        validate_sha256_public(&self.source_tree_digest, "sourceTreeDigest")?;
+        validate_sha256_public(&self.build_digest, "buildDigest")?;
+        validate_sha256_public(&self.environment_digest, "environmentDigest")?;
+        validate_sha256_public(&self.config_digest, "configDigest")?;
+        validate_sha256_public(&self.registration_digest, "registrationDigest")?;
 
         if !strictly_sorted_by(&self.consumed_wave5_gates, |left, right| {
             left.gate.cmp(&right.gate)
@@ -100,7 +100,7 @@ impl Wave6ProgramRegistrationV1 {
             return Err(RegistryError::Collection("consumedWave5Gates"));
         }
         for gate in &self.consumed_wave5_gates {
-            validate_sha256(&gate.occurrence_digest, "occurrenceDigest")?;
+            validate_sha256_public(&gate.occurrence_digest, "occurrenceDigest")?;
             if gate.evidence_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly {
                 return Err(RegistryError::Authority);
             }
@@ -114,7 +114,7 @@ impl Wave6ProgramRegistrationV1 {
             return Err(RegistryError::Collection("artifactKinds"));
         }
         for artifact in &self.artifact_kinds {
-            validate_sha256(&artifact.schema_digest, "artifactKinds.schemaDigest")?;
+            validate_sha256_public(&artifact.schema_digest, "artifactKinds.schemaDigest")?;
             if artifact.max_fixture_maturity > FixtureMaturityV1::FixtureRoundtrip
                 || artifact.permitted_claim == artifact.prohibited_inference
             {

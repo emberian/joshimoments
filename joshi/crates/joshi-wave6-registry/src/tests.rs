@@ -1,8 +1,13 @@
-use joshi_domain::{StableString, ValueDigest, WireU64};
+use joshi_domain::{StableString, UtcTimestamp, ValueDigest, WireU64};
 
 use crate::{
-    RegistryError, SemanticCeilingV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
-    parse_program_registration_exact,
+    ARTIFACT_DAG_CONTRACT, ArtifactDagV1, ArtifactDecisionKindV1, ArtifactDecisionV1,
+    ArtifactOccurrenceV1, ArtifactRefV1, ClaimCausalityV1, ClaimEconomicMeaningV1,
+    ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimRungV1, ClaimVerbV1,
+    FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, ProgramAuthorityV1, RegistryError,
+    SemanticCeilingV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
+    parse_artifact_dag_exact, parse_decision_ledger_exact, parse_program_registration_exact,
+    validate_claim_language,
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
@@ -15,6 +20,103 @@ fn reclose(value: &mut Wave6ProgramRegistrationV1) {
     value.registration_digest =
         digest_bytes(&canonical_bytes(&value.digest_material()).expect("material bytes"))
             .expect("material digest");
+}
+
+fn stable(value: &str) -> StableString {
+    StableString::new(value).expect("stable string")
+}
+
+fn digest(value: &str) -> ValueDigest {
+    digest_bytes(value.as_bytes()).expect("digest")
+}
+
+fn timestamp(value: &str) -> UtcTimestamp {
+    value.parse().expect("timestamp")
+}
+
+fn artifact_ref(id: &str, content: &str) -> ArtifactRefV1 {
+    ArtifactRefV1 {
+        artifact_id: stable(id),
+        content_digest: digest(content),
+    }
+}
+
+fn dag() -> ArtifactDagV1 {
+    let mut value = ArtifactDagV1 {
+        contract: stable(ARTIFACT_DAG_CONTRACT),
+        program_id: stable("w6-program-fixture-001"),
+        registration_digest: fixture().registration_digest,
+        artifacts: vec![
+            ArtifactOccurrenceV1 {
+                artifact_id: stable("artifact-market-001"),
+                kind_id: stable("market_atlas_fixture"),
+                content_digest: digest("market atlas fixture bytes"),
+                information_cutoff: timestamp("2026-08-18T00:00:01.000000Z"),
+                produced_at: timestamp("2026-08-18T00:00:02.000000Z"),
+                parents: vec![],
+                authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+                semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+            },
+            ArtifactOccurrenceV1 {
+                artifact_id: stable("artifact-proposal-001"),
+                kind_id: stable("research_proposal_fixture"),
+                content_digest: digest("research proposal fixture bytes"),
+                information_cutoff: timestamp("2026-08-18T00:00:02.000000Z"),
+                produced_at: timestamp("2026-08-18T00:00:03.000000Z"),
+                parents: vec![artifact_ref(
+                    "artifact-market-001",
+                    "market atlas fixture bytes",
+                )],
+                authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+                semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+            },
+        ],
+        dag_digest: digest("placeholder DAG digest"),
+    };
+    value.dag_digest =
+        digest_bytes(&canonical_bytes(&value.digest_material()).expect("DAG material"))
+            .expect("DAG digest");
+    value
+}
+
+fn ledger(dag: &ArtifactDagV1) -> FixtureDecisionLedgerV1 {
+    let market = artifact_ref("artifact-market-001", "market atlas fixture bytes");
+    let proposal = artifact_ref("artifact-proposal-001", "research proposal fixture bytes");
+    let mut value = FixtureDecisionLedgerV1 {
+        contract: stable(FIXTURE_DECISION_LEDGER_CONTRACT),
+        program_id: stable("w6-program-fixture-001"),
+        registration_digest: fixture().registration_digest,
+        artifact_dag_digest: dag.dag_digest.clone(),
+        decisions: vec![
+            ArtifactDecisionV1 {
+                decision_id: stable("decision-market-roundtrip-001"),
+                artifact: market.clone(),
+                predecessor_decision_id: None,
+                decision: ArtifactDecisionKindV1::PromoteFixtureRoundtrip,
+                decided_at: timestamp("2026-08-18T00:00:04.000000Z"),
+                evidence: vec![market],
+                reason: stable("deterministic_fixture_roundtrip_revalidated"),
+                authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+                semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+            },
+            ArtifactDecisionV1 {
+                decision_id: stable("decision-proposal-park-001"),
+                artifact: proposal.clone(),
+                predecessor_decision_id: None,
+                decision: ArtifactDecisionKindV1::Park,
+                decided_at: timestamp("2026-08-18T00:00:05.000000Z"),
+                evidence: vec![proposal],
+                reason: stable("awaits_store_resolved_wave5_gates"),
+                authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+                semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+            },
+        ],
+        ledger_digest: digest("placeholder ledger digest"),
+    };
+    value.ledger_digest =
+        digest_bytes(&canonical_bytes(&value.digest_material()).expect("ledger material"))
+            .expect("ledger digest");
+    value
 }
 
 #[test]
@@ -103,5 +205,130 @@ fn digest_wire_form_is_strict_lowercase_sha256() {
         Err(RegistryError::DigestFormat {
             field: "sourceTreeDigest"
         })
+    ));
+}
+
+#[test]
+fn exact_artifact_dag_closes_topology_and_time() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let value = dag();
+    let bytes = canonical_bytes(&value).expect("DAG bytes");
+    let parsed = parse_artifact_dag_exact(&bytes, &registration).expect("exact DAG");
+    assert_eq!(parsed.value(), &value);
+    assert_eq!(
+        parsed.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+
+    let mut future_parent = dag();
+    future_parent.artifacts[0].produced_at = timestamp("2026-08-18T00:00:04.000000Z");
+    future_parent.dag_digest =
+        digest_bytes(&canonical_bytes(&future_parent.digest_material()).expect("material"))
+            .expect("digest");
+    let bytes = canonical_bytes(&future_parent).expect("bytes");
+    assert!(matches!(
+        parse_artifact_dag_exact(&bytes, &registration),
+        Err(RegistryError::Dag("parent closure"))
+    ));
+}
+
+#[test]
+fn artifact_identity_content_and_kind_substitution_refuse() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let mut duplicate = dag();
+    duplicate.artifacts[1].content_digest = duplicate.artifacts[0].content_digest.clone();
+    duplicate.dag_digest =
+        digest_bytes(&canonical_bytes(&duplicate.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_artifact_dag_exact(&canonical_bytes(&duplicate).expect("bytes"), &registration),
+        Err(RegistryError::Dag("artifact occurrence"))
+    ));
+
+    let mut unknown_kind = dag();
+    unknown_kind.artifacts[0].kind_id = stable("unregistered_result");
+    unknown_kind.dag_digest =
+        digest_bytes(&canonical_bytes(&unknown_kind.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_artifact_dag_exact(
+            &canonical_bytes(&unknown_kind).expect("bytes"),
+            &registration
+        ),
+        Err(RegistryError::Dag("artifact occurrence"))
+    ));
+}
+
+#[test]
+fn claim_grammar_is_exactly_rung_and_kind_bound() {
+    let registration = fixture();
+    let claim = ClaimLanguageV1 {
+        claim_id: stable("claim-market-fixture-001"),
+        artifact_id: stable("artifact-market-001"),
+        artifact_kind_id: stable("market_atlas_fixture"),
+        statement: stable("fixture_point_in_time_description"),
+        rung: ClaimRungV1::H2Descriptive,
+        verb: ClaimVerbV1::ObservationPolicyScopedDescription,
+        causality: ClaimCausalityV1::NotClaimed,
+        identity_meaning: ClaimIdentityMeaningV1::NotClaimed,
+        economic_meaning: ClaimEconomicMeaningV1::NoEconomicAuthorityOrProfitClaim,
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    };
+    let validated = validate_claim_language(&registration, claim.clone()).expect("claim grammar");
+    assert_eq!(validated.value(), &claim);
+
+    let mut causal_laundering = claim.clone();
+    causal_laundering.verb = ClaimVerbV1::CalibratedConditionalEstimate;
+    assert!(matches!(
+        validate_claim_language(&registration, causal_laundering),
+        Err(RegistryError::ClaimLanguage)
+    ));
+
+    let mut arbitrary_wording = claim;
+    arbitrary_wording.statement = stable("profitable_market_pressure");
+    assert!(matches!(
+        validate_claim_language(&registration, arbitrary_wording),
+        Err(RegistryError::ClaimLanguage)
+    ));
+}
+
+#[test]
+fn fixture_decisions_are_append_only_and_never_store_promotion() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let dag_value = dag();
+    let dag_bytes = canonical_bytes(&dag_value).expect("DAG bytes");
+    let parsed_dag = parse_artifact_dag_exact(&dag_bytes, &registration).expect("DAG");
+    let value = ledger(&dag_value);
+    let bytes = canonical_bytes(&value).expect("ledger bytes");
+    let parsed =
+        parse_decision_ledger_exact(&bytes, &registration, &parsed_dag).expect("ledger closure");
+    assert_eq!(parsed.value(), &value);
+
+    let mut branched = ledger(&dag_value);
+    branched.decisions.push(ArtifactDecisionV1 {
+        decision_id: stable("decision-market-branch-002"),
+        artifact: artifact_ref("artifact-market-001", "market atlas fixture bytes"),
+        predecessor_decision_id: None,
+        decision: ArtifactDecisionKindV1::Park,
+        decided_at: timestamp("2026-08-18T00:00:06.000000Z"),
+        evidence: vec![artifact_ref(
+            "artifact-market-001",
+            "market atlas fixture bytes",
+        )],
+        reason: stable("branch_attempt"),
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    });
+    branched.ledger_digest =
+        digest_bytes(&canonical_bytes(&branched.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_decision_ledger_exact(
+            &canonical_bytes(&branched).expect("bytes"),
+            &registration,
+            &parsed_dag
+        ),
+        Err(RegistryError::Decision("branch or clock rollback"))
     ));
 }

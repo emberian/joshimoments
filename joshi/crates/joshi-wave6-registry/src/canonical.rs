@@ -4,7 +4,44 @@ use joshi_domain::ValueDigest;
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
-use crate::{RegistryError, Result, SemanticCeilingV1, Wave6ProgramRegistrationV1};
+use crate::{
+    ArtifactDagV1, FixtureDecisionLedgerV1, RegistryError, Result, SemanticCeilingV1,
+    Wave6ProgramRegistrationV1,
+};
+
+/// Any strictly decoded, exact, unverified fixture artifact.
+#[derive(Clone, Debug)]
+pub struct ValidatedExactArtifact<T> {
+    value: T,
+    exact_bytes: Vec<u8>,
+    document_digest: ValueDigest,
+}
+
+impl<T> ValidatedExactArtifact<T> {
+    /// Returns the validated value.
+    #[must_use]
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Returns the sole canonical bytes including one trailing newline.
+    #[must_use]
+    pub fn exact_bytes(&self) -> &[u8] {
+        &self.exact_bytes
+    }
+
+    /// Returns the digest of the full exact document.
+    #[must_use]
+    pub const fn document_digest(&self) -> &ValueDigest {
+        &self.document_digest
+    }
+
+    /// Exact parsing does not confer store authority.
+    #[must_use]
+    pub const fn semantic_ceiling(&self) -> SemanticCeilingV1 {
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    }
+}
 
 /// A validated fixture registration and its exact document bytes.
 ///
@@ -85,5 +122,44 @@ pub fn parse_program_registration_exact(bytes: &[u8]) -> Result<ValidatedProgram
         value,
         exact_bytes: bytes.to_vec(),
         document_digest,
+    })
+}
+
+/// Strictly parses an exact artifact DAG and validates it against `registration`.
+///
+/// # Errors
+///
+/// Refuses noncanonical bytes, digest mismatch, future/unknown parents, duplicate identities, or
+/// any authority wider than fixture semantics.
+pub fn parse_artifact_dag_exact(
+    bytes: &[u8],
+    registration: &ValidatedProgramRegistration,
+) -> Result<ValidatedExactArtifact<ArtifactDagV1>> {
+    let value: ArtifactDagV1 = decode_canonical(bytes)?;
+    value.validate(registration.value())?;
+    Ok(ValidatedExactArtifact {
+        value,
+        exact_bytes: bytes.to_vec(),
+        document_digest: digest_bytes(bytes)?,
+    })
+}
+
+/// Strictly parses an append-only fixture decision ledger against its exact DAG.
+///
+/// # Errors
+///
+/// Refuses noncanonical bytes, branching/backdated decisions, unknown evidence, digest mismatch,
+/// or authority widening.
+pub fn parse_decision_ledger_exact(
+    bytes: &[u8],
+    registration: &ValidatedProgramRegistration,
+    dag: &ValidatedExactArtifact<ArtifactDagV1>,
+) -> Result<ValidatedExactArtifact<FixtureDecisionLedgerV1>> {
+    let value: FixtureDecisionLedgerV1 = decode_canonical(bytes)?;
+    value.validate(registration.value(), dag.value())?;
+    Ok(ValidatedExactArtifact {
+        value,
+        exact_bytes: bytes.to_vec(),
+        document_digest: digest_bytes(bytes)?,
     })
 }
