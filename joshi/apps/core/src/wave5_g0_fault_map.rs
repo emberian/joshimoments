@@ -19,6 +19,7 @@ pub(crate) enum G0ExecutableFaultAdapter {
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)] // Keep the frozen one-to-one schedule mapping visibly exhaustive.
 pub(crate) const fn fault_adapter(point: CrashPoint) -> Option<G0ExecutableFaultAdapter> {
     match point {
         CrashPoint::BeforeStoreReceipt => Some(G0ExecutableFaultAdapter::Catalog(
@@ -89,6 +90,24 @@ pub(crate) const fn fault_adapter(point: CrashPoint) -> Option<G0ExecutableFault
                 Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
             ))
         }
+        CrashPoint::BeforeExport => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::BeforeV10Export,
+        )),
+        CrashPoint::After(KillPoint::AfterExport) => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::AfterV10Export,
+        )),
+        CrashPoint::BeforeImport => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::BeforeImportReadback,
+        )),
+        CrashPoint::After(KillPoint::AfterImport) => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::AfterImportReadback,
+        )),
+        CrashPoint::BeforeStatus => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryReady,
+        )),
+        CrashPoint::After(KillPoint::AfterStatus) => Some(G0ExecutableFaultAdapter::Component(
+            Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryReady,
+        )),
         CrashPoint::BeforeBackup => Some(G0ExecutableFaultAdapter::FinalRecovery(
             G0FinalRecoveryFaultPoint::BeforeBackup,
         )),
@@ -109,16 +128,7 @@ pub(crate) const fn fault_adapter(point: CrashPoint) -> Option<G0ExecutableFault
         )),
         CrashPoint::BeforePreIoReservation
         | CrashPoint::BeforeOriginFsync
-        | CrashPoint::BeforeExport
-        | CrashPoint::BeforeImport
-        | CrashPoint::BeforeStatus
-        | CrashPoint::After(
-            KillPoint::AfterPreIoReservation
-            | KillPoint::AfterOriginFsync
-            | KillPoint::AfterExport
-            | KillPoint::AfterImport
-            | KillPoint::AfterStatus,
-        ) => None,
+        | CrashPoint::After(KillPoint::AfterPreIoReservation | KillPoint::AfterOriginFsync) => None,
     }
 }
 
@@ -128,7 +138,7 @@ mod tests {
     use joshi_g0_harness::FakeFaultSchedule;
 
     #[test]
-    fn frozen_schedule_has_exactly_twenty_six_mapped_and_ten_blocked_faults() {
+    fn frozen_schedule_has_exactly_thirty_two_mapped_and_four_blocked_faults() {
         let schedule: FakeFaultSchedule = serde_json::from_slice(include_bytes!(
             "../../../fixtures/g0-fault/fake_fault_schedule.json"
         ))
@@ -146,20 +156,14 @@ mod tests {
                 blocked.push(point);
             }
         }
-        assert_eq!(mapped.len(), 26);
+        assert_eq!(mapped.len(), 32);
         assert_eq!(
             blocked,
             vec![
                 CrashPoint::BeforePreIoReservation,
                 CrashPoint::BeforeOriginFsync,
-                CrashPoint::BeforeExport,
-                CrashPoint::BeforeImport,
-                CrashPoint::BeforeStatus,
                 CrashPoint::After(KillPoint::AfterPreIoReservation),
                 CrashPoint::After(KillPoint::AfterOriginFsync),
-                CrashPoint::After(KillPoint::AfterExport),
-                CrashPoint::After(KillPoint::AfterImport),
-                CrashPoint::After(KillPoint::AfterStatus),
             ]
         );
     }

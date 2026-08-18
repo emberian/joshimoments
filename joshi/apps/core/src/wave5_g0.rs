@@ -98,6 +98,8 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterV10Export,
     BeforeV10ExportBinding,
     AfterV10ExportBinding,
+    BeforeImportReadback,
+    AfterImportReadback,
     BeforeExportRecoveryReady,
     AfterExportRecoveryReady,
     BeforeBackup,
@@ -756,6 +758,24 @@ pub fn run_wave5_g0_source_publication_with_fault(
     inject(
         fault,
         Wave5G0SourcePublicationFaultPoint::AfterV10ExportBinding,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeImportReadback,
+    )?;
+    let post_export_import = store
+        .load_wave5_g0_import_occurrence_v1(&baseline.import.import_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "registered import was absent after V10 export",
+        ))?;
+    if post_export_import != baseline.import {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "registered import changed across the V10 export",
+        ));
+    }
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterImportReadback,
     )?;
     inject(
         fault,
@@ -2268,6 +2288,8 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterV10Export,
             Wave5G0SourcePublicationFaultPoint::BeforeV10ExportBinding,
             Wave5G0SourcePublicationFaultPoint::AfterV10ExportBinding,
+            Wave5G0SourcePublicationFaultPoint::BeforeImportReadback,
+            Wave5G0SourcePublicationFaultPoint::AfterImportReadback,
             Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryReady,
             Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryReady,
             Wave5G0SourcePublicationFaultPoint::BeforeBackup,

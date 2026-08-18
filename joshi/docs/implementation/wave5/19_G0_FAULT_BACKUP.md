@@ -121,13 +121,19 @@ remain absent from this component bundle and therefore cannot appear
 `observed_partial`. The partial backup contains the store-reachable external source object,
 but not the separate supervisor spool inventory, and does not make the original roots unavailable.
 The component-local recovery matrix now includes before/after interruption points around the
-censored memory closure, for thirty exact points total. This does not add a harness step or turn the
-separate 37-scenario root matrix true.
+censored memory closure and the post-export restricted-import readback, for thirty-two exact points
+total. The import boundary reopens and rehashes the already registered manifest/Parquet CAS after
+the V10 export; it does not invent a second import commit. This does not add a harness step or turn
+the separate 37-scenario root matrix true.
 The one-shot paired route has its own six exact component-local interruptions: before/after
 exchange, before/after exact Cockpit read, and before/after pairing reopen. Each injected run is
 followed by a fresh-session recovery on the same catalog and an identical response-body check.
-Together with the thirty source/publication/memory/export points this is 36 package-local fault
-checks, not a mapping of all 36 schedule transitions and not a root qualification.
+Together with the thirty-two source/publication/memory/export points this is 38 package-local fault
+checks. A separate exact adapter map covers 32 of the frozen schedule's 36 transitions: six
+origin/store transitions, sixteen component transitions, four pairing/Glass transitions, and six
+final backup/restore/reopen transitions. Only before/after pre-I/O reservation and before/after
+origin fsync remain unmapped. Those package-local checks still do not emit a result for each frozen
+scenario and therefore are not a root qualification.
 
 ## Backup, restore, and reopen requirements
 
