@@ -212,13 +212,14 @@ apply_migration "$schema_dir/migrations/0010_wave5_g0_store_spine.sql"
 apply_migration "$schema_dir/migrations/0011_wave6_program_registry.sql"
 apply_migration "$schema_dir/migrations/0012_wave6_artifact_schemas.sql"
 apply_migration "$schema_dir/migrations/0013_wave6_fixture_artifacts.sql"
+apply_migration "$schema_dir/migrations/0014_wave6_artifact_dag.sql"
 upgrade_version=$($sqlite_bin "$validation_db" 'PRAGMA user_version;')
 upgrade_integrity=$($sqlite_bin "$validation_db" 'PRAGMA integrity_check;')
 upgrade_clock=$($sqlite_bin -separator '|' "$validation_db" \
     "SELECT local_clock_id,started_mono_ns FROM acquisition WHERE acquisition_id='upgrade-acquisition';")
-if [[ "$upgrade_version" != 13 || "$upgrade_integrity" != ok \
+if [[ "$upgrade_version" != 14 || "$upgrade_integrity" != ok \
       || "$upgrade_clock" != 'upgrade-source-clock|7' ]]; then
-    echo "V4-to-V13 upgrade validation failed: version=$upgrade_version integrity=$upgrade_integrity" >&2
+    echo "V4-to-V14 upgrade validation failed: version=$upgrade_version integrity=$upgrade_integrity" >&2
     exit 1
 fi
 for suffix in '' '-wal' '-shm'; do

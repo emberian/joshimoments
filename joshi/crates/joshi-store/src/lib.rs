@@ -48,8 +48,9 @@ pub use wave5::{
     Wave5SpoolCatalogBindingV1,
 };
 pub use wave6::{
-    StoredWave6ArtifactSchema, StoredWave6FixtureArtifact, StoredWave6ProgramRegistration,
-    Wave6ArtifactSchemaReceipt, Wave6FixtureArtifactReceipt, Wave6ProgramRegistrationReceipt,
+    StoredWave6ArtifactSchema, StoredWave6FixtureArtifact, StoredWave6FixtureArtifactDag,
+    StoredWave6ProgramRegistration, Wave6ArtifactSchemaReceipt, Wave6FixtureArtifactDagReceipt,
+    Wave6FixtureArtifactReceipt, Wave6ProgramRegistrationReceipt,
 };
 
 /// `SQLite` application identifier (`JOSH` in ASCII).

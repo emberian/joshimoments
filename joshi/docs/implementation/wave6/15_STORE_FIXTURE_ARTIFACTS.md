@@ -1,7 +1,7 @@
 # Wave 6 exact fixture artifact content
 
-Status: **PASS for durable exact evaluation bytes under their registered schemas; BLOCKED for an
-artifact-DAG occurrence, empirical claim, or operational release.**
+Status: **PASS for durable exact evaluation bytes under their registered schemas; V14 separately
+binds them as a fixture DAG; BLOCKED for an empirical claim or operational release.**
 
 Migration V13 adds `wave6_fixture_artifact_content_v1`. The sole store accepts the three checked
 generic, protocol and structural known-truth evaluation outputs only after their N00 program and
@@ -25,17 +25,18 @@ budget in the same transaction, and keeps the content table append-only. Exact r
 original commit. Kind/schema substitution, changed bytes and a second batch for the same content
 refuse.
 
-## Deliberate non-occurrence boundary
+## Deliberate content boundary
 
-This is content persistence, not an `ArtifactOccurrenceV1`. The table intentionally carries no
+The V13 row is content persistence, not an `ArtifactOccurrenceV1`. The table intentionally carries no
 information cutoff, production time, parent edges or DAG digest. It resolves no Wave 5 gate and
 does not make the fixture candidate a market observation, estimator result, economic claim,
 product capability or live release. The public ceiling remains
 `unverified_semantic_fixture_only`.
 
-Core's V3 registration report commits, exactly retries and read-only reopens all three artifacts
-after the six schemas. The foundation witness names only
-`exact_fixture_artifact_content_restart`; its `artifactOccurrence` qualification remains false.
+Core's V4 registration report commits, exactly retries and read-only reopens all three artifacts
+after the six schemas, then separately commits their exact V14 fixture DAG. The foundation witness
+therefore distinguishes a true `fixtureArtifactDagOccurrence` from the still-false
+`empiricalArtifactOccurrence` qualification.
 
 ## Verification
 

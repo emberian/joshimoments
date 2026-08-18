@@ -1,7 +1,7 @@
 # Wave 6 exact artifact-schema catalog
 
-Status: **PASS for durable exact schema bytes under N00; V13 separately retains three evaluation
-contents; BLOCKED for every artifact-DAG/result occurrence and every empirical claim.**
+Status: **PASS for durable exact schema bytes under N00; V13 retains three evaluation contents and
+V14 separately retains their fixture DAG; BLOCKED for every empirical or operational claim.**
 
 Migration V12 adds `wave6_registered_artifact_schema_v1`. It is a one-way join from the exact N00
 program row to the six checked schema documents already named by that registration.
@@ -33,7 +33,7 @@ The six retained documents are:
 | `research_proposal_fixture` | `joshi.analysis.wave6-research-desk/v1` |
 | `structural_known_truth_evaluation_fixture` | `joshi.analysis.wave6-structural-known-truth/v1` |
 
-The Core `wave6-program-registration` command commits all six in this exact order. Its V2 report
+The Core `wave6-program-registration` command commits all six in this exact order. Its V4 report
 emits each kind/schema/digest/commit tuple, requires `registeredSchemaCount="6"`, then proves the
 same tuples and bytes through a read-only reopen. Re-running the command yields the same six
 original commit identities.
@@ -48,9 +48,9 @@ authority.
 
 The three checked evaluation artifacts under `fixtures/wave6/artifacts` exactly implement their
 registered schema fields and are independently regenerated and reparsed by the Python known-truth
-suite. V13 now retains those exact output bytes under a separate content-only receipt. Binding a
-later artifact DAG still requires a distinct occurrence with explicit time and parent closure;
-repository or content-row presence alone does not raise this catalog's ceiling.
+suite. V13 retains those exact output bytes under a separate content-only receipt. V14 then binds
+them in a distinct fixture occurrence with explicit fixture time and parent closure. Repository,
+schema or content-row presence alone does not raise this catalog's ceiling.
 
 ## Verification
 

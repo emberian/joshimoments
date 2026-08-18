@@ -74,6 +74,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0013_wave6_fixture_artifacts.sql",
         sql: include_str!("../../../schema/migrations/0013_wave6_fixture_artifacts.sql"),
     },
+    Migration {
+        id: 14,
+        name: "0014_wave6_artifact_dag.sql",
+        sql: include_str!("../../../schema/migrations/0014_wave6_artifact_dag.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -327,12 +332,12 @@ mod tests {
         assert_eq!(g0.current, 10);
         assert_eq!(g0.applied, vec![10]);
 
-        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V13");
-        assert_eq!(current.current, 13);
-        assert_eq!(current.applied, vec![11, 12, 13]);
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V14");
+        assert_eq!(current.current, 14);
+        assert_eq!(current.applied, vec![11, 12, 13, 14]);
 
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
-            .expect_err("G0 migration cannot downgrade V13");
+            .expect_err("G0 migration cannot downgrade V14");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
     }
 }

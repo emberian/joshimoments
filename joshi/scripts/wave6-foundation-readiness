@@ -37,12 +37,12 @@ cargo run --locked --offline -q -p joshi-core -- wave6-program-registration \
   --state "$JOSHI_W6_STATE/catalog" > "$JOSHI_W6_STATE/program-retry.json"
 
 jq -e '
-  .contract == "joshi.core.wave6_program_registration_report.v3"
-  and .schemaVersion == 3
+  .contract == "joshi.core.wave6_program_registration_report.v4"
+  and .schemaVersion == 4
   and .status == "fixture_only"
   and .authority == "read_record_replay_propose_shadow_only"
   and .semanticCeiling == "unverified_semantic_fixture_only"
-  and .catalogSchema == "joshi.sqlite.v13"
+  and .catalogSchema == "joshi.sqlite.v14"
   and .programId == "w6-program-fixture-001"
   and (.registrationDigest | test("^sha256:[0-9a-f]{64}$"))
   and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
@@ -82,6 +82,15 @@ jq -e '
     | all(test("^[1-9][0-9]*$")))
   and .fixtureArtifactContentPersisted == true
   and .fixtureArtifactContentRestartReverified == true
+  and (.fixtureArtifactDag.dagId | test("^wave6-dag:[0-9a-f]{64}$"))
+  and .fixtureArtifactDag.dagDigest == "sha256:54c1773c3c0c29a9663bb5ad53b2d9b203a9dc8a1c7723935cabed74bc65ce09"
+  and (.fixtureArtifactDag.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+  and .fixtureArtifactDag.artifactCount == "3"
+  and .fixtureArtifactDag.maximumInformationCutoff == "2026-08-18T00:10:00.000000Z"
+  and .fixtureArtifactDag.maximumProducedAt == "2026-08-18T00:32:00.000000Z"
+  and (.fixtureArtifactDag.commitSeq | test("^[1-9][0-9]*$"))
+  and .fixtureArtifactDagPersisted == true
+  and .fixtureArtifactDagRestartReverified == true
   and .consumedWave5GateCount == "0"
   and .providerUnits == "0"
   and .externalMutationUnits == "0"
@@ -100,6 +109,7 @@ jq -e --slurpfile first "$JOSHI_W6_STATE/program-first.json" '
   and .documentDigest == $first[0].documentDigest
   and .schemas == $first[0].schemas
   and .fixtureArtifacts == $first[0].fixtureArtifacts
+  and .fixtureArtifactDag == $first[0].fixtureArtifactDag
   and .wave5GatesResolved == false
   and .operationalRelease == false
   and .empiricalClaim == false
@@ -114,16 +124,19 @@ JOSHI_W6_SCHEMA_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0012_wave6_artifact_schemas.sql | awk '{print $1}')
 JOSHI_W6_ARTIFACT_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0013_wave6_fixture_artifacts.sql | awk '{print $1}')
+JOSHI_W6_DAG_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0014_wave6_artifact_dag.sql | awk '{print $1}')
 
 jq -cn \
   --arg report "sha256:$JOSHI_W6_PROGRAM_SHA" \
   --arg program_migration "sha256:$JOSHI_W6_PROGRAM_MIGRATION_SHA" \
   --arg schema_migration "sha256:$JOSHI_W6_SCHEMA_MIGRATION_SHA" \
   --arg artifact_migration "sha256:$JOSHI_W6_ARTIFACT_MIGRATION_SHA" \
+  --arg dag_migration "sha256:$JOSHI_W6_DAG_MIGRATION_SHA" \
   --slurpfile program "$JOSHI_W6_STATE/program-first.json" '
   {
-    contract: "joshi.wave6.fixture_foundation_witness.v2",
-    schemaVersion: 2,
+    contract: "joshi.wave6.fixture_foundation_witness.v3",
+    schemaVersion: 3,
     authority: "read_record_replay_propose_shadow_only",
     status: "fixture_only",
     semanticCeiling: "unverified_semantic_fixture_only",
@@ -134,26 +147,30 @@ jq -cn \
     programMigrationDigest: $program_migration,
     schemaMigrationDigest: $schema_migration,
     artifactMigrationDigest: $artifact_migration,
+    dagMigrationDigest: $dag_migration,
     registeredSchemaCount: $program[0].registeredSchemaCount,
     schemas: $program[0].schemas,
     fixtureArtifactContentCount: $program[0].fixtureArtifactContentCount,
     fixtureArtifacts: $program[0].fixtureArtifacts,
+    fixtureArtifactDag: $program[0].fixtureArtifactDag,
     attainedCapabilities: [
       "exact_fixture_program_restart",
       "exact_fixture_schema_catalog_restart",
-      "exact_fixture_artifact_content_restart"
+      "exact_fixture_artifact_content_restart",
+      "exact_fixture_artifact_dag_restart"
     ],
     qualification: {
       wave5GatesResolved: false,
       operationalRelease: false,
-      artifactOccurrence: false,
+      fixtureArtifactDagOccurrence: true,
+      empiricalArtifactOccurrence: false,
       empiricalClaim: false,
       providerIo: false,
       externalMutation: false,
       productQualified: false,
       liveQualified: false
     },
-    claim: "fixture_program_schema_and_evaluation_content_only"
+    claim: "fixture_program_schema_evaluation_content_and_dag_only"
   }
 ' > "$JOSHI_W6_STATE/wave6-foundation-witness.json"
 

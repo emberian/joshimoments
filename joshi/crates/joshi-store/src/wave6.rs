@@ -6,8 +6,8 @@
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError};
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
 use joshi_wave6_registry::{
-    SemanticCeilingV1, ValidatedProgramRegistration, parse_evaluation_artifact_exact,
-    parse_program_registration_exact,
+    ArtifactDagV1, SemanticCeilingV1, ValidatedProgramRegistration, parse_artifact_dag_exact,
+    parse_evaluation_artifact_exact, parse_program_registration_exact,
 };
 use rusqlite::{OptionalExtension as _, Transaction, params};
 use sha2::{Digest as _, Sha256};
@@ -15,6 +15,7 @@ use sha2::{Digest as _, Sha256};
 const MAX_REGISTRATION_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 const MAX_FIXTURE_ARTIFACT_BYTES: usize = 512 * 1024;
+const MAX_FIXTURE_DAG_BYTES: usize = 512 * 1024;
 
 /// Durable receipt for an exact fixture-only Wave 6 program registration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -113,6 +114,43 @@ pub struct StoredWave6FixtureArtifact {
     pub semantic_ceiling: SemanticCeilingV1,
 }
 
+/// Durable receipt for one exact fixture-only artifact DAG.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wave6FixtureArtifactDagReceipt {
+    pub catalog_id: StableString,
+    pub catalog_schema: StableString,
+    pub batch_id: StableString,
+    pub dag_id: StableString,
+    pub program_id: StableString,
+    pub dag_digest: ValueDigest,
+    pub document_digest: ValueDigest,
+    pub artifact_count: u64,
+    pub maximum_information_cutoff: UtcTimestamp,
+    pub maximum_produced_at: UtcTimestamp,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+    pub status: IdempotencyStatus,
+}
+
+/// Exact artifact DAG re-parsed and cross-checked against durable content after restart.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave6FixtureArtifactDag {
+    pub batch_id: StableString,
+    pub dag_id: StableString,
+    pub program_id: StableString,
+    pub registration_digest: ValueDigest,
+    pub dag_digest: ValueDigest,
+    pub document_digest: ValueDigest,
+    pub exact_bytes: Vec<u8>,
+    pub artifact_count: u64,
+    pub maximum_information_cutoff: UtcTimestamp,
+    pub maximum_produced_at: UtcTimestamp,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+}
+
 struct RegistrationRow {
     batch_id: String,
     family_id: String,
@@ -168,6 +206,33 @@ struct FixtureArtifactRow {
     semantic_ceiling: String,
     commit_seq: i64,
     commit_digest_raw: String,
+}
+
+struct FixtureDagRow {
+    batch_id: String,
+    program_id: String,
+    registration_raw: String,
+    dag_raw: String,
+    document_raw: String,
+    bytes: Vec<u8>,
+    byte_length: i64,
+    artifact_count: i64,
+    maximum_information_us: i64,
+    maximum_produced_us: i64,
+    semantic_ceiling: String,
+    commit_seq: i64,
+    commit_digest_raw: String,
+}
+
+struct FixtureDagMemberRow {
+    ordinal: i64,
+    artifact_id: String,
+    kind_id: String,
+    content_raw: String,
+    information_us: i64,
+    produced_us: i64,
+    parent_count: i64,
+    semantic_ceiling: String,
 }
 
 impl SqliteStore {
@@ -660,6 +725,215 @@ impl SqliteStore {
         };
         stored_fixture_artifact(self, artifact_id, row).map(Some)
     }
+
+    /// Persists one exact fixture DAG after resolving every member to prior durable content.
+    ///
+    /// The DAG's clocks remain fixture declarations. Durability does not make them observations or
+    /// resolve a Wave 5, empirical, operational, product, live, causal, or economic gate.
+    ///
+    /// # Errors
+    ///
+    /// Refuses absent registration/content, noncanonical or oversized bytes, identity/kind/digest
+    /// substitution, invalid topology/clocks, a conflicting batch, read-only state, or failed
+    /// exact readback.
+    #[allow(clippy::too_many_lines)] // Keeps parse, content resolution, append, and readback local.
+    pub fn commit_wave6_fixture_artifact_dag_v1(
+        &mut self,
+        program_id: &StableString,
+        exact_bytes: &[u8],
+        batch_id: StableString,
+        writer_build: StableString,
+    ) -> Result<Wave6FixtureArtifactDagReceipt> {
+        if exact_bytes.is_empty() || exact_bytes.len() > MAX_FIXTURE_DAG_BYTES {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture DAG is empty or exceeds the exact-byte limit".into(),
+            ));
+        }
+        let registration = self
+            .load_wave6_program_registration_v1(program_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 program registration",
+                identity: program_id.to_string(),
+            })?;
+        let parsed_registration = parse_program_registration_exact(&registration.exact_bytes)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let parsed = parse_artifact_dag_exact(exact_bytes, &parsed_registration)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        validate_dag_contents(self, parsed.value(), None)?;
+        let dag_digest = parsed.value().dag_digest.clone();
+        let document_digest = parsed.document_digest().clone();
+        let dag_id = fixture_dag_id(program_id, &dag_digest)?;
+        let artifact_count = u64::try_from(parsed.value().artifacts.len()).map_err(|_| {
+            StoreError::IntegerRange {
+                field: "Wave 6 DAG artifact count",
+                value: parsed.value().artifacts.len().to_string(),
+            }
+        })?;
+        let maximum_information_cutoff = parsed
+            .value()
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.information_cutoff)
+            .max()
+            .ok_or_else(|| StoreError::InvalidBatch("Wave 6 fixture DAG is empty".into()))?;
+        let maximum_produced_at = parsed
+            .value()
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.produced_at)
+            .max()
+            .ok_or_else(|| StoreError::InvalidBatch("Wave 6 fixture DAG is empty".into()))?;
+        reject_second_dag_batch(self, &dag_id, &batch_id)?;
+        let operation_digest = dag_operation_digest(
+            program_id,
+            &registration.registration_digest,
+            &dag_digest,
+            &document_digest,
+        )?;
+        let context = self.begin_wave5_commit(batch_id.clone(), writer_build)?;
+        let generic = self.commit_wave5(
+            &context,
+            "maintenance",
+            &dag_id,
+            &document_digest,
+            &operation_digest,
+            |tx, seq| {
+                tx.execute(
+                    "INSERT INTO wave6_fixture_artifact_dag_v1
+                     (dag_id,program_id,registration_semantic_sha256,dag_semantic_sha256,
+                      dag_document_sha256,dag_bytes,dag_byte_length,artifact_count,
+                      maximum_information_cutoff_wall_us,maximum_produced_wall_us,
+                      semantic_ceiling,created_commit_seq)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                    params![
+                        dag_id.as_str(),
+                        program_id.as_str(),
+                        raw_digest(
+                            &registration.registration_digest,
+                            "Wave 6 DAG registration digest",
+                        )?,
+                        raw_digest(&dag_digest, "Wave 6 DAG semantic digest")?,
+                        raw_digest(&document_digest, "Wave 6 DAG document digest")?,
+                        exact_bytes,
+                        sqlite_len(exact_bytes.len(), "Wave 6 DAG bytes")?,
+                        sqlite_u64(artifact_count, "Wave 6 DAG artifact count")?,
+                        timestamp_us(maximum_information_cutoff, "Wave 6 DAG information cutoff")?,
+                        timestamp_us(maximum_produced_at, "Wave 6 DAG produced time")?,
+                        "unverified_semantic_fixture_only",
+                        seq,
+                    ],
+                )?;
+                for (ordinal, artifact) in parsed.value().artifacts.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO wave6_fixture_artifact_dag_member_v1
+                         (dag_id,ordinal,artifact_id,kind_id,content_sha256,
+                          information_cutoff_wall_us,produced_wall_us,parent_count,
+                          semantic_ceiling)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        params![
+                            dag_id.as_str(),
+                            sqlite_len(ordinal, "Wave 6 DAG member ordinal")?,
+                            artifact.artifact_id.as_str(),
+                            artifact.kind_id.as_str(),
+                            raw_digest(&artifact.content_digest, "Wave 6 DAG content digest")?,
+                            timestamp_us(
+                                artifact.information_cutoff,
+                                "Wave 6 DAG member information cutoff",
+                            )?,
+                            timestamp_us(artifact.produced_at, "Wave 6 DAG member produced time")?,
+                            sqlite_len(artifact.parents.len(), "Wave 6 DAG parent count")?,
+                            "unverified_semantic_fixture_only",
+                        ],
+                    )?;
+                }
+                Ok(())
+            },
+        )?;
+        let stored = self
+            .load_wave6_fixture_artifact_dag_v1(&dag_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture artifact DAG",
+                identity: dag_id.to_string(),
+            })?;
+        if stored.batch_id != batch_id
+            || stored.program_id != *program_id
+            || stored.registration_digest != registration.registration_digest
+            || stored.dag_digest != dag_digest
+            || stored.document_digest != document_digest
+            || stored.exact_bytes != exact_bytes
+            || stored.artifact_count != artifact_count
+            || stored.maximum_information_cutoff != maximum_information_cutoff
+            || stored.maximum_produced_at != maximum_produced_at
+            || stored.commit_seq != generic.commit_seq
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture DAG readback differs from its exact commit".into(),
+            ));
+        }
+        Ok(Wave6FixtureArtifactDagReceipt {
+            catalog_id: generic.catalog_id,
+            catalog_schema: generic.catalog_schema,
+            batch_id,
+            dag_id,
+            program_id: program_id.clone(),
+            dag_digest: stored.dag_digest,
+            document_digest: stored.document_digest,
+            artifact_count: stored.artifact_count,
+            maximum_information_cutoff: stored.maximum_information_cutoff,
+            maximum_produced_at: stored.maximum_produced_at,
+            commit_seq: stored.commit_seq,
+            commit_digest: stored.commit_digest,
+            semantic_ceiling: stored.semantic_ceiling,
+            status: generic.status,
+        })
+    }
+
+    /// Loads and independently reparses a DAG and every exact prior member content row.
+    ///
+    /// # Errors
+    ///
+    /// Refuses changed bytes/scalars/members, missing or later content, or invalid commit lineage.
+    pub fn load_wave6_fixture_artifact_dag_v1(
+        &self,
+        dag_id: &StableString,
+    ) -> Result<Option<StoredWave6FixtureArtifactDag>> {
+        let row: Option<FixtureDagRow> = self
+            .connection
+            .query_row(
+                "SELECT commit_row.commit_id,dag.program_id,
+                        dag.registration_semantic_sha256,dag.dag_semantic_sha256,
+                        dag.dag_document_sha256,dag.dag_bytes,dag.dag_byte_length,
+                        dag.artifact_count,dag.maximum_information_cutoff_wall_us,
+                        dag.maximum_produced_wall_us,dag.semantic_ceiling,
+                        dag.created_commit_seq,commit_row.commit_digest
+                 FROM wave6_fixture_artifact_dag_v1 dag
+                 JOIN ingest_commit commit_row ON commit_row.commit_seq=dag.created_commit_seq
+                 WHERE dag.dag_id=?1",
+                [dag_id.as_str()],
+                |row| {
+                    Ok(FixtureDagRow {
+                        batch_id: row.get(0)?,
+                        program_id: row.get(1)?,
+                        registration_raw: row.get(2)?,
+                        dag_raw: row.get(3)?,
+                        document_raw: row.get(4)?,
+                        bytes: row.get(5)?,
+                        byte_length: row.get(6)?,
+                        artifact_count: row.get(7)?,
+                        maximum_information_us: row.get(8)?,
+                        maximum_produced_us: row.get(9)?,
+                        semantic_ceiling: row.get(10)?,
+                        commit_seq: row.get(11)?,
+                        commit_digest_raw: row.get(12)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        stored_fixture_dag(self, dag_id, row).map(Some)
+    }
 }
 
 fn validate_canonical_schema(bytes: &[u8]) -> Result<()> {
@@ -926,6 +1200,214 @@ fn stored_fixture_artifact(
     })
 }
 
+fn reject_second_dag_batch(
+    store: &SqliteStore,
+    dag_id: &StableString,
+    batch_id: &StableString,
+) -> Result<()> {
+    let existing: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT commit_row.commit_id
+             FROM wave6_fixture_artifact_dag_v1 dag
+             JOIN ingest_commit commit_row ON commit_row.commit_seq=dag.created_commit_seq
+             WHERE dag.dag_id=?1",
+            [dag_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|value| value != batch_id.as_str())
+    {
+        return Err(StoreError::IdentityConflict {
+            kind: "Wave 6 fixture artifact DAG",
+            identity: dag_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn fixture_dag_id(program_id: &StableString, dag_digest: &ValueDigest) -> Result<StableString> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_artifact_dag_identity.v1",
+        program_id,
+        dag_digest,
+    ))?;
+    let digest = digest_bytes(&bytes)?;
+    stable(
+        &format!(
+            "wave6-dag:{}",
+            raw_digest(&digest, "Wave 6 DAG identity digest")?
+        ),
+        "Wave 6 fixture DAG ID",
+    )
+}
+
+fn dag_operation_digest(
+    program_id: &StableString,
+    registration_digest: &ValueDigest,
+    dag_digest: &ValueDigest,
+    document_digest: &ValueDigest,
+) -> Result<ValueDigest> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_artifact_dag_commit.v1",
+        program_id,
+        registration_digest,
+        dag_digest,
+        document_digest,
+    ))?;
+    digest_bytes(&bytes)
+}
+
+fn validate_dag_contents(
+    store: &SqliteStore,
+    dag: &ArtifactDagV1,
+    dag_commit: Option<u64>,
+) -> Result<()> {
+    for artifact in &dag.artifacts {
+        let stored = store
+            .load_wave6_fixture_artifact_v1(&artifact.artifact_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture artifact content",
+                identity: artifact.artifact_id.to_string(),
+            })?;
+        if stored.program_id != dag.program_id
+            || stored.kind_id != artifact.kind_id
+            || stored.content_digest != artifact.content_digest
+            || dag_commit.is_some_and(|commit| stored.commit_seq.get() >= commit)
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 DAG member differs from exact prior durable content".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)] // Exact bytes, scalars, members, and content close together.
+fn stored_fixture_dag(
+    store: &SqliteStore,
+    dag_id: &StableString,
+    row: FixtureDagRow,
+) -> Result<StoredWave6FixtureArtifactDag> {
+    let program_id = stable(&row.program_id, "Wave 6 DAG program ID")?;
+    let registration = store
+        .load_wave6_program_registration_v1(&program_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 program registration",
+            identity: program_id.to_string(),
+        })?;
+    let parsed_registration = parse_program_registration_exact(&registration.exact_bytes)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let parsed = parse_artifact_dag_exact(&row.bytes, &parsed_registration)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let value = parsed.value();
+    let expected_id = fixture_dag_id(&program_id, &value.dag_digest)?;
+    let artifact_count =
+        u64::try_from(value.artifacts.len()).map_err(|_| StoreError::IntegerRange {
+            field: "Wave 6 DAG artifact count",
+            value: value.artifacts.len().to_string(),
+        })?;
+    let maximum_information_cutoff = value
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.information_cutoff)
+        .max()
+        .ok_or_else(|| StoreError::InvalidBatch("Wave 6 fixture DAG is empty".into()))?;
+    let maximum_produced_at = value
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.produced_at)
+        .max()
+        .ok_or_else(|| StoreError::InvalidBatch("Wave 6 fixture DAG is empty".into()))?;
+    let commit_seq = u64_from_i64(row.commit_seq, "Wave 6 DAG commit")?;
+    if expected_id != *dag_id
+        || row.registration_raw
+            != raw_digest(
+                &registration.registration_digest,
+                "Wave 6 DAG registration digest",
+            )?
+        || row.dag_raw != raw_digest(&value.dag_digest, "Wave 6 DAG semantic digest")?
+        || row.document_raw != raw_digest(parsed.document_digest(), "Wave 6 DAG document digest")?
+        || usize_from_i64(row.byte_length, "Wave 6 DAG byte length")? != row.bytes.len()
+        || u64_from_i64(row.artifact_count, "Wave 6 DAG artifact count")? != artifact_count
+        || timestamp_from_us(row.maximum_information_us, "Wave 6 DAG information cutoff")?
+            != maximum_information_cutoff
+        || timestamp_from_us(row.maximum_produced_us, "Wave 6 DAG produced time")?
+            != maximum_produced_at
+        || row.semantic_ceiling != "unverified_semantic_fixture_only"
+    {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 DAG scalars differ from its exact bytes".into(),
+        ));
+    }
+
+    let mut statement = store.connection.prepare(
+        "SELECT ordinal,artifact_id,kind_id,content_sha256,
+                information_cutoff_wall_us,produced_wall_us,parent_count,semantic_ceiling
+         FROM wave6_fixture_artifact_dag_member_v1
+         WHERE dag_id=?1 ORDER BY ordinal",
+    )?;
+    let rows = statement
+        .query_map([dag_id.as_str()], |member| {
+            Ok(FixtureDagMemberRow {
+                ordinal: member.get(0)?,
+                artifact_id: member.get(1)?,
+                kind_id: member.get(2)?,
+                content_raw: member.get(3)?,
+                information_us: member.get(4)?,
+                produced_us: member.get(5)?,
+                parent_count: member.get(6)?,
+                semantic_ceiling: member.get(7)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if rows.len() != value.artifacts.len() {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 DAG member count differs from exact bytes".into(),
+        ));
+    }
+    for (ordinal, (member, artifact)) in rows.iter().zip(&value.artifacts).enumerate() {
+        if usize_from_i64(member.ordinal, "Wave 6 DAG member ordinal")? != ordinal
+            || member.artifact_id != artifact.artifact_id.as_str()
+            || member.kind_id != artifact.kind_id.as_str()
+            || member.content_raw
+                != raw_digest(&artifact.content_digest, "Wave 6 DAG member content digest")?
+            || timestamp_from_us(
+                member.information_us,
+                "Wave 6 DAG member information cutoff",
+            )? != artifact.information_cutoff
+            || timestamp_from_us(member.produced_us, "Wave 6 DAG member produced time")?
+                != artifact.produced_at
+            || usize_from_i64(member.parent_count, "Wave 6 DAG parent count")?
+                != artifact.parents.len()
+            || member.semantic_ceiling != "unverified_semantic_fixture_only"
+        {
+            return Err(StoreError::InvalidBatch(
+                "persisted Wave 6 DAG member differs from exact bytes".into(),
+            ));
+        }
+    }
+    drop(statement);
+    validate_dag_contents(store, value, Some(commit_seq))?;
+    Ok(StoredWave6FixtureArtifactDag {
+        batch_id: stable(&row.batch_id, "Wave 6 DAG batch ID")?,
+        dag_id: dag_id.clone(),
+        program_id,
+        registration_digest: registration.registration_digest,
+        dag_digest: value.dag_digest.clone(),
+        document_digest: parsed.document_digest().clone(),
+        exact_bytes: row.bytes,
+        artifact_count,
+        maximum_information_cutoff,
+        maximum_produced_at,
+        commit_seq: CommitSeq::new(commit_seq),
+        commit_digest: qualified_digest(&row.commit_digest_raw, "Wave 6 DAG commit digest")?,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    })
+}
+
 fn insert_registration(
     tx: &Transaction<'_>,
     seq: i64,
@@ -1086,6 +1568,16 @@ fn timestamp_us(value: UtcTimestamp, field: &'static str) -> Result<i64> {
     Ok(micros)
 }
 
+fn timestamp_from_us(value: i64, field: &'static str) -> Result<UtcTimestamp> {
+    if value <= 0 {
+        return Err(StoreError::TimestampRange { field });
+    }
+    let nanos = i128::from(value) * 1_000;
+    let datetime = time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map_err(|_| StoreError::TimestampRange { field })?;
+    UtcTimestamp::new(datetime).map_err(|_| StoreError::TimestampRange { field })
+}
+
 fn sqlite_len(value: usize, field: &'static str) -> Result<i64> {
     value.try_into().map_err(|_| StoreError::IntegerRange {
         field,
@@ -1125,6 +1617,7 @@ mod tests {
 
     const REGISTRATION: &[u8] =
         include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
+    const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
 
     fn schemas() -> [(&'static str, &'static [u8]); 6] {
         [
@@ -1193,6 +1686,50 @@ mod tests {
         }
     }
 
+    fn prepare_fixture_content(
+        store: &mut SqliteStore,
+        writer_build: &StableString,
+        artifact_limit: usize,
+    ) -> (StableString, Vec<Wave6FixtureArtifactReceipt>) {
+        let program_id = StableString::new("w6-program-fixture-001").expect("program ID");
+        store
+            .commit_wave6_program_registration_v1(
+                REGISTRATION,
+                StableString::new("wave6:program-registration:fixture-001")
+                    .expect("registration batch"),
+                writer_build.clone(),
+            )
+            .expect("program registration");
+        for (kind, bytes) in schemas() {
+            store
+                .commit_wave6_artifact_schema_v1(
+                    &program_id,
+                    StableString::new(kind).expect("kind ID"),
+                    bytes,
+                    StableString::new(format!("wave6:schema:{kind}")).expect("schema batch"),
+                    writer_build.clone(),
+                )
+                .unwrap_or_else(|error| panic!("schema {kind}: {error}"));
+        }
+        let accepted = artifacts()
+            .into_iter()
+            .take(artifact_limit)
+            .map(|(kind, bytes)| {
+                store
+                    .commit_wave6_fixture_artifact_v1(
+                        &program_id,
+                        StableString::new(kind).expect("kind ID"),
+                        bytes,
+                        StableString::new(format!("wave6:artifact:{kind}"))
+                            .expect("artifact batch"),
+                        writer_build.clone(),
+                    )
+                    .unwrap_or_else(|error| panic!("artifact {kind}: {error}"))
+            })
+            .collect();
+        (program_id, accepted)
+    }
+
     #[test]
     fn exact_fixture_registration_is_durable_idempotent_and_never_promoted() {
         let root = tempfile::tempdir().expect("temporary store");
@@ -1206,7 +1743,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 13);
+        assert_eq!(migration.current, 14);
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -1214,7 +1751,7 @@ mod tests {
             .commit_wave6_program_registration_v1(REGISTRATION, batch_id.clone(), build.clone())
             .expect("accepted registration");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
         assert_eq!(
             accepted.semantic_ceiling,
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
@@ -1357,7 +1894,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("schema commit {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
             let retry = store
                 .commit_wave6_artifact_schema_v1(
                     &program_id,
@@ -1476,7 +2013,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("artifact {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
             assert!(accepted.result_count > 0);
             assert_eq!(
                 accepted.semantic_ceiling,
@@ -1535,5 +2072,138 @@ mod tests {
             assert!(stored.schema_commit_seq < stored.commit_seq);
             assert_eq!(stored.commit_digest, accepted.commit_digest);
         }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Covers exact DAG content, retry, refusal, and restart.
+    fn exact_artifact_dag_resolves_prior_content_and_restarts_without_promotion() {
+        let root = tempfile::tempdir().expect("temporary store");
+        let store_config = config(root.path());
+        let mut store =
+            SqliteStore::open(store_config.clone(), StoreMode::SingleWriter).expect("writer store");
+        let migration = store
+            .migrate(
+                "2026-08-18T16:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("latest migration");
+        assert_eq!(migration.current, 14);
+        let writer_build = StableString::new("wave6-store-test").expect("writer build");
+        let (program_id, artifacts) = prepare_fixture_content(&mut store, &writer_build, 3);
+        let batch_id = StableString::new("wave6:artifact-dag:fixture-001").expect("DAG batch");
+        let accepted = store
+            .commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                ARTIFACT_DAG,
+                batch_id.clone(),
+                writer_build.clone(),
+            )
+            .expect("accepted artifact DAG");
+        assert_eq!(accepted.status, IdempotencyStatus::Accepted);
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
+        assert_eq!(accepted.artifact_count, 3);
+        assert_eq!(
+            accepted.maximum_information_cutoff,
+            "2026-08-18T00:10:00.000000Z"
+                .parse()
+                .expect("information cutoff")
+        );
+        assert_eq!(
+            accepted.maximum_produced_at,
+            "2026-08-18T00:32:00.000000Z"
+                .parse()
+                .expect("production time")
+        );
+        assert!(
+            artifacts
+                .iter()
+                .all(|artifact| artifact.commit_seq < accepted.commit_seq)
+        );
+        assert_eq!(
+            accepted.semantic_ceiling,
+            SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        );
+
+        let retry = store
+            .commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                ARTIFACT_DAG,
+                batch_id,
+                writer_build.clone(),
+            )
+            .expect("exact DAG retry");
+        assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+        assert_eq!(retry.dag_id, accepted.dag_id);
+        assert_eq!(retry.commit_seq, accepted.commit_seq);
+        assert_eq!(retry.commit_digest, accepted.commit_digest);
+
+        assert!(matches!(
+            store.commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                ARTIFACT_DAG,
+                StableString::new("wave6:artifact-dag:second-batch").expect("second batch"),
+                writer_build.clone(),
+            ),
+            Err(StoreError::IdentityConflict { .. })
+        ));
+
+        let registration =
+            parse_program_registration_exact(REGISTRATION).expect("exact registration");
+        let mut changed: ArtifactDagV1 = serde_json::from_slice(ARTIFACT_DAG).expect("DAG fixture");
+        changed.artifacts[0].content_digest =
+            ValueDigest::new(format!("sha256:{}", "7".repeat(64))).expect("changed digest");
+        changed.dag_digest = digest_bytes(
+            &canonical_bytes(&changed.digest_material()).expect("changed DAG material"),
+        )
+        .expect("changed DAG digest");
+        let changed_bytes = canonical_bytes(&changed).expect("changed DAG bytes");
+        assert!(parse_artifact_dag_exact(&changed_bytes, &registration).is_ok());
+        assert!(matches!(
+            store.commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                &changed_bytes,
+                StableString::new("wave6:artifact-dag:changed-content").expect("changed batch"),
+                writer_build,
+            ),
+            Err(StoreError::InvalidBatch(message))
+                if message.contains("differs from exact prior durable content")
+        ));
+        drop(store);
+
+        let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly).expect("reader store");
+        let stored = reopened
+            .load_wave6_fixture_artifact_dag_v1(&accepted.dag_id)
+            .expect("DAG readback")
+            .expect("stored DAG");
+        assert_eq!(stored.exact_bytes, ARTIFACT_DAG);
+        assert_eq!(stored.dag_digest, accepted.dag_digest);
+        assert_eq!(stored.document_digest, accepted.document_digest);
+        assert_eq!(stored.artifact_count, accepted.artifact_count);
+        assert_eq!(stored.commit_seq, accepted.commit_seq);
+        assert_eq!(stored.commit_digest, accepted.commit_digest);
+
+        let incomplete_root = tempfile::tempdir().expect("incomplete store");
+        let mut incomplete =
+            SqliteStore::open(config(incomplete_root.path()), StoreMode::SingleWriter)
+                .expect("incomplete writer");
+        incomplete
+            .migrate(
+                "2026-08-18T16:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("latest migration");
+        let writer_build = StableString::new("wave6-store-test").expect("writer build");
+        let (program_id, _) = prepare_fixture_content(&mut incomplete, &writer_build, 2);
+        assert!(matches!(
+            incomplete.commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                ARTIFACT_DAG,
+                StableString::new("wave6:artifact-dag:missing-content").expect("missing batch"),
+                writer_build,
+            ),
+            Err(StoreError::MissingIdentity { .. })
+        ));
     }
 }
