@@ -1,7 +1,8 @@
 # Wave 5 ordinary pairing
 
-`joshi-pairing` is the pure, ordinary same-origin pairing waist. It owns a service-memory
-registry, not a listener, route, store, browser session, wallet, or launch authority.
+`joshi-pairing` is the pure, ordinary same-origin pairing waist. Core supplies the only production
+adapter: OS entropy, a monotonic-anchored wall clock, and the sole SQLite journal. The default
+server still does not select that adapter.
 
 `PairingRegistry<E>` receives 32-byte OS entropy through its injected production port,
 domain-separates code and capability material before storage, stores only zeroizing hex bytes in
@@ -15,18 +16,24 @@ configurable window; wrong-origin requests do not consume a code. Expiry, explic
 monotone restart epochs invalidate codes and sessions. Restart drops all pre-restart zeroizing
 state, and the next epoch cannot authorize an old capability.
 
-`PairingSessionPort` is the narrow adapter for a route/store owner. The registry remains the only
-implementation here, and all returned values are semantic metadata. Prospective launch-bound
-pairing is a separate future protocol and is intentionally absent from this contract.
+The SQLite journal retains exact nonsecret occurrence bytes and rate windows before a one-time code
+or capability is returned. Restart begins a higher origin-scoped epoch, invalidates prior live
+state, carries the bounded rate budget forward, and seeds the next occurrence ordinal from durable
+readback. No secret code or `jpc1_` capability is serialized into the journal.
 
-## Unmounted Glass seam (P0)
+## Opt-in Core seam and default nonclaim
 
-This Rust contract is not mounted into Glass. Rust accepts 64-character lowercase-hex one-time
-codes and exposes only semantic occurrence/session metadata; capabilities remain memory-only and
-never serialize. Current Glass pairing expects human-formatted `EMBER-…` codes plus a response
-containing a capability and wall-clock expiry. That is an incompatible wire and clock model: no
-adapter or conversion is implied, and adding one requires a separately reviewed protocol. Until
-then the product route remains unavailable and no pairing/product capability is qualified.
+The opt-in Core constructor mounts the human-checkable `JOSHI-…` one-time-code exchange and issues
+an origin-, epoch-, expiry-, and scope-bound `jpc1_` capability. Cockpit and operator handlers use
+that ordinary capability when the adapter is present and never fall back to the legacy raw-hex
+capability in that mode. The headed Cockpit V2 read route is mounted only by this constructor; its
+response embeds the exact store-revalidated publication and head bytes, commit sequences, and byte
+digests. Tests cover wrong scope, revoke, expiry, and restart refusal.
+
+`Serve` continues to construct `CoreService::new`, so the exchange and Cockpit V2 route are absent
+from the default server and the production Glass shell remains unavailable. The opt-in integration
+test is an isolated durable protocol/publication pass, not a product mount, daily-use witness, or
+root G0 pass.
 
 Production adapters provide an OS-backed `Entropy` implementation and a monotonic `MonotonicClock`;
 the crate performs no wall-clock or device I/O. Public transitions use the monotonic-clock
@@ -34,7 +41,7 @@ adapter; raw timestamp transitions are crate-private and reject rollback. `parse
 `parse_pairing_session_descriptor` are strict canonical inbound decoders. Duplicate active code
 or capability bytes are rejected, and a failed duplicate capability restores the consumed code.
 
-The fixture in `fixtures/pairing/ordinary_pairing_v1.json` is deterministic metadata only and is
-marked nonproduction by this document; it contains no code or capability. Tests inject test-only
-`TestEntropy` and assert replay, origin, expiry, restart, revocation, rate, domain separation,
-rollback refusal, and redaction behavior.
+The fixtures in `fixtures/pairing/` contain no live capability. Pure tests inject test-only entropy;
+production-boundary tests use the SQLite journal and OS entropy and assert exact readback, origin,
+scope, expiry, restart, revocation, rate carry-forward, domain separation, rollback refusal, and
+redaction behavior.

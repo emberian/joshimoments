@@ -1496,6 +1496,195 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn paired_read_opens_exact_headed_g0_publication_then_revoke_and_restart_refuse() {
+        let root = tempfile::tempdir().unwrap();
+        let report = crate::wave5_g0::run_wave5_g0_source_publication(root.path()).unwrap();
+        let publication_id =
+            joshi_publication::CockpitPublicationId::new(report.publication_id).unwrap();
+        let config = crate::wave5_readiness::config(root.path()).unwrap();
+        let store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
+        let publication = store
+            .load_cockpit_v2_publication_v1(&publication_id)
+            .unwrap()
+            .unwrap();
+        let head = store
+            .load_cockpit_v2_head_v1(&publication_id)
+            .unwrap()
+            .unwrap();
+        drop(store);
+
+        let legacy = PairingCapability::from_hex(&"d".repeat(64)).unwrap();
+        let default_store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
+        let default_app = CoreService::new(default_store, None, legacy).router();
+        let unmounted = default_app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/cockpit-v2/publications/{}",
+                        publication_id.as_str()
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unmounted.status(), StatusCode::NOT_FOUND);
+
+        let origin = PairingOrigin::new("http://127.0.0.1:8787").unwrap();
+        let store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
+        let (core, ordinary) = CoreService::with_sqlite_pairing(
+            store,
+            None,
+            PairingCapability::from_hex(&"d".repeat(64)).unwrap(),
+            origin.clone(),
+            PairingConfig::default(),
+        )
+        .unwrap();
+        let wrong_scope = ordinary
+            .issue_code(vec![PairingScope::OperatorEvidenceWrite])
+            .unwrap();
+        let app = core.router();
+        let wrong_scope_exchange = app
+            .clone()
+            .oneshot(request(format!(
+                "{{\"contract\":\"joshi.pairing.exchange\",\"schemaVersion\":1,\"oneTimeCode\":\"{}\"}}",
+                wrong_scope.code.as_str()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(wrong_scope_exchange.status(), StatusCode::OK);
+        let wrong_scope_exchange: serde_json::Value = serde_json::from_slice(
+            &wrong_scope_exchange
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        let wrong_scope_capability = wrong_scope_exchange["capability"].as_str().unwrap();
+        let route = format!(
+            "/api/v1/cockpit-v2/publications/{}",
+            publication_id.as_str()
+        );
+        let scope_refused = app
+            .clone()
+            .oneshot(authorized_request(
+                "GET",
+                &route,
+                wrong_scope_capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(scope_refused.status(), StatusCode::UNAUTHORIZED);
+
+        let issued = ordinary
+            .issue_code(vec![PairingScope::CockpitRead])
+            .unwrap();
+        let exchange = app
+            .clone()
+            .oneshot(request(format!(
+                "{{\"contract\":\"joshi.pairing.exchange\",\"schemaVersion\":1,\"oneTimeCode\":\"{}\"}}",
+                issued.code.as_str()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(exchange.status(), StatusCode::OK);
+        let exchange: serde_json::Value =
+            serde_json::from_slice(&exchange.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let capability = exchange["capability"].as_str().unwrap().to_owned();
+        let session_id = exchange["sessionId"].as_str().unwrap().to_owned();
+        let opened = app
+            .clone()
+            .oneshot(authorized_request(
+                "GET",
+                &route,
+                &capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(opened.status(), StatusCode::OK);
+        assert_eq!(
+            opened.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let opened = opened.into_body().collect().await.unwrap().to_bytes();
+        let expected = format!(
+            "{{\"authority\":\"read_only_no_execution\",\"contract\":\"joshi.core.cockpit_v2_open\",\"head\":{},\"headBytesDigest\":\"{}\",\"headCommitSeq\":\"{}\",\"publication\":{},\"publicationBytesDigest\":\"{}\",\"publicationCommitSeq\":\"{}\",\"schemaVersion\":1,\"sourceOccurrenceId\":{}}}",
+            String::from_utf8(head.head_bytes).unwrap(),
+            head.head_digest.as_str(),
+            head.commit_seq.get(),
+            String::from_utf8(publication.publication_bytes).unwrap(),
+            publication.publication_bytes_digest.as_str(),
+            publication.commit_seq.get(),
+            serde_json::to_string(publication.source_occurrence_id.as_str()).unwrap(),
+        );
+        assert_eq!(opened.as_ref(), expected.as_bytes());
+
+        ordinary
+            .revoke_session(&session_id, "operator_revoked")
+            .unwrap();
+        let revoked = app
+            .clone()
+            .oneshot(authorized_request(
+                "GET",
+                &route,
+                &capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+
+        let live_issue = ordinary
+            .issue_code(vec![PairingScope::CockpitRead])
+            .unwrap();
+        let live_exchange = app
+            .oneshot(request(format!(
+                "{{\"contract\":\"joshi.pairing.exchange\",\"schemaVersion\":1,\"oneTimeCode\":\"{}\"}}",
+                live_issue.code.as_str()
+            )))
+            .await
+            .unwrap();
+        let live_exchange: serde_json::Value = serde_json::from_slice(
+            &live_exchange
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        let live_capability = live_exchange["capability"].as_str().unwrap().to_owned();
+        drop(ordinary);
+
+        let restarted_store = SqliteStore::open(config, StoreMode::SingleWriter).unwrap();
+        let (restarted_core, _restarted) = CoreService::with_sqlite_pairing(
+            restarted_store,
+            None,
+            PairingCapability::from_hex(&"d".repeat(64)).unwrap(),
+            origin,
+            PairingConfig::default(),
+        )
+        .unwrap();
+        let refused = restarted_core
+            .router()
+            .oneshot(authorized_request(
+                "GET",
+                &route,
+                &live_capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn authorizer_persists_expiry_from_its_single_boundary_sample_before_refusal() {
         let journal = Arc::new(Mutex::new(MemoryJournal::default()));
         let origin = PairingOrigin::new("http://127.0.0.1:8787").unwrap();

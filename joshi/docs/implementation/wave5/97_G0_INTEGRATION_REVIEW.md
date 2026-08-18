@@ -57,8 +57,8 @@ readiness command emits component booleans rather than an artifact-bearing root 
 | Origin + catalog | Fsynced immutable origin, exact store ingest receipt, run-bound catalog binding, ACK, reopen | **PASS only as isolated durable-offline component** | Existing C0 helper closes this component for one compiled public fixture, but its report omits the exact artifact identities and does not join accounting. It is not a G0 pass. |
 | Denominator + hot/control | Nonempty store-derived eligible identities/count/digest at one cutoff; independently derived hot and cold-control membership | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | The exact selection is retained separately from the exact provider body, its subjects must equal the parsed fact denominator, and the private resolver/reopen derives one hot plus one cold-control subject. This is fixture membership, not product parity or a live acquisition-policy result. |
 | Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | `wave5-g0-source-publication` now walks the real writer: the source occurrence is derived from the run-bound C0 receipt and decoded provider bytes, then fully rederived after read-only reopen and exact retry. It is not yet joined to supervisor accounting or a nonfixture source. |
-| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component, including its local fault prefixes; BLOCKED root/mounted** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions each converge to the identical chain. It does not mount the immutable route, prove a paired Glass open, or complete the other root crash seams. |
-| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable protocol; BLOCKED default/mounted G0** | Store restart counts are now derived by predecessor kind, and the exact SQLite exchange/scope/revoke/restart/next-ordinal plus expiry/reopen tests pass. The constructor remains crate-private, `Serve` never selects it, the production Glass shell advertises the route as unavailable, and no exact publication is opened. |
+| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The opt-in Core route then returns those exact body/head bytes under a durable scoped session, but the default server and product remain unmounted and the other root seams are absent. |
+| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication protocol; BLOCKED default/product/root G0** | The SQLite exchange now opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. `Serve` never selects the constructor, the production Glass shell remains unavailable, and no product presentation occurrence or complete root evidence bundle exists. |
 | Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable act + partial episode prefix; BLOCKED complete chain/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap plus one partial unresolved/no-trade episode in strict queue order. The store intentionally refuses the later session/outcome/reveal/interview states, so the required complete chain remains absent. |
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS only as synthetic cross-runtime format; BLOCKED store/root** | The regenerated 24-relation V10 fixture passes exact Rust/Python readback against frozen 0010 and has ten nonempty G0 rows. The private wrapper overrides catalog identity/path/range from an exact backup and resolves CAS, closing the inspected foreign-catalog gap, but no test invokes it or the 24-table store commit branch. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **BLOCKED** | Existing adapter does not close every G0 component and an aggregate Boolean is not evidence. |
@@ -306,7 +306,9 @@ invalidation. Core's exact count/receipt verification refused reopen. Store now 
 counts by predecessor kind. The rerun passes exchange, scoped read/write authorization, durable
 revocation, another live consume, reopen/restart invalidation, next ordinal and refusal of the old
 capability. A separate adapter test passes exact expiry persistence and readback across reopen.
-This raises pairing to an **isolated durable-protocol pass**. The constructor is still crate-private
+The later paired-publication test opens the store-revalidated G0 Cockpit body/head under
+`CockpitRead`, rejects a write-only scope, then proves revoke and restart refusal. This raises
+pairing to an **isolated durable paired-publication pass**. The constructor is still crate-private
 and CLI `Serve` still calls `CoreService::new`, which leaves ordinary pairing absent.
 
 The first mount draft exposed an actual protocol incompatibility, not merely a missing router
@@ -314,8 +316,9 @@ merge. Ordinary exchange returns `jpc1_<64 lowercase hex>` and Glass forwards it
 `X-Joshi-Pairing-Token`, while Cockpit/operator handlers authenticated only the separate legacy
 64-hex capability. An optional Core seam now parses the ordinary capability, checks the exact
 origin/browser posture and required read/write scope, and does not fall back to legacy auth while
-configured. The end-to-end unit reaches expected downstream responses before the current restart
-count refusal. This repairs the intrinsic namespace/scope mismatch, but the
+configured. The end-to-end unit exercises refusal across the restart boundary and now also reads
+the exact headed G0 publication. This repairs the intrinsic
+namespace/scope mismatch, but the
 constructor is crate-private, the default service still configures no ordinary coordinator, the
 exchange route therefore remains 404 in production, and no launch path selects the SQLite seal.
 
@@ -393,11 +396,11 @@ Boolean. The current self-hash therefore cannot promote the false-only scaffold.
 - `cargo test --locked --offline -p joshi-pairing --all-targets`: 13 intrinsic tests passed after
   origin identity, restart ordinal, durable rate-bootstrap and expiry-on-refusal repairs. There is
   still no default mounted route, so this alone is not product evidence.
-- Final `cargo test --locked --offline -p joshi-core --all-targets` passes 17 library, one binary
-  and eight HTTP tests. This includes the two exact SQLite pairing tests after Store changed
-  restart counts to predecessor-kind counts: exchange/scoped access/revoke/restart/next
-  ordinal/old-capability refusal and exact boundary expiry persistence/reopen. The previously stale
-  HTTP V9 receipt golden is aligned. Pairing tests still do not supply a default production mount.
+- Final `cargo test --locked --offline -p joshi-core --all-targets` passes 20 library, one binary
+  and eight HTTP tests. This includes exact SQLite exchange/scoped access/revoke/restart/next
+  ordinal/old-capability refusal, boundary-expiry persistence/reopen, and the byte-exact headed G0
+  publication open with wrong-scope/revoke/restart adversaries. The HTTP V10 receipt golden is
+  aligned. Pairing tests still do not supply a default production mount.
 - Focused Glass pairing/operational tests: 4 files and 24 tests passed, including exact code,
   origin-tag/session identity, expiry, scope and no-persistence vectors. They validate the browser
   side plus wire alignment with the optional Core authorization seam; the route is not mounted by
@@ -454,13 +457,14 @@ than that statement:
   rendered/omission partition. Load rebuilds the descriptor from store rows and bytes. The new
   component witness executes and reopens this path with an exact, separately retained
   `offline_fixture_only` selection. No supervisor-joined or nonfixture occurrence exists.
-- **Publication: isolated durable offline-fixture and local fault-prefix PASS; root/mounted BLOCKED.** Prepare stores exact resolved
+- **Publication: isolated durable offline-fixture, local fault-prefix, and opt-in paired-read PASS; root/default mount BLOCKED.** Prepare stores exact resolved
   input/semantic/container/checkpoint bytes together; body finalization allocates its own commit
   inside one transaction; the later head append is linear and unique, and V10 export admission
   accepts a V2 publication only with its head at the cutoff. The component witness now executes
   the honest store lifecycle, exact retry, read-only reopen, and interruption immediately before
-  and after semantic fact, prepare, body and head. It does not run the other G0 crash boundaries,
-  mount the immutable route, or record a paired Glass open.
+  and after semantic fact, prepare, body and head. The opt-in Core route returns the exact headed
+  bytes after durable scoped pairing and refuses wrong-scope, revoked, and pre-restart sessions. It
+  does not run the other G0 crash boundaries or record a product Glass presentation occurrence.
 - **Scientific memory: isolated durable act/partial-episode prefix PASS; complete chain/root BLOCKED.** Prefix
   reconstruction, idempotency, semantic append validation and queue-generation allocation occur
   beneath the `IMMEDIATE` transaction, and load revalidates the prefix plus exact headed scene.
@@ -468,9 +472,10 @@ than that statement:
   one partial unresolved/no-trade episode, including its four before/after interruption points.
   The store deliberately admits no later session/outcome-or-censor/reveal/interview artifacts, so
   the required full chain remains absent.
-- **Pairing: isolated durable protocol PASS; default/mounted G0 BLOCKED.** Exact SQLite lifecycle,
-  expiry/reopen, origin, rate-window, restart-count and ordinal tests pass. The CLI and production
-  Glass shell remain deliberately unmounted.
+- **Pairing: isolated durable paired-publication protocol PASS; default/product/root G0 BLOCKED.**
+  Exact SQLite lifecycle, expiry/reopen, origin, rate-window, restart-count and ordinal tests pass,
+  and a scoped capability opens the exact G0 Cockpit V2 body/head. The CLI and production Glass
+  shell remain deliberately unmounted.
 - **Export store boundary: BLOCKED.** The private wrapper loads an exact backup and import,
   overwrites catalog path/identity/schema/range with the backup closure, resolves CAS before and
   after export, and reopens the backup. The commit branch requires exact ordered 14-table V8/V9 or

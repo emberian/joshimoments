@@ -16,7 +16,11 @@ use joshi_admission::{
 };
 use joshi_domain::{SceneId, StableString, UtcTimestamp};
 use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
-use joshi_store::{OperatorCaptureMetadata, SceneMode, SceneSourceMode, SqliteStore};
+use joshi_publication::CockpitPublicationId;
+use joshi_store::{
+    OperatorCaptureMetadata, SceneMode, SceneSourceMode, SqliteStore, StoredCockpitV2Head,
+    StoredCockpitV2Publication,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -192,12 +196,13 @@ impl CoreService {
     }
 
     pub fn router(self) -> Router {
+        let ordinary_product_routes_mounted = self.inner.ordinary_pairing.is_some();
         let pairing_router = self
             .inner
             .ordinary_pairing
             .clone()
             .map(ordinary_pairing_router);
-        let router = Router::new()
+        let mut router = Router::new()
             .route("/api/v1/health", get(health))
             .route("/v1/observations/pump-companion", post(companion))
             .route("/api/v1/glass/snapshot", get(snapshot))
@@ -208,7 +213,14 @@ impl CoreService {
                 "/api/v1/operator/prospective-nominations",
                 post(prospective_nomination),
             )
-            .route("/api/v1/operator/abstentions", post(explicit_abstention))
+            .route("/api/v1/operator/abstentions", post(explicit_abstention));
+        if ordinary_product_routes_mounted {
+            router = router.route(
+                "/api/v1/cockpit-v2/publications/{publication_id}",
+                get(cockpit_v2_publication),
+            );
+        }
+        let router = router
             // No stream route exists in V1: reconnect ordering/digest binding is not frozen.
             .layer(DefaultBodyLimit::max(MAX_COMPANION_BYTES))
             .layer(ConcurrencyLimitLayer::new(16))
@@ -233,6 +245,123 @@ impl CoreService {
             .await
             .map_err(ServiceError::Io)
     }
+}
+
+async fn cockpit_v2_publication(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+    Path(publication_id): Path<String>,
+) -> Response {
+    match authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead) {
+        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::Rejected(response) => return response,
+        OrdinaryAuthorization::NotConfigured => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "route_not_mounted",
+                "ordinary Cockpit V2 publication access is not mounted",
+            );
+        }
+    }
+    let Ok(publication_id) = CockpitPublicationId::new(publication_id) else {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_publication_id",
+            "Cockpit V2 publication identity is invalid",
+        );
+    };
+    let Ok(store) = service.inner.store.lock() else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reader_unavailable",
+            "catalog lock is unavailable",
+        );
+    };
+    let (publication, head) = match (
+        store.load_cockpit_v2_publication_v1(&publication_id),
+        store.load_cockpit_v2_head_v1(&publication_id),
+    ) {
+        (Ok(Some(publication)), Ok(Some(head))) => (publication, head),
+        (Ok(_), Ok(_)) => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "headed_publication_not_found",
+                "exact headed Cockpit V2 publication was not found",
+            );
+        }
+        _ => {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "publication_readback_failed",
+                "exact headed Cockpit V2 publication failed durable readback",
+            );
+        }
+    };
+    if publication.source_occurrence_id != head.source_occurrence_id
+        || publication.commit_seq >= head.commit_seq
+    {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "publication_lineage_failed",
+            "Cockpit V2 publication and head do not close one strict store lineage",
+        );
+    }
+    exact_cockpit_v2_response(&publication, &head)
+}
+
+fn exact_cockpit_v2_response(
+    publication: &StoredCockpitV2Publication,
+    head: &StoredCockpitV2Head,
+) -> Response {
+    let prefix = "{\"authority\":\"read_only_no_execution\",\"contract\":\"joshi.core.cockpit_v2_open\",\"head\":";
+    let middle = format!(
+        ",\"headBytesDigest\":\"{}\",\"headCommitSeq\":\"{}\",\"publication\":",
+        head.head_digest.as_str(),
+        head.commit_seq.get(),
+    );
+    let suffix = format!(
+        ",\"publicationBytesDigest\":\"{}\",\"publicationCommitSeq\":\"{}\",\"schemaVersion\":1,\"sourceOccurrenceId\":{}}}",
+        publication.publication_bytes_digest.as_str(),
+        publication.commit_seq.get(),
+        serde_json::to_string(publication.source_occurrence_id.as_str())
+            .expect("stable strings always serialize"),
+    );
+    let Some(length) = prefix
+        .len()
+        .checked_add(head.head_bytes.len())
+        .and_then(|value| value.checked_add(middle.len()))
+        .and_then(|value| value.checked_add(publication.publication_bytes.len()))
+        .and_then(|value| value.checked_add(suffix.len()))
+    else {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "publication_response_too_large",
+            "Cockpit V2 publication response length overflowed",
+        );
+    };
+    if length > MAX_GLASS_RESPONSE_BYTES {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "publication_response_too_large",
+            "Cockpit V2 publication response exceeds the bounded Glass contract",
+        );
+    }
+    let mut body = Vec::with_capacity(length);
+    body.extend_from_slice(prefix.as_bytes());
+    body.extend_from_slice(&head.head_bytes);
+    body.extend_from_slice(middle.as_bytes());
+    body.extend_from_slice(&publication.publication_bytes);
+    body.extend_from_slice(suffix.as_bytes());
+    let mut response = Response::new(axum::body::Body::from(body));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn prospective_session_launch(
