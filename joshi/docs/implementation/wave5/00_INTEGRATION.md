@@ -145,6 +145,10 @@ adapter's exact semantic batch with no store digest; the store consumes those sa
 then binds its receipt to the run before the supervisor spool records the ACK. The full 37-scenario
 crash matrix, default product mount, qualified memory closure and final
 no-original-root reopen remain outside that component.
+The shared circulation function now also injects each exact pre/post boundary around store receipt,
+run-bound catalog binding and durable catalog ACK. All six fresh-state retries retain one immutable
+origin segment and converge to one idempotent binding and byte-identical ACK; these cover the six
+catalog transitions but not reservation or origin-fsync recovery.
 The component now also
 retains one exact headed-scene act, partial unresolved episode, hidden reconstruction, incomplete
 session close, explicitly gapped partial knowledge, missing outcome, retrospective reveal, and

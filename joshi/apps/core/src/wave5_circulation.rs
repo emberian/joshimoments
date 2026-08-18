@@ -22,8 +22,12 @@ use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CirculationFaultPoint {
+    BeforeStoreCommit,
     AfterStoreCommit,
+    BeforeCatalogBinding,
     AfterCatalogBinding,
+    BeforeCatalogAck,
+    AfterCatalogAck,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +182,7 @@ fn close_public_c0_origin(
 ) -> Result<Wave5CirculationClosure, Wave5CirculationError> {
     let exact_batch_bytes = prepared.exact_batch_bytes();
     let exact_policy_bytes = prepared.exact_policy_bytes();
+    inject(fault, CirculationFaultPoint::BeforeStoreCommit)?;
     for source in &prepared.admission_batch().registrations {
         store.register_source(source)?;
     }
@@ -189,11 +194,7 @@ fn close_public_c0_origin(
     // The immutable closure describes the one accepted durable occurrence. Invocation-level
     // idempotency is carried by the outer store receipt and must not mutate these retained bytes.
     public.status = PublicStatus::Accepted;
-    if fault == Some(CirculationFaultPoint::AfterStoreCommit) {
-        return Err(Wave5CirculationError::Injected(
-            CirculationFaultPoint::AfterStoreCommit,
-        ));
-    }
+    inject(fault, CirculationFaultPoint::AfterStoreCommit)?;
 
     let catalog_receipt = SpoolCatalogReceiptV1 {
         contract: SPOOL_CATALOG_RECEIPT_CONTRACT.into(),
@@ -225,6 +226,7 @@ fn close_public_c0_origin(
         authority: AUTHORITY.into(),
     };
     let binding_bytes = serde_json::to_vec(&binding)?;
+    inject(fault, CirculationFaultPoint::BeforeCatalogBinding)?;
     let context = store.begin_wave5_commit(
         StableString::new(format!("commit:{binding_id}"))?,
         StableString::new(writer_build)?,
@@ -245,11 +247,8 @@ fn close_public_c0_origin(
             "catalog binding returned an unsupported status",
         ));
     }
-    if fault == Some(CirculationFaultPoint::AfterCatalogBinding) {
-        return Err(Wave5CirculationError::Injected(
-            CirculationFaultPoint::AfterCatalogBinding,
-        ));
-    }
+    inject(fault, CirculationFaultPoint::AfterCatalogBinding)?;
+    inject(fault, CirculationFaultPoint::BeforeCatalogAck)?;
     let catalog_ack = spool.record_catalog_receipt(&segment.segment_id, &structural)?;
     if catalog_ack.admission_digest != structural.admission_digest.to_string()
         || catalog_ack.logical_digest != structural.batch_digest.to_string()
@@ -265,6 +264,7 @@ fn close_public_c0_origin(
             "catalog ACK rewrote the retained origin segment",
         ));
     }
+    inject(fault, CirculationFaultPoint::AfterCatalogAck)?;
     Ok(Wave5CirculationClosure {
         segment,
         origin_segment_bytes,
@@ -274,6 +274,16 @@ fn close_public_c0_origin(
         binding_receipt,
         catalog_ack,
     })
+}
+
+fn inject(
+    requested: Option<CirculationFaultPoint>,
+    current: CirculationFaultPoint,
+) -> Result<(), Wave5CirculationError> {
+    if requested == Some(current) {
+        return Err(Wave5CirculationError::Injected(current));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -524,6 +534,78 @@ mod tests {
             spool.read_segment(&original).expect("retained"),
             original_bytes
         );
+    }
+
+    #[test]
+    fn every_store_catalog_transition_retries_to_one_binding_and_ack() {
+        for point in [
+            CirculationFaultPoint::BeforeStoreCommit,
+            CirculationFaultPoint::AfterStoreCommit,
+            CirculationFaultPoint::BeforeCatalogBinding,
+            CirculationFaultPoint::AfterCatalogBinding,
+            CirculationFaultPoint::BeforeCatalogAck,
+            CirculationFaultPoint::AfterCatalogAck,
+        ] {
+            let state = tempfile::tempdir().expect("state");
+            let (mut store, run_id, run_digest) = registered(state.path());
+            let spool = LocalSpool::open(spool_config(state.path())).expect("spool");
+            let (prepared, committed_at) = prepared();
+            let run = RegisteredWave5Run {
+                run_id: &run_id,
+                registration_digest: &run_digest,
+            };
+            assert!(matches!(
+                circulate_public_c0(
+                    &mut store,
+                    &spool,
+                    run,
+                    &prepared,
+                    "segment:matrix-c0",
+                    "public-fixture-test",
+                    committed_at,
+                    "catalog-admission:matrix-c0",
+                    "test-build",
+                    Some(point),
+                ),
+                Err(Wave5CirculationError::Injected(actual)) if actual == point
+            ));
+            let origins = spool.list_segments().expect("segments");
+            let [origin] = origins.as_slice() else {
+                panic!("fault prefix did not retain exactly one origin segment");
+            };
+            let origin_bytes = spool.read_segment(origin).expect("origin bytes");
+            let recovered = circulate_public_c0(
+                &mut store,
+                &spool,
+                run,
+                &prepared,
+                "segment:matrix-c0",
+                "public-fixture-test",
+                committed_at,
+                "catalog-admission:matrix-c0",
+                "test-build",
+                None,
+            )
+            .unwrap_or_else(|error| panic!("recovery after {point:?} failed: {error}"));
+            let retry = circulate_public_c0(
+                &mut store,
+                &spool,
+                run,
+                &prepared,
+                "segment:matrix-c0",
+                "public-fixture-test",
+                committed_at,
+                "catalog-admission:matrix-c0",
+                "test-build",
+                None,
+            )
+            .expect("exact idempotent retry");
+            assert_eq!(recovered.origin_segment_bytes, origin_bytes);
+            assert_eq!(retry.origin_segment_bytes, origin_bytes);
+            assert_eq!(retry.binding_receipt.status, IdempotencyStatus::Idempotent);
+            assert_eq!(retry.catalog_ack, recovered.catalog_ack);
+            assert_eq!(spool.list_segments().expect("segments").len(), 1);
+        }
     }
 
     #[test]

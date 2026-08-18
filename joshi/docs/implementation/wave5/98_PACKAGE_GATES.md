@@ -84,7 +84,8 @@ attained=run_registered, public_c0_spool_catalog_closed, component_restart_readb
          store_resolved_fixture_source, headed_cockpit_v2_publication,
          paired_fixture_api_reopen, censored_scientific_memory,
          nonempty_v10_export_import, v10_export_recovered,
-         artifact_bearing_backup_restore, g0_component_30_prefix_recovery,
+         artifact_bearing_backup_restore, g0_catalog_6_prefix_recovery,
+         g0_component_30_prefix_recovery,
          g0_final_recovery_6_prefix_recovery,
          partial_root_18_role_evidence, final_distinct_root_store_origin_reopen
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
@@ -108,6 +109,8 @@ baseline evidence bundle whose final role binds that composite readback.
 The same Core suite injects process loss immediately before and after composite backup, restore and
 final reopen on six fresh catalogs; every exact retry recovers the same restored truth. These are
 six scheduled final-boundary cases, not the complete 37-scenario result.
+The shared circulation tests separately cover the exact six before/after store-receipt,
+catalog-binding and catalog-ACK transitions with one retained origin and idempotent retry.
 It refuses to emit the witness if the paired route changes bytes, accepts the prior capability,
 substitutes the run or publication, raises a browser/product/live bit, or if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
