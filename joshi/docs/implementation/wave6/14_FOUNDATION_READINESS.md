@@ -7,16 +7,17 @@ claim.**
 [`scripts/wave6-foundation-readiness`](../../../scripts/wave6-foundation-readiness) is the first
 root runner for the Wave 6 foundation. It runs:
 
-- all schema migrations and the V4-to-V17 upgrade check;
+- all schema migrations and the V4-to-V18 upgrade check;
 - the exact `joshi-wave6-registry` and `joshi-wave6-campaign` suites;
 - the store's Wave 6 program/schema/artifact-content/DAG/decision/campaign-bundle/proposal tests;
 - the Core program/schema/artifact-content/DAG/decision/campaign-bundle/proposal restart test; and
-- two invocations of the real `wave6-program-registration` command over the same V17 catalog.
+- two invocations of the real `wave6-program-registration` command over the same V18 catalog.
 
 The second invocation must reproduce the original program, six schema, three evaluation-content,
 one fixture-DAG, one decision-ledger, one atomic campaign-bundle, and one proposal commit
 identities. The script emits `joshi.wave6.fixture_foundation_witness.v6` with the exact report and
-V11-V17 migration digests.
+V11-V17 migration digests while the schema gate verifies V18. V18 disposition evidence joins the
+witness only when the Core root walk is extended.
 
 Run it with:
 

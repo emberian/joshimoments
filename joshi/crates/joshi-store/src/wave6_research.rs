@@ -1,18 +1,50 @@
 //! Sole-store persistence for one exact, non-executable Wave 6 research proposal.
 
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError};
-use joshi_domain::{CommitSeq, StableString, ValueDigest};
+use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
 use joshi_wave6_registry::{
     RESEARCH_PROPOSAL_KIND, RESEARCH_PROPOSAL_SCHEMA, ResearchArtifactDescriptorV1,
-    SemanticCeilingV1, parse_research_proposal_exact,
+    ResearchDispositionKindV1, SemanticCeilingV1, parse_research_disposition_exact,
+    parse_research_proposal_exact,
 };
 use rusqlite::{OptionalExtension as _, params};
 use sha2::{Digest as _, Sha256};
 
 const MAX_PROPOSAL_BYTES: usize = 512 * 1024;
+const MAX_DISPOSITION_BYTES: usize = 16 * 1024;
 const AUTHORITY: &str = "read_only_proposal_only_no_query_no_glass_no_action_no_claim_promotion";
 const CLAIM_SCOPE: &str = "research_design_proposal_not_result_or_live_decision";
 const CEILING: &str = "unverified_semantic_fixture_only";
+const REVIEWER_AUTHORITY: &str = "caller_fed_fixture_unverified";
+
+/// The sole authority state a persisted fixture disposition can carry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResearchDispositionAuthorityV1 {
+    /// Caller-fed identity; no verified human review, approval, execution, or result authority.
+    CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult,
+}
+
+impl ResearchDispositionAuthorityV1 {
+    #[must_use]
+    pub const fn human_review_verified(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn approval_authority(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn execution_authority(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn result_authority(self) -> bool {
+        false
+    }
+}
 
 /// Durable receipt for exact proposal bytes and their resolved prior evaluation closure.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +110,47 @@ pub struct StoredWave6FixtureResearchProposal {
     pub semantic_ceiling: SemanticCeilingV1,
 }
 
+/// Durable receipt for caller-fed disposition bytes; all review/approval authority remains false.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wave6FixtureResearchDispositionReceipt {
+    pub catalog_id: StableString,
+    pub catalog_schema: StableString,
+    pub batch_id: StableString,
+    pub disposition_id: StableString,
+    pub proposal_id: StableString,
+    pub proposal_digest: ValueDigest,
+    pub proposal_content_digest: ValueDigest,
+    pub disposition: ResearchDispositionKindV1,
+    pub reviewer_id: StableString,
+    pub decided_at: UtcTimestamp,
+    pub content_digest: ValueDigest,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub authority_boundary: ResearchDispositionAuthorityV1,
+    pub semantic_ceiling: SemanticCeilingV1,
+    pub status: IdempotencyStatus,
+}
+
+/// Exact disposition bytes re-parsed and rebound to their durable proposal after restart.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave6FixtureResearchDisposition {
+    pub batch_id: StableString,
+    pub disposition_id: StableString,
+    pub proposal_id: StableString,
+    pub proposal_digest: ValueDigest,
+    pub proposal_content_digest: ValueDigest,
+    pub disposition: ResearchDispositionKindV1,
+    pub reviewer_id: StableString,
+    pub decided_at: UtcTimestamp,
+    pub reason: String,
+    pub exact_bytes: Vec<u8>,
+    pub content_digest: ValueDigest,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub authority_boundary: ResearchDispositionAuthorityV1,
+    pub semantic_ceiling: SemanticCeilingV1,
+}
+
 struct ProposalRow {
     batch_id: String,
     program_id: String,
@@ -116,6 +189,28 @@ struct BindingRow {
     resolved_artifact_commit_seq: i64,
     role: String,
     semantic_ceiling: String,
+}
+
+struct DispositionRow {
+    batch_id: String,
+    proposal_id: String,
+    proposal_raw: String,
+    proposal_content_raw: String,
+    disposition_kind: String,
+    reviewer_id: String,
+    decided_at: String,
+    reason: String,
+    content_raw: String,
+    bytes: Vec<u8>,
+    byte_length: i64,
+    identity_authority: String,
+    human_review_verified: i64,
+    approval_authority: i64,
+    execution_authority: i64,
+    result_authority: i64,
+    semantic_ceiling: String,
+    commit_seq: i64,
+    commit_digest_raw: String,
 }
 
 impl SqliteStore {
@@ -394,6 +489,178 @@ impl SqliteStore {
             return Ok(None);
         };
         stored_research_proposal(self, proposal_id, row).map(Some)
+    }
+}
+
+impl SqliteStore {
+    /// Persists exact caller-fed disposition bytes after resolving the exact prior proposal.
+    ///
+    /// The receipt proves durability and proposal lineage only. It never authenticates the
+    /// reviewer or grants human-review, approval, execution, result, or release authority.
+    ///
+    /// # Errors
+    ///
+    /// Refuses missing/foreign proposal lineage, noncanonical or oversized bytes, backdating,
+    /// changed identity, a second batch for one disposition, read-only state, or failed readback.
+    #[allow(clippy::too_many_lines)]
+    pub fn commit_wave6_fixture_research_disposition_v1(
+        &mut self,
+        proposal_id: &StableString,
+        exact_bytes: &[u8],
+        batch_id: StableString,
+        writer_build: StableString,
+    ) -> Result<Wave6FixtureResearchDispositionReceipt> {
+        if exact_bytes.is_empty() || exact_bytes.len() > MAX_DISPOSITION_BYTES {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 research disposition is empty or exceeds the exact-byte limit".into(),
+            ));
+        }
+        let proposal = self
+            .load_wave6_fixture_research_proposal_v1(proposal_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture research proposal",
+                identity: proposal_id.to_string(),
+            })?;
+        let parsed_proposal = parse_research_proposal_exact(&proposal.exact_bytes)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let parsed = parse_research_disposition_exact(exact_bytes, &parsed_proposal)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let value = parsed.value();
+        let disposition_id = value.disposition_id.clone();
+        reject_second_disposition_batch(self, &disposition_id, &batch_id)?;
+        let operation_digest =
+            disposition_operation_digest(proposal_id, &disposition_id, parsed.content_digest())?;
+        let context = self.begin_wave5_commit(batch_id.clone(), writer_build)?;
+        let generic = self.commit_wave5(
+            &context,
+            "maintenance",
+            &disposition_id,
+            parsed.content_digest(),
+            &operation_digest,
+            |tx, seq| {
+                tx.execute(
+                    "INSERT INTO wave6_fixture_research_disposition_v1
+                     (disposition_id,proposal_id,proposal_semantic_sha256,
+                      proposal_content_sha256,disposition_kind,reviewer_id,decided_at,reason,
+                      disposition_content_sha256,disposition_bytes,disposition_byte_length,
+                      identity_authority,human_review_verified,approval_authority,
+                      execution_authority,result_authority,semantic_ceiling,created_commit_seq)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,0,0,0,?13,?14)",
+                    params![
+                        disposition_id.as_str(),
+                        proposal_id.as_str(),
+                        raw_digest(&proposal.proposal_digest, "Wave 6 proposal digest")?,
+                        raw_digest(&proposal.content_digest, "Wave 6 proposal content digest")?,
+                        disposition_kind(value.disposition),
+                        value.human_id.as_str(),
+                        value.decided_at.to_string(),
+                        value.reason.as_str(),
+                        raw_digest(parsed.content_digest(), "Wave 6 disposition content digest")?,
+                        exact_bytes,
+                        sqlite_usize(exact_bytes.len(), "Wave 6 disposition bytes")?,
+                        REVIEWER_AUTHORITY,
+                        CEILING,
+                        seq,
+                    ],
+                )?;
+                Ok(())
+            },
+        )?;
+        let stored = self
+            .load_wave6_fixture_research_disposition_v1(&disposition_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture research disposition",
+                identity: disposition_id.to_string(),
+            })?;
+        if stored.batch_id != batch_id
+            || stored.proposal_id != *proposal_id
+            || stored.exact_bytes != exact_bytes
+            || stored.content_digest != *parsed.content_digest()
+            || stored.commit_seq != generic.commit_seq
+            || stored.authority_boundary
+                != ResearchDispositionAuthorityV1::CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 research disposition readback differs from its exact commit".into(),
+            ));
+        }
+        Ok(Wave6FixtureResearchDispositionReceipt {
+            catalog_id: generic.catalog_id,
+            catalog_schema: generic.catalog_schema,
+            batch_id,
+            disposition_id,
+            proposal_id: proposal_id.clone(),
+            proposal_digest: stored.proposal_digest,
+            proposal_content_digest: stored.proposal_content_digest,
+            disposition: stored.disposition,
+            reviewer_id: stored.reviewer_id,
+            decided_at: stored.decided_at,
+            content_digest: stored.content_digest,
+            commit_seq: stored.commit_seq,
+            commit_digest: stored.commit_digest,
+            authority_boundary: ResearchDispositionAuthorityV1::CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult,
+            semantic_ceiling: stored.semantic_ceiling,
+            status: generic.status,
+        })
+    }
+
+    /// Loads and reparses one fixture disposition against its exact prior proposal.
+    ///
+    /// # Errors
+    ///
+    /// Refuses missing/substituted proposal lineage, changed bytes or scalars, malformed clocks or
+    /// digests, or any attempted authority promotion.
+    pub fn load_wave6_fixture_research_disposition_v1(
+        &self,
+        disposition_id: &StableString,
+    ) -> Result<Option<StoredWave6FixtureResearchDisposition>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT commit_row.commit_id,disposition.proposal_id,
+                        disposition.proposal_semantic_sha256,
+                        disposition.proposal_content_sha256,disposition.disposition_kind,
+                        disposition.reviewer_id,disposition.decided_at,disposition.reason,
+                        disposition.disposition_content_sha256,disposition.disposition_bytes,
+                        disposition.disposition_byte_length,disposition.identity_authority,
+                        disposition.human_review_verified,disposition.approval_authority,
+                        disposition.execution_authority,disposition.result_authority,
+                        disposition.semantic_ceiling,disposition.created_commit_seq,
+                        commit_row.commit_digest
+                 FROM wave6_fixture_research_disposition_v1 disposition
+                 JOIN ingest_commit commit_row
+                   ON commit_row.commit_seq=disposition.created_commit_seq
+                 WHERE disposition.disposition_id=?1",
+                [disposition_id.as_str()],
+                |row| {
+                    Ok(DispositionRow {
+                        batch_id: row.get(0)?,
+                        proposal_id: row.get(1)?,
+                        proposal_raw: row.get(2)?,
+                        proposal_content_raw: row.get(3)?,
+                        disposition_kind: row.get(4)?,
+                        reviewer_id: row.get(5)?,
+                        decided_at: row.get(6)?,
+                        reason: row.get(7)?,
+                        content_raw: row.get(8)?,
+                        bytes: row.get(9)?,
+                        byte_length: row.get(10)?,
+                        identity_authority: row.get(11)?,
+                        human_review_verified: row.get(12)?,
+                        approval_authority: row.get(13)?,
+                        execution_authority: row.get(14)?,
+                        result_authority: row.get(15)?,
+                        semantic_ceiling: row.get(16)?,
+                        commit_seq: row.get(17)?,
+                        commit_digest_raw: row.get(18)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        stored_research_disposition(self, disposition_id, row).map(Some)
     }
 }
 
@@ -692,6 +959,125 @@ fn reject_second_proposal_batch(
     Ok(())
 }
 
+fn stored_research_disposition(
+    store: &SqliteStore,
+    disposition_id: &StableString,
+    row: DispositionRow,
+) -> Result<StoredWave6FixtureResearchDisposition> {
+    let proposal_id = stable(&row.proposal_id, "Wave 6 disposition proposal ID")?;
+    let proposal = store
+        .load_wave6_fixture_research_proposal_v1(&proposal_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 fixture research proposal",
+            identity: proposal_id.to_string(),
+        })?;
+    let parsed_proposal = parse_research_proposal_exact(&proposal.exact_bytes)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let parsed = parse_research_disposition_exact(&row.bytes, &parsed_proposal)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let value = parsed.value();
+    let decided_at = row
+        .decided_at
+        .parse::<UtcTimestamp>()
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let commit_seq = CommitSeq::new(u64_from_i64(row.commit_seq, "Wave 6 disposition commit")?);
+    if value.disposition_id != *disposition_id
+        || value.proposal_id != proposal_id
+        || row.proposal_raw != raw_digest(&proposal.proposal_digest, "Wave 6 proposal digest")?
+        || row.proposal_content_raw
+            != raw_digest(&proposal.content_digest, "Wave 6 proposal content digest")?
+        || row.disposition_kind != disposition_kind(value.disposition)
+        || row.reviewer_id != value.human_id.as_str()
+        || decided_at != value.decided_at
+        || row.reason != value.reason
+        || row.content_raw
+            != raw_digest(parsed.content_digest(), "Wave 6 disposition content digest")?
+        || usize_from_i64(row.byte_length, "Wave 6 disposition byte length")? != row.bytes.len()
+        || row.identity_authority != REVIEWER_AUTHORITY
+        || row.human_review_verified != 0
+        || row.approval_authority != 0
+        || row.execution_authority != 0
+        || row.result_authority != 0
+        || row.semantic_ceiling != CEILING
+        || proposal.commit_seq >= commit_seq
+    {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 research disposition differs from exact bytes or proposal lineage"
+                .into(),
+        ));
+    }
+    Ok(StoredWave6FixtureResearchDisposition {
+        batch_id: stable(&row.batch_id, "Wave 6 disposition batch ID")?,
+        disposition_id: disposition_id.clone(),
+        proposal_id,
+        proposal_digest: proposal.proposal_digest,
+        proposal_content_digest: proposal.content_digest,
+        disposition: value.disposition,
+        reviewer_id: value.human_id.clone(),
+        decided_at,
+        reason: value.reason.clone(),
+        exact_bytes: row.bytes,
+        content_digest: parsed.content_digest().clone(),
+        commit_seq,
+        commit_digest: qualified_digest(
+            &row.commit_digest_raw,
+            "Wave 6 disposition commit digest",
+        )?,
+        authority_boundary: ResearchDispositionAuthorityV1::CallerFedFixtureUnverifiedNoHumanReviewApprovalExecutionOrResult,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    })
+}
+
+fn reject_second_disposition_batch(
+    store: &SqliteStore,
+    disposition_id: &StableString,
+    batch_id: &StableString,
+) -> Result<()> {
+    let existing: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT commit_row.commit_id
+             FROM wave6_fixture_research_disposition_v1 disposition
+             JOIN ingest_commit commit_row ON commit_row.commit_seq=disposition.created_commit_seq
+             WHERE disposition.disposition_id=?1",
+            [disposition_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|stored| stored != batch_id.as_str())
+    {
+        return Err(StoreError::IdentityConflict {
+            kind: "Wave 6 fixture research disposition",
+            identity: disposition_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn disposition_operation_digest(
+    proposal_id: &StableString,
+    disposition_id: &StableString,
+    content_digest: &ValueDigest,
+) -> Result<ValueDigest> {
+    digest_bytes(&serde_json::to_vec(&(
+        "joshi.store.wave6-fixture-research-disposition-commit.v1",
+        proposal_id,
+        disposition_id,
+        content_digest,
+    ))?)
+}
+
+const fn disposition_kind(value: ResearchDispositionKindV1) -> &'static str {
+    match value {
+        ResearchDispositionKindV1::Accept => "accept",
+        ResearchDispositionKindV1::Reject => "reject",
+        ResearchDispositionKindV1::Hold => "hold",
+        ResearchDispositionKindV1::Supersede => "supersede",
+    }
+}
+
 fn proposal_operation_digest(
     program_id: &StableString,
     proposal_id: &StableString,
@@ -778,6 +1164,8 @@ mod tests {
 
     const PROGRAM: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
     const PROPOSAL: &[u8] = include_bytes!("../../../fixtures/wave6/research_proposal_v1.json");
+    const DISPOSITION: &[u8] =
+        include_bytes!("../../../fixtures/wave6/research_disposition_v1.json");
 
     const SCHEMAS: [(&str, &[u8]); 4] = [
         (
@@ -846,7 +1234,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 17);
+        assert_eq!(migration.current, 18);
         let build = StableString::new("wave6-research-store-test").expect("build ID");
         let program = store
             .commit_wave6_program_registration_v1(
@@ -901,7 +1289,7 @@ mod tests {
                 build.clone(),
             )
             .expect("proposal");
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v17");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v18");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
         assert_eq!(accepted.descriptor_count, 3);
         assert_eq!(accepted.counterexample_count, 18);
@@ -984,6 +1372,132 @@ mod tests {
                 &program_id,
                 PROPOSAL,
                 StableString::new("wave6:research-proposal:second").expect("second batch"),
+                build,
+            ),
+            Err(StoreError::IdentityConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_disposition_resolves_proposal_retries_and_reopens_without_review_authority() {
+        let root = tempfile::tempdir().expect("temporary store");
+        let store_config = config(root.path());
+        let (mut store, program_id, build) = prepare(root.path());
+        let proposal = store
+            .commit_wave6_fixture_research_proposal_v1(
+                &program_id,
+                PROPOSAL,
+                StableString::new("wave6:research-proposal:fixture-001").expect("proposal batch"),
+                build.clone(),
+            )
+            .expect("proposal");
+        let batch = StableString::new("wave6:research-disposition:fixture-001").expect("batch");
+        let accepted = store
+            .commit_wave6_fixture_research_disposition_v1(
+                &proposal.proposal_id,
+                DISPOSITION,
+                batch.clone(),
+                build.clone(),
+            )
+            .expect("disposition");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v18");
+        assert_eq!(accepted.status, IdempotencyStatus::Accepted);
+        assert_eq!(accepted.disposition, ResearchDispositionKindV1::Hold);
+        assert!(!accepted.authority_boundary.human_review_verified());
+        assert!(!accepted.authority_boundary.approval_authority());
+        assert!(!accepted.authority_boundary.execution_authority());
+        assert!(!accepted.authority_boundary.result_authority());
+        let retry = store
+            .commit_wave6_fixture_research_disposition_v1(
+                &proposal.proposal_id,
+                DISPOSITION,
+                batch,
+                build,
+            )
+            .expect("idempotent disposition");
+        assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+        assert_eq!(retry.commit_seq, accepted.commit_seq);
+        assert_eq!(retry.commit_digest, accepted.commit_digest);
+        drop(store);
+
+        let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly).expect("reader store");
+        let stored = reopened
+            .load_wave6_fixture_research_disposition_v1(&accepted.disposition_id)
+            .expect("disposition readback")
+            .expect("stored disposition");
+        assert_eq!(stored.exact_bytes, DISPOSITION);
+        assert_eq!(stored.proposal_digest, accepted.proposal_digest);
+        assert_eq!(stored.commit_digest, accepted.commit_digest);
+        assert!(!stored.authority_boundary.human_review_verified());
+    }
+
+    #[test]
+    fn disposition_refuses_missing_proposal_changed_bytes_and_second_batch() {
+        let missing_root = tempfile::tempdir().expect("missing temporary store");
+        let mut missing =
+            SqliteStore::open(config(missing_root.path()), StoreMode::SingleWriter).expect("store");
+        missing
+            .migrate(
+                "2026-08-18T18:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("migration");
+        let proposal_id = StableString::new("research-proposal-482af6e85fb9edae5a00eccf29af12b2")
+            .expect("proposal ID");
+        assert!(matches!(
+            missing.commit_wave6_fixture_research_disposition_v1(
+                &proposal_id,
+                DISPOSITION,
+                StableString::new("wave6:research-disposition:missing").expect("batch"),
+                StableString::new("wave6-research-store-test").expect("build"),
+            ),
+            Err(StoreError::MissingIdentity {
+                kind: "Wave 6 fixture research proposal",
+                ..
+            })
+        ));
+
+        let root = tempfile::tempdir().expect("temporary store");
+        let (mut store, program_id, build) = prepare(root.path());
+        let proposal = store
+            .commit_wave6_fixture_research_proposal_v1(
+                &program_id,
+                PROPOSAL,
+                StableString::new("wave6:research-proposal:fixture-001").expect("proposal batch"),
+                build.clone(),
+            )
+            .expect("proposal");
+        let batch = StableString::new("wave6:research-disposition:fixture-001").expect("batch");
+        store
+            .commit_wave6_fixture_research_disposition_v1(
+                &proposal.proposal_id,
+                DISPOSITION,
+                batch.clone(),
+                build.clone(),
+            )
+            .expect("disposition");
+        let mut changed = DISPOSITION.to_vec();
+        let position = changed
+            .windows(b"fixture-only hold".len())
+            .position(|window| window == b"fixture-only hold")
+            .expect("reason");
+        changed[position] = b'F';
+        assert!(
+            store
+                .commit_wave6_fixture_research_disposition_v1(
+                    &proposal.proposal_id,
+                    &changed,
+                    batch,
+                    build.clone(),
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            store.commit_wave6_fixture_research_disposition_v1(
+                &proposal.proposal_id,
+                DISPOSITION,
+                StableString::new("wave6:research-disposition:second").expect("second batch"),
                 build,
             ),
             Err(StoreError::IdentityConflict { .. })

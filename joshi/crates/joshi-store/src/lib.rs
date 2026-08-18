@@ -60,8 +60,9 @@ pub use wave6_campaign::{
     Wave6FixtureCampaignBundleReceipt,
 };
 pub use wave6_research::{
+    ResearchDispositionAuthorityV1, StoredWave6FixtureResearchDisposition,
     StoredWave6FixtureResearchProposal, StoredWave6ResearchArtifactBinding,
-    Wave6FixtureResearchProposalReceipt,
+    Wave6FixtureResearchDispositionReceipt, Wave6FixtureResearchProposalReceipt,
 };
 
 /// `SQLite` application identifier (`JOSH` in ASCII).
