@@ -1637,6 +1637,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "joshi-wave6-registry"
+version = "0.1.0"
+dependencies = [
+ "joshi-domain",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
