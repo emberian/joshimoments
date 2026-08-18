@@ -63,6 +63,33 @@ artifact/evidence set, requires an exact predecessor per artifact, refuses branc
 rollback, and permits fixture-roundtrip promotion at most once. There is intentionally no
 `store_resolved`, operational, prospective, live, product, or economic decision variant.
 
+## Campaign lifecycle
+
+`CampaignLifecycleV1` implements the exact generic Wave 6 state machine without pretending to
+implement a campaign runtime:
+
+```text
+draft_exploratory
+  -> preregistered
+  -> enrollment_frozen
+  -> running
+  -> sealed
+  -> matured | censored | aborted_apparatus
+  -> adjudicated
+  -> continue | revise_as_new_campaign | park | reject
+```
+
+The genesis, predecessor, prior state, strict clock order, definition digest, and frozen
+commitment are revalidated on every transition. The commitment must first appear at
+`enrollment_frozen` and remain byte-identical. A revision must name a distinct successor campaign;
+it cannot silently edit the current one. Apparatus abort remains a distinct state and cannot be
+recast as a negative scientific result.
+
+All state names are caller-declared fixture semantics. In particular, `preregistered`, `sealed`,
+`matured`, and `adjudicated` do not mean that a durable registration, sealed journal, outcome,
+coverage closure, or adjudication receipt exists. The crate performs no enrollment, assignment,
+sensing, presentation, evidence collection, reveal, scoring, or execution.
+
 ## Authority boundary
 
 The crate has no dependency on `joshi-store` and defines no durable receipt, commit sequence,
@@ -80,7 +107,7 @@ authorized by this work.
 The focused suite covers exact fixture roundtrip, unknown/noncanonical JSON, digest and artifact
 substitution, provider-budget/missing-prohibition widening, strict digest wire form, DAG
 topology/time closure, duplicate content/unknown kind refusal, rung/wording substitution, and
-decision branching:
+decision branching, lifecycle skipping/branching, and frozen-commitment mutation:
 
 ```bash
 cargo test --locked --offline -p joshi-wave6-registry --all-targets
