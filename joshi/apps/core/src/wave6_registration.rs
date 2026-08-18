@@ -4,7 +4,8 @@ use std::{fs, path::Path, time::Duration};
 
 use joshi_domain::StableString;
 use joshi_store::{
-    IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, Wave6FixtureCampaignBundleBytes,
+    IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, StoredWave6FixtureResearchProposal,
+    Wave6FixtureCampaignBundleBytes,
 };
 use joshi_wave6_registry::SemanticCeilingV1;
 use serde::Serialize;
@@ -13,6 +14,8 @@ use thiserror::Error;
 const REGISTRATION: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
 const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
 const DECISION_LEDGER: &[u8] = include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
+const RESEARCH_PROPOSAL: &[u8] =
+    include_bytes!("../../../fixtures/wave6/research_proposal_v1.json");
 const CAMPAIGN_REGISTRATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/campaign/registration_v1.json");
 const CAMPAIGN_ENROLLMENT: &[u8] =
@@ -104,6 +107,38 @@ pub struct Wave6FixtureCampaignBundleReport {
     pub commit_seq: String,
 }
 
+/// One proposal descriptor resolved to an earlier exact fixture evaluation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureResearchArtifactBindingReport {
+    pub descriptor_artifact_id: String,
+    pub provenance_digest: String,
+    pub resolved_artifact_id: String,
+    pub resolved_kind_id: String,
+    pub fixture_alleged_commit_seq: String,
+    pub resolved_artifact_commit_seq: String,
+}
+
+/// One exact non-executable proposal retained after its prior evaluations.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureResearchProposalReport {
+    pub proposal_id: String,
+    pub proposal_digest: String,
+    pub content_digest: String,
+    pub commitment_digest: String,
+    pub policy_digest: String,
+    pub evidence_closure_digest: String,
+    pub descriptor_count: String,
+    pub counterexample_count: String,
+    pub experiment_count: String,
+    pub total_experiment_units: String,
+    pub maximum_fixture_alleged_commit_seq: String,
+    pub maximum_resolved_artifact_commit_seq: String,
+    pub artifact_bindings: Vec<Wave6FixtureResearchArtifactBindingReport>,
+    pub commit_seq: String,
+}
+
 /// Machine-readable, non-promoting result of the N00 durable fixture walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +176,12 @@ pub struct Wave6ProgramRegistrationReport {
     pub fixture_campaign_bundle_persisted: bool,
     pub fixture_campaign_bundle_restart_reverified: bool,
     pub prospective_campaign_journal: bool,
+    pub fixture_research_proposal: Wave6FixtureResearchProposalReport,
+    pub fixture_research_proposal_persisted: bool,
+    pub fixture_research_proposal_restart_reverified: bool,
+    pub human_research_review: bool,
+    pub proposal_executed: bool,
+    pub research_result: bool,
     pub consumed_wave5_gate_count: &'static str,
     pub provider_units: &'static str,
     pub external_mutation_units: &'static str,
@@ -204,6 +245,8 @@ pub fn run_wave6_program_registration(
     }
     let schema_reports = commit_schemas(&mut store, &accepted.program_id, &writer_build)?;
     let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
+    let research_proposal =
+        commit_research_proposal(&mut store, &accepted.program_id, &writer_build)?;
     let dag_report = commit_artifact_dag(&mut store, &accepted.program_id, &writer_build)?;
     let decision_report = commit_decision_ledger(&mut store, &dag_report, &writer_build)?;
     let campaign_report = commit_campaign_bundle(&mut store, &accepted.program_id, &writer_build)?;
@@ -230,13 +273,14 @@ pub fn run_wave6_program_registration(
     }
     verify_schemas(&reopened, &program_id, &schema_reports)?;
     verify_artifacts(&reopened, &artifact_reports)?;
+    verify_research_proposal(&reopened, &research_proposal)?;
     verify_artifact_dag(&reopened, &dag_report)?;
     verify_decision_ledger(&reopened, &decision_report)?;
     verify_campaign_bundle(&reopened, &campaign_report)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v6",
-        schema_version: 6,
+        contract: "joshi.core.wave6_program_registration_report.v7",
+        schema_version: 7,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -267,6 +311,12 @@ pub fn run_wave6_program_registration(
         fixture_campaign_bundle_persisted: true,
         fixture_campaign_bundle_restart_reverified: true,
         prospective_campaign_journal: false,
+        fixture_research_proposal: research_proposal,
+        fixture_research_proposal_persisted: true,
+        fixture_research_proposal_restart_reverified: true,
+        human_research_review: false,
+        proposal_executed: false,
+        research_result: false,
         consumed_wave5_gate_count: "0",
         provider_units: "0",
         external_mutation_units: "0",
@@ -286,6 +336,130 @@ fn campaign_bundle_bytes() -> Wave6FixtureCampaignBundleBytes<'static> {
         seal: CAMPAIGN_SEAL,
         adjudication: CAMPAIGN_ADJUDICATION,
     }
+}
+
+fn commit_research_proposal(
+    store: &mut SqliteStore,
+    program_id: &StableString,
+    writer_build: &StableString,
+) -> Result<Wave6FixtureResearchProposalReport, Wave6RegistrationError> {
+    let batch_id = StableString::new("wave6:research-proposal:fixture-001")?;
+    let accepted = store.commit_wave6_fixture_research_proposal_v1(
+        program_id,
+        RESEARCH_PROPOSAL,
+        batch_id.clone(),
+        writer_build.clone(),
+    )?;
+    if !matches!(
+        accepted.status,
+        IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+    ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research proposal returned an impossible first receipt",
+        ));
+    }
+    let retry = store.commit_wave6_fixture_research_proposal_v1(
+        program_id,
+        RESEARCH_PROPOSAL,
+        batch_id,
+        writer_build.clone(),
+    )?;
+    if retry.status != IdempotencyStatus::Idempotent
+        || retry.proposal_id != accepted.proposal_id
+        || retry.proposal_digest != accepted.proposal_digest
+        || retry.content_digest != accepted.content_digest
+        || retry.commitment_digest != accepted.commitment_digest
+        || retry.policy_digest != accepted.policy_digest
+        || retry.evidence_closure_digest != accepted.evidence_closure_digest
+        || retry.descriptor_count != accepted.descriptor_count
+        || retry.counterexample_count != accepted.counterexample_count
+        || retry.experiment_count != accepted.experiment_count
+        || retry.total_experiment_units != accepted.total_experiment_units
+        || retry.maximum_fixture_alleged_commit_seq != accepted.maximum_fixture_alleged_commit_seq
+        || retry.maximum_resolved_artifact_commit_seq
+            != accepted.maximum_resolved_artifact_commit_seq
+        || retry.commit_seq != accepted.commit_seq
+        || retry.commit_digest != accepted.commit_digest
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "exact Wave 6 research proposal retry changed durable identity",
+        ));
+    }
+    let stored = store
+        .load_wave6_fixture_research_proposal_v1(&accepted.proposal_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research proposal was absent after commit",
+        ))?;
+    if stored.exact_bytes != RESEARCH_PROPOSAL
+        || stored.commit_seq != accepted.commit_seq
+        || stored.commit_digest != accepted.commit_digest
+        || u64::try_from(stored.artifact_bindings.len()).ok() != Some(accepted.descriptor_count)
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 research proposal readback differed from its receipt",
+        ));
+    }
+    Ok(research_proposal_report(&stored))
+}
+
+fn research_proposal_report(
+    stored: &StoredWave6FixtureResearchProposal,
+) -> Wave6FixtureResearchProposalReport {
+    Wave6FixtureResearchProposalReport {
+        proposal_id: stored.proposal_id.to_string(),
+        proposal_digest: stored.proposal_digest.to_string(),
+        content_digest: stored.content_digest.to_string(),
+        commitment_digest: stored.commitment_digest.to_string(),
+        policy_digest: stored.policy_digest.to_string(),
+        evidence_closure_digest: stored.evidence_closure_digest.to_string(),
+        descriptor_count: stored.descriptor_count.to_string(),
+        counterexample_count: stored.counterexample_count.to_string(),
+        experiment_count: stored.experiment_count.to_string(),
+        total_experiment_units: stored.total_experiment_units.to_string(),
+        maximum_fixture_alleged_commit_seq: stored.maximum_fixture_alleged_commit_seq.to_string(),
+        maximum_resolved_artifact_commit_seq: stored
+            .maximum_resolved_artifact_commit_seq
+            .get()
+            .to_string(),
+        artifact_bindings: stored
+            .artifact_bindings
+            .iter()
+            .map(|binding| Wave6FixtureResearchArtifactBindingReport {
+                descriptor_artifact_id: binding.descriptor_artifact_id.to_string(),
+                provenance_digest: binding.provenance_digest.to_string(),
+                resolved_artifact_id: binding.resolved_artifact_id.to_string(),
+                resolved_kind_id: binding.resolved_kind_id.to_string(),
+                fixture_alleged_commit_seq: binding.fixture_alleged_commit_seq.to_string(),
+                resolved_artifact_commit_seq: binding
+                    .resolved_artifact_commit_seq
+                    .get()
+                    .to_string(),
+            })
+            .collect(),
+        commit_seq: stored.commit_seq.get().to_string(),
+    }
+}
+
+fn verify_research_proposal(
+    store: &SqliteStore,
+    report: &Wave6FixtureResearchProposalReport,
+) -> Result<(), Wave6RegistrationError> {
+    let proposal_id = StableString::new(report.proposal_id.clone())?;
+    let stored = store
+        .load_wave6_fixture_research_proposal_v1(&proposal_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research proposal was absent after restart",
+        ))?;
+    if stored.exact_bytes != RESEARCH_PROPOSAL
+        || research_proposal_report(&stored) != *report
+        || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture research proposal changed across read-only reopen",
+        ));
+    }
+    Ok(())
 }
 
 fn commit_campaign_bundle(
@@ -867,6 +1041,16 @@ mod tests {
         assert!(first.fixture_campaign_bundle_persisted);
         assert!(first.fixture_campaign_bundle_restart_reverified);
         assert!(!first.prospective_campaign_journal);
+        assert_eq!(first.fixture_research_proposal.descriptor_count, "3");
+        assert_eq!(first.fixture_research_proposal.counterexample_count, "18");
+        assert_eq!(first.fixture_research_proposal.experiment_count, "1");
+        assert_eq!(first.fixture_research_proposal.total_experiment_units, "3");
+        assert_eq!(first.fixture_research_proposal.artifact_bindings.len(), 3);
+        assert!(first.fixture_research_proposal_persisted);
+        assert!(first.fixture_research_proposal_restart_reverified);
+        assert!(!first.human_research_review);
+        assert!(!first.proposal_executed);
+        assert!(!first.research_result);
         assert_eq!(first.consumed_wave5_gate_count, "0");
         assert!(!first.wave5_gates_resolved);
         assert!(!first.operational_release);
@@ -891,6 +1075,10 @@ mod tests {
         assert_eq!(
             repeated.fixture_campaign_bundle,
             first.fixture_campaign_bundle
+        );
+        assert_eq!(
+            repeated.fixture_research_proposal,
+            first.fixture_research_proposal
         );
     }
 }

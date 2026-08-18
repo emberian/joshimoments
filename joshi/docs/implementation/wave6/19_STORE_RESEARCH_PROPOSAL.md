@@ -33,6 +33,10 @@ prospective registration, empirical support, operational release, policy value, 
 economic capability. A changed proposal cannot replace the existing identity, and the same
 proposal cannot be rebound to a second batch.
 
+Core report `joshi.core.wave6_program_registration_report.v7` and root witness
+`joshi.wave6.fixture_foundation_witness.v6` carry the exact receipt/readback fields and retain
+`humanResearchReview`, `proposalExecuted`, and `researchResult` as `false`.
+
 ## Verification
 
 ```sh
