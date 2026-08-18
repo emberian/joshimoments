@@ -2,44 +2,61 @@ use joshi_domain::{BatchDigest, OpenVariant, SourceId, StableString, UtcTimestam
 use joshi_evidence::{Boundary, CoverageScope, DurableIngestBatch};
 use joshi_spool::{EvidenceBatchEntry, ProtectionDomainId, SpoolConfig, SpoolEntry};
 use joshi_supervisor::{
-    AttemptKind, OperationKey, PendingSegment, ProtectionProfile, QueueClass, QueueLimits,
-    ReservationRequest, RetryPolicy, SourceKey, Supervisor, SupervisorConfig,
+    AttemptKind, FaultInjector, FaultPoint, OperationKey, PendingSegment, ProtectionProfile,
+    QueueClass, QueueLimits, ReservationRequest, RetryPolicy, SourceKey, Supervisor,
+    SupervisorConfig, SupervisorError,
 };
-use std::{env, fs, path::PathBuf, thread, time::Duration};
+use std::{collections::BTreeMap, env, fs, path::PathBuf, sync::Arc, thread, time::Duration};
+
+struct KillPause {
+    target: FaultPoint,
+    marker: PathBuf,
+}
+
+impl FaultInjector for KillPause {
+    fn check(&self, point: FaultPoint) -> Result<(), SupervisorError> {
+        if point == self.target {
+            fs::write(&self.marker, format!("{point:?}")).unwrap();
+            loop {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+        Ok(())
+    }
+}
 
 fn main() {
     let mut args = env::args().skip(1);
     let root = PathBuf::from(args.next().expect("collector root"));
     let phase = args.next().expect("kill phase");
     let at: UtcTimestamp = "2026-08-17T12:00:00.000000Z".parse().unwrap();
-    let mut supervisor = Supervisor::open(config(&root)).unwrap();
+    let target = match phase.as_str() {
+        "before_pre_io_reservation" => FaultPoint::BeforeAttemptReservation,
+        "after_pre_io_reservation" => FaultPoint::AfterAttemptReservation,
+        "before_origin_fsync" => FaultPoint::BeforeLocalSpoolAppend,
+        "after_origin_fsync" => FaultPoint::AfterLocalSpoolAppend,
+        other => panic!("unknown phase {other}"),
+    };
+    let mut supervisor = Supervisor::open_with_faults(
+        config(&root),
+        BTreeMap::new(),
+        Arc::new(KillPause {
+            target,
+            marker: root.join("child-ready"),
+        }),
+    )
+    .unwrap();
     supervisor.reconcile_startup(at).unwrap();
     let reservation = supervisor.reserve(request(at), at).unwrap();
-    match phase.as_str() {
-        "reserved_before_io" => {}
-        "queued_before_spool" => {
-            let item = PendingSegment::new(
-                reservation,
-                evidence_entry("kill-queued"),
-                QueueClass::Evidence,
-            )
-            .unwrap();
-            supervisor.try_enqueue(item).unwrap();
-        }
-        "locally_durable" => {
-            let item = PendingSegment::new(
-                reservation,
-                evidence_entry("kill-durable"),
-                QueueClass::Evidence,
-            )
-            .unwrap();
-            supervisor.try_enqueue(item).unwrap();
-            supervisor.drain_one(at).unwrap().unwrap();
-        }
-        other => panic!("unknown phase {other}"),
-    }
-    fs::write(root.join("child-ready"), phase.as_bytes()).unwrap();
-    thread::sleep(Duration::from_mins(1));
+    let item = PendingSegment::new(
+        reservation,
+        evidence_entry("kill-origin"),
+        QueueClass::Evidence,
+    )
+    .unwrap();
+    supervisor.try_enqueue(item).unwrap();
+    supervisor.drain_one(at).unwrap().unwrap();
+    panic!("kill child passed requested fault point {phase}");
 }
 
 fn config(root: &std::path::Path) -> SupervisorConfig {

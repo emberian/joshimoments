@@ -26,7 +26,7 @@ fn real_process_kills_repeat_without_skipping_or_false_cursor_progress() {
     ))
     .unwrap();
     assert_eq!(matrix.contract, "joshi.supervisor.kill_failpoint_matrix.v1");
-    assert_eq!(matrix.failpoints.len(), 4);
+    assert_eq!(matrix.failpoints.len(), 7);
     assert!(
         matrix
             .process_kills
@@ -58,11 +58,15 @@ fn real_process_kills_repeat_without_skipping_or_false_cursor_progress() {
         recovered.reconcile_startup(support::at()).unwrap();
         let replay = replay_spool(recovered.spool(), &std::collections::BTreeMap::new()).unwrap();
         match case.phase.as_str() {
-            "reserved_before_io" | "queued_before_spool" => {
+            "before_pre_io_reservation" => {
+                assert_eq!(replay.evidence_batches, 0);
+                assert_eq!(replay.control_entries, 0);
+            }
+            "after_pre_io_reservation" | "before_origin_fsync" => {
                 assert_eq!(replay.evidence_batches, 0);
                 assert_eq!(replay.control_entries, 1);
             }
-            "locally_durable" => {
+            "after_origin_fsync" => {
                 assert_eq!(replay.evidence_batches, 1);
                 assert_eq!(replay.control_entries, 0);
             }

@@ -358,6 +358,8 @@ impl Supervisor {
                 ));
             }
         }
+        self.journal
+            .check(crate::FaultPoint::BeforeAttemptReservation)?;
         let key = (request.source_key.clone(), request.operation_key.clone());
         let (generation, attempt_ordinal) = match self.state.generations.get(&key) {
             None => (GenerationId::new(1), 1),
@@ -400,6 +402,8 @@ impl Supervisor {
             .append(at, JournalEvent::AttemptReserved(reservation.clone()))?;
         self.state.apply(&record.event);
         self.persist_health()?;
+        self.journal
+            .check(crate::FaultPoint::AfterAttemptReservation)?;
         Ok(reservation)
     }
 

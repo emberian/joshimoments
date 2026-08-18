@@ -15,8 +15,11 @@ use std::{
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FaultPoint {
+    BeforeAttemptReservation,
+    AfterAttemptReservation,
     AfterJournalTemporarySync,
     AfterJournalRename,
+    BeforeLocalSpoolAppend,
     AfterLocalSpoolAppend,
     AfterHealthTemporarySync,
 }
@@ -103,6 +106,10 @@ impl DurableJournal {
 
     pub(crate) const fn next_ordinal(&self) -> u64 {
         self.next_ordinal
+    }
+
+    pub(crate) fn check(&self, point: FaultPoint) -> Result<()> {
+        self.faults.check(point)
     }
 
     pub(crate) fn append(

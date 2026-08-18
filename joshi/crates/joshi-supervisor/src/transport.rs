@@ -166,6 +166,7 @@ impl LocalTransport {
         if matches!(entry, SpoolEntry::EvidenceBatch(_)) {
             self.enforce_daily_budget(created_at, &closure)?;
         }
+        self.faults.check(FaultPoint::BeforeLocalSpoolAppend)?;
         let outcome = self.spool.append_segment(&bytes, &closure)?;
         self.faults.check(FaultPoint::AfterLocalSpoolAppend)?;
         Ok((closure, outcome.into()))
