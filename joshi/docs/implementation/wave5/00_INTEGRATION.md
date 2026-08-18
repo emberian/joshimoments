@@ -122,10 +122,12 @@ cargo test --locked --offline -p joshi-operational-status
 The migration validator, combined admission/artifact/store/core tests, operational-status and
 mechanics-capability tests, and strict focused Clippy gates pass at this handoff. The standalone
 `wave5-ignition-readiness` command also emits the expected V9 `useful_partial` result. A fresh full
-`./scripts/wave5-readiness` run now passes the preserved workspace gate and executes both the C0
-ignition component, the joined partial G0 component, and a separate one-shot paired route/restart
-smoke. Its schema-V4 witness binds the exact G0 component file, inspector-smoke file, fifteen-role
-component evidence bundle, V10 snapshot and V9/V10 migration digests while
+`./scripts/wave5-readiness` run now passes the preserved workspace gate and executes the C0
+ignition component plus one joined partial G0 root-evidence command. The latter runs the durable
+component and one-shot paired route/restart smoke over the same catalog, then exact-matches their
+run, source, publication, head and response bytes. Its schema-V5 witness binds the nested component
+and inspector reports, their consolidated eighteen-role evidence bundle, V10 snapshot and V9/V10
+migration digests while
 keeping every root/product/live qualification false.
 
 The final script output must continue to state `useful_partial`,
@@ -188,8 +190,9 @@ completed root occurrence.
 The one-shot `wave5-g0-inspector-smoke` command exercises the actual exchange and exact Cockpit V2
 HTTP open in process, restarts the SQLite pairing epoch, proves the old capability is refused, and
 opens identical response bytes under a fresh scoped session. Its JSON is secret-free and keeps
-`browserPresented`, product/live qualification, and the full fault walk false. Root readiness binds
-the exact smoke-file digest separately from the component evidence bundle.
+`browserPresented`, product/live qualification, and the full fault walk false. The
+`wave5-g0-root-evidence` command now runs it after the component and joins its consumed pairing,
+route response and reopen readback artifacts to the same run/source/publication lineage.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
@@ -200,8 +203,10 @@ each maps one-to-one to
 `observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
 fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second
-segment is generated. The remaining roles and full 37-scenario matrix are absent, and both the embedded and outer
-`fullOfflineFaultWalk` fields remain false.
+segment is generated. The root join supplies the three remaining baseline roles—pairing exchange,
+Glass API read and reopen readback—for an exact eighteen-item bundle. These are baseline artifacts,
+not 37 executed scenario results: the embedded, joined and outer `fullOfflineFaultWalk` fields all
+remain false.
 
 ## Explicit nonclaims
 

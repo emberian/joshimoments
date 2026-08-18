@@ -70,24 +70,26 @@ gates=workspaceOffline, schemaFreshAndUpgrade, glassOffline, companionOffline,
 Wave 5 witness (`wave5-witness.json`):
 
 ```text
-schemaVersion=4
+schemaVersion=5
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0ComponentDigest=sha256:ae54f8118635426b9ab0340d1bf205b43a309a0190a2972607eabb47d84f7ad7
-g0InspectorSmokeDigest=sha256:181ae942333d4a1bb1265a7c9b2739e5c30255db4fa8c9f3cfb5170325bba5d4
-g0EvidenceBundleDigest=sha256:a34cacbaa187039468049d9ab7d2e8fcce0f477f8babe911e4d0007c2ace0141
-g0SnapshotId=sha256:7c7da6ef291acc42f815109745f08a0efe06aeba8d62c69ff0bd1d2eab7ba214
+g0RootEvidenceDigest=sha256:d09a0c558ac177f0c84c80e2489b8d1ca4d7b0455c2dbf6cd9be4d4667347175
+g0ComponentDigest=sha256:778748255796f8e2ff8d60b9609bfcd3573b4c365fec7f49e098d091e9454b80
+g0InspectorSmokeDigest=sha256:98945af055c916334832a9d3d44f6fe000a78d5f5aecdc42c56f5f1f60a0633a
+g0EvidenceBundleDigest=sha256:63b6cd0244c354baff5eb0803758661bf2233916f5bde72188cb57504fd581f2
+g0SnapshotId=sha256:37b9e8c0b0fd5101c77cf93657f3703aa418a1d8c3ea30d7e208555309df2c46
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
 g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
          store_resolved_fixture_source, headed_cockpit_v2_publication,
          paired_fixture_api_reopen, censored_scientific_memory,
          nonempty_v10_export_import, v10_export_recovered,
-         artifact_bearing_backup_restore, g0_component_30_prefix_recovery
+         artifact_bearing_backup_restore, g0_component_30_prefix_recovery,
+         partial_root_18_role_evidence
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
 criticalSurfaceAccessibility=false; broadParity=false
-claim=offline_run_registration_public_c0_and_partial_g0_component_closure_only
+claim=offline_run_registration_public_c0_and_partial_g0_root_evidence_only
 ```
 
 The ignition detail (`ignition-readiness.json`) independently reports
@@ -96,13 +98,14 @@ The ignition detail (`ignition-readiness.json`) independently reports
 `durableProgressCount=2`, `circulationClosed=true`, `originSegmentRetained=true`,
 `catalogAckReverified=true`, `restartReverified=true`, and `providerIo=false`.
 
-The same root invocation executes `wave5-g0-source-publication`, checks its fifteen-role evidence
-bundle, the eight-occurrence censored-memory closure, and nonempty V10 snapshot identity. It then
-executes the actual in-process pairing/open/restart smoke and binds its secret-free file digest. It
-refuses to emit the witness if the paired route changes bytes, accepts the prior capability, raises
-a browser/product/live bit, or if any partial component
+The same root invocation executes `wave5-g0-root-evidence`, which runs the component and actual
+in-process pairing/open/restart smoke over the same catalog. It checks the component's
+eight-occurrence censored-memory closure and nonempty V10 snapshot, exact-matches the registered
+run/source/publication/head and route bytes, and emits one eighteen-role baseline evidence bundle.
+It refuses to emit the witness if the paired route changes bytes, accepts the prior capability,
+substitutes the run or publication, raises a browser/product/live bit, or if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
-offline component, not a W5-G0/product/live pass.
+offline baseline conjunction, not the 37-scenario W5-G0/product/live pass.
 
 There is no red package/root gate in this current run. The remaining blockers are semantic
 qualification gates, not compile/test/tooling failures: no live provider I/O, no sustained

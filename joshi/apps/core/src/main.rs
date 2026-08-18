@@ -54,6 +54,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Join the partial G0 component and paired route into one 18-role evidence bundle.
+    Wave5G0RootEvidence {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Serve bounded local admission and immutable query endpoints on loopback only.
     Serve {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -112,6 +117,11 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Wave5G0InspectorSmoke { state }) => {
             let report = joshi_core::g0_inspector_smoke::run_g0_inspector_smoke(&state).await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0RootEvidence { state }) => {
+            let report =
+                joshi_core::wave5_g0_root_evidence::run_wave5_g0_root_evidence(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -261,6 +271,8 @@ enum CliError {
     Wave5G0SourcePublication(#[from] joshi_core::wave5_g0::Wave5G0SourcePublicationError),
     #[error(transparent)]
     G0InspectorSmoke(#[from] G0InspectorSmokeError),
+    #[error(transparent)]
+    Wave5G0RootEvidence(#[from] joshi_core::wave5_g0_root_evidence::Wave5G0RootEvidenceError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

@@ -49,9 +49,13 @@ pub struct G0InspectorSmokeReport {
     pub schema_version: u16,
     pub authority: &'static str,
     pub status: &'static str,
+    pub run_registration_id: String,
+    pub run_registration_digest: String,
+    pub source_occurrence_id: String,
     pub publication_id: String,
     pub publication_digest: String,
     pub head_digest: String,
+    pub head_bytes_digest: String,
     pub pairing_occurrence_id: String,
     pub pairing_occurrence_digest: String,
     pub session_id: String,
@@ -140,6 +144,19 @@ pub async fn run_g0_inspector_smoke_with_fault(
     let publication_id = publication.publication.publication_id.clone();
     let publication_digest = publication.publication.publication_digest.clone();
     let head_digest = head.head.head_digest.clone();
+    let source_occurrence_id = publication.source_occurrence_id.clone();
+    let source = store
+        .load_wave5_source_occurrence_v1(&source_occurrence_id)?
+        .ok_or(G0InspectorSmokeError::Invariant(
+            "headed publication source occurrence is absent",
+        ))?;
+    let registration = store
+        .load_wave5_run_registration_v1(&source.occurrence.run_registration_id)?
+        .ok_or(G0InspectorSmokeError::Invariant(
+            "headed publication run registration is absent",
+        ))?;
+    let run_registration_id = registration.run_registration_id;
+    let run_registration_digest = registration.exact_digest;
     drop(store);
 
     let origin = PairingOrigin::new(ORIGIN)?;
@@ -296,9 +313,13 @@ pub async fn run_g0_inspector_smoke_with_fault(
         schema_version: 1,
         authority: "read_only_no_execution",
         status: "useful_partial",
+        run_registration_id: run_registration_id.to_string(),
+        run_registration_digest: run_registration_digest.to_string(),
+        source_occurrence_id: source_occurrence_id.to_string(),
         publication_id: publication_id.to_string(),
         publication_digest: publication_digest.to_string(),
         head_digest: head_digest.to_string(),
+        head_bytes_digest: head.head_digest.to_string(),
         pairing_occurrence_id: consumed_id.to_string(),
         pairing_occurrence_digest: pairing_occurrence.document_digest.to_string(),
         session_id,

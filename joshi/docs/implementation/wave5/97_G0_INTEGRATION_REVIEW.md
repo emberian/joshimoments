@@ -47,9 +47,10 @@ export now uses its parser dependencies, and Core exercises the private store wr
 exact input backup and registered CAS import through the 24-table commit/reopen path. The root
 cannot infer persistence or semantic verification from a public port, import or package edge. The
 G0 component now joins its supervisor reservation and exact Pump batch to the sole store/catalog
-origin. The root readiness wrapper executes that component and binds its report digest, fifteen-role
-evidence-bundle digest, V10 snapshot ID, and separate paired-route/restart smoke digest into a
-schema-V4 witness. The witness remains a partial
+origin. The root readiness wrapper now runs the component and paired-route/restart smoke through
+one join, exact-matches their run/source/publication lineage, and binds both nested report digests,
+the eighteen-role evidence-bundle digest, and V10 snapshot ID into a schema-V5 witness. The witness
+remains a partial
 artifact index rather than a completed root occurrence and keeps every qualification bit false.
 
 ## Per-component gate ledger
@@ -66,8 +67,8 @@ artifact index rather than a completed root occurrence and keeps every qualifica
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS as a joined durable offline-fixture component; BLOCKED complete root/live** | Core copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the restricted manifest plus Parquet CAS. It then creates an immutable input backup, runs the private backup-bound 24-table V10 wrapper, independently validates Rust/Python readback, commits the exact snapshot, and captures it in the final backup. This remains fixture-only and does not imply status recovery, product use, or root completion. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS as a joined durable offline-fixture export recovery; BLOCKED root/live** | Core commits `export_stale`, starts recovery before the immutable input backup, commits the V10 snapshot, and adds a canonical same-run export binding. `RecoveryVerified/Ready` cites only that binding's exact commit sequence and commit digest; store semantics reject a production receipt or unrelated commit. The full chain reopens exactly but does not imply product, live, or root readiness. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS as isolated durable and joined partial store backup/restore; BLOCKED complete inventory/fault/root** | The public-API test still proves original-root removal and tamper refusal. Core now additionally joins the actual writer to the same partial occurrence, with a 1 KiB external source object, nonempty inventory, distinct backup/restore roots, exact retry and restart readback. That joined path does not hide the original roots or include the separate supervisor spool inventory, so it is not the final recovery set. |
-| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + package-local prefix recovery; BLOCKED full executable/root** | The source/publication/memory/status/export/backup implementation passes thirty exact before/after component interruptions. Pairing/open adds six more around exchange, exact read, and reopen, with fresh-session recovery on the same catalog. These 36 package-local checks are not an exact mapping of the schedule's 36 transitions. The root harness still attaches only the fifteen component artifacts; reservation/origin/import and other required crash seams remain incomplete, so it does not execute or qualify all 37 scenarios. |
-| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as a fifteen-role component bundle plus separate paired-route smoke; BLOCKED root** | The component report binds reservation, origin, receipt, binding, ACK, fact, prepare, head, act, episode, committed V10 export manifest, restricted import, recovered status, backup and restore identities/digests. The schema-V4 root witness separately binds the secret-free pairing/open/restart smoke file. These are not yet one 37-scenario evidence bundle; paired-read fault evidence and final no-original-root reopen remain absent, and every qualification bit stays false. |
+| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + package-local prefix recovery; BLOCKED full executable/root** | The source/publication/memory/status/export/backup implementation passes thirty exact before/after component interruptions. Pairing/open adds six more around exchange, exact read, and reopen, with fresh-session recovery on the same catalog. These 36 package-local checks are not an exact mapping of the schedule's 36 transitions. The root join closes baseline evidence roles only; it does not emit a result for each of the 37 scheduled scenarios, so no fault-walk qualification follows. |
+| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as one eighteen-role partial baseline bundle; BLOCKED fault-root** | `wave5-g0-root-evidence` runs the component and pairing/open/restart smoke over one catalog, exact-matches run registration, source occurrence, publication semantic/byte digests and head, and extends the fifteen component artifacts with consumed pairing, exact HTTP read and post-restart readback. The schema-V5 readiness witness binds the resulting eighteen-item bundle and both nested report digests. This is one baseline conjunction, not 37 executed scenario results; final no-original-root recovery and every qualification bit remain false. |
 
 ## Red-team invariants for landing components
 
@@ -502,7 +503,8 @@ than that statement:
 
 ## Current root decision
 
-**W5-G0: BLOCKED.** Origin/catalog, source/denominator/publication and a deliberately partial
-memory prefix now form one useful artifact-bearing offline-fixture component, but they cannot
-raise the root gate. No implementation reviewed at this point supplies one occurrence across every
-required seam and crash boundary, and no Boolean readiness claim may say otherwise.
+**W5-G0: BLOCKED.** Origin/catalog, source/denominator/publication, deliberately partial memory,
+export/import/status/backup and paired API read now form one eighteen-role baseline evidence
+bundle, but it cannot raise the fault/root or product gate. No implementation reviewed at this
+point emits exact results across all 37 required scenarios or a final no-original-root product
+reopen, and no Boolean readiness claim may say otherwise.

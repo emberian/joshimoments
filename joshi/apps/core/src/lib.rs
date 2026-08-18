@@ -6,6 +6,7 @@ pub mod readiness;
 pub mod service;
 mod wave5_circulation;
 pub mod wave5_g0;
+pub mod wave5_g0_root_evidence;
 pub mod wave5_readiness;
 
 use joshi_domain::{
