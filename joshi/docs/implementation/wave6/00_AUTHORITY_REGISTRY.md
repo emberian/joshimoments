@@ -32,10 +32,13 @@ missing prohibitions, and a reclosed nonzero provider budget all refuse.
 The checked-in registration deliberately consumes no Wave 5 gates. Adding a caller-authored gate
 reference cannot raise its ceiling.
 
-The registered fixture kinds currently cover the checked campaign-registration, market-atlas,
-and research-proposal schemas. Registering the campaign schema grants only
-`fixture_campaign_protocol_only`; it explicitly prohibits any prospective result or operational
-campaign inference. The independently bounded N03 contract is documented in
+The five registered fixture kinds cover the checked campaign-registration, generic known-truth
+evaluation, market-atlas, Pump/PumpSwap/DLMM protocol known-truth evaluation, and
+research-proposal schemas. Both evaluation kinds are limited to H1 deterministic fixture results
+or refusals: neither permits a market, estimator-performance, quote, route, or economic claim.
+Registering the campaign schema grants only `fixture_campaign_protocol_only`; it explicitly
+prohibits any prospective result or operational campaign inference. The independently bounded N03
+contract is documented in
 [11_PROSPECTIVE_CAMPAIGN_CONTRACT.md](11_PROSPECTIVE_CAMPAIGN_CONTRACT.md).
 
 ## Artifact lineage and claim grammar

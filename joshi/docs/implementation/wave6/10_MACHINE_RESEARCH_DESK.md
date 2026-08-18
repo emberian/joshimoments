@@ -96,17 +96,19 @@ not durable proof that a person, clock, review, policy registration, or append-o
 3. requires zero consumed Wave 5 gates, zero provider/external-mutation budgets, the fixed fixture
    data policy, desk operation list, claim/source/output/side-effect prohibitions, artifact claim
    boundaries, and sorted local symbols;
-4. rehashes every registered artifact schema document, including the campaign-registration
-   contract, an Arrow-derived market-atlas schema, and the research-proposal contract descriptor;
-5. rebuilds and evaluates the exact eight-case `N01` signed-flow known-truth suite;
-6. admits that evaluation only as a fixture `DESIGN` descriptor; and
+4. rehashes all five registered artifact schema documents: campaign registration, generic
+   known-truth evaluation, Arrow-derived market atlas, protocol known-truth evaluation, and the
+   research-proposal contract;
+5. rebuilds and evaluates the exact eight-case generic `N01` known-truth suite and seven-case
+   Pump/PumpSwap/DLMM protocol battery from their pinned raw fixture bytes;
+6. admits the two evaluations only as separate fixture `DESIGN` descriptors; and
 7. produces one deterministic protocol draft for comparing a separately implemented candidate
-   against the same frozen cases.
+   against the same frozen 15-case denominator.
 
-The packet binds program and registration identity, complete N01 suite/evaluation digests, the full
-research proposal, status, authority, claim scope, `executable=false`, and `query_count=0` under a
-recomputed packet ID/digest. The proposal's only experiment manifest is likewise non-executable
-with zero queries.
+The packet binds program and registration identity, both complete N01 suite/evaluation digests,
+the full research proposal, status, authority, claim scope, `executable=false`, and
+`query_count=0` under a recomputed packet ID/digest. The proposal's only experiment manifest is
+likewise non-executable with zero queries.
 
 The packet authority is:
 
@@ -135,8 +137,8 @@ outcome-targeted, same-policy-ID budget-replacement, and provenance-swap superse
 
 The fixture-packet tests additionally cover Rust/Python registration digest parity, exact artifact
 schema bytes, unknown/reordered registration fields, provider-budget widening, schema
-substitution, deterministic packet construction, exact N01 evidence closure, packet identity,
-authority, and evaluation substitution.
+substitution, deterministic packet construction, exact generic and protocol N01 evidence closure,
+raw Pump/DLMM fixture substitution, packet identity, authority, and evaluation substitution.
 
 ## Deferred work
 
