@@ -126,10 +126,10 @@ fn pump_reservation_is_acknowledged_only_after_an_exact_durable_receipt() {
         acquisition_id: reservation.acquisition_id.clone(),
         request_group_id: "request-group-1".into(),
         attempt_ordinal: "0".into(),
-        route_id: "coins-current".into(),
-        transport: "rest".into(),
-        access_class: "public".into(),
-        stability: "observed".into(),
+        route_id: "coin_exact".into(),
+        transport: "http".into(),
+        access_class: "officially_described_public".into(),
+        stability: "documented_mutable".into(),
         session_class: "none".into(),
         source_locator: "https://frontend-api-v3.pump.fun/coins/{mint}".into(),
         request_fingerprint: format!("sha256:{}", "a".repeat(64)),
@@ -172,6 +172,19 @@ fn pump_reservation_is_acknowledged_only_after_an_exact_durable_receipt() {
         coverage_gaps: vec![],
         completed: true,
     };
+    let mut forged_public = outcome.clone();
+    forged_public.attempts[0].route_id = "user_profile".into();
+    forged_public.attempts[0].access_class = "observed_public_product".into();
+    forged_public.attempts[0].stability = "authenticated_unverified".into();
+    assert!(
+        admit_pump_outcome(
+            &forged_public,
+            "batch-pump-forged-public",
+            time("2026-08-16T18:42:18.125000Z"),
+            30,
+        )
+        .is_err()
+    );
     let admission = admit_pump_outcome(
         &outcome,
         "batch-pump-1",

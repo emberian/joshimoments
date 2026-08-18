@@ -15,14 +15,20 @@ use joshi_admission::{
     },
 };
 use joshi_domain::StableString;
+use joshi_pump_adapter::prepare_direct;
+use joshi_spool::{LocalSpool, SpoolConfig};
 use joshi_store::{
     IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, Wave5RunRegistrationByteBundle,
 };
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::wave5_circulation::{RegisteredWave5Run, circulate_public_c0};
+
 const SURFACE_PROFILE_FILE: &[u8] =
     include_bytes!("../../../fixtures/surface/daily_use_surface_profile_v1.json");
+const DIRECT_C0_FILE: &[u8] =
+    include_bytes!("../../../fixtures/pump-api/direct-fetch-outcome.synthetic.json");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,19 +47,24 @@ pub struct Wave5IgnitionReadinessReport {
     pub retry_status: IdempotencyStatus,
     pub changed_same_id_refused: bool,
     pub durable_progress_count: usize,
+    pub circulation_closed: bool,
+    pub origin_segment_retained: bool,
+    pub catalog_ack_reverified: bool,
     pub restart_reverified: bool,
     pub provider_io: bool,
     pub publication_qualified: bool,
     pub live_qualified: bool,
 }
 
-/// Walks exact semantic run registration, idempotent retry, store-only status projection and
-/// restart readback. It performs no provider, credential, wallet, publication, or transaction I/O.
+/// Walks exact semantic run registration plus one sealed no-network C0 origin segment through the
+/// sole store, durable run-bound catalog closure, catalog ACK and restart readback. It performs no
+/// provider, credential, wallet, publication, export, import, or transaction I/O.
 ///
 /// # Errors
 ///
 /// Returns [`Wave5ReadinessError`] when fixture construction, semantic admission, store migration,
 /// durable registration, idempotency, or restart readback fails.
+#[allow(clippy::too_many_lines)] // The offline witness keeps its ordered crash/readback checks visible.
 pub fn run_wave5_ignition_readiness(
     state: &Path,
 ) -> Result<Wave5IgnitionReadinessReport, Wave5ReadinessError> {
@@ -98,10 +109,38 @@ pub fn run_wave5_ignition_readiness(
             "changed bytes under one run identity were accepted",
         ));
     }
-    let view = store.load_wave5_store_status_view_v1(&run_id)?;
-    if view.durable_progress.len() != 1 {
+    let committed_at = now()?;
+    let prepared = prepare_direct(
+        DIRECT_C0_FILE,
+        "batch:wave5-c0-circulation-0001",
+        committed_at,
+        1,
+    )?;
+    let spool = LocalSpool::open(spool_config(state))?;
+    let circulation = circulate_public_c0(
+        &mut store,
+        &spool,
+        RegisteredWave5Run {
+            run_id: run_id.as_str(),
+            registration_digest: accepted.exact_document_digest.as_str(),
+        },
+        &prepared,
+        "segment:wave5-c0-circulation-0001",
+        "public-fixture-wave5-c0",
+        committed_at,
+        "catalog-admission:wave5-c0-0001",
+        env!("CARGO_PKG_VERSION"),
+        None,
+    )?;
+    if circulation.binding_receipt.status != IdempotencyStatus::Accepted {
         return Err(Wave5ReadinessError::Invariant(
-            "store status did not resolve exact run progress",
+            "fresh Wave 5 spool/catalog binding was not accepted",
+        ));
+    }
+    let view = store.load_wave5_store_status_view_v1(&run_id)?;
+    if view.durable_progress.len() != 2 {
+        return Err(Wave5ReadinessError::Invariant(
+            "store status did not resolve exact run and spool progress",
         ));
     }
     drop(store);
@@ -114,8 +153,29 @@ pub fn run_wave5_ignition_readiness(
                 "registered run was absent after restart",
             ))?;
     let reopened_view = reopened.load_wave5_store_status_view_v1(&run_id)?;
+    let catalog_admission_id = StableString::new("catalog-admission:wave5-c0-0001")?;
+    let loaded_binding = reopened
+        .load_wave5_spool_catalog_binding_v1(
+            &catalog_admission_id,
+            &circulation.origin_segment_bytes,
+            prepared.exact_batch_bytes(),
+            prepared.exact_policy_bytes(),
+        )?
+        .ok_or(Wave5ReadinessError::Invariant(
+            "spool/catalog binding was absent after restart",
+        ))?;
+    let reopened_spool = LocalSpool::open(spool_config(state))?;
+    let reopened_ack = reopened_spool.record_catalog_receipt(
+        &circulation.segment.segment_id,
+        &circulation.structural_receipt,
+    )?;
     if loaded.exact_bytes != bundle.registration
         || loaded.exact_digest != accepted.exact_document_digest
+        || loaded_binding.exact_binding_bytes != circulation.binding_bytes
+        || loaded_binding.exact_receipt_bytes != circulation.catalog_receipt_bytes
+        || loaded_binding.binding_commit_seq != circulation.binding_receipt.commit_seq
+        || reopened_ack != circulation.catalog_ack
+        || reopened_spool.read_segment(&circulation.segment)? != circulation.origin_segment_bytes
         || reopened_view != view
     {
         return Err(Wave5ReadinessError::Invariant(
@@ -134,11 +194,25 @@ pub fn run_wave5_ignition_readiness(
         retry_status: retry.status,
         changed_same_id_refused: true,
         durable_progress_count: view.durable_progress.len(),
+        circulation_closed: true,
+        origin_segment_retained: true,
+        catalog_ack_reverified: true,
         restart_reverified: true,
         provider_io: false,
         publication_qualified: false,
         live_qualified: false,
     })
+}
+
+pub(crate) fn spool_config(root: &Path) -> SpoolConfig {
+    SpoolConfig {
+        root: root.join("spool"),
+        max_segment_bytes: 4 * 1024 * 1024,
+        max_entries_per_segment: 1,
+        max_total_bytes: 8 * 1024 * 1024,
+        control_reserve_bytes: 512 * 1024,
+        max_transfer_chunk_bytes: 64 * 1024,
+    }
 }
 
 fn fixture_documents()
@@ -225,7 +299,7 @@ fn fixture_documents()
     ))
 }
 
-fn fixture_registration_bundles() -> Result<
+pub(crate) fn fixture_registration_bundles() -> Result<
     (
         Wave5RunRegistrationV1,
         OwnedWave5RunRegistrationBundleV1,
@@ -288,7 +362,9 @@ fn exact(
     })
 }
 
-fn store_bundle(bundle: &OwnedWave5RunRegistrationBundleV1) -> Wave5RunRegistrationByteBundle<'_> {
+pub(crate) fn store_bundle(
+    bundle: &OwnedWave5RunRegistrationBundleV1,
+) -> Wave5RunRegistrationByteBundle<'_> {
     Wave5RunRegistrationByteBundle {
         registration: &bundle.registration,
         build: &bundle.documents.build,
@@ -304,7 +380,7 @@ fn digest(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::of_bytes(bytes)
 }
 
-fn config(root: &Path) -> Result<StoreConfig, Wave5ReadinessError> {
+pub(crate) fn config(root: &Path) -> Result<StoreConfig, Wave5ReadinessError> {
     Ok(StoreConfig {
         catalog_path: root.join("catalog.sqlite"),
         blob_root: root.join("blobs"),
@@ -317,7 +393,7 @@ fn config(root: &Path) -> Result<StoreConfig, Wave5ReadinessError> {
     })
 }
 
-fn now() -> Result<joshi_domain::UtcTimestamp, Wave5ReadinessError> {
+pub(crate) fn now() -> Result<joshi_domain::UtcTimestamp, Wave5ReadinessError> {
     let nanos = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
     let micros = nanos.div_euclid(1_000) * 1_000;
     joshi_domain::UtcTimestamp::new(
@@ -333,6 +409,12 @@ pub enum Wave5ReadinessError {
     Admission(#[from] joshi_admission::AdmissionError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
+    #[error(transparent)]
+    Pump(#[from] joshi_pump_adapter::PumpAdapterError),
+    #[error(transparent)]
+    Spool(#[from] joshi_spool::SpoolError),
+    #[error(transparent)]
+    Circulation(#[from] crate::wave5_circulation::Wave5CirculationError),
     #[error(transparent)]
     Wire(#[from] joshi_domain::WireStringError),
     #[error(transparent)]
@@ -354,7 +436,10 @@ mod tests {
         assert_eq!(report.status, "useful_partial");
         assert_eq!(report.retry_status, IdempotencyStatus::Idempotent);
         assert!(report.changed_same_id_refused);
-        assert_eq!(report.durable_progress_count, 1);
+        assert_eq!(report.durable_progress_count, 2);
+        assert!(report.circulation_closed);
+        assert!(report.origin_segment_retained);
+        assert!(report.catalog_ack_reverified);
         assert!(report.restart_reverified);
         assert!(!report.provider_io);
         assert!(!report.publication_qualified);

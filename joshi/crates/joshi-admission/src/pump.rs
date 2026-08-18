@@ -12,7 +12,10 @@ use joshi_evidence::{
     MonotonicReading, ObservationDraft, ObservationEventTime, ObservationMetadata,
     ObservationTiming,
 };
-use joshi_pump_api::{BodyCapture, FetchOutcome, IdentityStore, ROUTE_CATALOG, SOURCE_CONTRACT};
+use joshi_pump_api::{
+    AccessClass, BodyCapture, FetchOutcome, IdentityStore, ROUTE_CATALOG, RouteId, RouteSpec,
+    SOURCE_CONTRACT,
+};
 use std::collections::BTreeSet;
 
 const PUMP_SOURCE_ID: &str = "pump.api.product.v1";
@@ -53,10 +56,22 @@ pub fn admit_pump_outcome(
                 "Pump attempt contract/catalog mismatch".into(),
             ));
         }
+        let route_id = attempt.route_id.parse::<RouteId>().map_err(|_| {
+            AdmissionError::SourceEnvelope("Pump attempt has an unknown route".into())
+        })?;
+        let route = RouteSpec::for_id(route_id);
+        if attempt.access_class != route.access.to_string()
+            || attempt.stability != route.stability.to_string()
+            || attempt.transport != route.transport.to_string()
+        {
+            return Err(AdmissionError::SourceEnvelope(
+                "Pump attempt route policy differs from the pinned catalog".into(),
+            ));
+        }
         validate_sha(&attempt.request_fingerprint)?;
         let acquisition = acquisition(attempt, source_id.clone(), committed_at)?;
         let envelope_id = ObservationId::new(format!("obs:{}:attempt", attempt.acquisition_id))?;
-        let is_private = attempt.access_class != "public" || attempt.session_class != "none";
+        let is_private = requires_private_retention(route.access, &attempt.session_class);
         let envelope = serde_json::to_vec(attempt)?;
         drafts.push(EvidenceDraft::Observation(observation(
             acquisition.clone(),
@@ -257,6 +272,13 @@ pub fn admit_pump_outcome(
     })
 }
 
+fn requires_private_retention(access_class: AccessClass, session_class: &str) -> bool {
+    !matches!(
+        access_class,
+        AccessClass::OfficiallyDescribedPublic | AccessClass::ObservedPublicProduct
+    ) || !matches!(session_class, "none" | "public")
+}
+
 /// Acknowledge pre-I/O occurrence reservations after an exact durable receipt.
 ///
 /// # Errors
@@ -432,4 +454,29 @@ fn timestamp(value: &str) -> Result<UtcTimestamp, AdmissionError> {
     value
         .parse()
         .map_err(|_| AdmissionError::SourceEnvelope("invalid six-digit UTC timestamp".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccessClass, requires_private_retention};
+
+    #[test]
+    fn public_product_access_without_a_session_retains_as_public_source() {
+        assert!(!requires_private_retention(
+            AccessClass::OfficiallyDescribedPublic,
+            "public"
+        ));
+        assert!(!requires_private_retention(
+            AccessClass::ObservedPublicProduct,
+            "none"
+        ));
+        assert!(requires_private_retention(
+            AccessClass::AuthenticatedUserSession,
+            "authenticated:fixture"
+        ));
+        assert!(requires_private_retention(
+            AccessClass::ObservedPublicProduct,
+            "authenticated:fixture"
+        ));
+    }
 }

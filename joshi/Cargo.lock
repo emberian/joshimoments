@@ -1182,6 +1182,8 @@ dependencies = [
  "joshi-evidence",
  "joshi-operational-status",
  "joshi-operator",
+ "joshi-pump-adapter",
+ "joshi-spool",
  "joshi-store",
  "serde",
  "serde_json",

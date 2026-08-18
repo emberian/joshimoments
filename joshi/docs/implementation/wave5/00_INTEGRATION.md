@@ -1,9 +1,10 @@
 # Wave 5 integration — Living Instrument authority spine
 
-Status: **implementation in progress / useful partial**. No live, product-parity, publication,
-export/import, repeated-use, or remote qualification is claimed by this document. The only runnable
-Wave 5 readiness target remains an offline semantic registration/retry/reopen witness, and it must
-not be promoted beyond the explicit closed boundaries and open joins below.
+Status: **implementation in progress / useful partial**. No full Phase-0 fault walk, live,
+product-parity, publication, export/import, repeated-use, or remote qualification is claimed by
+this document. The runnable Wave 5 readiness target now closes registration plus one public C0
+origin-segment/store-receipt/catalog-binding/ACK/reopen component walk; it must not be promoted
+beyond the explicit closed boundaries and open joins below.
 
 ## Sole authority sequence
 
@@ -47,8 +48,11 @@ binds the full run reference and final plan digest.
   are checked across reopen.
 - Public-integrity spool admission reconstructs the exact serialized entry from the sealed segment,
   logical batch, canonical Pump physical policy, cursors, and durable rows at or before the receipt
-  cutoff. Authenticated-private segments fail closed until the store can verify their AEAD tag and
-  reconstructed plaintext; byte-length resemblance is not admission.
+  cutoff. The immutable origin segment contains no postcommit admission digest; only the exact
+  store receipt, run-bound catalog binding and separately fsynced catalog ACK bind that later
+  digest. Crash/retry preserves the origin bytes. Authenticated-private segments fail closed until
+  the store can verify their AEAD tag and reconstructed plaintext; byte-length resemblance is not
+  admission.
 - Operational recovery cannot self-author an initial ready/recovering/stopped state. Verified
   recovery requires the exact latest predecessor plus later same-run, component-resolved durable
   evidence; the current finite evidence resolvers are spool and export, and unsupported components
@@ -80,8 +84,9 @@ These boundaries have independent adversarial coverage:
 
 1. Exact seven-document run registration, independent six-component semantic parsing, service-owned
    clock authority, exact retry identity, and restart readback are closed for offline C0.
-2. Public-integrity Pump spool/catalog derivation is closed; authenticated-private spool admission
-   is explicitly unavailable rather than weakly inferred.
+2. Public-integrity Pump origin-segment/store-receipt/run-bound catalog binding/catalog ACK and exact
+   restart readback are closed; authenticated-private spool admission is explicitly unavailable
+   rather than weakly inferred.
 3. The finite operational recovery state machine and same-run spool/export evidence resolution are
    closed; unsupported recovery evidence refuses.
 4. The restricted derived-artifact V2 import/CAS/Parquet/readback seam is closed at its descriptive,
@@ -120,11 +125,15 @@ mechanics-capability tests, and strict focused Clippy gates pass at this handoff
 script is not recorded as passing yet: its preserved Wave 4 workspace gate encountered a concurrent
 scientific-memory compile failure outside this lane, so no root PASS is inferred from focused gates.
 
-The final script output must continue to state `useful_partial`, `fixtureWalked: true`, and false
-for bounded-nonfixture, restart-recovered, sustained, live, Ember-use, accessibility, and parity
-maturity until separate real occurrences prove those states. A fixture may exercise canonical Pump
-policy bytes without network I/O; the supervisor fake `joshi.store.policy.v1` is not a production
-physical-policy contract and cannot qualify spool circulation.
+The final script output must continue to state `useful_partial`,
+`qualification.fullOfflineFaultWalk: false`, and false for bounded-nonfixture,
+restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
+occurrences prove those states. The C0 component walk may report
+`public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because source-fact,
+publication, export/import, status recovery and backup/restore crash boundaries remain open. A fixture may
+exercise canonical Pump policy bytes without network I/O; the supervisor fake
+`joshi.store.policy.v1` is not a production physical-policy contract and cannot qualify spool
+circulation.
 
 ## Explicit nonclaims
 

@@ -14,6 +14,8 @@ joshi-domain = { path = "../../crates/joshi-domain" }
 joshi-evidence = { path = "../../crates/joshi-evidence" }
 joshi-operator = { path = "../../crates/joshi-operator" }
 joshi-operational-status = { path = "../../crates/joshi-operational-status" }
+joshi-pump-adapter = { path = "../../crates/joshi-pump-adapter" }
+joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
 serde.workspace = true
 serde_json.workspace = true

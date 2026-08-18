@@ -31,9 +31,9 @@ pub use operational::{
 pub use store::SqliteStore;
 pub use wave5::{
     StoredWave5OperationalRecord, StoredWave5RestrictedArtifact, StoredWave5RunRegistration,
-    Wave5CommitContext, Wave5CommitReceipt, Wave5ExportValidationBindingV1,
-    Wave5OperationalRecordKind, Wave5OperationalRecordV1, Wave5OperationalState,
-    Wave5RestrictedArtifactRegistrationV1, Wave5RunRegistrationByteBundle,
+    StoredWave5SpoolCatalogBinding, Wave5CommitContext, Wave5CommitReceipt,
+    Wave5ExportValidationBindingV1, Wave5OperationalRecordKind, Wave5OperationalRecordV1,
+    Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1, Wave5RunRegistrationByteBundle,
     Wave5SpoolCatalogBindingV1,
 };
 

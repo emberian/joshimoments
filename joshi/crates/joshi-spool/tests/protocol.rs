@@ -561,7 +561,10 @@ fn exact_catalog_receipt_is_separate_and_mismatch_is_refused() {
         .expect("catalog ack");
     assert_eq!(ack.from_commit_seq, 4);
     assert_eq!(ack.admission_digest, receipt.admission_digest.to_string());
-    assert_eq!(local.read_segment(&closure).expect("origin retained"), bytes);
+    assert_eq!(
+        local.read_segment(&closure).expect("origin retained"),
+        bytes
+    );
 
     let retried = local
         .record_catalog_receipt(&closure.segment_id, &receipt)
@@ -598,7 +601,9 @@ fn catalog_ack_crash_after_temporary_sync_retries_without_rewriting_origin() {
     };
     let batch_entry = batch_entry.clone();
     let (bytes, closure) = public_segment("catalog-crash-segment", entry);
-    local.append_segment(&bytes, &closure).expect("append origin");
+    local
+        .append_segment(&bytes, &closure)
+        .expect("append origin");
     let receipt = DurableReceipt {
         contract: stable("joshi.store.ingest_receipt"),
         schema_version: 1,
@@ -631,14 +636,20 @@ fn catalog_ack_crash_after_temporary_sync_retries_without_rewriting_origin() {
         local.record_catalog_receipt(&closure.segment_id, &receipt),
         Err(SpoolError::Injected(FaultPoint::AfterAckTemporarySync))
     ));
-    assert_eq!(local.read_segment(&closure).expect("origin retained"), bytes);
+    assert_eq!(
+        local.read_segment(&closure).expect("origin retained"),
+        bytes
+    );
 
     let reopened = LocalSpool::open(config).expect("reopen spool");
     let ack = reopened
         .record_catalog_receipt(&closure.segment_id, &receipt)
         .expect("retry pending ACK");
     assert_eq!(ack.admission_digest, receipt.admission_digest.to_string());
-    assert_eq!(reopened.read_segment(&closure).expect("origin retained"), bytes);
+    assert_eq!(
+        reopened.read_segment(&closure).expect("origin retained"),
+        bytes
+    );
 }
 
 #[derive(Deserialize)]

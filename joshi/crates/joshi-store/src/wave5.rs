@@ -237,6 +237,20 @@ pub struct StoredWave5RunRegistration {
     pub commit_seq: CommitSeq,
 }
 
+/// Exact run-bound spool/catalog closure rederived from durable rows and retained origin bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave5SpoolCatalogBinding {
+    pub catalog_admission_id: StableString,
+    pub segment_id: StableString,
+    pub batch_id: StableString,
+    pub exact_binding_bytes: Vec<u8>,
+    pub binding_digest: ValueDigest,
+    pub exact_receipt_bytes: Vec<u8>,
+    pub receipt_digest: ValueDigest,
+    pub store_commit_seq: CommitSeq,
+    pub binding_commit_seq: CommitSeq,
+}
+
 /// Exact durable operational occurrence re-parsed and re-resolved after restart.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredWave5OperationalRecord {
@@ -1220,6 +1234,99 @@ impl SqliteStore {
                 Ok(())
             },
         )
+    }
+
+    /// Loads and independently rederives one exact spool/catalog closure after restart.
+    ///
+    /// The catalog retains the binding and receipt bytes while the caller supplies the retained
+    /// immutable origin segment plus its exact batch and policy bytes. All five byte strings are
+    /// reparsed and cross-checked against durable ingest rows before this method returns.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing/changed origin segment, batch, policy, receipt, binding, run, ingest
+    /// commit, or persisted spool/catalog row.
+    pub fn load_wave5_spool_catalog_binding_v1(
+        &self,
+        catalog_admission_id: &StableString,
+        exact_segment_bytes: &[u8],
+        exact_batch_bytes: &[u8],
+        exact_policy_bytes: &[u8],
+    ) -> Result<Option<StoredWave5SpoolCatalogBinding>> {
+        type Row = (Vec<u8>, String, Vec<u8>, String, String, String, i64, i64);
+        let row: Option<Row> = self
+            .connection
+            .query_row(
+                "SELECT b.binding_bytes,b.binding_sha256,s.receipt_bytes,s.receipt_sha256,
+                        b.segment_id,b.batch_id,s.store_commit_seq,b.created_commit_seq
+                 FROM wave5_spool_catalog_binding_v1 b
+                 JOIN spool_catalog_admission s
+                   ON s.segment_id=b.segment_id AND s.batch_id=b.batch_id
+                 WHERE b.catalog_admission_id=?1",
+                [catalog_admission_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            binding_bytes,
+            binding_sha,
+            receipt_bytes,
+            receipt_sha,
+            segment_id,
+            batch_id,
+            store_seq,
+            binding_seq,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let parsed = SpoolCapability::parse(
+            self,
+            &binding_bytes,
+            exact_segment_bytes,
+            exact_batch_bytes,
+            exact_policy_bytes,
+            &receipt_bytes,
+        )?;
+        if parsed.admission_id != *catalog_admission_id
+            || parsed.binding_digest.as_str() != format!("sha256:{binding_sha}")
+            || parsed.receipt_digest.as_str() != format!("sha256:{receipt_sha}")
+            || parsed.receipt.segment_id != segment_id
+            || parsed.receipt.batch.batch_id != batch_id
+            || sqlite_wire_u64(
+                &parsed.receipt.catalog_receipt.commit_seq,
+                "store commit sequence",
+            )? != store_seq
+        {
+            return Err(StoreError::InvalidBatch(
+                "persisted spool/catalog closure differs from exact bytes".into(),
+            ));
+        }
+        Ok(Some(StoredWave5SpoolCatalogBinding {
+            catalog_admission_id: parsed.admission_id,
+            segment_id: stable(&segment_id, "segment ID")?,
+            batch_id: stable(&batch_id, "batch ID")?,
+            exact_binding_bytes: binding_bytes,
+            binding_digest: parsed.binding_digest,
+            exact_receipt_bytes: receipt_bytes,
+            receipt_digest: parsed.receipt_digest,
+            store_commit_seq: CommitSeq::new(as_u64(store_seq, "store commit sequence")?),
+            binding_commit_seq: CommitSeq::new(as_u64(
+                binding_seq,
+                "spool binding commit sequence",
+            )?),
+        }))
     }
 
     /// Parses and appends one durable operational status/degradation/recovery record.
