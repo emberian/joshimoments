@@ -29,6 +29,17 @@ use zeroize::Zeroizing;
 const ORIGIN: &str = "http://127.0.0.1:8787";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+/// Component-local interruption points for the actual pairing/open/restart smoke.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum G0InspectorSmokeFaultPoint {
+    BeforePairingExchange,
+    AfterPairingExchange,
+    BeforeGlassRead,
+    AfterGlassRead,
+    BeforeReopen,
+    AfterReopen,
+}
+
 /// Exact, secret-free result of the in-process pairing and immutable-open smoke walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +81,8 @@ pub enum G0InspectorSmokeError {
     Wire(#[from] joshi_domain::WireStringError),
     #[error(transparent)]
     Protocol(#[from] joshi_pairing::PairingError),
+    #[error("injected G0 inspector smoke interruption at {0:?}")]
+    Injected(G0InspectorSmokeFaultPoint),
     #[error("G0 inspector smoke invariant failed: {0}")]
     Invariant(&'static str),
 }
@@ -100,6 +113,20 @@ struct ExchangeResponse {
 #[allow(clippy::too_many_lines)]
 pub async fn run_g0_inspector_smoke(
     state: &Path,
+) -> Result<G0InspectorSmokeReport, G0InspectorSmokeError> {
+    run_g0_inspector_smoke_with_fault(state, None).await
+}
+
+/// Execute the same smoke path with one deterministic component-local interruption.
+///
+/// # Errors
+///
+/// Returns the requested injected interruption or any ordinary smoke refusal. A subsequent
+/// no-fault invocation on the same state must converge to a successful fresh-session read.
+#[allow(clippy::too_many_lines)]
+pub async fn run_g0_inspector_smoke_with_fault(
+    state: &Path,
+    fault: Option<G0InspectorSmokeFaultPoint>,
 ) -> Result<G0InspectorSmokeReport, G0InspectorSmokeError> {
     let config = offline_fixture_store_config(state)
         .map_err(|_| G0InspectorSmokeError::Invariant("fixture store configuration is invalid"))?;
@@ -133,6 +160,7 @@ pub async fn run_g0_inspector_smoke(
             .ok_or(G0InspectorSmokeError::Invariant("pairing ordinal overflow"))?,
     );
     let app = core.router();
+    inject(fault, G0InspectorSmokeFaultPoint::BeforePairingExchange)?;
     let exchange_response = exchange(&app, issued.code.as_str()).await?;
     if exchange_response.contract != "joshi.pairing.session"
         || exchange_response.schema_version != 1
@@ -146,12 +174,14 @@ pub async fn run_g0_inspector_smoke(
             "pairing exchange response differs from its issued scope/origin/epoch",
         ));
     }
+    inject(fault, G0InspectorSmokeFaultPoint::AfterPairingExchange)?;
     let session_id = exchange_response.session_id.clone();
     let capability = Zeroizing::new(exchange_response.capability);
     let route = format!(
         "/api/v1/cockpit-v2/publications/{}",
         publication_id.as_str()
     );
+    inject(fault, G0InspectorSmokeFaultPoint::BeforeGlassRead)?;
     let opened = send(
         &app,
         authorized_request("GET", &route, capability.as_str(), Body::empty())?,
@@ -172,8 +202,11 @@ pub async fn run_g0_inspector_smoke(
     let route_response_digest = Sha256Digest::of_bytes(&opened_bytes);
     let route_response_byte_length = u64::try_from(opened_bytes.len())
         .map_err(|_| G0InspectorSmokeError::Invariant("route response length overflow"))?;
+    inject(fault, G0InspectorSmokeFaultPoint::AfterGlassRead)?;
     drop(app);
     drop(pairing);
+
+    inject(fault, G0InspectorSmokeFaultPoint::BeforeReopen)?;
 
     let (restarted_core, restarted_pairing) = CoreService::with_sqlite_pairing(
         SqliteStore::open(config.clone(), StoreMode::SingleWriter)?,
@@ -214,6 +247,7 @@ pub async fn run_g0_inspector_smoke(
             "post-restart Cockpit V2 route response changed bytes",
         ));
     }
+    inject(fault, G0InspectorSmokeFaultPoint::AfterReopen)?;
     drop(reopened_capability);
     drop(restarted_app);
     drop(restarted_pairing);
@@ -279,6 +313,16 @@ pub async fn run_g0_inspector_smoke(
         product_qualified: false,
         live_qualified: false,
     })
+}
+
+fn inject(
+    requested: Option<G0InspectorSmokeFaultPoint>,
+    current: G0InspectorSmokeFaultPoint,
+) -> Result<(), G0InspectorSmokeError> {
+    if requested == Some(current) {
+        return Err(G0InspectorSmokeError::Injected(current));
+    }
+    Ok(())
 }
 
 fn occurrence_ordinal(value: &str) -> Result<u64, G0InspectorSmokeError> {
@@ -398,5 +442,37 @@ mod tests {
         assert!(!report.browser_presented);
         assert!(!report.product_qualified);
         assert!(!report.live_qualified);
+    }
+
+    #[tokio::test]
+    async fn every_pairing_open_prefix_recovers_under_a_fresh_session() {
+        let points = [
+            G0InspectorSmokeFaultPoint::BeforePairingExchange,
+            G0InspectorSmokeFaultPoint::AfterPairingExchange,
+            G0InspectorSmokeFaultPoint::BeforeGlassRead,
+            G0InspectorSmokeFaultPoint::AfterGlassRead,
+            G0InspectorSmokeFaultPoint::BeforeReopen,
+            G0InspectorSmokeFaultPoint::AfterReopen,
+        ];
+        for point in points {
+            let state = tempfile::tempdir().expect("temporary inspector fault state");
+            crate::wave5_g0::run_wave5_g0_source_publication(state.path())
+                .expect("G0 fixture component");
+            assert!(matches!(
+                run_g0_inspector_smoke_with_fault(state.path(), Some(point)).await,
+                Err(G0InspectorSmokeError::Injected(actual)) if actual == point
+            ));
+            let recovered = run_g0_inspector_smoke(state.path())
+                .await
+                .expect("fresh-session inspector recovery");
+            assert!(recovered.paired_route_read_closed);
+            assert!(recovered.restart_old_capability_refused);
+            assert!(recovered.fresh_pairing_reopen_closed);
+            assert_eq!(
+                recovered.route_response_digest,
+                recovered.reopened_response_digest
+            );
+            assert!(!recovered.full_offline_fault_walk);
+        }
     }
 }
