@@ -9,15 +9,18 @@ foreign-key checks.
 `CockpitV2ManifestV1` requires a typed surface-profile reference, observed-universe reference,
 exact knowledge/commit/chain cutoff, sorted public `CockpitV2SourceFactRefV1` values, sorted
 membership, coverage and gap references, rendered subjects, omissions, and explicit ordering and
-pagination policies. A source fact with `app_private`, `authenticated`, or `raw_private_bytes`
-protection is refused before publication; no source-body bytes are present in the DTO.
+pagination policies. Each source fact is bound to one exact `surface_id`, `source_id`, subject,
+and field. A source fact with `app_private`, `authenticated`, or `raw_private_bytes` protection
+is refused before publication; no source-body bytes are present in the DTO.
 
 Every timestamp and optional commit sequence is checked against the cutoff. References are sorted
-and duplicate-free. Coverage states (`complete`, `partial`, `stale`, `unknown`, `unavailable`,
-`refused`) carry sorted `fact_ids`, the exact eligible-subject denominator, and field lists; every
-field must equal the union from its referenced public fact set, so every profile/source × subject
-cell remains explicit. A complete scope cannot have a gap. Typed gaps remain visible rather than
-being collapsed to absence.
+and duplicate-free. The profile reference repeats sorted declared surface/source/field cells;
+coverage is the exact Cartesian product of those cells and the eligible subjects. Each coverage
+entry is one explicit `surface_id`/`source_id`/subject/field cell with sorted `fact_ids`; every
+referenced fact must bind that same cell, and every source fact must be referenced exactly once.
+`complete` requires at least one fact and cannot have a matching typed gap. Other states
+(`partial`, `stale`, `unknown`, `unavailable`, `refused`) remain explicit rather than collapsing to
+absence.
 The universe digest is recomputed from its domain, ID, count and sorted eligible subjects. The
 manifest requires memberships to cover every eligible subject exactly once and rendered plus
 omitted subjects to form an exact disjoint eligible partition. Public V2
@@ -31,7 +34,8 @@ the canonical container material with a zero self-slot. `canonical_bytes()` is t
 manifest with the actual container digest. These are intentionally distinct domains. The
 `PreparedCockpitV2` object retains semantic bytes, container bytes and a checkpoint, and performs
 no I/O; preparation cross-binds every checkpoint profile/universe/cutoff/digest field to the
-manifest. Strict canonical readback helpers reject unknown fields or noncanonical bytes.
+manifest. Strict canonical readback helpers reject unknown fields or noncanonical bytes for
+manifests, checkpoints, publications, heads, and queries.
 
 ## Commit/head crash semantics
 

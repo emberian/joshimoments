@@ -381,15 +381,23 @@ impl CockpitV2ManifestV1 {
             .field_cells
             .iter()
             .flat_map(|cell| {
-                self.observed_universe.eligible_subjects.iter().map(move |subject| {
-                    (&cell.surface_id, &cell.source_id, subject, &cell.field)
-                })
+                self.observed_universe
+                    .eligible_subjects
+                    .iter()
+                    .map(move |subject| (&cell.surface_id, &cell.source_id, subject, &cell.field))
             })
             .collect();
         let actual_coverage: std::collections::BTreeSet<_> = self
             .coverage
             .iter()
-            .map(|cell| (&cell.surface_id, &cell.source_id, &cell.subject, &cell.field))
+            .map(|cell| {
+                (
+                    &cell.surface_id,
+                    &cell.source_id,
+                    &cell.subject,
+                    &cell.field,
+                )
+            })
             .collect();
         if actual_coverage != expected_coverage || actual_coverage.len() != self.coverage.len() {
             return Err(PublicationError::CockpitV2Reference);
@@ -427,7 +435,10 @@ impl CockpitV2ManifestV1 {
         }
         for coverage in &self.coverage {
             validate_sha256(&coverage.coverage_digest)?;
-            if coverage.fact_ids.windows(2).any(|window| window[0] >= window[1])
+            if coverage
+                .fact_ids
+                .windows(2)
+                .any(|window| window[0] >= window[1])
             {
                 return Err(PublicationError::CockpitV2Reference);
             }

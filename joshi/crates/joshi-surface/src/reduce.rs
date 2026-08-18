@@ -404,6 +404,9 @@ pub fn reduce_surface_incremental(
 pub fn parse_surface_cut(bytes: &[u8]) -> Result<SurfaceCutV1, SurfaceError> {
     let cut: SurfaceCutV1 = serde_json::from_slice(bytes)?;
     cut.validate()?;
+    if cut.canonical_bytes()? != bytes {
+        return Err(SurfaceError::DigestMismatch);
+    }
     Ok(cut)
 }
 
@@ -421,6 +424,9 @@ pub fn parse_surface_cut_against(
 pub fn parse_profile(bytes: &[u8]) -> Result<DailyUseSurfaceProfileV1, SurfaceError> {
     let profile: DailyUseSurfaceProfileV1 = serde_json::from_slice(bytes)?;
     profile.validate()?;
+    if profile.canonical_bytes()? != bytes {
+        return Err(SurfaceError::DigestMismatch);
+    }
     Ok(profile)
 }
 

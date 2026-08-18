@@ -1,6 +1,7 @@
 use super::*;
 
 const OCCURRENCE_FIXTURE: &str = include_str!("../../../fixtures/pairing/ordinary_pairing_v1.json");
+const SESSION_FIXTURE: &str = include_str!("../../../fixtures/pairing/session_descriptor_v1.json");
 
 #[derive(Clone)]
 struct RepeatEntropy;
@@ -34,6 +35,7 @@ fn issue_consume_authorize_is_one_time_and_redacted() {
     let exchanged = registry
         .consume(&issued.code, &service_origin, 101)
         .unwrap();
+    assert_ne!(issued.code.as_str(), exchanged.capability.as_str());
     assert_eq!(
         registry
             .authorize(
@@ -139,6 +141,42 @@ fn deterministic_metadata_fixture_is_strict_and_secret_free() {
     occurrence.validate().unwrap();
     assert!(!OCCURRENCE_FIXTURE.contains("capability"));
     assert!(!OCCURRENCE_FIXTURE.contains("secret"));
+    let session = parse_pairing_session_descriptor(SESSION_FIXTURE.trim_end().as_bytes()).unwrap();
+    assert_eq!(
+        session.canonical_bytes().unwrap(),
+        SESSION_FIXTURE.trim_end().as_bytes()
+    );
+}
+
+#[test]
+fn clock_rollback_is_refused_at_the_public_adapter_boundary() {
+    struct RollbackClock {
+        values: std::vec::IntoIter<u64>,
+    }
+
+    impl MonotonicClock for RollbackClock {
+        fn now_ms(&mut self) -> Result<u64, PairingError> {
+            self.values.next().ok_or(PairingError::Entropy)
+        }
+    }
+
+    let mut registry = PairingRegistry::new(
+        origin("https://localhost:9443"),
+        1,
+        PairingConfig::default(),
+        TestEntropy::new(42),
+    )
+    .unwrap();
+    let mut clock = RollbackClock {
+        values: vec![100, 99].into_iter(),
+    };
+    registry
+        .issue_now(&mut clock, vec![PairingScope::CockpitRead])
+        .unwrap();
+    assert!(matches!(
+        registry.issue_now(&mut clock, vec![PairingScope::CockpitRead]),
+        Err(PairingError::ClockRollback)
+    ));
 }
 
 #[test]

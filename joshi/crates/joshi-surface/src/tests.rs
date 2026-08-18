@@ -269,11 +269,64 @@ fn strict_profile_bytes_reject_unknown_fields() {
 
 #[test]
 fn canonical_profile_fixture_round_trips_exactly() {
-    let parsed = parse_profile(PROFILE_FIXTURE.as_bytes()).unwrap();
+    let parsed = parse_profile(PROFILE_FIXTURE.trim_end().as_bytes()).unwrap();
     assert_eq!(
         parsed.canonical_bytes().unwrap(),
         PROFILE_FIXTURE.trim_end().as_bytes()
     );
+}
+
+#[test]
+fn strict_parsers_and_sample_universe_close_exact_bytes_and_denominator() {
+    let p = profile();
+    let mut padded_profile = vec![b' '];
+    padded_profile.extend(p.canonical_bytes().unwrap());
+    assert!(matches!(
+        parse_profile(&padded_profile),
+        Err(SurfaceError::DigestMismatch)
+    ));
+
+    let cutoff = t("2026-08-17T12:00:00.000000Z");
+    let cut = SurfaceReducer::reduce(&p, universe(cutoff), &[], cutoff, 10).unwrap();
+    let mut padded_cut = vec![b' '];
+    padded_cut.extend(cut.canonical_bytes().unwrap());
+    assert!(matches!(
+        parse_surface_cut(&padded_cut),
+        Err(SurfaceError::DigestMismatch)
+    ));
+
+    let mut sample = universe(cutoff);
+    sample.closed = false;
+    sample.sample_only = true;
+    sample.eligible_subjects.push(s("mint-c"));
+    assert!(matches!(
+        sample.validate(),
+        Err(SurfaceError::UniverseNotClosed)
+    ));
+}
+
+#[test]
+fn stale_age_is_recomputed_at_the_exact_cutoff() {
+    let p = profile();
+    let cutoff = t("2026-08-17T12:00:00.000000Z");
+    let mut stale = observation(
+        "stale",
+        "mint-a",
+        "2026-08-17T11:00:00.000000Z",
+        SurfaceMembership::Census,
+        "001",
+    );
+    stale.fields.insert(
+        s("name"),
+        FieldState::Stale {
+            observed_at: t("2026-08-17T11:00:00.000000Z"),
+            age_seconds: WireU64::new(1),
+        },
+    );
+    assert!(matches!(
+        SurfaceReducer::reduce(&p, universe(cutoff), &[stale], cutoff, 10),
+        Err(SurfaceError::Cutoff)
+    ));
 }
 
 #[test]

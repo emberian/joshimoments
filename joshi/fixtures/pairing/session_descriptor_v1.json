@@ -1,0 +1,1 @@
+{"contract":"joshi.pairing.session","schemaVersion":1,"sessionId":"pair-session-1-2","origin":"https://localhost:9443","epoch":1,"issuedAtMs":100,"expiresAtMs":200,"scopes":["cockpit_read","replay_read"],"authority":"read_only_no_execution"}

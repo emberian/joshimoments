@@ -15,13 +15,16 @@ remains in the profile, including a critical surface that is currently unavailab
 `public_chain_alternative_not_product_parity` can support chain launch/trade/lifecycle/pool facts,
 but never personalized membership/order, callouts/follows, social/media, or rendered-product
 parity. `absent_by_design` requires an Ember approval reason and contributes no parity credit.
-Each entry also carries `field_status` for every declared field/media item; reducers and Glass must
-show a gap, stale, refusal or unknown field without promoting the rest of the surface.
+Each entry carries `field_status` for every declared field/media item. The declared field/media
+list is sorted and duplicate-free, and its status map must close exactly over that list; reducers
+and Glass must show a gap, stale, refusal or unknown field without promoting the rest of the
+surface.
 
 ## Point-in-time reduction
 
-`DeclaredObservedUniverseV1` carries a closed eligible count, sorted eligible subjects and digest;
-`sample_only` is explicit and cannot masquerade as a census. `SurfaceReducer::reduce` filters both
+`DeclaredObservedUniverseV1` carries an exact eligible count, sorted duplicate-free eligible
+subjects and digest whether it is closed or sample-only; `sample_only` is explicit and cannot
+masquerade as a census. `SurfaceReducer::reduce` filters both
 `known_at` and `observed_at` at the requested cutoff, applies explicit supersession, sorts by
 `order_key/subject/event_id`, preserves denominator-only omissions, and records field-specific
 `covered`, `gap`, `stale`, `refused`, and `unknown` states. A late correction cannot enter an older
@@ -29,10 +32,13 @@ cut. `reduce_incremental` uses the same complete target closure, so its bytes eq
 
 The cut carries the declared universe, profile digest, omissions, typed
 `SurfaceFieldStateV1 { surface_id, source_id, subject, field, state }` cells and recomputed
-`reducer_digest`; profile-bound validation requires exactly one cell for every declared
-surface/source/eligible-subject/field tuple, including independent `unknown` cells. The closed
-rendered/omission subject partition is exact. Unknown JSON fields are refused
-(`deny_unknown_fields`).
+`reducer_digest`; profile-bound validation requires exactly one collision-free cell for every
+declared surface/source/eligible-subject/field tuple, including independent `unknown` cells. A
+closed universe rejects unordered or duplicate eligible subjects, and rendered rows are strictly
+ordered by `order_key/subject/event_id`. The rendered/omission subject partition is exact. Unknown
+JSON fields are refused (`deny_unknown_fields`), and strict inbound profile/cut parsers also
+refuse bytes that do not round-trip to their canonical serialization. `stale.age_seconds` is
+recomputed from the exact cutoff and its observed timestamp, never trusted as caller-supplied age.
 
 ## Hot control and product qualification
 

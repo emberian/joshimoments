@@ -405,9 +405,7 @@ impl<E: Entropy> PairingRegistry<E> {
             .collect();
         for id in expired_codes {
             if let Some(record) = self.codes.remove(&id) {
-                let occurrence_id = self
-                    .next_occurrence_id()
-                ?;
+                let occurrence_id = self.next_occurrence_id()?;
                 out.push(occurrence(
                     occurrence_id,
                     PairingOccurrenceKind::Expired,
@@ -428,9 +426,7 @@ impl<E: Entropy> PairingRegistry<E> {
             .collect();
         for id in expired_sessions {
             if let Some(record) = self.sessions.remove(&id) {
-                let occurrence_id = self
-                    .next_occurrence_id()
-                ?;
+                let occurrence_id = self.next_occurrence_id()?;
                 out.push(occurrence(
                     occurrence_id,
                     PairingOccurrenceKind::Expired,

@@ -174,7 +174,10 @@ impl DailyUseSurfaceProfileV1 {
                 return Err(SurfaceError::DuplicateSurface);
             }
             if surface.fields_media.is_empty()
-                || surface.fields_media.windows(2).any(|pair| pair[0] >= pair[1])
+                || surface
+                    .fields_media
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
                 || surface.field_status.len() != surface.fields_media.len()
                 || surface
                     .fields_media
@@ -244,18 +247,19 @@ impl DeclaredObservedUniverseV1 {
         if !self.closed && !self.sample_only {
             return Err(SurfaceError::UniverseNotClosed);
         }
-        if self.closed {
-            if self.eligible_subjects.windows(2).any(|pair| pair[0] >= pair[1])
-                || u64::try_from(self.eligible_subjects.len())
-                    .map_err(|_| SurfaceError::UniverseNotClosed)?
-                    != self.eligible_count.get()
-            {
-                return Err(SurfaceError::UniverseNotClosed);
-            }
-            let expected = digest(&serde_json::to_vec(&self.eligible_subjects)?)?;
-            if expected != self.eligible_digest {
-                return Err(SurfaceError::DigestMismatch);
-            }
+        if self
+            .eligible_subjects
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+            || u64::try_from(self.eligible_subjects.len())
+                .map_err(|_| SurfaceError::UniverseNotClosed)?
+                != self.eligible_count.get()
+        {
+            return Err(SurfaceError::UniverseNotClosed);
+        }
+        let expected = digest(&serde_json::to_vec(&self.eligible_subjects)?)?;
+        if expected != self.eligible_digest {
+            return Err(SurfaceError::DigestMismatch);
         }
         Ok(())
     }
@@ -313,7 +317,16 @@ impl FieldState {
             | Self::Gap {
                 since: observed_at, ..
             } => *observed_at <= cutoff,
-            Self::Stale { observed_at, .. } => *observed_at <= cutoff,
+            Self::Stale {
+                observed_at,
+                age_seconds,
+            } => {
+                if *observed_at > cutoff {
+                    return false;
+                }
+                let elapsed = (cutoff.as_datetime() - observed_at.as_datetime()).whole_seconds();
+                u64::try_from(elapsed).is_ok_and(|value| value == age_seconds.get())
+            }
             Self::Refused { .. } | Self::Unknown { .. } => true,
         }
     }
@@ -432,8 +445,15 @@ impl SurfaceCutV1 {
         self.universe.validate()?;
         if self.universe.cutoff != self.cutoff
             || self.rendered.windows(2).any(|w| {
-                (w[0].order_key.clone(), w[0].subject.clone(), w[0].event_id.clone())
-                    >= (w[1].order_key.clone(), w[1].subject.clone(), w[1].event_id.clone())
+                (
+                    w[0].order_key.clone(),
+                    w[0].subject.clone(),
+                    w[0].event_id.clone(),
+                ) >= (
+                    w[1].order_key.clone(),
+                    w[1].subject.clone(),
+                    w[1].event_id.clone(),
+                )
             })
         {
             return Err(SurfaceError::Cutoff);
