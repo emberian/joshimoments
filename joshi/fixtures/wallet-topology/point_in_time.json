@@ -1,0 +1,749 @@
+{
+  "contract": "joshi.wallet_topology.fixture.v1",
+  "input": {
+    "contract": "joshi.wallet_topology.v1",
+    "facts": [
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:funding:v1",
+          "transactionId": "tx:funding",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:funding",
+          "slot": "100",
+          "blockTime": "2026-08-16T00:00:01.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:02.000000Z",
+          "evidence": {
+            "observationIds": ["obs:funding"],
+            "sourceEventIds": ["event:funding"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "caller_account",
+        "fact": {
+          "associationId": "caller:funding:0",
+          "transactionId": "tx:funding",
+          "transactionFactId": "txfact:funding:v1",
+          "instructionPath": "0",
+          "accountId": "wallet:A",
+          "accountOrdinal": "0",
+          "role": {"discriminator": "fee_payer", "recognition": "known"},
+          "programId": "program:system",
+          "isSigner": true,
+          "isWritable": true,
+          "availableAt": "2026-08-16T00:00:02.000000Z",
+          "evidence": {
+            "observationIds": ["obs:funding"],
+            "sourceEventIds": ["event:funding"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transfer",
+        "fact": {
+          "flowId": "flow:A:B:sol",
+          "transactionId": "tx:funding",
+          "transactionFactId": "txfact:funding:v1",
+          "instructionPath": "0",
+          "eventOrdinal": "0",
+          "fromAccountId": "wallet:A",
+          "toAccountId": "wallet:B",
+          "programId": "program:system",
+          "mark": {
+            "assetId": "solana:native:SOL",
+            "atoms": "1000000000",
+            "flowKind": {"discriminator": "native_transfer", "recognition": "known"},
+            "venueId": null,
+            "poolId": null
+          },
+          "availableAt": "2026-08-16T00:00:02.000000Z",
+          "evidence": {
+            "observationIds": ["obs:funding"],
+            "sourceEventIds": ["event:funding"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:route:v1",
+          "transactionId": "tx:route",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:route",
+          "slot": "110",
+          "blockTime": "2026-08-16T00:00:03.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:04.000000Z",
+          "evidence": {
+            "observationIds": ["obs:route"],
+            "sourceEventIds": ["event:route"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "swap",
+        "fact": {
+          "swapId": "swap:route:0",
+          "transactionId": "tx:route",
+          "transactionFactId": "txfact:route:v1",
+          "instructionPath": "1.0",
+          "eventOrdinal": "0",
+          "traderWalletId": "wallet:B",
+          "callerAccountId": "wallet:B",
+          "programId": "program:pump",
+          "venueId": "venue:pump_curve",
+          "poolId": "pool:pump:MINT",
+          "input": {"assetId": "solana:native:SOL", "atoms": "100000000"},
+          "output": {"assetId": "solana:spl:MINT", "atoms": "1000000"},
+          "feeLegs": [],
+          "availableAt": "2026-08-16T00:00:04.000000Z",
+          "evidence": {
+            "observationIds": ["obs:route"],
+            "sourceEventIds": ["event:route"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "swap",
+        "fact": {
+          "swapId": "swap:route:1",
+          "transactionId": "tx:route",
+          "transactionFactId": "txfact:route:v1",
+          "instructionPath": "2.0",
+          "eventOrdinal": "1",
+          "traderWalletId": "wallet:B",
+          "callerAccountId": "wallet:B",
+          "programId": "program:pumpswap",
+          "venueId": "venue:pumpswap",
+          "poolId": "pool:pumpswap:MINT",
+          "input": {"assetId": "solana:spl:MINT", "atoms": "1000000"},
+          "output": {"assetId": "solana:native:SOL", "atoms": "101000000"},
+          "feeLegs": [],
+          "availableAt": "2026-08-16T00:00:04.000000Z",
+          "evidence": {
+            "observationIds": ["obs:route"],
+            "sourceEventIds": ["event:route"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "same_transaction_bundle",
+        "fact": {
+          "bundleId": "bundle:route",
+          "transactionId": "tx:route",
+          "transactionFactId": "txfact:route:v1",
+          "orderedMembers": [
+            {"kind": "swap", "id": "swap:route:0"},
+            {"kind": "swap", "id": "swap:route:1"}
+          ],
+          "availableAt": "2026-08-16T00:00:04.000000Z",
+          "evidence": {
+            "observationIds": ["obs:route"],
+            "sourceEventIds": ["event:route"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:B_buy:v1",
+          "transactionId": "tx:B_buy",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:B_buy",
+          "slot": "120",
+          "blockTime": "2026-08-16T00:00:05.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:06.000000Z",
+          "evidence": {
+            "observationIds": ["obs:B_buy"],
+            "sourceEventIds": ["event:B_buy"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "swap",
+        "fact": {
+          "swapId": "swap:B_buy",
+          "transactionId": "tx:B_buy",
+          "transactionFactId": "txfact:B_buy:v1",
+          "instructionPath": "1",
+          "eventOrdinal": "0",
+          "traderWalletId": "wallet:B",
+          "callerAccountId": "wallet:B",
+          "programId": "program:pump",
+          "venueId": "venue:pump_curve",
+          "poolId": "pool:pump:MINT",
+          "input": {"assetId": "solana:native:SOL", "atoms": "50000000"},
+          "output": {"assetId": "solana:spl:MINT", "atoms": "400000"},
+          "feeLegs": [],
+          "availableAt": "2026-08-16T00:00:06.000000Z",
+          "evidence": {
+            "observationIds": ["obs:B_buy"],
+            "sourceEventIds": ["event:B_buy"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:C_buy:v1",
+          "transactionId": "tx:C_buy",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:C_buy",
+          "slot": "122",
+          "blockTime": "2026-08-16T00:00:06.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:07.000000Z",
+          "evidence": {
+            "observationIds": ["obs:C_buy"],
+            "sourceEventIds": ["event:C_buy"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "swap",
+        "fact": {
+          "swapId": "swap:C_buy",
+          "transactionId": "tx:C_buy",
+          "transactionFactId": "txfact:C_buy:v1",
+          "instructionPath": "1",
+          "eventOrdinal": "0",
+          "traderWalletId": "wallet:C",
+          "callerAccountId": "wallet:C",
+          "programId": "program:pump",
+          "venueId": "venue:pump_curve",
+          "poolId": "pool:pump:MINT",
+          "input": {"assetId": "solana:native:SOL", "atoms": "60000000"},
+          "output": {"assetId": "solana:spl:MINT", "atoms": "450000"},
+          "feeLegs": [],
+          "availableAt": "2026-08-16T00:00:07.000000Z",
+          "evidence": {
+            "observationIds": ["obs:C_buy"],
+            "sourceEventIds": ["event:C_buy"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:lp:v1",
+          "transactionId": "tx:lp",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:lp",
+          "slot": "124",
+          "blockTime": "2026-08-16T00:00:07.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:08.000000Z",
+          "evidence": {
+            "observationIds": ["obs:lp"],
+            "sourceEventIds": ["event:lp"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "liquidity_position_event",
+        "fact": {
+          "liquidityEventId": "lp_event:add",
+          "transactionId": "tx:lp",
+          "transactionFactId": "txfact:lp:v1",
+          "instructionPath": "1",
+          "eventOrdinal": "0",
+          "positionId": "position:B:MINT",
+          "actorWalletId": "wallet:B",
+          "authorityAccountId": "wallet:B",
+          "programId": "program:meteora_dlmm",
+          "venueId": "venue:meteora_dlmm",
+          "poolId": "pool:meteora:MINT",
+          "eventKind": {"discriminator": "add_liquidity", "recognition": "known"},
+          "assetLegs": [
+            {"direction": "into_position", "amount": {"assetId": "solana:native:SOL", "atoms": "200000000"}},
+            {"direction": "into_position", "amount": {"assetId": "solana:spl:MINT", "atoms": "300000"}}
+          ],
+          "protocolLiquidityUnits": "9000000000000000000",
+          "availableAt": "2026-08-16T00:00:08.000000Z",
+          "evidence": {
+            "observationIds": ["obs:lp"],
+            "sourceEventIds": ["event:lp"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:reorg:v1",
+          "transactionId": "tx:reorg",
+          "version": "1",
+          "supersedesTransactionFactId": null,
+          "chainId": "solana:mainnet",
+          "signature": "signature:reorg",
+          "slot": "125",
+          "blockTime": "2026-08-16T00:00:08.000000Z",
+          "finality": {"discriminator": "confirmed", "recognition": "known"},
+          "canonicality": {"discriminator": "canonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:09.000000Z",
+          "evidence": {
+            "observationIds": ["obs:reorg:v1"],
+            "sourceEventIds": ["event:reorg"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "swap",
+        "fact": {
+          "swapId": "swap:reorg",
+          "transactionId": "tx:reorg",
+          "transactionFactId": "txfact:reorg:v1",
+          "instructionPath": "1",
+          "eventOrdinal": "0",
+          "traderWalletId": "wallet:C",
+          "callerAccountId": "wallet:C",
+          "programId": "program:pump",
+          "venueId": "venue:pump_curve",
+          "poolId": "pool:pump:MINT",
+          "input": {"assetId": "solana:native:SOL", "atoms": "70000000"},
+          "output": {"assetId": "solana:spl:MINT", "atoms": "500000"},
+          "feeLegs": [],
+          "availableAt": "2026-08-16T00:00:09.000000Z",
+          "evidence": {
+            "observationIds": ["obs:reorg:v1"],
+            "sourceEventIds": ["event:reorg"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      },
+      {
+        "kind": "transaction",
+        "fact": {
+          "transactionFactId": "txfact:reorg:v2",
+          "transactionId": "tx:reorg",
+          "version": "2",
+          "supersedesTransactionFactId": "txfact:reorg:v1",
+          "chainId": "solana:mainnet",
+          "signature": "signature:reorg",
+          "slot": "125",
+          "blockTime": "2026-08-16T00:00:08.000000Z",
+          "finality": {"discriminator": "finalized", "recognition": "known"},
+          "canonicality": {"discriminator": "noncanonical", "recognition": "known"},
+          "availableAt": "2026-08-16T00:00:20.000000Z",
+          "evidence": {
+            "observationIds": ["obs:reorg:v2"],
+            "sourceEventIds": ["event:reorg"],
+            "coverageIds": ["cov:chain"]
+          }
+        }
+      }
+    ],
+    "hypotheses": [
+      {
+        "hypothesisId": "hyp:funding:v1",
+        "hypothesisSeriesId": "hyp_series:funding:A:B",
+        "version": "1",
+        "claim": {
+          "kind": "funding_edge",
+          "claim": {
+            "from_wallet_id": "wallet:A",
+            "to_wallet_id": "wallet:B",
+            "supporting_flow_ids": ["flow:A:B:sol"]
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "transfer_shape_candidate",
+        "methodVersion": "1",
+        "supportPpm": "700000",
+        "validity": {
+          "slots": {"lowerInclusive": "100", "upperExclusive": "200"},
+          "wallTime": {
+            "status": {"discriminator": "bounded", "recognition": "known"},
+            "lower": "2026-08-16T00:00:00.000000Z",
+            "upper": "2026-08-16T01:00:00.000000Z"
+          }
+        },
+        "availableAt": "2026-08-16T00:00:03.000000Z",
+        "status": "candidate",
+        "evidence": {
+          "observationIds": ["obs:funding"],
+          "sourceEventIds": ["event:funding"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [{"kind": "transfer", "id": "flow:A:B:sol"}],
+          "derivationIds": [],
+          "inputDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "supersedesHypothesisId": null,
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "ordinary_transfer", "recognition": "known"},
+            "description": "A payment, refund, or custody transfer can have the same chain shape.",
+            "supportingFactRefs": [{"kind": "transfer", "id": "flow:A:B:sol"}]
+          }
+        ]
+      },
+      {
+        "hypothesisId": "hyp:cluster:BC:v1",
+        "hypothesisSeriesId": "hyp_series:cluster:BC",
+        "version": "1",
+        "claim": {
+          "kind": "wallet_cluster",
+          "claim": {
+            "members": [
+              {
+                "walletId": "wallet:B",
+                "membershipSupportPpm": "620000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              },
+              {
+                "walletId": "wallet:C",
+                "membershipSupportPpm": "610000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              }
+            ]
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "bounded_co_trade_candidate",
+        "methodVersion": "1",
+        "supportPpm": "600000",
+        "validity": {
+          "slots": {"lowerInclusive": "100", "upperExclusive": "130"},
+          "wallTime": {
+            "status": {"discriminator": "bounded", "recognition": "known"},
+            "lower": "2026-08-16T00:00:00.000000Z",
+            "upper": "2026-08-16T01:00:00.000000Z"
+          }
+        },
+        "availableAt": "2026-08-16T00:00:10.000000Z",
+        "status": "disputed",
+        "evidence": {
+          "observationIds": ["obs:B_buy", "obs:C_buy"],
+          "sourceEventIds": ["event:B_buy", "event:C_buy"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [
+            {"kind": "swap", "id": "swap:B_buy"},
+            {"kind": "swap", "id": "swap:C_buy"}
+          ],
+          "derivationIds": [],
+          "inputDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "supersedesHypothesisId": null,
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "universal_sniper", "recognition": "known"},
+            "description": "Independent broad snipers co-trade many launches without shared control.",
+            "supportingFactRefs": [
+              {"kind": "swap", "id": "swap:B_buy"},
+              {"kind": "swap", "id": "swap:C_buy"}
+            ]
+          },
+          {
+            "alternativeKind": {"discriminator": "shared_signal", "recognition": "known"},
+            "description": "Separate wallets can react to the same board or callout signal.",
+            "supportingFactRefs": []
+          }
+        ]
+      },
+      {
+        "hypothesisId": "hyp:cluster:BC:v2",
+        "hypothesisSeriesId": "hyp_series:cluster:BC",
+        "version": "2",
+        "claim": {
+          "kind": "wallet_cluster",
+          "claim": {
+            "members": [
+              {
+                "walletId": "wallet:B",
+                "membershipSupportPpm": "100000",
+                "role": {"discriminator": "retracted_member", "recognition": "known"}
+              },
+              {
+                "walletId": "wallet:C",
+                "membershipSupportPpm": "100000",
+                "role": {"discriminator": "retracted_member", "recognition": "known"}
+              }
+            ]
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "bounded_co_trade_candidate",
+        "methodVersion": "2",
+        "supportPpm": "100000",
+        "validity": {
+          "slots": {"lowerInclusive": "100", "upperExclusive": "130"},
+          "wallTime": {
+            "status": {"discriminator": "bounded", "recognition": "known"},
+            "lower": "2026-08-16T00:00:00.000000Z",
+            "upper": "2026-08-16T01:00:00.000000Z"
+          }
+        },
+        "availableAt": "2026-08-16T00:00:28.000000Z",
+        "status": "retracted",
+        "evidence": {
+          "observationIds": ["obs:B_buy", "obs:C_buy"],
+          "sourceEventIds": ["event:B_buy", "event:C_buy"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [
+            {"kind": "swap", "id": "swap:B_buy"},
+            {"kind": "swap", "id": "swap:C_buy"}
+          ],
+          "derivationIds": [],
+          "inputDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "supersedesHypothesisId": "hyp:cluster:BC:v1",
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "insufficient_recurrence", "recognition": "known"},
+            "description": "The bounded coincidence did not recur outside the selected mint.",
+            "supportingFactRefs": [
+              {"kind": "swap", "id": "swap:B_buy"},
+              {"kind": "swap", "id": "swap:C_buy"}
+            ]
+          }
+        ]
+      },
+      {
+        "hypothesisId": "hyp:cluster:future:v1",
+        "hypothesisSeriesId": "hyp_series:cluster:future",
+        "version": "1",
+        "claim": {
+          "kind": "wallet_cluster",
+          "claim": {
+            "members": [
+              {
+                "walletId": "wallet:B",
+                "membershipSupportPpm": "500000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              },
+              {
+                "walletId": "wallet:C",
+                "membershipSupportPpm": "500000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              }
+            ]
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "later_period_candidate",
+        "methodVersion": "1",
+        "supportPpm": "500000",
+        "validity": {
+          "slots": {"lowerInclusive": "130", "upperExclusive": "200"},
+          "wallTime": {
+            "status": {"discriminator": "bounded", "recognition": "known"},
+            "lower": "2026-08-16T00:30:00.000000Z",
+            "upper": "2026-08-16T01:00:00.000000Z"
+          }
+        },
+        "availableAt": "2026-08-16T00:00:25.000000Z",
+        "status": "candidate",
+        "evidence": {
+          "observationIds": ["obs:B_buy", "obs:C_buy"],
+          "sourceEventIds": ["event:B_buy", "event:C_buy"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [
+            {"kind": "swap", "id": "swap:B_buy"},
+            {"kind": "swap", "id": "swap:C_buy"}
+          ],
+          "derivationIds": [],
+          "inputDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "supersedesHypothesisId": null,
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "period_specific_signal", "recognition": "known"},
+            "description": "A later shared strategy does not establish an earlier association.",
+            "supportingFactRefs": []
+          }
+        ]
+      },
+      {
+        "hypothesisId": "hyp:cluster:unknown_time:v1",
+        "hypothesisSeriesId": "hyp_series:cluster:unknown_time",
+        "version": "1",
+        "claim": {
+          "kind": "wallet_cluster",
+          "claim": {
+            "members": [
+              {
+                "walletId": "wallet:B",
+                "membershipSupportPpm": "500000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              },
+              {
+                "walletId": "wallet:C",
+                "membershipSupportPpm": "500000",
+                "role": {"discriminator": "candidate_member", "recognition": "known"}
+              }
+            ]
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "missing_wall_time_candidate",
+        "methodVersion": "1",
+        "supportPpm": "500000",
+        "validity": {
+          "slots": {"lowerInclusive": "100", "upperExclusive": "130"},
+          "wallTime": {
+            "status": {"discriminator": "source_missing", "recognition": "known"},
+            "lower": null,
+            "upper": null
+          }
+        },
+        "availableAt": "2026-08-16T00:00:10.000000Z",
+        "status": "candidate",
+        "evidence": {
+          "observationIds": ["obs:B_buy", "obs:C_buy"],
+          "sourceEventIds": ["event:B_buy", "event:C_buy"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [
+            {"kind": "swap", "id": "swap:B_buy"},
+            {"kind": "swap", "id": "swap:C_buy"}
+          ],
+          "derivationIds": [],
+          "inputDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        },
+        "supersedesHypothesisId": null,
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "missing_validity", "recognition": "known"},
+            "description": "Unknown wall validity cannot be treated as globally active.",
+            "supportingFactRefs": []
+          }
+        ]
+      },
+      {
+        "hypothesisId": "hyp:coordination:route:v1",
+        "hypothesisSeriesId": "hyp_series:coordination:route",
+        "version": "1",
+        "claim": {
+          "kind": "coordination",
+          "claim": {
+            "wallet_ids": ["wallet:B", "wallet:C"],
+            "bundle_ids": ["bundle:route"],
+            "co_trade_derivation_ids": []
+          }
+        },
+        "producer": "joshi.fixture",
+        "method": "bundle_plus_cotrade_candidate",
+        "methodVersion": "1",
+        "supportPpm": "300000",
+        "validity": {
+          "slots": {"lowerInclusive": "100", "upperExclusive": "130"},
+          "wallTime": {
+            "status": {"discriminator": "bounded", "recognition": "known"},
+            "lower": "2026-08-16T00:00:00.000000Z",
+            "upper": "2026-08-16T01:00:00.000000Z"
+          }
+        },
+        "availableAt": "2026-08-16T00:00:11.000000Z",
+        "status": "candidate",
+        "evidence": {
+          "observationIds": ["obs:B_buy", "obs:C_buy", "obs:route"],
+          "sourceEventIds": ["event:B_buy", "event:C_buy", "event:route"],
+          "coverageIds": ["cov:chain"],
+          "factRefs": [
+            {"kind": "swap", "id": "swap:B_buy"},
+            {"kind": "swap", "id": "swap:C_buy"},
+            {"kind": "swap", "id": "swap:route:0"},
+            {"kind": "swap", "id": "swap:route:1"}
+          ],
+          "derivationIds": [],
+          "inputDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "supersedesHypothesisId": null,
+        "adversarialAlternatives": [
+          {
+            "alternativeKind": {"discriminator": "independent_actors_shared_route", "recognition": "known"},
+            "description": "One wallet route and two nearby buys do not establish coordinated control.",
+            "supportingFactRefs": [
+              {"kind": "swap", "id": "swap:B_buy"},
+              {"kind": "swap", "id": "swap:C_buy"}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "before_noncanonical_correction",
+      "request": {
+        "snapshotId": "snapshot:early",
+        "availableThrough": "2026-08-16T00:00:15.000000Z",
+        "eventSlot": "126",
+        "eventTime": "2026-08-16T00:00:09.000000Z",
+        "acceptedFinalities": ["confirmed", "finalized"],
+        "acceptedCanonicalities": ["canonical"],
+        "focusMintIds": ["solana:spl:MINT"],
+        "requestedCoverageIds": ["cov:chain"],
+        "coTradeWindowSlots": "10",
+        "maxPairRows": "100"
+      },
+      "expected": {
+        "acceptedFactCount": "15",
+        "excludedNoncanonicalCount": "0",
+        "flowEdgeCount": "13",
+        "coTradeJointOccurrences": "2",
+        "currentHypothesisIds": [
+          "hyp:cluster:BC:v1",
+          "hyp:coordination:route:v1",
+          "hyp:funding:v1"
+        ]
+      }
+    },
+    {
+      "name": "after_noncanonical_and_retraction",
+      "request": {
+        "snapshotId": "snapshot:late",
+        "availableThrough": "2026-08-16T00:00:30.000000Z",
+        "eventSlot": "126",
+        "eventTime": "2026-08-16T00:00:09.000000Z",
+        "acceptedFinalities": ["confirmed", "finalized"],
+        "acceptedCanonicalities": ["canonical"],
+        "focusMintIds": ["solana:spl:MINT"],
+        "requestedCoverageIds": ["cov:chain"],
+        "coTradeWindowSlots": "10",
+        "maxPairRows": "100"
+      },
+      "expected": {
+        "acceptedFactCount": "13",
+        "excludedNoncanonicalCount": "1",
+        "flowEdgeCount": "11",
+        "coTradeJointOccurrences": "1",
+        "currentHypothesisIds": [
+          "hyp:cluster:BC:v2",
+          "hyp:coordination:route:v1",
+          "hyp:funding:v1"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+[package]
+name = "joshi-collector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+joshi-domain = { path = "../../crates/joshi-domain" }
+joshi-spool = { path = "../../crates/joshi-spool" }
+joshi-supervisor = { path = "../../crates/joshi-supervisor" }
+serde_json.workspace = true
+time.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

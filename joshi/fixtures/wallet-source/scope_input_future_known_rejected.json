@@ -1,0 +1,31 @@
+{
+  "contractVersion": "joshi.wallet_source.v1",
+  "scopeId": "scope:future-known-candidate",
+  "target": {
+    "kind": "wallet",
+    "candidate": {
+      "candidateId": "candidate:future-known",
+      "wallet": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+      "relation": "cohort_candidate",
+      "epistemicStatus": "inferred",
+      "subjectId": null,
+      "inferenceVersion": "resolver.v1",
+      "evidenceObservationIds": ["observation:arrives-later"],
+      "evidenceCoverageIds": ["coverage:later"],
+      "validFrom": "2026-08-16T12:00:00.000000Z",
+      "validTo": null,
+      "availableAt": "2026-08-16T12:10:00.000000Z"
+    }
+  },
+  "requestedAt": "2026-08-16T12:00:00.000000Z",
+  "availableAt": "2026-08-16T12:05:00.000000Z",
+  "evidenceInputIds": ["attention:callout:1"],
+  "evidenceCoverageIds": ["coverage:social:1"],
+  "budget": {
+    "maxRequests": "10",
+    "maxPages": "2",
+    "maxResponseBytes": "1048576",
+    "maxProviderCredits": "20",
+    "maxPublicKeys": "1"
+  }
+}

@@ -1,0 +1,78 @@
+contract: joshi.wave4.release_manifest/v1
+status: required_template_not_a_release
+releaseId: UNRESOLVED
+releaseClass: collector_or_replica
+createdAt: UNRESOLVED_UTC
+
+source:
+  licenseExpression: AGPL-3.0-or-later
+  revision: UNRESOLVED_REQUIRED_IMMUTABLE_COMMIT
+  repositoryState: must_be_clean_and_committed
+  currentBlocker: repository_has_unborn_HEAD_as_observed_2026_08_17
+  sourceArchive:
+    path: UNRESOLVED_RELATIVE_PATH
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+    requirements:
+      - exact_release_revision
+      - Cargo_toml_and_Cargo_lock
+      - rust_toolchain_toml
+      - build_and_install_scripts
+      - interface_and_config_schemas
+      - required_migrations_and_fixtures_with_publishable_provenance
+      - exclude_credentials_private_evidence_and_authenticated_provider_bytes
+  sourceOffer:
+    path: SOURCE_OFFER.txt
+    sha256: UNRESOLVED
+    rule: point_to_exact_adjacent_source_archive_or_exact_immutable_public_revision
+
+toolchain:
+  target: x86_64-unknown-linux-gnu
+  rustChannel: 1.97.1
+  rustToolchainFileSha256: UNRESOLVED_AT_RELEASE
+  CargoLockSha256: UNRESOLVED_AT_RELEASE
+  buildCommand: UNRESOLVED_REPRODUCIBLE_LOCKED_COMMAND
+  builderIdentity: UNRESOLVED_NON_SECRET
+  buildEnvironmentManifestSha256: UNRESOLVED
+
+artifacts:
+  - logicalName: executable
+    path: UNRESOLVED
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+    fileMode: "0755"
+  - logicalName: sbom
+    path: sbom.spdx.json
+    format: SPDX-2.3-json
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+  - logicalName: third_party_notices
+    path: THIRD_PARTY_NOTICES.md
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+  - logicalName: project_license
+    path: LICENSE
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+  - logicalName: dependency_license_inventory
+    path: dependency-licenses.json
+    sha256: UNRESOLVED
+    byteLength: UNRESOLVED
+
+verification:
+  cargoMetadataLockedSha256: UNRESOLVED
+  cargoTreeDuplicatesSha256: UNRESOLVED
+  cargoDenyReportSha256: UNRESOLVED
+  cargoAuditReportSha256: UNRESOLVED
+  testReportSha256: UNRESOLVED
+  authorityAuditSha256: UNRESOLVED
+  secretCanaryReportSha256: UNRESOLVED
+  sbomMatchesExactTargetAndLock: false
+  everyArtifactDigestVerifiedBeforeInstall: false
+  correspondingSourceClosureVerified: false
+
+distribution:
+  publishAuthorized: false
+  installAuthorized: false
+  externalAccountCreationAuthorized: false
+  releaseResult: blocked_until_every_UNRESOLVED_and_false_gate_is_closed

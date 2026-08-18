@@ -1,0 +1,26 @@
+{
+  "contract": "joshi.census_bakeoff/v1",
+  "schemaVersion": "1",
+  "runId": "fixture-census-run",
+  "window": {"windowId": "slots-1-20", "lowerSlot": "1", "upperSlot": "20"},
+  "candidate": [{
+    "signature": "sig-create-1", "slot": "10", "finality": "finalized",
+    "programMentioned": true, "logsTruncated": false, "failedTransaction": false,
+    "predicate": "match", "bytes": "120", "providerCredits": "2", "latencyMs": "8"
+  }],
+  "reference": [{
+    "signature": "sig-create-1", "slot": "10", "finality": "finalized",
+    "hydratedExact": true, "failedTransaction": false, "decode": "decoded",
+    "predicate": "match", "bytes": "240", "providerCredits": "4", "latencyMs": "12"
+  }],
+  "gaps": [],
+  "caps": {
+    "maxCandidateBytes": "1000", "maxReferenceBytes": "1000",
+    "maxCandidateCredits": "10", "maxReferenceCredits": "10", "maxTotalLatencyMs": "100"
+  },
+  "thresholds": {
+    "minimumRecallPpm": "1000000", "minimumPrecisionPpm": "1000000",
+    "minimumParserYieldPpm": "1000000", "maximumCandidateGapCount": "0",
+    "maximumReferenceGapCount": "0"
+  }
+}

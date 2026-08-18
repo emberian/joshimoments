@@ -1,0 +1,24 @@
+[package]
+name = "joshi-spool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-store = { path = "../joshi-store" }
+ring = "0.17.14"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

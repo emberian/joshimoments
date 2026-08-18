@@ -1,0 +1,193 @@
+{
+  "fixture_id": "joshi.evidence-tape.e0.v1",
+  "fixture_version": 1,
+  "schema_user_version": 8,
+  "synthetic": true,
+  "effect_ceiling": "observe_only",
+  "load_sql": {
+    "path": "fixtures/tape/load.sql",
+    "sha256": "d1324d03db157e5f6e832df7b6686f9765934383c9ec6f366184d420bdc31214"
+  },
+  "expected_sql": {
+    "path": "fixtures/tape/expected.sql",
+    "sha256": "d6544583ff10a14fd64151966614d7e02dd377417be5968397d6233489b2a47a"
+  },
+  "migrations": [
+    {
+      "id": 1,
+      "path": "schema/migrations/0001_evidence.sql",
+      "sha256": "6592bd84ce46c63834c5749e3cab93b4efc1b612f3c8e99db050563289fdb76e"
+    },
+    {
+      "id": 2,
+      "path": "schema/migrations/0002_assertions_coverage.sql",
+      "sha256": "e2820b19098206c15e7acf747e8440a7805ac60a454ffe3cec0625f0cdf51884"
+    },
+    {
+      "id": 3,
+      "path": "schema/migrations/0003_scenes_commands.sql",
+      "sha256": "312ec8ad4264192df440f1368c7684b4e02135ba046f12f1766bd75184f6c909"
+    },
+    {
+      "id": 4,
+      "path": "schema/migrations/0004_operations_exports.sql",
+      "sha256": "0d98eeb1e44e69478dc4eb24f2569408c3c5268e3d3248b2ce623b61371c9ead"
+    },
+    {
+      "id": 5,
+      "path": "schema/migrations/0005_lossless_contract.sql",
+      "sha256": "1cf6d516471ec0113728f451d300440388dceaff9569c3d29d37ee0b42b54514"
+    },
+    {
+      "id": 6,
+      "path": "schema/migrations/0006_optional_acquisition_monotonic.sql",
+      "sha256": "e3fe91970d62e57cb92a05e4ca54bbf4765c8af98fe3036df3f72cfff8809c15"
+    },
+    {
+      "id": 7,
+      "path": "schema/migrations/0007_operational_exocortex.sql",
+      "sha256": "20e9024677916be8f0ad0ca37624b965a52d61017804ab440e4de719047d8d33"
+    },
+    {
+      "id": 8,
+      "path": "schema/migrations/0008_semantic_artifact_durability.sql",
+      "sha256": "386c4ec473e0bf33408ac91c77aa46b8d3012cd0ec2f14d7c9acf0263d14d1c9"
+    }
+  ],
+  "cases": [
+    {
+      "id": "duplicate-acquisition-not-duplicate-event",
+      "observations": ["obs_equal_primary", "obs_equal_redelivery"],
+      "shared_blob": "9a65e611501e08bd7a07c31649054a38c9542d3e0b2fa5f02a3eb7b6a7f4e163",
+      "expected": "two observations, two acquisitions, two stable source events"
+    },
+    {
+      "id": "equal-valued-distinct-events",
+      "source_events": ["sev_equal_trade_0", "sev_equal_trade_1"],
+      "assertions": ["ast_trade_0_v1", "ast_trade_1_v1"],
+      "expected": "same value digest and exact amounts, distinct event and assertion identity"
+    },
+    {
+      "id": "unknown-variant",
+      "observation": "obs_unknown_variant",
+      "expected": "unsupported_variant with retained raw bytes and no coerced assertion"
+    },
+    {
+      "id": "gap-recovery-cursor",
+      "gap": "gap_fixture_101_102",
+      "cursor_chain": ["cur_fixture_100", "cur_fixture_101", "cur_fixture_102"],
+      "expected": "partial then complete recovery; each cursor and evidence share one commit"
+    },
+    {
+      "id": "late-correction-bitemporal",
+      "semantic_key": "fixture:trade:sig-equal:0",
+      "as_known_at_7": "ast_trade_0_v1",
+      "retrospective_through_11": "ast_trade_0_v2"
+    },
+    {
+      "id": "runner-flat-watch-reentry",
+      "commands": [
+        "cmd_fixture_runner",
+        "cmd_fixture_flat",
+        "cmd_fixture_watch_flat",
+        "cmd_fixture_reentry"
+      ],
+      "inventory_epochs": ["epoch-a", "epoch-b"],
+      "expected": "runner, flat assertion, continued watch, and reentry remain distinct; no fill is claimed"
+    },
+    {
+      "id": "witnessed-versus-retrospective",
+      "witnessed_scene": "scn_fixture_witnessed",
+      "retrospective_scene": "scn_fixture_retrospective",
+      "expected": "different cutoff semantics and exact view digests"
+    }
+  ],
+  "artifacts": [
+    {
+      "label": "equal-events-transaction",
+      "path": "fixtures/tape/blobs/sha256/9a65e611501e08bd7a07c31649054a38c9542d3e0b2fa5f02a3eb7b6a7f4e163.blob",
+      "sha256": "9a65e611501e08bd7a07c31649054a38c9542d3e0b2fa5f02a3eb7b6a7f4e163",
+      "bytes": 216
+    },
+    {
+      "label": "unknown-variant",
+      "path": "fixtures/tape/blobs/sha256/b6d35637158ced08f1ec3da5c3e6f7671f312f38d6e1cdd6f0ec83bd2f4d2eef.blob",
+      "sha256": "b6d35637158ced08f1ec3da5c3e6f7671f312f38d6e1cdd6f0ec83bd2f4d2eef",
+      "bytes": 77
+    },
+    {
+      "label": "recovery-slot-101",
+      "path": "fixtures/tape/blobs/sha256/70c4eaa98d6cfa0a0f6771fe815b40380ed46931ab9ca2f8116fbb13e37e255e.blob",
+      "sha256": "70c4eaa98d6cfa0a0f6771fe815b40380ed46931ab9ca2f8116fbb13e37e255e",
+      "bytes": 143
+    },
+    {
+      "label": "recovery-slot-102",
+      "path": "fixtures/tape/blobs/sha256/1dddf91700fb4cc9c9de512b80ba350edb1ac7335c5324d5c94609b68851ebd9.blob",
+      "sha256": "1dddf91700fb4cc9c9de512b80ba350edb1ac7335c5324d5c94609b68851ebd9",
+      "bytes": 143
+    },
+    {
+      "label": "late-correction",
+      "path": "fixtures/tape/blobs/sha256/e678b843e8e3036b7b9869aa694d10973abe62732ce01e753a1b7f2726db202a.blob",
+      "sha256": "e678b843e8e3036b7b9869aa694d10973abe62732ce01e753a1b7f2726db202a",
+      "bytes": 136
+    },
+    {
+      "label": "witnessed-view",
+      "path": "fixtures/tape/blobs/sha256/a336d1fe5cf40b171fd365df00b5b4e93aae8db2d891c23cbf0eac9d4130921f.blob",
+      "sha256": "a336d1fe5cf40b171fd365df00b5b4e93aae8db2d891c23cbf0eac9d4130921f",
+      "bytes": 187
+    },
+    {
+      "label": "retrospective-view",
+      "path": "fixtures/tape/blobs/sha256/a3d68a6735232487e94c561b57fd10cf1b8c5dc03d1323e996eb0427040e4ffc.blob",
+      "sha256": "a3d68a6735232487e94c561b57fd10cf1b8c5dc03d1323e996eb0427040e4ffc",
+      "bytes": 223
+    },
+    {
+      "label": "runner-command",
+      "path": "fixtures/tape/blobs/sha256/e63b333a8db00de7dd3f7d0aeb32079d0aa5d29b88525a4e815ab6e94a8464a7.blob",
+      "sha256": "e63b333a8db00de7dd3f7d0aeb32079d0aa5d29b88525a4e815ab6e94a8464a7",
+      "bytes": 119
+    },
+    {
+      "label": "flat-command",
+      "path": "fixtures/tape/blobs/sha256/587af6f405fa2431054b685b26694d40849ee55afce3da720a950e723b45ebc3.blob",
+      "sha256": "587af6f405fa2431054b685b26694d40849ee55afce3da720a950e723b45ebc3",
+      "bytes": 112
+    },
+    {
+      "label": "watch-flat-command",
+      "path": "fixtures/tape/blobs/sha256/93800bd6452115cee7e65a402dc0a2bcac972323cde57487639c5e5859ca67d7.blob",
+      "sha256": "93800bd6452115cee7e65a402dc0a2bcac972323cde57487639c5e5859ca67d7",
+      "bytes": 93
+    },
+    {
+      "label": "reentry-command",
+      "path": "fixtures/tape/blobs/sha256/32b0906e2d191157ec36b32d6e06ae8847b08c4f0b53d6cd4b3709aad892dc45.blob",
+      "sha256": "32b0906e2d191157ec36b32d6e06ae8847b08c4f0b53d6cd4b3709aad892dc45",
+      "bytes": 110
+    },
+    {
+      "label": "parquet-protocol-stand-in",
+      "path": "fixtures/tape/exports/92a6a5d1c027425d95c0ffd558861ecbe966a88007fc8bc2d69e10b44d303c96.parquet.fixture",
+      "sha256": "92a6a5d1c027425d95c0ffd558861ecbe966a88007fc8bc2d69e10b44d303c96",
+      "bytes": 60,
+      "parquet_interoperability_claim": false
+    },
+    {
+      "label": "export-snapshot-manifest",
+      "path": "fixtures/tape/exports/snapshot-manifest.json",
+      "sha256": "dd9470b6138f7ef50bc05cd2e8046ca215e51b429e5152f246c29dd8526a7c5e",
+      "bytes": 409
+    }
+  ],
+  "excluded_claims": [
+    "source completeness outside the declared synthetic window",
+    "landed wallet effects or financial reconciliation",
+    "strategy profitability",
+    "real Parquet schema or reader compatibility",
+    "process-kill or power-loss durability"
+  ]
+}

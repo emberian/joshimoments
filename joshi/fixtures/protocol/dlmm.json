@@ -1,0 +1,71 @@
+{
+  "contract": "joshi.protocol-fixtures.dlmm.v1",
+  "official_source": {
+    "repository": "MeteoraAg/dlmm-sdk",
+    "revision": "fb02e51ae677bbd18e76543f702dae40632426db",
+    "package": "1.9.14",
+    "program": "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
+  },
+  "chain_price_vectors": [
+    {
+      "id": "sol_usdc_active_bin_finalized_2026_08_16",
+      "provenance": "mainnet_observation",
+      "rpc_commitment": "finalized",
+      "pool": "HTvjzsfX3yU6BUodCjZ5vZkUrAxMDTrBs3CJaq43ashR",
+      "pool_observation_slot": "439760560",
+      "active_bin_id": "-25904",
+      "bin_step": "1",
+      "bin_array": "2j5ep8wxApESNcqQdtKi6owCURUopnBbGgfRffUQ3CRF",
+      "bin_array_observation_slot": "439760658",
+      "bin_array_index": "-371",
+      "bin_array_version": "2",
+      "amount_x": "0",
+      "amount_y": "1088745934",
+      "stored_price_q64": "1383501207885697265",
+      "liquidity_supply": "20079366908360889634249985065",
+      "expected_price_q64": "1383501207885697265"
+    }
+  ],
+  "position_vectors": [
+    {
+      "id": "single_bin_quarter_share",
+      "provenance": "synthetic_boundary",
+      "bin_id": "0",
+      "bin_step": "25",
+      "price_q64": "18446744073709551616",
+      "pool_x_atoms": "1000",
+      "pool_y_atoms": "2000",
+      "liquidity_supply": "55340232221128654848000",
+      "position_share": "13835058055282163712000",
+      "expected_position_x_atoms": "250",
+      "expected_position_y_atoms": "500",
+      "deposit_x_atoms": "100",
+      "deposit_y_atoms": "200",
+      "expected_deposit_share": "5534023222112865484800",
+      "remove_bps": "5000",
+      "expected_removed_share": "6917529027641081856000",
+      "expected_removed_x_atoms": "125",
+      "expected_removed_y_atoms": "250",
+      "pending_fee_x_atoms": "3",
+      "pending_fee_y_atoms": "4",
+      "pending_reward_atoms": "5"
+    }
+  ],
+  "fee_vectors": [
+    {
+      "id": "power_factor_and_variable_fee",
+      "provenance": "synthetic_boundary",
+      "base_factor": "10000",
+      "bin_step": "20",
+      "base_fee_power_factor": "1",
+      "variable_fee_control": "7500",
+      "volatility_accumulator": "10000",
+      "protocol_share_bps": "1000",
+      "expected_total_fee_rate_1e9": "20003000",
+      "amount_atoms": "1000000",
+      "expected_fee_from_net_atoms": "20412",
+      "expected_fee_from_gross_atoms": "20003",
+      "expected_protocol_fee_from_gross_atoms": "2000"
+    }
+  ]
+}

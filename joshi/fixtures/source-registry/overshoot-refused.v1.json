@@ -1,0 +1,7 @@
+{
+  "case": "bounded_overshoot",
+  "worstCase": { "requests": "1", "ingressBytes": "4096" },
+  "maxOvershoot": { "requests": "1", "ingressBytes": "4096" },
+  "hardCap": { "requests": "1", "ingressBytes": "4096" },
+  "expectedRefusal": "budget_exceeded_before_io"
+}

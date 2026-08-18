@@ -1,0 +1,62 @@
+{
+  "contract": "joshi.scientific_memory.fixture.v1",
+  "timeEncoding": "decimal-string u64 LogicalSessionTick from the session clock; catalogCutoff uses separate decimal-string CatalogCommitSeq",
+  "canonicalGoldens": [
+    {
+      "name": "external_manual_execution_escape_with_presentation_gap",
+      "canonicalOccurrence": "{\"kind\":\"operator_act\",\"value\":{\"actId\":\"act-escape\",\"sessionId\":\"session-1\",\"occurredAt\":\"12\",\"scene\":{\"status\":\"committed\",\"value\":{\"sceneId\":\"scene-1\",\"sceneDigest\":\"sha256:4f48f7207cebf92638debb5694e4a8677350cf88a9e98e73c6c466b6b1d43890\",\"catalogCutoff\":\"10\"}},\"presentation\":{\"status\":\"gap\",\"value\":{\"gapId\":\"gap-1\",\"scene\":null,\"reason\":\"capture_failed\",\"detectedAt\":\"11\"}},\"kind\":{\"external_manual_execution_escape\":{\"reason\":\"operator exited outside the managed path\"}},\"subject\":\"manual-exit\",\"assertion\":{\"assertionId\":\"assertion-escape\",\"disposition\":{\"kind\":\"verbatim\",\"value\":{\"text\":\"left managed path\"}}}}}",
+      "digest": "sha256:d79e01fab67daeb50068755da6cef7dea695a05505b80a923decceb575c919ec"
+    }
+  ],
+  "cases": [
+    {
+      "name": "act_survives_missing_presentation",
+      "actId": "act-gap",
+      "qualification": "unverified_semantic",
+      "scene": { "status": "committed", "value": { "sceneId": "scene-1", "sceneDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "catalogCutoff": "10" } },
+      "presentation": { "status": "gap", "value": { "gapId": "gap-1", "scene": null, "reason": "capture_failed", "detectedAt": "11" } },
+      "expected": { "retainedSemantic": true, "storeQualified": false, "researchAdmission": "refused_missing_presentation" }
+    },
+    {
+      "name": "matching_presentation_closes_research",
+      "actId": "act-presented",
+      "presentation": { "status": "occurrence", "value": { "occurrenceId": "presentation-occurrence-1", "presentationId": "presentation-1", "scene": { "sceneId": "scene-1", "sceneDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "catalogCutoff": "10" }, "renderDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "viewport": "1280x720", "focus": "candidate", "occurredAt": "11" } },
+      "expected": { "researchAdmission": "admitted" }
+    },
+    {
+      "name": "scene_mismatch_refuses",
+      "actId": "act-mismatch",
+      "expected": { "append": "refused_scene_presentation_mismatch" }
+    },
+    {
+      "name": "bounded_episode_with_no_trade_and_unknown_effect",
+      "episodeId": "episode-1",
+      "segments": ["flat_watch", "no_trade", "unknown_interval", "unresolved_effect"],
+      "expected": { "transactionInference": false, "completeness": "partial" }
+    },
+    {
+      "name": "two_pass_replay",
+      "episodeId": "episode-1",
+      "hidden": { "outcomeVisibility": "hidden", "sceneRequired": true },
+      "retrospective": { "outcomeVisibility": "revealed", "separateArtifact": true },
+      "expected": { "hiddenOutcomeLeak": "refused" }
+    },
+    {
+      "name": "retry_after_crash",
+      "actId": "act-retry",
+      "expected": { "first": "applied", "sameBytesRetry": "duplicate", "changedBytes": "identity_conflict" }
+    },
+    {
+      "name": "positive_closures_need_private_witness",
+      "qualification": "unverified_semantic",
+      "closedKnowledge": "refused_without_store_witness",
+      "availableOutcome": "refused_without_store_witness"
+    },
+    {
+      "name": "post_close_episode_and_future_replay",
+      "episodeAfterSessionClose": "refused_session_terminal",
+      "hiddenReplayAfterOutcome": "refused_outcome_leak",
+      "revealUnknownId": "refused_outcome_leak"
+    }
+  ]
+}

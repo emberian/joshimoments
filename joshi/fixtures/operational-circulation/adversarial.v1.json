@@ -1,0 +1,31 @@
+{
+  "contract": "joshi.operational_circulation.report.v1",
+  "outcome": "blocked",
+  "blockers": [
+    "census_membership_artifact_not_semantically_inspectable",
+    "projection_market_state_artifact_unreferenced",
+    "publication_exact_bytes_unbound"
+  ],
+  "adversarial": [
+    {
+      "mutation": "source-segment-byte-substitution",
+      "expectedError": "source_receipt_closure"
+    },
+    {
+      "mutation": "duplicate-cluster-context-key",
+      "expectedError": "strict_json"
+    },
+    {
+      "mutation": "free-standing-cluster-context",
+      "expectedError": "cluster_context_closure"
+    },
+    {
+      "mutation": "later-known-market-input",
+      "expectedError": "market_state_closure"
+    },
+    {
+      "mutation": "publication-semantic-for-exact-digest-substitution",
+      "expectedError": "publication_closure"
+    }
+  ]
+}

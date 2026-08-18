@@ -1,0 +1,46 @@
+{
+  "schema_version": "joshi.accounting.arithmetic.v1",
+  "cases": [
+    {
+      "name": "floor_non_divisible",
+      "operation": "mul_div_floor",
+      "lhs": "7",
+      "rhs": "10",
+      "denominator": "6",
+      "expected": { "kind": "value", "atoms": "11" }
+    },
+    {
+      "name": "ceil_non_divisible",
+      "operation": "mul_div_ceil",
+      "lhs": "7",
+      "rhs": "10",
+      "denominator": "6",
+      "expected": { "kind": "value", "atoms": "12" }
+    },
+    {
+      "name": "ceil_exact_has_no_extra_atom",
+      "operation": "mul_div_ceil",
+      "lhs": "6",
+      "rhs": "10",
+      "denominator": "6",
+      "expected": { "kind": "value", "atoms": "10" }
+    },
+    {
+      "name": "zero_denominator_is_typed_error",
+      "operation": "mul_div_floor",
+      "lhs": "1",
+      "rhs": "1",
+      "denominator": "0",
+      "expected": { "kind": "error", "code": "division_by_zero" }
+    },
+    {
+      "name": "u128_product_must_not_narrow_silently",
+      "operation": "mul_div_floor",
+      "lhs": "18446744073709551615",
+      "rhs": "18446744073709551615",
+      "denominator": "1",
+      "expected": { "kind": "error", "code": "narrowing" }
+    }
+  ]
+}
+

@@ -1,0 +1,16 @@
+{
+  "contract": "joshi.mechanics_capability.v1",
+  "profileId": "pump-curve/v1",
+  "sourceId": "fixture/mechanics",
+  "status": "semantic_only",
+  "attained": ["exact_math", "coherent_real_state", "observed_simulation"],
+  "refused": [
+    {
+      "kind": "size_quote",
+      "quoteId": "quote-1",
+      "reason": "unsupported_size"
+    }
+  ],
+  "pendingOpportunity": ["landed_fill_or_failure", "terminal_position_closure"],
+  "notImplied": ["observed_attempt", "whole_position_liquidation", "publication", "calibration"]
+}

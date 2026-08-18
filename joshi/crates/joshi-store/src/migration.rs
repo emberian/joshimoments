@@ -1,0 +1,266 @@
+use crate::{APPLICATION_ID, MINIMUM_SQLITE_VERSION_NUMBER, Result, StoreError};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
+
+struct Migration {
+    id: i64,
+    name: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        id: 1,
+        name: "0001_evidence.sql",
+        sql: include_str!("../../../schema/migrations/0001_evidence.sql"),
+    },
+    Migration {
+        id: 2,
+        name: "0002_assertions_coverage.sql",
+        sql: include_str!("../../../schema/migrations/0002_assertions_coverage.sql"),
+    },
+    Migration {
+        id: 3,
+        name: "0003_scenes_commands.sql",
+        sql: include_str!("../../../schema/migrations/0003_scenes_commands.sql"),
+    },
+    Migration {
+        id: 4,
+        name: "0004_operations_exports.sql",
+        sql: include_str!("../../../schema/migrations/0004_operations_exports.sql"),
+    },
+    Migration {
+        id: 5,
+        name: "0005_lossless_contract.sql",
+        sql: include_str!("../../../schema/migrations/0005_lossless_contract.sql"),
+    },
+    Migration {
+        id: 6,
+        name: "0006_optional_acquisition_monotonic.sql",
+        sql: include_str!("../../../schema/migrations/0006_optional_acquisition_monotonic.sql"),
+    },
+    Migration {
+        id: 7,
+        name: "0007_operational_exocortex.sql",
+        sql: include_str!("../../../schema/migrations/0007_operational_exocortex.sql"),
+    },
+    Migration {
+        id: 8,
+        name: "0008_semantic_artifact_durability.sql",
+        sql: include_str!("../../../schema/migrations/0008_semantic_artifact_durability.sql"),
+    },
+    Migration {
+        id: 9,
+        name: "0009_wave5_living_instrument.sql",
+        sql: include_str!("../../../schema/migrations/0009_wave5_living_instrument.sql"),
+    },
+];
+
+/// Linked runtime and active durability settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeStatus {
+    /// Linked `SQLite` version.
+    pub sqlite_version: String,
+    /// Numeric linked `SQLite` version.
+    pub sqlite_version_number: i32,
+    /// Active journal mode.
+    pub journal_mode: String,
+    /// Active synchronous level.
+    pub synchronous: i64,
+    /// Whether foreign keys are active.
+    pub foreign_keys: bool,
+    /// Catalog application identity.
+    pub application_id: i32,
+    /// Highest migration encoded in `user_version`.
+    pub user_version: i64,
+}
+
+/// Result of a forward-only migration pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MigrationReport {
+    /// Migration IDs newly applied in this invocation.
+    pub applied: Vec<u64>,
+    /// Highest migration after the pass.
+    pub current: u64,
+    /// Verified runtime settings.
+    pub runtime: RuntimeStatus,
+}
+
+pub(crate) fn assert_linked_runtime() -> Result<()> {
+    let actual_number = rusqlite::version_number();
+    if actual_number < MINIMUM_SQLITE_VERSION_NUMBER {
+        return Err(StoreError::UnsafeSqliteRuntime {
+            actual: rusqlite::version().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn configure_writer(connection: &Connection) -> Result<()> {
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.pragma_update(None, "wal_autocheckpoint", 1000_i64)?;
+    connection.pragma_update(None, "trusted_schema", "OFF")?;
+    connection.pragma_update(None, "temp_store", "MEMORY")?;
+    connection.pragma_update(None, "busy_timeout", 5000_i64)?;
+    let application_id: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    if application_id == 0 {
+        connection.pragma_update(None, "application_id", APPLICATION_ID)?;
+    } else if application_id != APPLICATION_ID {
+        return Err(StoreError::ApplicationId {
+            actual: application_id,
+        });
+    }
+    verify_runtime(connection, true).map(|_| ())
+}
+
+pub(crate) fn configure_reader(connection: &Connection) -> Result<()> {
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "trusted_schema", "OFF")?;
+    connection.pragma_update(None, "query_only", "ON")?;
+    let application_id: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    if application_id != APPLICATION_ID {
+        return Err(StoreError::ApplicationId {
+            actual: application_id,
+        });
+    }
+    verify_runtime(connection, false).map(|_| ())
+}
+
+pub(crate) fn migrate(connection: &mut Connection, applied_at_us: i64) -> Result<MigrationReport> {
+    let mut applied = Vec::new();
+    for migration in MIGRATIONS {
+        let digest = format!("{:x}", Sha256::digest(migration.sql.as_bytes()));
+        let has_ledger: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='schema_migration')",
+                [],
+                |row| row.get(0),
+            )?;
+        if has_ledger {
+            let existing: Option<(String, String)> = connection
+                .query_row(
+                    "SELECT name, source_sha256 FROM schema_migration WHERE migration_id=?1",
+                    [migration.id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((name, source_sha256)) = existing {
+                if name != migration.name || source_sha256 != digest {
+                    return Err(StoreError::MigrationConflict {
+                        migration: migration.id.to_string(),
+                        detail: format!(
+                            "catalog has {name}/{source_sha256}, source has {}/{digest}",
+                            migration.name
+                        ),
+                    });
+                }
+                continue;
+            }
+        }
+        let rebuilds_acquisition = migration.id == 6;
+        if rebuilds_acquisition {
+            connection.pragma_update(None, "foreign_keys", "OFF")?;
+            connection.pragma_update(None, "legacy_alter_table", "ON")?;
+        }
+        let result = (|| -> Result<()> {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.execute_batch(migration.sql)?;
+            transaction.execute(
+                "INSERT INTO schema_migration
+                 (migration_id,name,source_sha256,applied_at_us,sqlite_version)
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![
+                    migration.id,
+                    migration.name,
+                    digest,
+                    applied_at_us,
+                    rusqlite::version()
+                ],
+            )?;
+            transaction.pragma_update(None, "user_version", migration.id)?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        if rebuilds_acquisition {
+            connection.pragma_update(None, "legacy_alter_table", "OFF")?;
+            connection.pragma_update(None, "foreign_keys", "ON")?;
+            if result.is_ok() {
+                let defects: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM pragma_foreign_key_check",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if defects != 0 {
+                    return Err(StoreError::MigrationConflict {
+                        migration: migration.id.to_string(),
+                        detail: format!("foreign-key defects after table rebuild: {defects}"),
+                    });
+                }
+            }
+        }
+        result?;
+        applied.push(u64::try_from(migration.id).unwrap_or_default());
+    }
+    let runtime = verify_runtime(connection, true)?;
+    Ok(MigrationReport {
+        current: runtime.user_version.try_into().unwrap_or_default(),
+        applied,
+        runtime,
+    })
+}
+
+pub(crate) fn verify_runtime(
+    connection: &Connection,
+    require_writer: bool,
+) -> Result<RuntimeStatus> {
+    assert_linked_runtime()?;
+    let journal_mode: String =
+        connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::RuntimeSetting {
+            setting: "journal_mode",
+            actual: journal_mode,
+            expected: "wal",
+        });
+    }
+    let synchronous: i64 = connection.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+    if require_writer && synchronous != 2 {
+        return Err(StoreError::RuntimeSetting {
+            setting: "synchronous",
+            actual: synchronous.to_string(),
+            expected: "2 (FULL)",
+        });
+    }
+    let foreign_keys: i64 =
+        connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    if foreign_keys != 1 {
+        return Err(StoreError::RuntimeSetting {
+            setting: "foreign_keys",
+            actual: foreign_keys.to_string(),
+            expected: "1",
+        });
+    }
+    let application_id: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    if application_id != APPLICATION_ID {
+        return Err(StoreError::ApplicationId {
+            actual: application_id,
+        });
+    }
+    let user_version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    Ok(RuntimeStatus {
+        sqlite_version: rusqlite::version().to_owned(),
+        sqlite_version_number: rusqlite::version_number(),
+        journal_mode,
+        synchronous,
+        foreign_keys: true,
+        application_id,
+        user_version,
+    })
+}

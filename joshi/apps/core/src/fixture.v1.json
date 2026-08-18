@@ -1,0 +1,277 @@
+{
+  "contract": "joshi.fixture.v1",
+  "witnessed_scene_id": "scene-demo-001",
+  "witnessed_commit": "4",
+  "rendered_at": "2026-08-16T16:00:10.000000Z",
+  "replay_build": "joshi-core-demo-1",
+  "records": [
+    {
+      "record_type": "observation",
+      "acquisition": {
+        "acquisition_id": "acq-001",
+        "source_id": "fixture-market",
+        "acquisition_kind": { "discriminator": "fixture", "recognition": "known" },
+        "transport_kind": { "discriminator": "fixture", "recognition": "known" },
+        "parent_acquisition_id": null,
+        "request_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "contract_version": "fixture-market-v1",
+        "started_at": "2026-08-16T16:00:00.000000Z",
+        "started_monotonic": {
+          "clock_id": "fixture-process-1",
+          "nanoseconds": "1000000000"
+        },
+        "source_locator": "page:1:item:1",
+        "source_cursor": "cursor-001",
+        "clocks": {
+          "requested_at": "2026-08-16T16:00:00.000000Z",
+          "received_at": "2026-08-16T16:00:00.100000Z",
+          "persisted_at": "2026-08-16T16:00:00.110000Z",
+          "monotonic_elapsed_ns": "100000000",
+          "monotonic_domain": "fixture-process-1"
+        }
+      },
+      "observation": {
+        "observation_id": "obs-001",
+        "acquisition_ordinal": "0",
+        "observation_kind": { "discriminator": "fixture", "recognition": "known" },
+        "source_events": [
+          {
+            "source_event_id": "fixture-event-001",
+            "relation": { "discriminator": "contains", "recognition": "known" },
+            "event_ordinal": "0"
+          }
+        ],
+        "source_variant": { "discriminator": "trade", "recognition": "known" },
+        "event_time": {
+          "status": { "discriminator": "exact", "recognition": "known" },
+          "lower": "2026-08-16T15:59:59.000000Z",
+          "upper": "2026-08-16T16:00:00.000000Z",
+          "precision_us": "1000000"
+        },
+        "chain": {
+          "slot": "1000",
+          "transaction_index": "0",
+          "instruction_path": ["0", "1"],
+          "log_index": "1",
+          "commitment": { "discriminator": "confirmed", "recognition": "known" }
+        },
+        "source_cursor": "cursor-001",
+        "timing": {
+          "received_at": "2026-08-16T16:00:00.100000Z",
+          "received_monotonic": {
+            "clock_id": "fixture-process-1",
+            "nanoseconds": "1100000000"
+          },
+          "persisted_at": "2026-08-16T16:00:00.110000Z",
+          "available_at": "2026-08-16T16:00:00.110000Z"
+        },
+        "parse_disposition": { "discriminator": "decoded", "recognition": "known" },
+        "quality_code": null,
+        "media_type": "application/json"
+      },
+      "payload_utf8": "{\"price_raw\":\"1000000\"}"
+    },
+    {
+      "record_type": "observation",
+      "acquisition": {
+        "acquisition_id": "acq-002",
+        "source_id": "fixture-market",
+        "acquisition_kind": { "discriminator": "fixture", "recognition": "known" },
+        "transport_kind": { "discriminator": "fixture", "recognition": "known" },
+        "parent_acquisition_id": null,
+        "request_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+        "contract_version": "fixture-market-v1",
+        "started_at": "2026-08-16T16:00:01.000000Z",
+        "started_monotonic": {
+          "clock_id": "fixture-process-1",
+          "nanoseconds": "2000000000"
+        },
+        "source_locator": "page:1:item:2",
+        "source_cursor": "cursor-002",
+        "clocks": {
+          "requested_at": "2026-08-16T16:00:01.000000Z",
+          "received_at": "2026-08-16T16:00:01.100000Z",
+          "persisted_at": "2026-08-16T16:00:01.110000Z",
+          "monotonic_elapsed_ns": "100000000",
+          "monotonic_domain": "fixture-process-1"
+        }
+      },
+      "observation": {
+        "observation_id": "obs-002",
+        "acquisition_ordinal": "0",
+        "observation_kind": { "discriminator": "fixture", "recognition": "known" },
+        "source_events": [
+          {
+            "source_event_id": "fixture-event-002",
+            "relation": { "discriminator": "contains", "recognition": "known" },
+            "event_ordinal": "0"
+          }
+        ],
+        "source_variant": { "discriminator": "trade", "recognition": "known" },
+        "event_time": {
+          "status": { "discriminator": "exact", "recognition": "known" },
+          "lower": "2026-08-16T16:00:01.000000Z",
+          "upper": "2026-08-16T16:00:02.000000Z",
+          "precision_us": "1000000"
+        },
+        "chain": {
+          "slot": "1001",
+          "transaction_index": "0",
+          "instruction_path": ["0", "1"],
+          "log_index": "1",
+          "commitment": { "discriminator": "confirmed", "recognition": "known" }
+        },
+        "source_cursor": "cursor-002",
+        "timing": {
+          "received_at": "2026-08-16T16:00:01.100000Z",
+          "received_monotonic": {
+            "clock_id": "fixture-process-1",
+            "nanoseconds": "2100000000"
+          },
+          "persisted_at": "2026-08-16T16:00:01.110000Z",
+          "available_at": "2026-08-16T16:00:01.110000Z"
+        },
+        "parse_disposition": { "discriminator": "decoded", "recognition": "known" },
+        "quality_code": null,
+        "media_type": "application/json"
+      },
+      "payload_utf8": "{\"price_raw\":\"1000000\"}"
+    },
+    {
+      "record_type": "coverage_window",
+      "window": {
+        "coverage_id": "coverage-001",
+        "scope": {
+          "source_id": "fixture-market",
+          "family": { "discriminator": "market_census", "recognition": "known" },
+          "subject": null
+        },
+        "lower": { "clock": "source_cursor", "value": "cursor-001" },
+        "upper": null,
+        "state": { "discriminator": "degraded", "recognition": "known" },
+        "available_at": "2026-08-16T16:00:01.110000Z"
+      }
+    },
+    {
+      "record_type": "coverage_gap",
+      "gap": {
+        "gap_id": "gap-001",
+        "coverage_id": "coverage-001",
+        "scope": {
+          "source_id": "fixture-market",
+          "family": { "discriminator": "market_census", "recognition": "known" },
+          "subject": null
+        },
+        "lower": { "clock": "source_cursor", "value": "cursor-002" },
+        "upper": null,
+        "reason": { "discriminator": "connection_reset", "recognition": "known" },
+        "detected_at": "2026-08-16T16:00:02.000000Z"
+      }
+    },
+    {
+      "record_type": "observation",
+      "acquisition": {
+        "acquisition_id": "acq-003",
+        "source_id": "fixture-market",
+        "acquisition_kind": { "discriminator": "recovery", "recognition": "known" },
+        "transport_kind": { "discriminator": "fixture", "recognition": "known" },
+        "parent_acquisition_id": "acq-002",
+        "request_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+        "contract_version": "fixture-market-v1",
+        "started_at": "2026-08-16T16:00:05.000000Z",
+        "started_monotonic": {
+          "clock_id": "fixture-process-1",
+          "nanoseconds": "6000000000"
+        },
+        "source_locator": "recovery:item:1",
+        "source_cursor": "cursor-003",
+        "clocks": {
+          "requested_at": null,
+          "received_at": "2026-08-16T16:00:06.000000Z",
+          "persisted_at": "2026-08-16T16:00:06.010000Z",
+          "monotonic_elapsed_ns": null,
+          "monotonic_domain": null
+        }
+      },
+      "observation": {
+        "observation_id": "obs-003",
+        "acquisition_ordinal": "0",
+        "observation_kind": { "discriminator": "fixture", "recognition": "known" },
+        "source_events": [
+          {
+            "source_event_id": "fixture-event-late-001",
+            "relation": { "discriminator": "contains", "recognition": "known" },
+            "event_ordinal": "0"
+          }
+        ],
+        "source_variant": { "discriminator": "mystery_migration_v7", "recognition": "unknown" },
+        "event_time": {
+          "status": { "discriminator": "exact", "recognition": "known" },
+          "lower": "2026-08-16T15:59:30.000000Z",
+          "upper": "2026-08-16T15:59:31.000000Z",
+          "precision_us": "1000000"
+        },
+        "chain": null,
+        "source_cursor": "cursor-003",
+        "timing": {
+          "received_at": "2026-08-16T16:00:06.000000Z",
+          "received_monotonic": {
+            "clock_id": "fixture-process-1",
+            "nanoseconds": "7000000000"
+          },
+          "persisted_at": "2026-08-16T16:00:06.010000Z",
+          "available_at": "2026-08-16T16:00:06.010000Z"
+        },
+        "parse_disposition": { "discriminator": "unsupported_variant", "recognition": "known" },
+        "quality_code": "unknown-source-variant",
+        "media_type": "application/octet-stream"
+      },
+      "payload_utf8": "opaque future payload"
+    },
+    {
+      "record_type": "coverage_recovery",
+      "recovery": {
+        "recovery_id": "recovery-001",
+        "gap_id": "gap-001",
+        "acquisition_id": "acq-003",
+        "status": { "discriminator": "partial", "recognition": "known" },
+        "recovered_through": { "clock": "source_cursor", "value": "cursor-003" },
+        "evidence": ["obs-003"],
+        "available_at": "2026-08-16T16:00:06.010000Z"
+      }
+    },
+    {
+      "record_type": "assertion",
+      "assertion": {
+        "assertion_id": "assertion-001",
+        "semantic_key": "fixture.trade.fixture-event-001",
+        "assertion_kind": { "discriminator": "parsed_trade", "recognition": "known" },
+        "producer": "fixture-parser",
+        "producer_version": "1",
+        "assertion_status": { "discriminator": "accepted", "recognition": "known" },
+        "valid_time": {
+          "status": { "discriminator": "exact", "recognition": "known" },
+          "lower": "2026-08-16T15:59:59.000000Z",
+          "upper": "2026-08-16T15:59:59.000001Z"
+        },
+        "evidence": [
+          {
+            "observation_id": "obs-001",
+            "role": { "discriminator": "decoded_from", "recognition": "known" }
+          }
+        ],
+        "source_events": [
+          {
+            "source_event_id": "fixture-event-001",
+            "relation": { "discriminator": "claims_about", "recognition": "known" }
+          }
+        ],
+        "command_evidence": [],
+        "supersedes_assertion_id": null,
+        "available_at": "2026-08-16T16:00:07.000000Z",
+        "value_digest": "sha256:c15e5c99b6baca688f9dc5ea865dca0063449d06d127734f9829fbaf82c17e99",
+        "extension": { "asset": "fixture-asset", "price_raw": "1000000" }
+      }
+    }
+  ]
+}

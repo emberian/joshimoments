@@ -1,0 +1,35 @@
+{
+  "contract": "joshi.spool.replication_schedules.v1",
+  "scenarios": [
+    {
+      "name": "partial_restart_overlap",
+      "operations": [
+        { "op": "send", "segment": 0, "offset": 0, "length": 97 },
+        { "op": "restart" },
+        { "op": "send", "segment": 0, "offset": 32, "length": 131 },
+        { "op": "send_remainder", "segment": 0 },
+        { "op": "expect_durable", "segment": 0 }
+      ]
+    },
+    {
+      "name": "whole_segment_reorder_and_duplicate",
+      "operations": [
+        { "op": "send_remainder", "segment": 1 },
+        { "op": "expect_durable", "segment": 1 },
+        { "op": "send_remainder", "segment": 0 },
+        { "op": "send_remainder", "segment": 0 },
+        { "op": "expect_durable", "segment": 0 }
+      ]
+    },
+    {
+      "name": "forward_chunk_gap_refused_then_resume",
+      "operations": [
+        { "op": "send", "segment": 0, "offset": 11, "length": 20, "expect_error": true },
+        { "op": "send", "segment": 0, "offset": 0, "length": 53 },
+        { "op": "restart" },
+        { "op": "send_remainder", "segment": 0 },
+        { "op": "expect_durable", "segment": 0 }
+      ]
+    }
+  ]
+}

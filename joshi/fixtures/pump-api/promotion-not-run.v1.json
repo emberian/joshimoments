@@ -1,0 +1,9 @@
+{
+  "contract": "joshi.pump_api.promotion_run.v1",
+  "runId": "w4-real-pump-promotion-not-run",
+  "routeId": "unselected",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "sessionPathDisposition": "not_run_ember_present_required",
+  "occurrences": [],
+  "stopConditionIds": []
+}

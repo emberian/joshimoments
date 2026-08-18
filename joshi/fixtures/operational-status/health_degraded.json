@@ -1,0 +1,184 @@
+{
+  "contract": "joshi.operational.health/v1",
+  "snapshotId": "operational-health:fixture:degraded",
+  "observedAt": "2026-08-17T12:00:00.000000Z",
+  "authority": "read_only_no_execution",
+  "readiness": "degraded",
+  "degradation": {
+    "policyId": "degradation-policy:s0",
+    "stage": "social_refresh_slowed",
+    "causes": ["source_disconnected", "queue_pressure"],
+    "since": "2026-08-17T11:59:00.000000Z",
+    "recovery": "pending"
+  },
+  "supervisor": {
+    "phase": "running",
+    "restartCount": "2",
+    "shutdownDeadlineExceededCount": "0",
+    "lastReservationAgeMs": "80",
+    "pendingReservations": "1"
+  },
+  "sources": [
+    {
+      "sourceFamily": "helius_websocket",
+      "state": "live",
+      "generationId": "source-generation:helius:7",
+      "generationSequence": "7",
+      "lastReservationAgeMs": "80",
+      "lastDurableFrameAgeMs": "120",
+      "pendingReservations": "0",
+      "retryCount": "1",
+      "nextRetryDelayMs": null,
+      "status": "ready"
+    },
+    {
+      "sourceFamily": "pump_portal_websocket",
+      "state": "retry_waiting",
+      "generationId": "source-generation:pump-portal:3",
+      "generationSequence": "3",
+      "lastReservationAgeMs": "4500",
+      "lastDurableFrameAgeMs": "5000",
+      "pendingReservations": "1",
+      "retryCount": "4",
+      "nextRetryDelayMs": "1000",
+      "status": "gap"
+    }
+  ],
+  "evidenceQueue": {
+    "records": {"used": "32", "maximum": "4096", "controlReserve": "128"},
+    "bytes": {"used": "1048576", "maximum": "67108864", "controlReserve": "4194304"},
+    "saturation": {
+      "incidentCount": "1",
+      "currentlySaturated": false,
+      "rejectedOccurrencePreserved": true,
+      "durableScopedGapRecorded": true,
+      "restartPermitted": true
+    }
+  },
+  "spool": {
+    "readySegmentCount": "1",
+    "readyBytes": "1024",
+    "oldestReadyAgeMs": "200",
+    "usedBytes": "4096",
+    "maximumBytes": "1073741824",
+    "controlReserveBytes": "33554432",
+    "degraded": false
+  },
+  "replica": {
+    "status": "degraded",
+    "generationId": "replica-generation:hbox:4",
+    "generationSequence": "4",
+    "unackedBytes": "1024",
+    "oldestUnackedAgeMs": "3000",
+    "ackLagMs": "3000"
+  },
+  "catalog": {
+    "status": "recovering",
+    "unackedSegmentCount": "1",
+    "unackedBatchCount": "1",
+    "unackedBytes": "1024",
+    "oldestUnackedAgeMs": "800",
+    "lastExactAckAgeMs": "900",
+    "lastClosedReceipt": {
+      "catalogId": "catalog:local",
+      "catalogSchema": "joshi.sqlite.v6",
+      "commitSeq": "40",
+      "fromCommitSeq": "40",
+      "throughCommitSeq": "40",
+      "batchId": "batch:39",
+      "batchDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "storeAdmissionDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "accepted",
+      "gapOutcomeCount": "0",
+      "gapOutcomeIds": []
+    }
+  },
+  "coverage": {
+    "cursorScopes": [
+      {
+        "scopeId": "scope:market-census",
+        "sourceFamily": "helius_websocket",
+        "cursorKind": "slot",
+        "cursorValuePresent": true,
+        "advancedThrough": "40",
+        "openGapCount": "0",
+        "recoveryState": "stable"
+      },
+      {
+        "scopeId": "scope:pump-live",
+        "sourceFamily": "pump_portal_websocket",
+        "cursorKind": "connection_generation",
+        "cursorValuePresent": true,
+        "advancedThrough": "38",
+        "openGapCount": "1",
+        "recoveryState": "blocked_unrecoverable"
+      }
+    ],
+    "openGaps": [
+      {
+        "gapId": "gap:pump-live:disconnect-1",
+        "scopeId": "scope:pump-live",
+        "sourceFamily": "pump_portal_websocket",
+        "kind": "live_only_miss",
+        "disposition": "live_only_unrecoverable",
+        "lower": {"clock": "source_cursor", "value": "connection:3:frame:90"},
+        "upper": null,
+        "detectedAt": "2026-08-17T11:59:00.000000Z",
+        "recoveryState": "blocked_unrecoverable"
+      }
+    ]
+  },
+  "normalizerDriftCount": "1",
+  "quarantine": [
+    {"class": "schema_drift", "count": "1"}
+  ],
+  "artifacts": [
+    {
+      "kind": "projection",
+      "status": "stale",
+      "occurrenceId": "projection-publication:31",
+      "contentDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "ageMs": "6000"
+    },
+    {
+      "kind": "glass_presentation",
+      "status": "ready",
+      "occurrenceId": "presentation:31",
+      "contentDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "ageMs": "2000"
+    },
+    {
+      "kind": "glass_command_capture",
+      "status": "ready",
+      "occurrenceId": "command-capture:9",
+      "contentDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ageMs": "1500"
+    },
+    {
+      "kind": "export_snapshot",
+      "status": "stale",
+      "occurrenceId": "export:22",
+      "contentDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "ageMs": "60000"
+    },
+    {
+      "kind": "analysis_artifact",
+      "status": "unavailable",
+      "occurrenceId": null,
+      "contentDigest": null,
+      "ageMs": null
+    }
+  ],
+  "resources": [
+    {"kind": "cpu_millicores", "observed": "300", "limitOrFloor": "1000", "status": "ready"},
+    {"kind": "rss_bytes", "observed": "536870912", "limitOrFloor": "2147483648", "status": "ready"},
+    {"kind": "disk_free_bytes", "observed": "214748364800", "limitOrFloor": "107374182400", "status": "ready"},
+    {"kind": "disk_free_inodes", "observed": "1000000", "limitOrFloor": "100000", "status": "ready"},
+    {"kind": "clock_offset_abs_milliseconds", "observed": "4", "limitOrFloor": "100", "status": "ready"}
+  ],
+  "budgets": [
+    {"kind": "provider_requests", "unit": "count", "authorized": "10000", "used": "2500", "remaining": "7500", "status": "ready"},
+    {"kind": "native_units", "unit": "native_atoms", "authorized": "0", "used": "0", "remaining": "0", "status": "refused"},
+    {"kind": "daily_spool_bytes", "unit": "bytes", "authorized": "1073741824", "used": "4096", "remaining": "1073737728", "status": "ready"}
+  ]
+}

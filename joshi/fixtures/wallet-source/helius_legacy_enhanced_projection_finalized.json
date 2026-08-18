@@ -1,0 +1,40 @@
+[
+  {
+    "description": "Provider-authored summary intentionally omitted from normalization truth",
+    "type": "SWAP",
+    "source": "PUMP_FUN",
+    "fee": 5000,
+    "feePayer": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+    "signature": "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv",
+    "slot": 355001234,
+    "timestamp": 1786881599,
+    "transactionError": null,
+    "nativeTransfers": [
+      {
+        "fromUserAccount": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+        "toUserAccount": "2k5AXX4guW9XwRQ1AKCpAuUqgWDpQpwFfpVFh3hnm2Ha",
+        "amount": 1000
+      }
+    ],
+    "tokenTransfers": [
+      {
+        "fromUserAccount": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+        "toUserAccount": "2k5AXX4guW9XwRQ1AKCpAuUqgWDpQpwFfpVFh3hnm2Ha",
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "tokenAmount": 1,
+        "rawTokenAmount": {
+          "tokenAmount": "1000000",
+          "decimals": 6
+        }
+      }
+    ],
+    "events": {
+      "swap": {
+        "nativeInput": null,
+        "nativeOutput": null,
+        "tokenInputs": [],
+        "tokenOutputs": []
+      }
+    }
+  }
+]

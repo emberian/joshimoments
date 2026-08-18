@@ -1,0 +1,26 @@
+[
+  {
+    "mint": "MintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "name": "Same",
+    "symbol": "SAME",
+    "creator": "CreatorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "complete": false,
+    "created_timestamp": 9007199254740993,
+    "last_trade_timestamp": 9007199254740994,
+    "market_cap": 1.000,
+    "reply_count": 1,
+    "is_currently_live": false
+  },
+  {
+    "mint": "MintBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "name": "Same",
+    "symbol": "SAME",
+    "creator": "CreatorBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "complete": false,
+    "created_timestamp": 9007199254740993,
+    "last_trade_timestamp": 9007199254740994,
+    "market_cap": 1.000,
+    "reply_count": 1,
+    "is_currently_live": false
+  }
+]

@@ -1,0 +1,431 @@
+{
+  "journal": [
+    {
+      "recordKind": "intent",
+      "head": {
+        "contract": "joshi.hot_scope_intent/v1",
+        "schemaVersion": "1",
+        "recordId": "intent-record-cold",
+        "recordOrdinal": "0",
+        "recordedAt": "2026-08-17T00:05:00.000000Z",
+        "predecessorRecordId": null
+      },
+      "intentId": "intent-cold",
+      "subject": { "kind": "mint", "key": "mint-cold-market" },
+      "openedAt": "2026-08-17T00:00:00.000000Z",
+      "expiresAt": "2026-08-17T02:00:00.000000Z",
+      "lastJustifiedAt": "2026-08-17T00:01:00.000000Z",
+      "requestingOccurrenceId": "operator-command-cold",
+      "sceneId": "scene-cold",
+      "policyOccurrenceId": "policy-occurrence-s0",
+      "policyConfigDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "asOf": {
+        "availableThrough": "2026-08-17T00:04:00.000000Z",
+        "commitThrough": "40"
+      },
+      "authority": "read_only_no_execution",
+      "activation": {
+        "kind": "operator_accepted",
+        "operatorCommandId": "operator-command-cold",
+        "operatorCommandDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "operatorAdmissionReceiptId": "operator-receipt-cold",
+        "sceneId": "scene-cold",
+        "sceneViewDigest": "sha256:5151515151515151515151515151515151515151515151515151515151515151",
+        "presentationChoiceBinding": null
+      },
+      "reasons": [
+        {
+          "kind": "operator_nomination",
+          "reasonId": "reason-cold",
+          "justifiedAt": "2026-08-17T00:01:00.000000Z",
+          "evidence": [
+            { "kind": "scene", "id": "scene-cold", "digest": "sha256:5151515151515151515151515151515151515151515151515151515151515151", "availableAt": "2026-08-17T00:01:00.000000Z", "commitSeq": "10" },
+            { "kind": "operator_command", "id": "operator-command-cold", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "availableAt": "2026-08-17T00:01:00.000000Z", "commitSeq": "11" },
+            { "kind": "receipt", "id": "operator-receipt-cold", "digest": "sha256:6161616161616161616161616161616161616161616161616161616161616161", "availableAt": "2026-08-17T00:01:00.000000Z", "commitSeq": "12" },
+            { "kind": "policy_occurrence", "id": "policy-occurrence-s0", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "availableAt": "2026-08-17T00:00:00.000000Z", "commitSeq": "1" }
+          ]
+        }
+      ],
+      "censusDenominators": [
+        {
+          "censusId": "census-independent-40",
+          "kind": "independent_chain_provider",
+          "eligibleMembershipArtifactId": "census-membership-40",
+          "eligibleUniverseDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eligibleSubjectCount": "4",
+          "asOf": {
+            "availableThrough": "2026-08-17T00:04:00.000000Z",
+            "commitThrough": "40"
+          },
+          "evidence": [
+            { "kind": "artifact", "id": "census-membership-40", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "39" }
+          ],
+          "coverageEvidence": [
+            { "kind": "coverage", "id": "coverage-census-40", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "40" }
+          ],
+          "parityReceiptId": null
+        }
+      ],
+      "requestedSources": [
+        {
+          "sourceKey": "helius-main",
+          "operationKey": "mint-hot-observation",
+          "sourceFamily": "helius_public_chain",
+          "fidelity": {
+            "exactPublicBodies": true,
+            "exactPrivateBodiesOptional": true,
+            "media": "exact_optional",
+            "refreshIntervalUs": "1000000"
+          },
+          "budget": {
+            "maxRequests": "10",
+            "maxPages": "2",
+            "maxResponseBytes": "1048576",
+            "maxProviderCredits": "20",
+            "providerCurrency": [],
+            "chainNative": []
+          }
+        }
+      ]
+    },
+    {
+      "recordKind": "intent",
+      "head": {
+        "contract": "joshi.hot_scope_intent/v1",
+        "schemaVersion": "1",
+        "recordId": "intent-record-losing",
+        "recordOrdinal": "1",
+        "recordedAt": "2026-08-17T00:05:00.000000Z",
+        "predecessorRecordId": "intent-record-cold"
+      },
+      "intentId": "intent-losing",
+      "subject": { "kind": "mint", "key": "mint-losing-market" },
+      "openedAt": "2026-08-17T00:00:00.000000Z",
+      "expiresAt": "2026-08-17T02:00:00.000000Z",
+      "lastJustifiedAt": "2026-08-17T00:02:00.000000Z",
+      "requestingOccurrenceId": "operator-command-losing",
+      "sceneId": "scene-losing",
+      "policyOccurrenceId": "policy-occurrence-s0",
+      "policyConfigDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "asOf": {
+        "availableThrough": "2026-08-17T00:04:00.000000Z",
+        "commitThrough": "40"
+      },
+      "authority": "read_only_no_execution",
+      "activation": {
+        "kind": "operator_accepted",
+        "operatorCommandId": "operator-command-losing",
+        "operatorCommandDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "operatorAdmissionReceiptId": "operator-receipt-losing",
+        "sceneId": "scene-losing",
+        "sceneViewDigest": "sha256:5252525252525252525252525252525252525252525252525252525252525252",
+        "presentationChoiceBinding": null
+      },
+      "reasons": [
+        {
+          "kind": "operator_nomination",
+          "reasonId": "reason-losing",
+          "justifiedAt": "2026-08-17T00:02:00.000000Z",
+          "evidence": [
+            { "kind": "scene", "id": "scene-losing", "digest": "sha256:5252525252525252525252525252525252525252525252525252525252525252", "availableAt": "2026-08-17T00:02:00.000000Z", "commitSeq": "20" },
+            { "kind": "operator_command", "id": "operator-command-losing", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "availableAt": "2026-08-17T00:02:00.000000Z", "commitSeq": "21" },
+            { "kind": "receipt", "id": "operator-receipt-losing", "digest": "sha256:6262626262626262626262626262626262626262626262626262626262626262", "availableAt": "2026-08-17T00:02:00.000000Z", "commitSeq": "22" },
+            { "kind": "policy_occurrence", "id": "policy-occurrence-s0", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "availableAt": "2026-08-17T00:00:00.000000Z", "commitSeq": "1" }
+          ]
+        }
+      ],
+      "censusDenominators": [
+        {
+          "censusId": "census-independent-40",
+          "kind": "independent_chain_provider",
+          "eligibleMembershipArtifactId": "census-membership-40",
+          "eligibleUniverseDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eligibleSubjectCount": "4",
+          "asOf": {
+            "availableThrough": "2026-08-17T00:04:00.000000Z",
+            "commitThrough": "40"
+          },
+          "evidence": [
+            { "kind": "artifact", "id": "census-membership-40", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "39" }
+          ],
+          "coverageEvidence": [
+            { "kind": "coverage", "id": "coverage-census-40", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "40" }
+          ],
+          "parityReceiptId": null
+        }
+      ],
+      "requestedSources": [
+        {
+          "sourceKey": "helius-main",
+          "operationKey": "mint-hot-observation",
+          "sourceFamily": "helius_public_chain",
+          "fidelity": {
+            "exactPublicBodies": true,
+            "exactPrivateBodiesOptional": true,
+            "media": "exact_optional",
+            "refreshIntervalUs": "1000000"
+          },
+          "budget": {
+            "maxRequests": "10",
+            "maxPages": "2",
+            "maxResponseBytes": "1048576",
+            "maxProviderCredits": "20",
+            "providerCurrency": [],
+            "chainNative": []
+          }
+        }
+      ]
+    },
+    {
+      "recordKind": "intent",
+      "head": {
+        "contract": "joshi.hot_scope_intent/v1",
+        "schemaVersion": "1",
+        "recordId": "intent-record-high",
+        "recordOrdinal": "2",
+        "recordedAt": "2026-08-17T00:05:00.000000Z",
+        "predecessorRecordId": "intent-record-losing"
+      },
+      "intentId": "intent-high",
+      "subject": { "kind": "mint", "key": "mint-high-activity" },
+      "openedAt": "2026-08-17T00:00:00.000000Z",
+      "expiresAt": "2026-08-17T02:00:00.000000Z",
+      "lastJustifiedAt": "2026-08-17T00:03:00.000000Z",
+      "requestingOccurrenceId": "operator-command-high",
+      "sceneId": "scene-high",
+      "policyOccurrenceId": "policy-occurrence-s0",
+      "policyConfigDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "asOf": {
+        "availableThrough": "2026-08-17T00:04:00.000000Z",
+        "commitThrough": "40"
+      },
+      "authority": "read_only_no_execution",
+      "activation": {
+        "kind": "operator_accepted",
+        "operatorCommandId": "operator-command-high",
+        "operatorCommandDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "operatorAdmissionReceiptId": "operator-receipt-high",
+        "sceneId": "scene-high",
+        "sceneViewDigest": "sha256:5353535353535353535353535353535353535353535353535353535353535353",
+        "presentationChoiceBinding": null
+      },
+      "reasons": [
+        {
+          "kind": "operator_nomination",
+          "reasonId": "reason-high",
+          "justifiedAt": "2026-08-17T00:03:00.000000Z",
+          "evidence": [
+            { "kind": "scene", "id": "scene-high", "digest": "sha256:5353535353535353535353535353535353535353535353535353535353535353", "availableAt": "2026-08-17T00:03:00.000000Z", "commitSeq": "30" },
+            { "kind": "operator_command", "id": "operator-command-high", "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333", "availableAt": "2026-08-17T00:03:00.000000Z", "commitSeq": "31" },
+            { "kind": "receipt", "id": "operator-receipt-high", "digest": "sha256:6363636363636363636363636363636363636363636363636363636363636363", "availableAt": "2026-08-17T00:03:00.000000Z", "commitSeq": "32" },
+            { "kind": "policy_occurrence", "id": "policy-occurrence-s0", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "availableAt": "2026-08-17T00:00:00.000000Z", "commitSeq": "1" }
+          ]
+        }
+      ],
+      "censusDenominators": [
+        {
+          "censusId": "census-independent-40",
+          "kind": "independent_chain_provider",
+          "eligibleMembershipArtifactId": "census-membership-40",
+          "eligibleUniverseDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eligibleSubjectCount": "4",
+          "asOf": {
+            "availableThrough": "2026-08-17T00:04:00.000000Z",
+            "commitThrough": "40"
+          },
+          "evidence": [
+            { "kind": "artifact", "id": "census-membership-40", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "39" }
+          ],
+          "coverageEvidence": [
+            { "kind": "coverage", "id": "coverage-census-40", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "40" }
+          ],
+          "parityReceiptId": null
+        }
+      ],
+      "requestedSources": [
+        {
+          "sourceKey": "helius-main",
+          "operationKey": "mint-hot-observation",
+          "sourceFamily": "helius_public_chain",
+          "fidelity": {
+            "exactPublicBodies": true,
+            "exactPrivateBodiesOptional": true,
+            "media": "exact_optional",
+            "refreshIntervalUs": "1000000"
+          },
+          "budget": {
+            "maxRequests": "10",
+            "maxPages": "2",
+            "maxResponseBytes": "1048576",
+            "maxProviderCredits": "20",
+            "providerCurrency": [],
+            "chainNative": []
+          }
+        }
+      ]
+    },
+    {
+      "recordKind": "intent",
+      "head": {
+        "contract": "joshi.hot_scope_intent/v1",
+        "schemaVersion": "1",
+        "recordId": "intent-record-model",
+        "recordOrdinal": "3",
+        "recordedAt": "2026-08-17T00:05:00.000000Z",
+        "predecessorRecordId": "intent-record-high"
+      },
+      "intentId": "intent-model",
+      "subject": { "kind": "mint", "key": "mint-model-proposal" },
+      "openedAt": "2026-08-17T00:00:00.000000Z",
+      "expiresAt": "2026-08-17T02:00:00.000000Z",
+      "lastJustifiedAt": "2026-08-17T00:04:00.000000Z",
+      "requestingOccurrenceId": "model-proposal-1",
+      "sceneId": null,
+      "policyOccurrenceId": "policy-occurrence-s0",
+      "policyConfigDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "asOf": {
+        "availableThrough": "2026-08-17T00:04:00.000000Z",
+        "commitThrough": "40"
+      },
+      "authority": "read_only_no_execution",
+      "activation": {
+        "kind": "proposal_only",
+        "modelArtifactId": "model-artifact-1",
+        "modelProposalId": "model-proposal-1"
+      },
+      "reasons": [
+        {
+          "kind": "model_proposal",
+          "reasonId": "reason-model",
+          "justifiedAt": "2026-08-17T00:04:00.000000Z",
+          "evidence": [
+            { "kind": "artifact", "id": "model-artifact-1", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "40" },
+            { "kind": "policy_occurrence", "id": "policy-occurrence-s0", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "availableAt": "2026-08-17T00:00:00.000000Z", "commitSeq": "1" }
+          ]
+        }
+      ],
+      "censusDenominators": [
+        {
+          "censusId": "census-independent-40",
+          "kind": "independent_chain_provider",
+          "eligibleMembershipArtifactId": "census-membership-40",
+          "eligibleUniverseDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eligibleSubjectCount": "4",
+          "asOf": {
+            "availableThrough": "2026-08-17T00:04:00.000000Z",
+            "commitThrough": "40"
+          },
+          "evidence": [
+            { "kind": "artifact", "id": "census-membership-40", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "39" }
+          ],
+          "coverageEvidence": [
+            { "kind": "coverage", "id": "coverage-census-40", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "availableAt": "2026-08-17T00:04:00.000000Z", "commitSeq": "40" }
+          ],
+          "parityReceiptId": null
+        }
+      ],
+      "requestedSources": [
+        {
+          "sourceKey": "helius-main",
+          "operationKey": "mint-hot-observation",
+          "sourceFamily": "helius_public_chain",
+          "fidelity": {
+            "exactPublicBodies": true,
+            "exactPrivateBodiesOptional": true,
+            "media": "exact_optional",
+            "refreshIntervalUs": "1000000"
+          },
+          "budget": {
+            "maxRequests": "10",
+            "maxPages": "2",
+            "maxResponseBytes": "1048576",
+            "maxProviderCredits": "20",
+            "providerCurrency": [],
+            "chainNative": []
+          }
+        }
+      ]
+    }
+  ],
+  "evaluation": {
+    "decisionOccurrenceId": "decision-normal",
+    "evaluatedAt": "2026-08-17T00:10:00.000000Z",
+    "policy": {
+      "policyId": "acquisition-policy-s0",
+      "policyVersion": "1",
+      "configDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "maxHotMints": "2",
+      "maxHotWallets": "10",
+      "maxOtherSubjects": "2",
+      "shortenedHotTtlUs": "1800000000",
+      "degradedSocialRefreshUs": "30000000",
+      "sourcePolicies": [
+        {
+          "sourceKey": "helius-main",
+          "operationKeys": ["mint-hot-observation"],
+          "maximumBudget": {
+            "maxRequests": "100",
+            "maxPages": "20",
+            "maxResponseBytes": "8388608",
+            "maxProviderCredits": "200",
+            "providerCurrency": [],
+            "chainNative": []
+          },
+          "nativeUnitsAuthorized": false
+        }
+      ]
+    },
+    "resources": {
+      "sampledAt": "2026-08-17T00:09:00.000000Z",
+      "evidence": [
+        { "kind": "source_health", "id": "resource-snapshot-normal", "digest": "sha256:7878787878787878787878787878787878787878787878787878787878787878", "availableAt": "2026-08-17T00:09:00.000000Z", "commitSeq": null }
+      ],
+      "queueRecordsUsed": "10",
+      "queueRecordCapacity": "100",
+      "queueRecordControlReserve": "10",
+      "queueBytesUsed": "1000",
+      "queueByteCapacity": "100000",
+      "queueByteControlReserve": "10000",
+      "spoolBytesToday": "1000",
+      "maxSpoolBytesToday": "1073741824",
+      "diskFreeBytes": "200000000000",
+      "diskFloorBytes": "100000000000",
+      "controlReserveFreeBytes": "1000000",
+      "controlReserveRequiredBytes": "100000"
+    },
+    "collectorGenerations": [
+      {
+        "sourceKey": "helius-main",
+        "generation": "7",
+        "availability": "healthy",
+        "evidence": [
+          { "kind": "source_health", "id": "health-helius-7", "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777", "availableAt": "2026-08-17T00:09:00.000000Z", "commitSeq": null }
+        ]
+      }
+    ]
+  },
+  "overloadResources": {
+    "sampledAt": "2026-08-17T00:09:00.000000Z",
+    "evidence": [
+      { "kind": "source_health", "id": "resource-snapshot-overload", "digest": "sha256:7979797979797979797979797979797979797979797979797979797979797979", "availableAt": "2026-08-17T00:09:00.000000Z", "commitSeq": null }
+    ],
+    "queueRecordsUsed": "90",
+    "queueRecordCapacity": "100",
+    "queueRecordControlReserve": "10",
+    "queueBytesUsed": "90000",
+    "queueByteCapacity": "100000",
+    "queueByteControlReserve": "10000",
+    "spoolBytesToday": "1073741824",
+    "maxSpoolBytesToday": "1073741824",
+    "diskFreeBytes": "200000000000",
+    "diskFloorBytes": "100000000000",
+    "controlReserveFreeBytes": "1000000",
+    "controlReserveRequiredBytes": "100000"
+  },
+  "adversarialMarketLabels": {
+    "intent-cold": "cold_market",
+    "intent-high": "high_activity",
+    "intent-losing": "losing_subject",
+    "intent-model": "model_favorite"
+  }
+}

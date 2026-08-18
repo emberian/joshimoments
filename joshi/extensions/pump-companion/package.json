@@ -1,0 +1,41 @@
+{
+  "name": "@joshi/pump-companion",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": "26.4.0"
+  },
+  "scripts": {
+    "audit:manifest": "node scripts/audit-manifest.mjs",
+    "build": "wxt build --browser chrome",
+    "build:firefox": "wxt build --browser firefox",
+    "check:offline": "npm run lint && npm run typecheck && npm run test && npm run mock && npm run build && npm run audit:manifest && npm run build:firefox",
+    "dev": "wxt --browser chrome",
+    "lint": "biome check .",
+    "mock": "tsx scripts/replay-mock.ts",
+    "prepare": "wxt prepare",
+    "test": "vitest run",
+    "typecheck": "wxt prepare && tsc --noEmit"
+  },
+  "dependencies": {
+    "json-dup-key-validator": "1.0.3",
+    "lossless-json": "4.3.1",
+    "punycode": "2.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "@types/node": "26.2.0",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10",
+    "wxt": "0.21.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": false
+  }
+}

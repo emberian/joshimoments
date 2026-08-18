@@ -1,0 +1,38 @@
+{
+  "contract": "joshi.source_registry/v1",
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "sourceId": "fixture-source",
+      "provider": "fixture",
+      "contractVersion": "fixture/v1",
+      "status": "enabled",
+      "access": "unauthenticated_public",
+      "credential": "none",
+      "credentialDescriptor": null,
+      "methods": [
+        {
+          "key": "fixture_sequence",
+          "kind": "fixture",
+          "schemaFingerprint": { "algorithm": "sha256", "digest": "sha256:fixture-schema-v1" },
+          "billing": { "unit": "request", "minorUnitsPerUnit": 0, "currency": null, "assetId": null, "zeroPriceAttestation": "operator_conformance_only" },
+          "quota": { "unit": "request", "hardLimit": 1000, "reset": "utc_day", "windowSeconds": 86400, "remainingObservable": true },
+          "commitment": "finalized",
+          "finality": "require_finalized",
+          "absence": "empty_only_when_complete",
+          "maxRequestBytes": 1024,
+          "maxResponseBytes": 4096
+        }
+      ],
+      "fields": [
+        { "field": "launch", "authority": "primary", "methodKeys": ["fixture_sequence"], "absence": "empty_only_when_complete" }
+      ],
+      "progress": "fixture_sequence",
+      "retry": { "maxAttempts": 1, "maxDelayMs": 0, "retryableStatuses": [], "gap": "recoverable_with_bounded_read" },
+      "protection": "public",
+      "retention": "public",
+      "killSwitch": { "enabled": false, "reason": "none", "requiresOperatorReenable": false },
+      "schemaFingerprint": "sha256:89939e8c47f6d4e84bfff1e16b86a934831d5f32f417fdfecd91804ca89ffe5e"
+    }
+  ]
+}

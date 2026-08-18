@@ -1,0 +1,14 @@
+{
+  "contract": "joshi.pump_api.schema_registry.v1",
+  "accepted": {
+    "callout_recent": [
+      "sha256:0747aaeea606bed53b51ef8ab5548661b5d69d748cf81447b5f2075dc3cbaa96"
+    ],
+    "coin_exact": [
+      "sha256:2d8ba8e83b557641912b0545ec54e6b978df5d4434c1949eedf21b3e03570e06"
+    ],
+    "discovery_coins": [
+      "sha256:86852de73c6820c564d09496d6b680dc6cd0130a9dbb2bae9538c9cb2bdbffae"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "joshi.pump_api.parity_input.v1",
+  "source": "pump_companion",
+  "routeId": "coin_exact",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "requestFingerprint": "sha256:cacaca656d59ea3998f028973fc9333ca802804cd6e96a4ad10224aaf4d5a205",
+  "sessionClass": "authenticated:synthetic",
+  "comparisonBoundary": "decoded_response_body",
+  "observedAt": "2026-08-16T12:00:00.000000Z",
+  "bodyBase64": "eyJuIjo5MDA3MTk5MjU0NzQwOTkzfQ==",
+  "byteLength": "22",
+  "blobId": "sha256:4ac8309cc76123ef6c5325ef925fc873e9b5856ec4f844ef1462f9303960378a"
+}

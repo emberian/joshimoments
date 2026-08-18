@@ -1,0 +1,25 @@
+{
+  "contract": "joshi.analysis.analog_memory.fixture/v1",
+  "distanceSpec": {
+    "specId": "shape-distance",
+    "version": "1",
+    "featureWeights": { "shape": "1", "territory": "0.5" },
+    "missingPolicy": "skip",
+    "missingPenalty": "10"
+  },
+  "cases": [
+    { "name": "equal_cutoff_refuses", "queryCutoff": "2026-01-01T01:40:00Z", "candidateCutoff": "2026-01-01T01:40:00Z", "expected": "temporal_leakage" },
+    { "name": "later_known_feature_refuses", "knownAt": "2026-01-01T02:00:00Z", "decisionCutoff": "2026-01-01T01:40:00Z", "expected": "temporal_leakage" },
+    { "name": "later_ontology_refuses", "ontologyEffectiveAt": "2026-01-01T02:00:00Z", "decisionCutoff": "2026-01-01T01:40:00Z", "expected": "temporal_leakage" },
+    { "name": "later_identity_correction_refuses", "identityEffectiveAt": "2026-01-01T02:00:00Z", "decisionCutoff": "2026-01-01T01:40:00Z", "expected": "temporal_leakage" },
+    { "name": "outcome_feature_refuses", "outcomeDerived": true, "expected": "temporal_leakage" },
+    { "name": "gap_skip_none", "status": "gap", "missingPolicy": "skip", "expected": "none_analogous" },
+    { "name": "gap_penalty_is_visible", "status": "gap", "missingPolicy": "penalize", "expected": "component_penalty" },
+    { "name": "stable_tie_break", "candidateIds": ["a", "b"], "equalDistance": true, "expected": ["a", "b"] },
+    { "name": "retrospective_is_separate", "outcome": "profit_target", "expected": "separate_reveal_artifact" }
+    ,{ "name": "duplicate_identity_refuses", "expected": "manifest_error" }
+    ,{ "name": "boolean_distance_refuses", "expected": "manifest_error" }
+    ,{ "name": "unclosed_gap_is_explicit", "status": "gap", "gapClosed": false, "expected": "gap_state" }
+    ,{ "name": "matured_outcome_requires_evidence", "expected": "manifest_error" }
+  ]
+}

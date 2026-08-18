@@ -1,0 +1,29 @@
+[package]
+name = "joshi-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-artifact-admission = { path = "../joshi-artifact-admission" }
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-export = { path = "../joshi-export" }
+joshi-operator = { path = "../joshi-operator" }
+joshi-operational-status = { path = "../joshi-operational-status" }
+joshi-publication = { path = "../joshi-publication" }
+joshi-surface = { path = "../joshi-surface" }
+rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled", "extra_check"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

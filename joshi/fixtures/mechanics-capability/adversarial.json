@@ -1,0 +1,28 @@
+{
+  "contract": "joshi.mechanics_capability.v1",
+  "profileId": "pump-curve/v1",
+  "sourceId": "fixture/mechanics",
+  "rows": [
+    {
+      "kind": "observed_simulation",
+      "status": "attained",
+      "stateObservationId": "obs-1",
+      "finality": "finalized",
+      "coverage": "complete"
+    },
+    {
+      "kind": "size_quote",
+      "status": "refused",
+      "reason": "unsupported_size",
+      "quoteId": "quote-1",
+      "stateObservationId": "obs-1",
+      "finality": "finalized",
+      "coverage": "complete"
+    },
+    {
+      "claim": "observed_attempt",
+      "expected": "missing",
+      "reason": "simulation_does_not_imply_attempt"
+    }
+  ]
+}

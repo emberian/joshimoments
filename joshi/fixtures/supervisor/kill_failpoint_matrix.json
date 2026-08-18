@@ -1,0 +1,23 @@
+{
+  "contract": "joshi.supervisor.kill_failpoint_matrix.v1",
+  "processKills": [
+    {
+      "phase": "reserved_before_io",
+      "expected": "one explicit abandoned-attempt gap after restart"
+    },
+    {
+      "phase": "queued_before_spool",
+      "expected": "one explicit abandoned-attempt gap after restart"
+    },
+    {
+      "phase": "locally_durable",
+      "expected": "the exact evidence segment replays after restart without a gap"
+    }
+  ],
+  "failpoints": [
+    "after_journal_temporary_sync",
+    "after_journal_rename",
+    "after_local_spool_append",
+    "after_health_temporary_sync"
+  ]
+}

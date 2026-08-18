@@ -1,0 +1,18 @@
+{
+  "callouts": [
+    {
+      "calloutId": "callout-1",
+      "userId": "Wallet1111111111111111111111111111111111111",
+      "user_uuid": "provider-user-1",
+      "coinMint": "Mint111111111111111111111111111111111111111",
+      "thesis": "untrusted fixture text",
+      "calloutPrice": 1.2300e-7,
+      "marketCap": 9007199254740993,
+      "multiple": 2.5000,
+      "maxPriceSol": 0.000004200,
+      "peakTimestamp": 18446744073709551615,
+      "createdAt": 9007199254740993
+    }
+  ],
+  "nextPageToken": "opaque|cursor|fixture"
+}

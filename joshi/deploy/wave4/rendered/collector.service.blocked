@@ -1,0 +1,16 @@
+contract=joshi.wave4.service_render.v1
+target=persvati
+role=collector_s0_canary
+render_status=blocked
+install_path=/etc/systemd/system/joshi-collector.service
+rendered_unit_bytes=0
+enable=false
+start=false
+listeners=none
+reason_1=collector_has_no_live_run_subcommand
+reason_2=collector_has_no_runtime_config_contract
+reason_3=collector_graceful_shutdown_deadline_is_unfrozen
+reason_4=collector_is_not_a_workspace_release_artifact
+reason_5=target_os_is_eol
+required_before_rerender=freeze_live_cli_config_credentials_exit_codes_signal_shutdown_and_release_digest
+forbidden_execstart=joshi-collector_fake-provider_is_not_a_daemon

@@ -1,0 +1,83 @@
+{
+  "contract": "joshi.attention.adversarial_mutations.v1",
+  "base": "study-ready.valid.json",
+  "cases": [
+    {
+      "id": "future_identity_attribution",
+      "pointer": "/attention_events/0/caller_identity_version_id",
+      "value": "identity:impostor:v1",
+      "expected_code": "Leakage",
+      "meaning": "A later-discovered handle collision cannot rewrite who was known at the callout cutoff."
+    },
+    {
+      "id": "event_source_clock_drift",
+      "pointer": "/attention_events/0/event_time/source_value",
+      "value": "2026-08-16T11:59:59Z",
+      "expected_code": "InvalidJoin",
+      "meaning": "A derived attention event cannot move or rewrite the exact forcing occurrence clock."
+    },
+    {
+      "id": "event_observation_clock_drift",
+      "pointer": "/attention_events/0/observed_at",
+      "value": "2026-08-16T12:00:01.500000Z",
+      "expected_code": "InvalidJoin",
+      "meaning": "The event's observation clock must remain the forcing input's observation clock."
+    },
+    {
+      "id": "future_cluster_correction",
+      "pointer": "/selected_cluster_contexts/0/source_available_at",
+      "value": "2026-08-16T12:20:00.000000Z",
+      "expected_code": "Leakage",
+      "meaning": "A cluster artifact learned later cannot annotate an earlier caller contemporaneously."
+    },
+    {
+      "id": "slot_invalid_cluster",
+      "pointer": "/selected_cluster_contexts/0/valid_slots/upper",
+      "value": "100",
+      "expected_code": "Leakage",
+      "meaning": "Wall-clock validity cannot hide a failed point-in-time chain-slot join."
+    },
+    {
+      "id": "provider_peak_outcome_as_mark",
+      "pointer": "/kernel_marks/1/name",
+      "value": "provider_peak_multiple",
+      "expected_code": "Leakage",
+      "meaning": "Outcome-ranked callout fields are retrospective annotations, never event-time features."
+    },
+    {
+      "id": "unbound_product_presentation",
+      "pointer": "/attention_events/0/presentation_context",
+      "value": null,
+      "expected_code": "InvalidJoin",
+      "meaning": "Board ordinal and choice context require a scene/view/session/policy binding."
+    },
+    {
+      "id": "absent_followup_as_uncensored",
+      "pointer": "/response_observations/1/censoring",
+      "value": {"kind": "none"},
+      "expected_code": "InvalidResponse",
+      "meaning": "Unavailable community follow-up is censoring, not a zero response."
+    },
+    {
+      "id": "outcome_after_analysis_cut",
+      "pointer": "/response_observations/0/analysis_cutoff",
+      "value": "2026-08-16T12:01:03.000000Z",
+      "expected_code": "InvalidTime",
+      "meaning": "An outcome may enter an analysis only after its own durable availability."
+    },
+    {
+      "id": "choice_set_incomplete",
+      "pointer": "/cohort_rows/0/witnessed_choice_set_complete",
+      "value": false,
+      "expected_code": "InvalidCohort",
+      "meaning": "A witnessed choice claim needs a complete denominator, not visible winners alone."
+    },
+    {
+      "id": "zero_risk_set_denominator",
+      "pointer": "/cohort_rows/0/risk_set_denominator",
+      "value": "0",
+      "expected_code": "InvalidCohort",
+      "meaning": "Cohort membership is uninterpretable without an explicit candidate census denominator."
+    }
+  ]
+}

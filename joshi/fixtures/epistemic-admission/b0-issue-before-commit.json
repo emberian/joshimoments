@@ -1,0 +1,1 @@
+{"case":"B0 commit after issue deadline","maximumInputAvailability":"2026-08-18T00:00:02Z","informationCutoff":"2026-08-18T00:00:02Z","occurrenceCommitAt":"2026-08-18T00:00:06Z","issueDeadline":"2026-08-18T00:00:05Z","targetWindowOrigin":"2026-08-18T00:00:07Z","expectation":"reject_before_durable_admission"}

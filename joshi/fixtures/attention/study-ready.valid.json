@@ -1,0 +1,508 @@
+{
+  "contract": "joshi.attention.dataset.v1",
+  "exact_inputs": [
+    {
+      "input_id": "attention-input:callout-001:r1",
+      "evidence": {
+        "acquisition_id": "pump-api-acq:001",
+        "observation_id": "pump-api-obs:001:0",
+        "source_id": "joshi.pump_api.acquisition.v1",
+        "source_variant": "pump_api.callout_recent",
+        "observed_at": "2026-08-16T12:00:01.000000Z",
+        "available_at": "2026-08-16T12:00:02.000000Z",
+        "available_commit": "10",
+        "coverage": {
+          "scope_id": "coverage:callout-recent:first-page",
+          "population": "callout_recent order=provider_default cursor=start limit=20",
+          "state": "complete",
+          "window_ids": ["window:callout-recent:1159-1201"],
+          "gap_ids": [],
+          "source_cursor": "cursor:opaque:page-1"
+        },
+        "protection_domain": "public_product",
+        "retention_class": "permanent_evidence",
+        "epistemic_class": "provider_assertion"
+      },
+      "event_time": {
+        "status": "exact",
+        "lower": "2026-08-16T12:00:00.000000Z",
+        "upper": "2026-08-16T12:00:01.000000Z",
+        "precision_us": "1000000",
+        "source_value": "2026-08-16T12:00:00Z"
+      },
+      "kind": "callout_observed",
+      "payload": {
+        "provider_callout_id": "pump-callout:001",
+        "revision_id": "pump-callout:001:r1",
+        "supersedes_revision_id": null,
+        "mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+        "provider_user_id": "pump-user:caller-001",
+        "author_wallet_id": "solana:wallet:Caller11111111111111111111111111111111",
+        "thesis_blob_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "callout_price_lexeme": "0.0000012300",
+        "market_cap_lexeme": "9007199254740993",
+        "amount_atoms": "1230000",
+        "amount_asset_id": "solana:mint:So11111111111111111111111111111111111111112",
+        "direction": "positive",
+        "content_state": "created",
+        "retrospective_outcomes": [
+          {
+            "name": "provider_peak_multiple",
+            "value": "4.2500",
+            "as_of": "2026-08-16T12:10:00.000000Z",
+            "available_at": "2026-08-16T12:10:01.000000Z"
+          }
+        ]
+      }
+    },
+    {
+      "input_id": "attention-input:duplicate-coin-001",
+      "evidence": {
+        "acquisition_id": "pump-api-acq:002",
+        "observation_id": "pump-api-obs:002:0",
+        "source_id": "joshi.pump_api.acquisition.v1",
+        "source_variant": "pump_api.discovery_candidate_census",
+        "observed_at": "2026-08-16T12:30:01.000000Z",
+        "available_at": "2026-08-16T12:30:02.000000Z",
+        "available_commit": "20",
+        "coverage": {
+          "scope_id": "coverage:census:launches:1200-1231",
+          "population": "prospective launch census provider_created_at in [12:00,12:31)",
+          "state": "complete",
+          "window_ids": ["window:census:1200-1231"],
+          "gap_ids": [],
+          "source_cursor": "cursor:census:1231"
+        },
+        "protection_domain": "public_product",
+        "retention_class": "permanent_evidence",
+        "epistemic_class": "provider_assertion"
+      },
+      "event_time": {
+        "status": "exact",
+        "lower": "2026-08-16T12:30:00.000000Z",
+        "upper": "2026-08-16T12:30:01.000000Z",
+        "precision_us": "1000000",
+        "source_value": "2026-08-16T12:30:00Z"
+      },
+      "kind": "social_transition_observed",
+      "payload": {
+        "transition": "duplicate_coin_appeared",
+        "subject_id": null,
+        "wallet_id": null,
+        "mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+        "community_id": "pump-community:coin-001",
+        "authority": "unknown"
+      }
+    }
+  ],
+  "identity_versions": [
+    {
+      "identity_version_id": "identity:caller-001:v1",
+      "identity_series_id": "identity-series:pump-user:caller-001",
+      "subject_id": "pump-user:caller-001",
+      "provider_user_id": "pump-user:caller-001",
+      "handle": "caller_alpha",
+      "display_name": "Caller Alpha",
+      "wallet_links": [
+        {
+          "wallet_id": "solana:wallet:Caller11111111111111111111111111111111",
+          "relation": "provider_author_wallet",
+          "epistemic_class": "provider_assertion",
+          "evidence_input_ids": ["attention-input:callout-001:r1"]
+        }
+      ],
+      "valid_time": {
+        "lower": "2026-08-16T11:00:00.000000Z",
+        "upper": null
+      },
+      "knowledge_time": {
+        "known_from": "2026-08-16T12:00:02.000000Z",
+        "known_until": null,
+        "available_commit": "10"
+      },
+      "status": "supported",
+      "evidence_input_ids": ["attention-input:callout-001:r1"],
+      "supersedes": null,
+      "conflicts_with": ["identity:impostor:v1"]
+    },
+    {
+      "identity_version_id": "identity:impostor:v1",
+      "identity_series_id": "identity-series:pump-user:impostor-999",
+      "subject_id": "pump-user:impostor-999",
+      "provider_user_id": "pump-user:impostor-999",
+      "handle": "caller_alpha",
+      "display_name": "Caller Alpha",
+      "wallet_links": [],
+      "valid_time": {
+        "lower": "2026-08-16T11:30:00.000000Z",
+        "upper": null
+      },
+      "knowledge_time": {
+        "known_from": "2026-08-16T12:20:00.000000Z",
+        "known_until": null,
+        "available_commit": "15"
+      },
+      "status": "disputed",
+      "evidence_input_ids": ["attention-input:callout-001:r1"],
+      "supersedes": null,
+      "conflicts_with": ["identity:caller-001:v1"]
+    }
+  ],
+  "follow_edge_versions": [],
+  "territory_snapshots": [
+    {
+      "territory_snapshot_id": "territory:coin-001:community:v1",
+      "territory_series_id": "territory-series:coin-001:community",
+      "mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+      "community_id": "pump-community:coin-001",
+      "relation": "community_attention",
+      "leader_identity_version_id": "identity:caller-001:v1",
+      "valid_time": {
+        "lower": "2026-08-16T11:30:00.000000Z",
+        "upper": null
+      },
+      "knowledge_time": {
+        "known_from": "2026-08-16T12:00:02.000000Z",
+        "known_until": null,
+        "available_commit": "10"
+      },
+      "status": "candidate",
+      "confidence": "0.7000",
+      "resolver_version": "territory-resolver:v1",
+      "evidence_input_ids": ["attention-input:callout-001:r1"],
+      "supersedes": null,
+      "competing_snapshot_ids": []
+    }
+  ],
+  "selected_cluster_contexts": [
+    {
+      "cluster_context_id": "cluster-context:callout-001",
+      "cluster_hypothesis_id": "wallet-cluster-hypothesis:caller-001:v1",
+      "hypothesis_series_id": "wallet-cluster-series:caller-001",
+      "selected_for_attention_event_id": "attention-event:callout-001:r1",
+      "member_wallet_ids": ["solana:wallet:Caller11111111111111111111111111111111"],
+      "source_artifact_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "source_snapshot_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "selection_query_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "selection_adapter_version": "attention-ecology-adapter:v1",
+      "valid_time": {
+        "lower": "2026-08-16T11:00:00.000000Z",
+        "upper": null
+      },
+      "valid_slots": {
+        "lower": "90",
+        "upper": "110"
+      },
+      "source_available_at": "2026-08-16T12:00:02.000000Z",
+      "source_available_commit": "10",
+      "source_status": "candidate",
+      "selected_for_event_time": {
+        "status": "exact",
+        "lower": "2026-08-16T12:00:00.000000Z",
+        "upper": "2026-08-16T12:00:01.000000Z",
+        "precision_us": "1000000",
+        "source_value": "2026-08-16T12:00:00Z"
+      },
+      "selected_for_chain_slot": "100",
+      "selected_as_of": "2026-08-16T12:00:02.000000Z",
+      "selected_as_of_commit": "10",
+      "selection_disposition": "latest_effective_known_for_exact_cut",
+      "confidence_ppm": "550000",
+      "evidence_input_ids": ["attention-input:callout-001:r1"],
+      "adversarial_alternatives": ["shared-custody-or-service-wallet"]
+    }
+  ],
+  "attention_events": [
+    {
+      "attention_event_id": "attention-event:callout-001:r1",
+      "forcing_input_id": "attention-input:callout-001:r1",
+      "event_kind": "callout",
+      "mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+      "event_time": {
+        "status": "exact",
+        "lower": "2026-08-16T12:00:00.000000Z",
+        "upper": "2026-08-16T12:00:01.000000Z",
+        "precision_us": "1000000",
+        "source_value": "2026-08-16T12:00:00Z"
+      },
+      "observed_at": "2026-08-16T12:00:01.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "caller_identity_version_id": "identity:caller-001:v1",
+      "caller_wallet_id": "solana:wallet:Caller11111111111111111111111111111111",
+      "caller_cluster_context_id": "cluster-context:callout-001",
+      "direction": "positive",
+      "amount_atoms": "1230000",
+      "amount_asset_id": "solana:mint:So11111111111111111111111111111111111111112",
+      "territory_snapshot_id": "territory:coin-001:community:v1",
+      "community_id": "pump-community:coin-001",
+      "venue_id": "pump:bonding-curve",
+      "pool_id": null,
+      "chain_slot": "100",
+      "lifecycle_id": "pump.lifecycle:bonding_curve",
+      "regime_epoch": "regime:launch-day:001",
+      "topology_epoch": "topology:wallet-graph:commit-10",
+      "scene_id": "scene:pump:callout-board:120002",
+      "presentation_context": {
+        "kind": "provider_product",
+        "presentation_id": "pump-presentation:callout-board:120001",
+        "presentation_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "view_contract": "pump.product.callout_board.observed.v1",
+        "view_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "client_session_id": "pump-session:ember:fixture",
+        "scene_id": "scene:pump:callout-board:120002",
+        "policy_version": "provider-presentation-policy:unknown-fixture",
+        "observed_at": "2026-08-16T12:00:01.000000Z"
+      },
+      "decision_id": "operator-decision:observe-only:001",
+      "choice_set_id": "choice-set:pump-callout-board:120001",
+      "coverage": {
+        "scope_id": "coverage:callout-recent:first-page",
+        "population": "callout_recent order=provider_default cursor=start limit=20",
+        "state": "complete",
+        "window_ids": ["window:callout-recent:1159-1201"],
+        "gap_ids": [],
+        "source_cursor": "cursor:opaque:page-1"
+      },
+      "interpretation": "marked_forcing_event_no_causal_claim"
+    }
+  ],
+  "kernel_events": [
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "attention_event_id": "attention-event:callout-001:r1",
+      "mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+      "event_kind": "callout",
+      "event_time": {
+        "status": "exact",
+        "lower": "2026-08-16T12:00:00.000000Z",
+        "upper": "2026-08-16T12:00:01.000000Z",
+        "precision_us": "1000000",
+        "source_value": "2026-08-16T12:00:00Z"
+      },
+      "event_available_at": "2026-08-16T12:00:02.000000Z",
+      "event_available_commit": "10",
+      "fit_eligible_from": "2026-08-16T12:00:02.000000Z",
+      "caller_identity_version_id": "identity:caller-001:v1",
+      "caller_wallet_id": "solana:wallet:Caller11111111111111111111111111111111",
+      "caller_cluster_context_id": "cluster-context:callout-001",
+      "direction": "positive",
+      "amount_atoms": "1230000",
+      "amount_asset_id": "solana:mint:So11111111111111111111111111111111111111112",
+      "venue_id": "pump:bonding-curve",
+      "chain_slot": "100",
+      "territory_snapshot_id": "territory:coin-001:community:v1",
+      "community_id": "pump-community:coin-001",
+      "lifecycle_id": "pump.lifecycle:bonding_curve",
+      "regime_epoch": "regime:launch-day:001",
+      "topology_epoch": "topology:wallet-graph:commit-10",
+      "scene_id": "scene:pump:callout-board:120002",
+      "presentation_context": {
+        "kind": "provider_product",
+        "presentation_id": "pump-presentation:callout-board:120001",
+        "presentation_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "view_contract": "pump.product.callout_board.observed.v1",
+        "view_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "client_session_id": "pump-session:ember:fixture",
+        "scene_id": "scene:pump:callout-board:120002",
+        "policy_version": "provider-presentation-policy:unknown-fixture",
+        "observed_at": "2026-08-16T12:00:01.000000Z"
+      },
+      "decision_id": "operator-decision:observe-only:001",
+      "choice_set_id": "choice-set:pump-callout-board:120001",
+      "mark_set_version": "callout-marks:v1",
+      "coverage": {
+        "scope_id": "coverage:callout-recent:first-page",
+        "population": "callout_recent order=provider_default cursor=start limit=20",
+        "state": "complete",
+        "window_ids": ["window:callout-recent:1159-1201"],
+        "gap_ids": [],
+        "source_cursor": "cursor:opaque:page-1"
+      }
+    }
+  ],
+  "kernel_marks": [
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "caller_history",
+      "name": "prior_callout_count_through_cut",
+      "direction": null,
+      "value": {"encoding": "unknown", "value": "left_truncated_history"},
+      "epistemic_class": "derived_measure",
+      "observed_through": "2026-08-16T12:00:00.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:caller-history:001", "population": "caller callouts before anchor", "state": "unknown", "window_ids": [], "gap_ids": [], "source_cursor": null},
+      "through_cut": "2026-08-16T12:00:00.000000Z",
+      "missingness_reason": "caller history begins at current observation"
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "context",
+      "name": "source_surface",
+      "direction": null,
+      "value": {"encoding": "utf8", "value": "pump.callout_recent"},
+      "epistemic_class": "provider_assertion",
+      "observed_through": "2026-08-16T12:00:01.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:callout-recent:first-page", "population": "callout_recent order=provider_default cursor=start limit=20", "state": "complete", "window_ids": ["window:callout-recent:1159-1201"], "gap_ids": [], "source_cursor": "cursor:opaque:page-1"},
+      "through_cut": "2026-08-16T12:00:01.000000Z",
+      "missingness_reason": null
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "territory",
+      "name": "territory_snapshot_id",
+      "direction": null,
+      "value": {"encoding": "identifier", "value": "territory:coin-001:community:v1"},
+      "epistemic_class": "model_inference",
+      "observed_through": "2026-08-16T12:00:01.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:territory:coin-001", "population": "known territory assertions as of commit 10", "state": "partial", "window_ids": ["window:callout-recent:1159-1201"], "gap_ids": [], "source_cursor": null},
+      "through_cut": "2026-08-16T12:00:01.000000Z",
+      "missingness_reason": null
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "lifecycle",
+      "name": "protocol_phase",
+      "direction": null,
+      "value": {"encoding": "identifier", "value": "pump.lifecycle:bonding_curve"},
+      "epistemic_class": "protocol_fact",
+      "observed_through": "2026-08-16T12:00:00.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:chain:coin-001", "population": "mint lifecycle chain state at slot 100", "state": "complete", "window_ids": ["window:chain:slot-100"], "gap_ids": [], "source_cursor": "slot:100"},
+      "through_cut": "2026-08-16T12:00:00.000000Z",
+      "missingness_reason": null
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "audience_overlap",
+      "name": "audience_overlap_estimate_id",
+      "direction": null,
+      "value": {"encoding": "identifier", "value": "audience-overlap:caller-community:001"},
+      "epistemic_class": "derived_measure",
+      "observed_through": "2026-08-16T11:59:00.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:audience-overlap:001", "population": "intersection of two explicitly sampled follow sets", "state": "partial", "window_ids": ["window:follow-sample:001"], "gap_ids": [], "source_cursor": null},
+      "through_cut": "2026-08-16T11:59:00.000000Z",
+      "missingness_reason": null
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "family": "presentation",
+      "name": "board_ordinal",
+      "direction": null,
+      "value": {"encoding": "wire_u64", "value": "1"},
+      "epistemic_class": "provider_presentation",
+      "observed_through": "2026-08-16T12:00:01.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "available_commit": "10",
+      "source_input_ids": ["attention-input:callout-001:r1"],
+      "coverage": {"scope_id": "coverage:callout-recent:first-page", "population": "callout_recent order=provider_default cursor=start limit=20", "state": "complete", "window_ids": ["window:callout-recent:1159-1201"], "gap_ids": [], "source_cursor": "cursor:opaque:page-1"},
+      "through_cut": "2026-08-16T12:00:01.000000Z",
+      "missingness_reason": null
+    }
+  ],
+  "audience_overlap_estimates": [
+    {
+      "estimate_id": "audience-overlap:caller-community:001",
+      "left_subject_id": "pump-user:caller-001",
+      "right_subject_id": "pump-community-subject:coin-001",
+      "intersection_count": "2",
+      "left_denominator": "5",
+      "right_denominator": "7",
+      "estimator_version": "set-intersection:v1",
+      "observed_through": "2026-08-16T11:59:00.000000Z",
+      "available_at": "2026-08-16T12:00:02.000000Z",
+      "left_coverage": {"scope_id": "coverage:follow-sample:left", "population": "explicit sampled outgoing follows for caller", "state": "partial", "window_ids": ["window:follow-sample:001"], "gap_ids": [], "source_cursor": null},
+      "right_coverage": {"scope_id": "coverage:follow-sample:right", "population": "explicit sampled community participants", "state": "partial", "window_ids": ["window:community-sample:001"], "gap_ids": [], "source_cursor": null}
+    }
+  ],
+  "response_observations": [
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "subject_mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+      "response_name": "log_mid_price_change",
+      "window_start_seconds": "0",
+      "window_end_seconds": "60",
+      "value": {"encoding": "json_number_lexeme", "value": "0.0100"},
+      "event_time": {"status": "bounded", "lower": "2026-08-16T12:00:02.000000Z", "upper": "2026-08-16T12:01:02.000000Z", "precision_us": "1000000", "source_value": null},
+      "observed_at": "2026-08-16T12:01:03.000000Z",
+      "available_at": "2026-08-16T12:01:04.000000Z",
+      "analysis_cutoff": "2026-08-16T13:00:00.000000Z",
+      "venue_id": "pump:bonding-curve",
+      "pool_id": null,
+      "coverage": {"scope_id": "coverage:chain:coin-001:response-0-60", "population": "all canonical swaps in response interval", "state": "complete", "window_ids": ["window:chain:response-0-60"], "gap_ids": [], "source_cursor": "slot:130"},
+      "censoring": {"kind": "none"},
+      "source_input_ids": []
+    },
+    {
+      "kernel_event_id": "kernel-event:callout-001:r1",
+      "subject_mint_id": "solana:mint:Coin111111111111111111111111111111111111",
+      "response_name": "new_unique_community_authors",
+      "window_start_seconds": "60",
+      "window_end_seconds": "120",
+      "value": null,
+      "event_time": {"status": "source_missing", "lower": null, "upper": null, "precision_us": null, "source_value": "community route unavailable"},
+      "observed_at": "2026-08-16T12:02:03.000000Z",
+      "available_at": "2026-08-16T12:02:04.000000Z",
+      "analysis_cutoff": "2026-08-16T13:00:00.000000Z",
+      "venue_id": null,
+      "pool_id": null,
+      "coverage": {"scope_id": "coverage:community:coin-001:response-60-120", "population": "community messages in response interval", "state": "gapped", "window_ids": [], "gap_ids": ["gap:community-route:1201-1203"], "source_cursor": null},
+      "censoring": {"kind": "source_loss", "lower": "2026-08-16T12:01:02.000000Z", "upper": "2026-08-16T12:02:02.000000Z", "gap_ids": ["gap:community-route:1201-1203"]},
+      "source_input_ids": []
+    }
+  ],
+  "cohort_rows": [
+    {
+      "cohort_row_id": "cohort-row:duplicate-risk:coin-001",
+      "cohort_definition_id": "cohort-definition:duplicate-competing-risk:v1",
+      "candidate_census_id": "candidate-census:pump-launches:1200-1300",
+      "risk_set_id": "risk-set:launches:anchor-120002",
+      "risk_set_denominator": "1",
+      "anchor_kernel_event_id": "kernel-event:callout-001:r1",
+      "anchor_cut": "2026-08-16T12:00:02.000000Z",
+      "fit_cutoff": "2026-08-16T13:00:00.000000Z",
+      "subject": {"kind": "mint", "id": "solana:mint:Coin111111111111111111111111111111111111"},
+      "risk_origin_at": "2026-08-16T11:00:00.000000Z",
+      "risk_entry_at": "2026-08-16T11:30:00.000000Z",
+      "risk_exit_at": "2026-08-16T12:30:00.000000Z",
+      "horizon_seconds": "3600",
+      "left_truncated": true,
+      "event_of_interest": null,
+      "competing_events": [
+        {
+          "event_kind": "duplicate_coin_appeared",
+          "event_time": {"status": "exact", "lower": "2026-08-16T12:30:00.000000Z", "upper": "2026-08-16T12:30:01.000000Z", "precision_us": "1000000", "source_value": "2026-08-16T12:30:00Z"},
+          "known_at": "2026-08-16T12:30:02.000000Z",
+          "source_input_ids": ["attention-input:duplicate-coin-001"]
+        }
+      ],
+      "censoring": {"kind": "none"},
+      "choice_set_id": "choice-set:pump-callout-board:120001",
+      "witnessed_choice_set_complete": true,
+      "exposure_summaries": [
+        {
+          "family": "caller_history",
+          "name": "observed_callout_exposure_count",
+          "value": {"encoding": "wire_u64", "value": "1"},
+          "observed_through": "2026-08-16T12:00:00.000000Z",
+          "available_at": "2026-08-16T12:00:02.000000Z",
+          "coverage": {"scope_id": "coverage:callout-recent:first-page", "population": "callout_recent order=provider_default cursor=start limit=20", "state": "complete", "window_ids": ["window:callout-recent:1159-1201"], "gap_ids": [], "source_cursor": "cursor:opaque:page-1"}
+        }
+      ],
+      "coverage": {"scope_id": "coverage:candidate-census:pump-launches:1200-1300", "population": "all launches eligible under cohort-definition v1", "state": "complete", "window_ids": ["window:census:1200-1300"], "gap_ids": [], "source_cursor": "cursor:census:1300"}
+    }
+  ]
+}

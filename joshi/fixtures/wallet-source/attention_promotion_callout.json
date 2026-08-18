@@ -1,0 +1,15 @@
+{
+  "contractVersion": "joshi.wallet_source.v1",
+  "promotionId": "promotion:callout:42",
+  "mintId": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "walletId": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+  "callerClusterContextId": "selected-cluster-context:callout:42",
+  "sourceClusterHypothesisId": "cluster-hypothesis:42:v3",
+  "reasonVariant": "pump_callout_observed",
+  "requestedHotScope": "wallet_live_and_backfill",
+  "asOfAvailableAt": "2026-08-16T12:00:00.000000Z",
+  "expiresAt": "2026-08-16T12:05:00.000000Z",
+  "evidenceInputIds": ["attention-input:callout:42:revision:1"],
+  "evidenceCoverageIds": ["coverage:pump-callout:wallet:author"],
+  "derivationVersion": "social-to-wallet-promotion.v1"
+}

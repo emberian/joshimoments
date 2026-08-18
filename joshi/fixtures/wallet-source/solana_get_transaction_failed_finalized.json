@@ -1,0 +1,55 @@
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": {
+    "slot": 355001235,
+    "blockTime": 1786881600,
+    "transaction": {
+      "signatures": [
+        "3ShNEcfKhWrvFVTwHCK7FjgWXABAZgo9Cpr2S6AGngg9xDifcQyY2mGQQ85p11vxSRvQ3B3SbaajobL1rfSJmyjG"
+      ],
+      "message": {
+        "header": {
+          "numRequiredSignatures": 1,
+          "numReadonlySignedAccounts": 0,
+          "numReadonlyUnsignedAccounts": 1
+        },
+        "accountKeys": [
+          "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+          "2k5AXX4guW9XwRQ1AKCpAuUqgWDpQpwFfpVFh3hnm2Ha",
+          "11111111111111111111111111111111"
+        ],
+        "recentBlockhash": "11111111111111111111111111111111",
+        "instructions": [
+          {
+            "program": "system",
+            "programId": "11111111111111111111111111111111",
+            "parsed": {
+              "type": "transfer",
+              "info": {
+                "source": "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K",
+                "destination": "2k5AXX4guW9XwRQ1AKCpAuUqgWDpQpwFfpVFh3hnm2Ha",
+                "lamports": 999999
+              }
+            }
+          }
+        ]
+      }
+    },
+    "meta": {
+      "err": {
+        "InstructionError": [0, "InsufficientFunds"]
+      },
+      "fee": 5000,
+      "preBalances": [1000000, 0, 1],
+      "postBalances": [995000, 0, 1],
+      "preTokenBalances": [],
+      "postTokenBalances": [],
+      "innerInstructions": [],
+      "logMessages": [
+        "Program 11111111111111111111111111111111 failed: insufficient funds"
+      ]
+    },
+    "version": 0
+  }
+}

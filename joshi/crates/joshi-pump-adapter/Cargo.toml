@@ -1,0 +1,25 @@
+[package]
+name = "joshi-pump-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-admission = { path = "../joshi-admission", features = ["source-edges"] }
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-pump-api = { path = "../joshi-pump-api" }
+joshi-spool = { path = "../joshi-spool" }
+joshi-store = { path = "../joshi-store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "joshi-sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bs58 = "0.5.1"
+bytes = { version = "1.12.1", features = ["serde"] }
+futures-util = { version = "0.3.34", features = ["sink"] }
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+secrecy = "0.10.3"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["serde", "serde-human-readable"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+tracing = "0.1.44"
+url = "2.5.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

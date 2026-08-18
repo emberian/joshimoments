@@ -1,0 +1,56 @@
+{
+  "contract": "joshi.pump_api.fetch_outcome.v1",
+  "requestGroupId": "request-group-w4-direct-1",
+  "attempts": [
+    {
+      "contract": "joshi.pump_api.acquisition.v1",
+      "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+      "acquisitionId": "acq:pump-w4-direct-fixture-1",
+      "requestGroupId": "request-group-w4-direct-1",
+      "attemptOrdinal": "0",
+      "routeId": "discovery_coins",
+      "transport": "http",
+      "accessClass": "observed_public_product",
+      "stability": "undocumented_observed",
+      "sessionClass": "none",
+      "sourceLocator": "https://frontend-api-v3.pump.fun/coins",
+      "requestFingerprint": "sha256:1f58b9145b24d108d7ac38887338b3ea3229833b9c1e418250343f907bfd1047",
+      "httpStatus": 200,
+      "safeResponseHeaders": [],
+      "clocks": {
+        "startedAt": "2026-08-17T12:00:00.000000Z",
+        "receivedAt": "2026-08-17T12:00:00.010000Z",
+        "monotonicClockId": "pump-w4-fixture-clock",
+        "startedMonotonicNs": "100",
+        "receivedMonotonicNs": "200",
+        "elapsedNs": "100"
+      },
+      "body": {
+        "status": "exact",
+        "boundary": "http_entity_body_post_transfer_decoding_identity_encoding",
+        "mediaType": "application/json",
+        "bytesBase64": "W3sibWludCI6Ik1pbnRBIn0seyJtaW50IjoiTWludEIifV0=",
+        "byteLength": "35",
+        "blobId": "sha256:52aa28de72e23f1ab436d37fd702ffef6c2bc3b771dea901a011815b16e81584"
+      }
+    }
+  ],
+  "coverageWindows": [
+    {
+      "windowId": "coverage:pump-w4-direct-fixture-1",
+      "observedFrom": "2026-08-17T12:00:00.000000Z",
+      "observedTo": "2026-08-17T12:00:00.010000Z",
+      "scope": {
+        "routeId": "discovery_coins",
+        "requestFingerprint": "sha256:1f58b9145b24d108d7ac38887338b3ea3229833b9c1e418250343f907bfd1047",
+        "orderSemantics": "query sort/order; membership and revision unknown",
+        "cursorInFingerprint": null,
+        "pageSize": "2"
+      },
+      "acquisitionIds": ["acq:pump-w4-direct-fixture-1"],
+      "completeness": "one_response_page_observed_feed_completion_unknown"
+    }
+  ],
+  "coverageGaps": [],
+  "completed": true
+}

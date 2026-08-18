@@ -1,0 +1,8 @@
+{
+  "case": "wallet_bearing_key",
+  "source": "pumpportal",
+  "access": "authenticated_private",
+  "credential": "wallet_bearing_signing",
+  "billing": { "unit": "token_trade_event", "minorUnitsPerUnit": 0 },
+  "expectedRefusal": "wallet_bearing_credential"
+}

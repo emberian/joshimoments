@@ -1,0 +1,52 @@
+{
+  "contract": "joshi.operational.fault_scenario/v1",
+  "scenarioId": "fault-scenario:queue-byte-saturation",
+  "initial": {
+    "readiness": "ready",
+    "degradationStage": "full_fidelity",
+    "recoveryState": "stable",
+    "openGapCount": "0",
+    "quarantineCount": "0",
+    "backlogRecords": "0",
+    "backlogBytes": "0",
+    "priorProjectionServedStale": false,
+    "presentationWitnessed": true,
+    "sourceRestartPermitted": true,
+    "logsUsedAsEvidence": false
+  },
+  "steps": [
+    {
+      "at": "2026-08-17T12:00:01.000000Z",
+      "input": {"action": "inject", "fault": "queue_bytes_full", "addedBacklogRecords": "6", "addedBacklogBytes": "600"},
+      "expected": {"readiness": "not_ready", "degradationStage": "stop_before_control_reserve", "recoveryState": "pending", "openGapCount": "1", "quarantineCount": "0", "backlogRecords": "6", "backlogBytes": "600", "priorProjectionServedStale": false, "presentationWitnessed": true, "sourceRestartPermitted": false}
+    },
+    {
+      "at": "2026-08-17T12:00:02.000000Z",
+      "input": {"action": "clear", "fault": "queue_bytes_full"},
+      "expected": {"readiness": "not_ready", "degradationStage": "stop_before_control_reserve", "recoveryState": "draining", "openGapCount": "1", "quarantineCount": "0", "backlogRecords": "6", "backlogBytes": "600", "priorProjectionServedStale": false, "presentationWitnessed": true, "sourceRestartPermitted": false}
+    },
+    {
+      "at": "2026-08-17T12:00:03.000000Z",
+      "input": {
+        "action": "drain",
+        "window": {"recoveryWindowId": "recovery-window:1", "startedAt": "2026-08-17T12:00:02.100000Z", "endedAt": "2026-08-17T12:00:02.900000Z", "backlogStartRecords": "6", "admittedArrivalRecords": "2", "durablyDrainedRecords": "4", "backlogEndRecords": "4", "backlogStartBytes": "600", "admittedArrivalBytes": "200", "durablyDrainedBytes": "400", "backlogEndBytes": "400"},
+        "minimumDrainToArrivalPpm": "2000000"
+      },
+      "expected": {"readiness": "not_ready", "degradationStage": "stop_before_control_reserve", "recoveryState": "draining", "openGapCount": "1", "quarantineCount": "0", "backlogRecords": "4", "backlogBytes": "400", "priorProjectionServedStale": false, "presentationWitnessed": true, "sourceRestartPermitted": false}
+    },
+    {
+      "at": "2026-08-17T12:00:04.000000Z",
+      "input": {
+        "action": "drain",
+        "window": {"recoveryWindowId": "recovery-window:2", "startedAt": "2026-08-17T12:00:03.100000Z", "endedAt": "2026-08-17T12:00:03.900000Z", "backlogStartRecords": "4", "admittedArrivalRecords": "0", "durablyDrainedRecords": "4", "backlogEndRecords": "0", "backlogStartBytes": "400", "admittedArrivalBytes": "0", "durablyDrainedBytes": "400", "backlogEndBytes": "0"},
+        "minimumDrainToArrivalPpm": "2000000"
+      },
+      "expected": {"readiness": "not_ready", "degradationStage": "stop_before_control_reserve", "recoveryState": "verifying", "openGapCount": "1", "quarantineCount": "0", "backlogRecords": "0", "backlogBytes": "0", "priorProjectionServedStale": false, "presentationWitnessed": true, "sourceRestartPermitted": false}
+    },
+    {
+      "at": "2026-08-17T12:00:05.000000Z",
+      "input": {"action": "verify"},
+      "expected": {"readiness": "ready", "degradationStage": "full_fidelity", "recoveryState": "recovered", "openGapCount": "1", "quarantineCount": "0", "backlogRecords": "0", "backlogBytes": "0", "priorProjectionServedStale": false, "presentationWitnessed": true, "sourceRestartPermitted": true}
+    }
+  ]
+}

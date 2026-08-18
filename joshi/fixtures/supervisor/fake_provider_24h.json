@@ -1,0 +1,10 @@
+{
+  "contract": "joshi.supervisor.fake_provider_schedule.v1",
+  "durationSeconds": 86400,
+  "frameIntervalSeconds": 3600,
+  "disconnectEveryFrames": 5,
+  "retryableFailureEveryFrames": 4,
+  "duplicateEveryFrames": 3,
+  "payloadBytes": 512,
+  "realtime": false
+}

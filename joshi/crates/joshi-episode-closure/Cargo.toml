@@ -1,0 +1,18 @@
+[package]
+name = "joshi-episode-closure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-admission = { path = "../joshi-admission" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+
+[lints]
+workspace = true

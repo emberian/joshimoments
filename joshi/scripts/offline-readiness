@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_CREATED_STATE=0
+if [ "${JOSHI_READINESS_STATE:-}" = "" ]; then
+  JOSHI_READINESS_STATE=$(mktemp -d /tmp/joshi-readiness.XXXXXX)
+  JOSHI_CREATED_STATE=1
+fi
+case "$JOSHI_READINESS_STATE" in
+  /tmp/joshi-readiness.*) ;;
+  *)
+    echo "JOSHI_READINESS_STATE must be an explicit /tmp/joshi-readiness.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_READINESS_STATE
+export CARGO_NET_OFFLINE=true
+export npm_config_offline=true
+export npm_config_audit=false
+export npm_config_fund=false
+
+cleanup() {
+  if [ "$JOSHI_CREATED_STATE" -eq 1 ]; then
+    rm -rf -- "$JOSHI_READINESS_STATE"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+cargo fmt --all -- --check
+cargo build --locked --offline --workspace --all-targets --all-features
+cargo test --locked --offline --workspace --all-targets --all-features
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --workspace --all-features --no-deps
+./schema/validate.sh
+
+(
+  cd apps/glass
+  npm ci --offline
+  npm run typecheck
+  npm run test
+  npm run build
+)
+
+(
+  cd extensions/pump-companion
+  npm ci --offline
+  npm run check:offline
+)
+
+(
+  cd analysis
+  uv sync --frozen --offline --all-groups
+  uv run --frozen --offline ruff check .
+  uv run --frozen --offline pytest
+)
+
+cargo tree --locked --offline -p joshi-core --edges normal > "$JOSHI_READINESS_STATE/core-dependencies.txt"
+if rg -i '(anchor-client|solana-client|solana-sdk|solana-keypair|wallet-adapter|jito|yellowstone|tonic)' "$JOSHI_READINESS_STATE/core-dependencies.txt"; then
+  echo "economic, signing, or remote-control authority entered the core dependency closure" >&2
+  exit 1
+fi
+
+cargo run --locked --offline -p joshi-core -- offline-readiness --state "$JOSHI_READINESS_STATE"

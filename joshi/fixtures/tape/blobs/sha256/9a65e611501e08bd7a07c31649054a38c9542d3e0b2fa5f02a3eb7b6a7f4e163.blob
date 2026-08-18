@@ -1,0 +1,1 @@
+{"cluster":"fixture","signature":"sig-equal","slot":"100","events":[{"event_index":"0","kind":"trade","base_atoms":"100","quote_atoms":"25"},{"event_index":"1","kind":"trade","base_atoms":"100","quote_atoms":"25"}]}

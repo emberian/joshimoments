@@ -1,0 +1,29 @@
+{
+  "contract": "joshi.projection.adversarial.v1",
+  "cases": [
+    {
+      "name": "stale_full_position_quote",
+      "expected": "known_unrealized_refused"
+    },
+    {
+      "name": "conflicting_effective_assertions",
+      "expected": "conflict_must_be_visible_in_coverage"
+    },
+    {
+      "name": "partial_coverage",
+      "expected": "named_partial_residual"
+    },
+    {
+      "name": "unknown_external_basis",
+      "expected": "unknown_not_zero"
+    },
+    {
+      "name": "exact_flat_watching_reentry",
+      "expected": "same_episode_new_basis_epoch"
+    },
+    {
+      "name": "unclassified_external_wallet_change",
+      "expected": "landed_truth_plus_named_residual"
+    }
+  ]
+}

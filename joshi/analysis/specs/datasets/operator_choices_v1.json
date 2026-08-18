@@ -1,0 +1,13 @@
+{
+  "choice_set_kind": "eligible",
+  "contract": "joshi.analysis.dataset_spec/v1",
+  "embargo_policy": "exclude_between_train_and_validation",
+  "feature_spec_id": "feature:decision-context-chart-shape/v1",
+  "label_spec_id": "label:crackle-competing-risk-20m/v1",
+  "row_unit": "decision_candidate",
+  "spec_id": "dataset:operator-choice-scenes/v1",
+  "train_before": "2026-08-15T00:00:00.000000Z",
+  "validation_end": "2026-08-17T00:00:00.000000Z",
+  "validation_start": "2026-08-16T00:00:00.000000Z",
+  "version": "1"
+}

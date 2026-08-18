@@ -1,0 +1,25 @@
+[package]
+name = "joshi-operational-circulation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-acquisition-policy = { path = "../joshi-acquisition-policy" }
+joshi-admission = { path = "../joshi-admission" }
+joshi-attention = { path = "../joshi-attention" }
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-market-state = { path = "../joshi-market-state", default-features = false }
+joshi-projection = { path = "../joshi-projection" }
+joshi-publication = { path = "../joshi-publication" }
+joshi-store = { path = "../joshi-store" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

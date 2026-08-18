@@ -1,0 +1,26 @@
+{
+  "claim_scope": "descriptive_only_not_predictive_or_strategy_claim",
+  "contract": "joshi.analysis.feature_spec/v1",
+  "entity_unit": "decision_candidate",
+  "feature_cutoff": "decision_available_at",
+  "features": [
+    "witnessed_choice_membership",
+    "territory_identity",
+    "creator_identity_as_known",
+    "descriptive_chart_shape",
+    "predecision_gesture_count"
+  ],
+  "missingness_states": [
+    "observed",
+    "explicit_gap",
+    "not_observed"
+  ],
+  "post_cut_fields_forbidden": [
+    "outcomes",
+    "postdecision_gestures",
+    "postdecision_interviews",
+    "later_social_identity"
+  ],
+  "spec_id": "feature:decision-context-chart-shape/v1",
+  "version": "1"
+}

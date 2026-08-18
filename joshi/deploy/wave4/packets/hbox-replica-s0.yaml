@@ -1,0 +1,219 @@
+contract: joshi.wave4.deployment_packet/v1
+packetId: hbox-replica-s0-canary-001
+renderedAt: "2026-08-17"
+authority: review_only_no_host_mutation
+status: blocked_eol_storage_memory_and_runtime_absent
+
+target:
+  hostAlias: hbox
+  role: ciphertext_replica_s0
+  observedOs: "Ubuntu 24.10"
+  observedOsSupport: eol_2025_07_10
+  requiredOs:
+    family: ubuntu
+    expectedTarget: "26.04 LTS"
+    rule: must_be_lts_and_listed_supported_by_canonical_at_action_time
+    evidenceUrl: https://ubuntu.com/project/docs/release-team/list-of-releases/
+    evidenceSha256: UNRESOLVED_ACTION_TIME_INPUT
+  architecture: x86_64
+
+hardBlockers:
+  - eol_os
+  - os_repair_not_authorized
+  - replica_daemon_cli_and_transport_absent
+  - unmirrored_zfs_special_vdev_not_accepted_or_repaired
+  - zfs_native_encryption_off
+  - memory_available_gate_not_proved_for_24_hours
+  - swap_pressure_not_accepted
+  - tailscale_peer_asymmetry_unresolved
+  - no_off_site_failure_domain
+
+authorization:
+  readOnlyPreflight: not_run_this_wave
+  repairOs: false
+  repairOrTuneZfs: false
+  tuneArcMemoryOrSwap: false
+  createIdentityDatasetOrPaths: false
+  installArtifact: false
+  placeDecryptionOrProviderCredential: false
+  installEnableOrStartService: false
+  changeNetwork: false
+  deleteOrReleaseOriginCopy: false
+  purchase: false
+
+principal:
+  user: joshi
+  group: joshi
+  uid: system_allocated_not_hardcoded
+  gid: system_allocated_not_hardcoded
+  loginShell: /usr/sbin/nologin
+  home: /nonexistent
+  createHome: false
+  exactCommandsAfterSeparateIdentityApproval:
+    - /usr/sbin/groupadd --system joshi
+    - /usr/sbin/useradd --system --gid joshi --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin joshi
+  validationRule: existing_identity_must_match_every_field_or_fail
+
+replicaIdentity:
+  replicaId: hbox-ciphertext-01
+  generation: s0-canary-001
+  acceptedProtectionClass: authenticated_private
+  acceptedDomains: explicitly_allowlisted_at_canary_freeze
+  decryptionKeys: none
+  providerCredentials: none
+  catalogAuthority: none
+  deletionAuthority: none
+
+paths:
+  - path: /etc/joshi
+    owner: root
+    group: joshi
+    mode: "0750"
+    purpose: non_secret_configuration_parent_only
+  - path: /usr/local/libexec/joshi
+    owner: root
+    group: root
+    mode: "0755"
+    purpose: future_verified_replica_binary_parent
+  - path: /usr/local/share/joshi/releases
+    owner: root
+    group: root
+    mode: "0755"
+    purpose: manifest_sbom_notices_license_source_offer
+  - path: /tank/joshi
+    owner: root
+    group: joshi
+    mode: "0750"
+    purpose: approved_replica_parent_only_after_zfs_risk_acceptance
+  - path: /tank/joshi/spool
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: exact_single_replica_generation_root
+  - path: /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/partial
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/ready
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/acks
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/quarantine
+    owner: joshi
+    group: joshi
+    mode: "0700"
+
+pathCreationCommandsAfterSeparateApprovalAndZfsRiskAcceptance:
+  - /usr/bin/install -d -o root -g joshi -m 0750 /etc/joshi
+  - /usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec/joshi
+  - /usr/bin/install -d -o root -g root -m 0755 /usr/local/share/joshi/releases
+  - /usr/bin/install -d -o root -g joshi -m 0750 /tank/joshi
+  - /usr/bin/install -d -o joshi -g joshi -m 0700 /tank/joshi/spool /tank/joshi/spool/replicas /tank/joshi/spool/replicas/hbox-ciphertext-01 /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001
+  - /usr/bin/install -d -o joshi -g joshi -m 0700 /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/partial /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/ready /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/acks /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001/quarantine
+
+replicaBounds:
+  maxSegmentBytes: 33554432
+  maxChunkBytes: UNFROZEN_W4_01
+  maxTotalBytes: UNFROZEN_RETENTION_AND_CAPACITY_GATE
+  remoteAckMeaning: exact_ciphertext_envelope_durable_at_this_replica_generation_only
+  remoteAckDoesNotAuthorize:
+    - catalog_cursor_advance
+    - semantic_admission
+    - retention_release
+    - origin_deletion
+    - key_destruction
+
+memoryGate:
+  observationDurationHours: 24
+  minimumAvailableBytes: 17179869184
+  stopIfAvailableBelowBytes: 8589934592
+  stopIfBelowDurationSeconds: 300
+  sustainedMemoryPsiAllowed: false
+  swapRule: stable_and_explicitly_accepted
+  arcOrSwapTuningAuthorized: false
+
+futureSystemdResourceEnvelope:
+  status: review_target_not_a_unit
+  CPUQuota: "50%"
+  MemoryHigh: 512M
+  MemoryMax: 1G
+  MemorySwapMax: 0
+  TasksMax: 64
+  LimitNOFILE: 4096
+  UMask: "0077"
+  NoNewPrivileges: true
+  CapabilityBoundingSet: empty
+  AmbientCapabilities: empty
+  PrivateDevices: true
+  ProtectSystem: strict
+  ProtectHome: true
+  ReadWritePaths:
+    - /tank/joshi/spool/replicas/hbox-ciphertext-01/s0-canary-001
+  RestartPolicy: bounded_three_failures_then_stop
+
+storageGate:
+  normalDataVdev: observed_two_disk_mirror
+  specialVdev: observed_single_device_unmirrored
+  zfsNativeEncryption: observed_off
+  requiredDecision: explicit_acceptance_or_separate_backup_aware_repair
+  forbiddenInference: online_pool_or_clean_scrub_means_backup
+  soleCopyAllowed: false
+
+credentials:
+  authorizedNow: []
+  allowedLater: []
+  forbidden:
+    - private_domain_decryption_key
+    - provider_token
+    - pump_session
+    - wallet_private_key_or_seed
+    - catalog_writer_capability
+
+network:
+  listeners: []
+  publicEndpoints: []
+  firewallChanges: []
+  tailscaleChanges: []
+  dnsChanges: []
+  transport: blocked_until_replica_adapter_and_bidirectional_authenticated_canary
+
+artifact:
+  releaseManifest: ../release/RELEASE_MANIFEST.required.yaml
+  installCommands: []
+  status: blocked_no_replica_executable_or_transport
+
+mutationStages:
+  - stage: os_repair
+    status: separate_destructive_packet_required
+    commands: []
+  - stage: zfs_repair_or_risk_acceptance
+    status: separate_storage_decision_required
+    commands: []
+  - stage: identity_and_paths
+    status: rendered_but_not_authorized
+  - stage: artifact_install
+    status: blocked
+    commands: []
+  - stage: service_install_enable_start
+    status: blocked
+    commands: []
+  - stage: network_change
+    status: no_change_default
+    commands: []
+
+topologyDiagnostics:
+  authority: non_authoritative_packet_diagnostic_root_witness_owns_status
+  beforeCanary: qualified_local_operational_candidate_subject_to_root_witness
+  afterCollectorOnlyCanary: remote_collector_candidate_replica_unqualified_subject_to_root_witness
+  afterBothCanaries: qualified_remote_resilient_candidate_subject_to_root_witness
+  neverAssertedByThisPacket:
+    - qualified_local_operational
+    - qualified_remote_resilient

@@ -1,0 +1,7 @@
+{
+  "case": "zero_price_is_not_unauthenticated",
+  "access": "unauthenticated_public",
+  "credential": "none",
+  "billing": { "unit": "request", "minorUnitsPerUnit": 0, "zeroPriceAttestation": "not_provided" },
+  "expectedRefusal": "zero_price_not_unauthenticated"
+}

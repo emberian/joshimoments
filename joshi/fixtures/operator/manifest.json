@@ -1,0 +1,19 @@
+{
+  "fixtureContract": "joshi.operator.cross_language_goldens",
+  "schemaVersion": 1,
+  "effectCeiling": "observe_only",
+  "files": [
+    {
+      "path": "apps/glass/src/contract/golden.ts",
+      "sha256": "d30ea712883f7b3335fde101afe87cc2725fb8b3f33485c01bd6c545fe6f55eb"
+    },
+    {
+      "path": "apps/glass/src/operator/golden.ts",
+      "sha256": "74b9c95ab87b52d2bc9015672f29256cf09f72fa745be4ed59d0975d93ef31d2"
+    }
+  ],
+  "glassViewDigest": "sha256:8cbd045cbf22dd4c908ef84ecc14840d71f846b672c0311f65a2a48cdf8d69ab",
+  "operatorPayloadDigest": "sha256:11e7520b23cd385313fbdec6c5854614988ba4cdfadbe1958ca2078915233fa7",
+  "operatorCommandDigest": "sha256:7b27c7c0ceaee821a45b289c4694ced31d9a3861f1c59044335fd917a3abc531"
+}
+

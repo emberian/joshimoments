@@ -1,0 +1,56 @@
+contract: joshi.wave4.deployment_packet/v1
+packetId: hetzner-optional-unselected-001
+renderedAt: "2026-08-17"
+authority: review_only_no_purchase_no_provider_call
+status: not_inspected_not_purchased
+
+target:
+  provider: Hetzner
+  product: UNSELECTED
+  region: UNSELECTED
+  hostId: UNALLOCATED
+  role: UNSELECTED_COLLECTOR_OR_CIPHERTEXT_REPLICA
+  price: UNQUOTED
+  recurringSpendCap: 0
+  architecture: UNSELECTED
+  os:
+    family: ubuntu
+    version: UNSELECTED_SUPPORTED_LTS_AT_ACTION_TIME
+    supportEvidenceSha256: UNRESOLVED_ACTION_TIME_INPUT
+
+considerationGate:
+  requiredMeasuredNeed:
+    - approved_local_canary_shows_laptop_sleep_or_network_continuity_is_material_blocker
+    - or_approved_off_site_failure_domain_value_exceeds_recurring_cost
+  requiredApprovals:
+    - product_region_price_and_recurring_cap
+    - account_and_purchase
+    - supported_image_and_update_policy
+    - private_management_network
+    - exact_role_and_credentials
+    - data_protection_and_retrieval_canary
+  currentResult: no_purchase_no_commands_no_account_access
+
+acceptanceContract:
+  localCrashDurableSsd: required_and_measured
+  freeStorageReserve:
+    minimumPercent: 20
+    minimumBytes: 107374182400
+    rule: greater_reserve_wins
+  listeners: []
+  publicEndpoints: []
+  firewallDefault: deny_inbound_except_separately_reviewed_management_transport
+  tailscaleChanges: []
+  providerReadCredentials: only_if_collector_and_separately_approved
+  decryptionKeys: none_if_replica
+  walletMaterial: forbidden
+  transactionConstructionSigningSubmission: forbidden
+  soleCatalogWriter: Mac
+  soleBackupAllowed: false
+  artifactAndSourceContract: ../release/RELEASE_MANIFEST.required.yaml
+
+mutationStages: []
+purchaseCommands: []
+networkCommands: []
+serviceCommands: []
+destructiveCommands: []

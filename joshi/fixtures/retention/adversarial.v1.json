@@ -1,0 +1,42 @@
+{
+  "contract": "joshi.retention.fixture.v1",
+  "description": "Authenticated-private retention transition adversaries; facts only, no actions.",
+  "domain": { "domainId": "private/social", "keyId": "social-key-7", "keyState": "present" },
+  "inventory": [
+    { "itemId": "origin-1", "kind": "origin_spool", "domainId": "private/social", "contentDigest": "sha256:origin-1", "bytes": "present", "keyId": "social-key-7", "dependsOn": [] },
+    { "itemId": "cas-1", "kind": "cas", "domainId": "private/social", "contentDigest": "sha256:cas-1", "bytes": "present", "keyId": "social-key-7", "dependsOn": ["origin-1"] },
+    { "itemId": "replica-1", "kind": "replica", "domainId": "private/social", "contentDigest": "sha256:replica-1", "bytes": "unknown", "keyId": "social-key-7", "dependsOn": ["origin-1"] },
+    { "itemId": "export-1", "kind": "export", "domainId": "private/social", "contentDigest": "sha256:export-1", "bytes": "present", "keyId": "social-key-7", "dependsOn": ["origin-1"] },
+    { "itemId": "derived-1", "kind": "derived_reference", "domainId": "private/social", "contentDigest": "sha256:derived-1", "bytes": "present", "keyId": "social-key-7", "dependsOn": ["origin-1"] }
+  ],
+  "cases": [
+    {
+      "name": "partial_replica",
+      "target": ["origin-1", "cas-1", "replica-1"],
+      "expected": { "status": "blocked", "refusals": ["partial_replica"], "coverageEffect": "unchanged" }
+    },
+    {
+      "name": "outstanding_export_and_derived_reference",
+      "target": ["origin-1"],
+      "expected": { "status": "blocked", "refusals": ["outstanding_reference"], "coverageEffect": "unchanged" }
+    },
+    {
+      "name": "stale_receipt",
+      "requestId": "missing-request-9",
+      "phase": "bytes_deleted",
+      "expected": { "transition": "refused", "reason": "missing_request" }
+    },
+    {
+      "name": "key_loss_scope",
+      "target": ["origin-1"],
+      "phase": "key_destroyed",
+      "expected": { "transition": "refused", "reason": "key_scope_incomplete" }
+    },
+    {
+      "name": "retry_after_crash",
+      "occurrenceId": "tombstone-occurrence-1",
+      "retry": "exact_same_bytes",
+      "expected": { "first": "applied", "retry": "duplicate", "coverageEffect": "unchanged" }
+    }
+  ]
+}

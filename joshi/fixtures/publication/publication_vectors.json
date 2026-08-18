@@ -1,0 +1,30 @@
+{
+  "contract": "joshi.publication_vectors",
+  "schemaVersion": 1,
+  "golden": {
+    "artifactBytes": "1171",
+    "artifactDigest": "sha256:54a044671521c467a312dd1b66853cda14afd8bf3f430fcc2c00919a91e7f583",
+    "resultDigest": "sha256:d7c6cbaf0736069a895d126fabeb94ec204bc22285611ba5f5d97098ee34a69b",
+    "inputClosureDigest": "sha256:b57ebaf6f3c0edfbc06f63241a0ec52d9cd6330beedfba7cf8bb545b3b949d9b",
+    "checkpointDigest": "sha256:61b33e123b45e7b1b831844541f4a9fbf95c04e63f440f38c82000b51276544c",
+    "publicationBytes": "1430",
+    "publicationDigest": "sha256:1524b025b3e615358a53ac410600d0c386b6f18a93d9c1e19708ab034f87cb8d",
+    "cockpitBytes": "901",
+    "cockpitPublicationDigest": "sha256:f9ba49c1d85a43bb8ab85bf3ec0c446e53f35fb2e6b6da35bdae65d3557593d1"
+  },
+  "crashCases": [
+    { "stage": "before_prepare", "visible": "prior_stale", "newQueryable": false },
+    { "stage": "after_prepare", "visible": "prior_stale", "newQueryable": false },
+    { "stage": "during_commit", "visible": "prior_stale", "newQueryable": false },
+    { "stage": "after_commit", "visible": "prior_stale", "newQueryable": true },
+    { "stage": "during_head", "visible": "prior_stale", "newQueryable": true },
+    { "stage": "after_head", "visible": "new_fresh", "newQueryable": true }
+  ],
+  "selectionCases": [
+    "fresh",
+    "stale",
+    "unsupported_with_prior",
+    "missing",
+    "conflicting"
+  ]
+}

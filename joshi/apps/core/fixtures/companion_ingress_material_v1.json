@@ -1,0 +1,1 @@
+{"contract":"joshi.pump_companion.capture_batch","schemaVersion":1,"batchId":"30000000-0000-4000-8000-000000000001","producer":{"adapter":"pump-companion","adapterVersion":"0.1.0","installationId":"60000000-0000-4000-8000-000000000001","extensionSessionId":"70000000-0000-4000-8000-000000000001"},"acquisitions":[],"gaps":[]}

@@ -1,0 +1,8 @@
+{
+  "contract": "joshi.pump_api.request.v1",
+  "routeId": "coin_exact",
+  "path": {
+    "mint": "Mint111111111111111111111111111111111111111"
+  },
+  "query": {}
+}

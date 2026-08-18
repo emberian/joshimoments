@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_W5_CREATED_STATE=0
+if [ "${JOSHI_W5_STATE:-}" = "" ]; then
+  JOSHI_W5_STATE=$(mktemp -d /tmp/joshi-wave5-readiness.XXXXXX)
+  JOSHI_W5_CREATED_STATE=1
+fi
+case "$JOSHI_W5_STATE" in
+  /tmp/joshi-wave5-readiness.*) ;;
+  *)
+    echo "JOSHI_W5_STATE must be an explicit /tmp/joshi-wave5-readiness.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_W5_STATE
+
+cleanup() {
+  if [ "$JOSHI_W5_CREATED_STATE" -eq 1 ]; then
+    echo "wave5 fixture witness retained at $JOSHI_W5_STATE/wave5-witness.json" >&2
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+# Preserve the complete root structural gate. Its Wave 4 result remains historical evidence and
+# is not rewritten by this script.
+JOSHI_W4_STATE=$(mktemp -d /tmp/joshi-wave4-readiness.XXXXXX)
+export JOSHI_W4_STATE
+./scripts/wave4-readiness \
+  > "$JOSHI_W5_STATE/wave4-witness.json"
+
+# This command walks only semantic run registration, exact retry, store-only status projection and
+# restart readback. It is separate from source/spool/publication/provider qualification and cannot
+# set a live/product maturity bit.
+mkdir -p "$JOSHI_W5_STATE/ignition"
+cargo run --locked --offline -p joshi-core -- wave5-ignition-readiness \
+  --state "$JOSHI_W5_STATE/ignition" > "$JOSHI_W5_STATE/ignition-readiness.json"
+
+JOSHI_IGNITION_SHA=$(shasum -a 256 "$JOSHI_W5_STATE/ignition-readiness.json" | awk '{print $1}')
+JOSHI_MIGRATION_SHA=$(shasum -a 256 schema/migrations/0009_wave5_living_instrument.sql | awk '{print $1}')
+
+printf '%s\n' "{\"contract\":\"joshi.wave5.living_instrument_witness\",\"schemaVersion\":1,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"fixtureWalkDigest\":\"sha256:$JOSHI_IGNITION_SHA\",\"catalogMigrationDigest\":\"sha256:$JOSHI_MIGRATION_SHA\",\"maturity\":{\"fixtureWalked\":true,\"boundedNonfixture\":false,\"restartRecovered\":false,\"sustainedObserved\":false,\"liveReadOnly\":false,\"preliminaryEmberUse\":false,\"criticalSurfaceAccessibility\":false,\"broadParity\":false},\"claim\":\"offline_semantic_run_registration_retry_and_reopen_only\"}" \
+  > "$JOSHI_W5_STATE/wave5-witness.json"
+
+cat "$JOSHI_W5_STATE/wave5-witness.json"

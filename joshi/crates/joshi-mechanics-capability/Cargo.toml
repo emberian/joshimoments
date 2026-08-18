@@ -1,0 +1,19 @@
+[package]
+name = "joshi-mechanics-capability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-domain = { path = "../joshi-domain" }
+joshi-market-math = { path = "../joshi-market-math" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

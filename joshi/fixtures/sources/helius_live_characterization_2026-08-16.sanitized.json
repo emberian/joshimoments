@@ -1,0 +1,88 @@
+{
+  "fixture_contract": "joshi.sanitized_provider_characterization.v1",
+  "provenance": "Derived from a private exact Helius capture on 2026-08-16; identifiers, slots, signatures, log text, and payload values are omitted.",
+  "not_replay_evidence": true,
+  "sample": {
+    "connection_attempts": 1,
+    "observed_duration_ms": 5979,
+    "subscriptions": [
+      "pump_program_logs_processed",
+      "pumpswap_program_logs_processed"
+    ],
+    "inbound_messages": 4913,
+    "inbound_bytes": 11943303,
+    "schema_variants": {
+      "subscription_ack": 2,
+      "logs_notification": 4911,
+      "malformed": 0
+    }
+  },
+  "logs_notification_shape": {
+    "top_level_keys": [
+      "jsonrpc",
+      "method",
+      "params"
+    ],
+    "method": "logsNotification",
+    "params_keys": [
+      "result",
+      "subscription"
+    ],
+    "result_keys": [
+      "context",
+      "value"
+    ],
+    "context_keys": [
+      "slot"
+    ],
+    "value_keys": [
+      "err",
+      "logs",
+      "signature"
+    ],
+    "field_types": {
+      "params.subscription": "integer",
+      "params.result.context.slot": "integer",
+      "params.result.value.err": "null_or_object",
+      "params.result.value.logs": "array_of_strings",
+      "params.result.value.signature": "string"
+    },
+    "log_count": {
+      "min": 7,
+      "p50": 11,
+      "p95": 87,
+      "max": 149
+    },
+    "notifications_with_log_truncation_marker": 3
+  },
+  "route_aggregate": {
+    "pump": {
+      "notifications": 2118,
+      "successful": 413,
+      "failed": 1705
+    },
+    "pumpswap": {
+      "notifications": 2793,
+      "successful": 2292,
+      "failed": 501
+    },
+    "unique_signatures": 4905,
+    "signatures_seen_on_both_routes": 6,
+    "same_route_duplicate_deliveries": 0,
+    "unknown_route_notifications": 0
+  },
+  "http_aggregate": {
+    "requests": 23,
+    "statuses": {
+      "200": 23
+    },
+    "methods": {
+      "getSlot": 1,
+      "getSignaturesForAddress": 2,
+      "getTransaction": 20
+    },
+    "transaction_results_present": 20,
+    "transaction_results_null": 0,
+    "transaction_versions_encoded_as_number": 20
+  }
+}

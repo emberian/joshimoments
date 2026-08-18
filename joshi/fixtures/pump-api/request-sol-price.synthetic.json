@@ -1,0 +1,6 @@
+{
+  "contract": "joshi.pump_api.request.v1",
+  "routeId": "sol_price",
+  "path": {},
+  "query": {}
+}

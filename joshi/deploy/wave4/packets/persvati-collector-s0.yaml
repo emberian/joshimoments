@@ -1,0 +1,253 @@
+contract: joshi.wave4.deployment_packet/v1
+packetId: persvati-collector-s0-canary-001
+renderedAt: "2026-08-17"
+authority: review_only_no_host_mutation
+status: blocked_eol_and_runtime_absent
+
+target:
+  hostAlias: persvati
+  role: collector_s0_canary
+  observedOs: "Ubuntu 25.10"
+  observedOsSupport: eol_2026_07
+  requiredOs:
+    family: ubuntu
+    expectedTarget: "26.04 LTS"
+    rule: must_be_lts_and_listed_supported_by_canonical_at_action_time
+    evidenceUrl: https://ubuntu.com/project/docs/release-team/list-of-releases/
+    evidenceSha256: UNRESOLVED_ACTION_TIME_INPUT
+  architecture: x86_64
+
+hardBlockers:
+  - eol_os
+  - os_repair_not_authorized
+  - collector_not_workspace_member_or_release_artifact
+  - live_run_subcommand_absent
+  - runtime_config_contract_absent
+  - graceful_shutdown_deadline_absent
+  - lid_suspend_reboot_continuity_unproved
+  - tailscale_peer_asymmetry_unresolved
+  - disk_encryption_posture_unproved
+
+authorization:
+  readOnlyPreflight: not_run_this_wave
+  repairOs: false
+  rebootOrPowerPolicy: false
+  createIdentityOrPaths: false
+  installArtifact: false
+  placeCredential: false
+  installEnableOrStartService: false
+  callProvider: false
+  changeNetwork: false
+  deleteOrRetainEvidence: false
+  walletOrEconomicAction: false
+
+principal:
+  user: joshi
+  group: joshi
+  uid: system_allocated_not_hardcoded
+  gid: system_allocated_not_hardcoded
+  loginShell: /usr/sbin/nologin
+  home: /nonexistent
+  createHome: false
+  exactCommandsAfterSeparateIdentityApproval:
+    - /usr/sbin/groupadd --system joshi
+    - /usr/sbin/useradd --system --gid joshi --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin joshi
+  validationRule: existing_identity_must_match_every_field_or_fail
+
+paths:
+  - path: /etc/joshi
+    owner: root
+    group: joshi
+    mode: "0750"
+    purpose: non_secret_configuration_parent_only
+  - path: /etc/joshi/credentials
+    owner: root
+    group: root
+    mode: "0700"
+    purpose: future_runtime_credentials_only
+  - path: /usr/local/libexec/joshi
+    owner: root
+    group: root
+    mode: "0755"
+    purpose: verified_release_binary_parent
+  - path: /usr/local/share/joshi/releases
+    owner: root
+    group: root
+    mode: "0755"
+    purpose: manifest_sbom_notices_license_source_offer
+  - path: /var/lib/joshi/collector
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: collector_root_local_crash_durable_filesystem
+  - path: /var/lib/joshi/collector/identity
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: generation_and_occurrence_reservations
+  - path: /var/lib/joshi/collector/journal
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: acquisition_attempt_journal
+  - path: /var/lib/joshi/collector/spool
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: exact_local_spool_root
+  - path: /var/lib/joshi/collector/spool/staging
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /var/lib/joshi/collector/spool/ready
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /var/lib/joshi/collector/spool/acks
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /var/lib/joshi/collector/spool/catalog_acks
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /var/lib/joshi/collector/spool/quarantine
+    owner: joshi
+    group: joshi
+    mode: "0700"
+  - path: /var/lib/joshi/collector/health
+    owner: joshi
+    group: joshi
+    mode: "0700"
+    purpose: durable_health_json_no_listener
+
+pathCreationCommandsAfterSeparateApproval:
+  - /usr/bin/install -d -o root -g joshi -m 0750 /etc/joshi
+  - /usr/bin/install -d -o root -g root -m 0700 /etc/joshi/credentials
+  - /usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec/joshi
+  - /usr/bin/install -d -o root -g root -m 0755 /usr/local/share/joshi/releases
+  - /usr/bin/install -d -o joshi -g joshi -m 0700 /var/lib/joshi/collector
+  - /usr/bin/install -d -o joshi -g joshi -m 0700 /var/lib/joshi/collector/identity /var/lib/joshi/collector/journal /var/lib/joshi/collector/spool /var/lib/joshi/collector/health
+  - /usr/bin/install -d -o joshi -g joshi -m 0700 /var/lib/joshi/collector/spool/staging /var/lib/joshi/collector/spool/ready /var/lib/joshi/collector/spool/acks /var/lib/joshi/collector/spool/catalog_acks /var/lib/joshi/collector/spool/quarantine
+
+collectorInterface:
+  executableName: joshi-collector
+  installPath: /usr/local/libexec/joshi/joshi-collector
+  status: offline_only_not_installable
+  exactCommands:
+    replay: /usr/local/libexec/joshi/joshi-collector replay --root /var/lib/joshi/collector
+    replayPrivate: /usr/local/libexec/joshi/joshi-collector replay --root /var/lib/joshi/collector --private-key-file /run/credentials/joshi-collector.service/spool-seal-private.key
+    fakeProvider: /usr/local/libexec/joshi/joshi-collector fake-provider --root /var/lib/joshi/collector --fixture /usr/local/share/joshi/canary/fake-provider.json --hours 24 --realtime
+    health: /usr/local/libexec/joshi/joshi-collector health --root /var/lib/joshi/collector
+  liveRun: absent
+  listener: absent
+  readinessEndpoint: absent
+  runtimeConfigFile: absent
+
+frozenS0Bounds:
+  evidenceQueueRecords: 4096
+  evidenceQueueBytes: 67108864
+  maxSegmentOuterBytes: 33554432
+  maxDailySpoolGrowthBytes: 1073741824
+  freeStorageStopFloor:
+    minimumPercent: 20
+    minimumBytes: 107374182400
+    rule: greater_reserve_wins
+  sourceToLocalDurableP99Milliseconds: 2000
+  averageLogicalCpu: 1
+  averageRssBytes: 2147483648
+  unresolvedConfigFields:
+    maxEntriesPerSegment: UNFROZEN_W4_01
+    maxTotalRootBytes: UNFROZEN_W4_01
+    controlReserveBytes: UNFROZEN_W4_01
+    maxTransferChunkBytes: UNFROZEN_W4_01
+  result: runtime_config_not_renderable
+
+futureSystemdResourceEnvelope:
+  status: review_target_not_a_unit
+  CPUQuota: "100%"
+  MemoryHigh: 2G
+  MemoryMax: 3G
+  TasksMax: 128
+  LimitNOFILE: 8192
+  UMask: "0077"
+  NoNewPrivileges: true
+  CapabilityBoundingSet: empty
+  AmbientCapabilities: empty
+  PrivateDevices: true
+  ProtectSystem: strict
+  ProtectHome: true
+  ReadWritePaths:
+    - /var/lib/joshi/collector
+  RestartPolicy: bounded_three_failures_then_stop
+  gracefulStopSeconds: UNFROZEN_W4_01
+
+credentials:
+  authorizedNow: []
+  futurePurposeBindings:
+    - logicalName: spool-seal-private.key
+      purpose: seal_authenticated_private_segments_at_origin
+      delivery: systemd_runtime_credential_not_argument_or_environment
+      onDiskStagingPath: /etc/joshi/credentials/spool-seal-private.key
+      owner: root
+      group: root
+      mode: "0400"
+      status: not_created_not_authorized
+    - logicalName: provider-read.token
+      purpose: one_separately_approved_read_only_source_adapter
+      delivery: systemd_runtime_credential_not_argument_or_environment
+      onDiskStagingPath: /etc/joshi/credentials/provider-read.token
+      owner: root
+      group: root
+      mode: "0400"
+      status: not_created_not_authorized
+  forbidden:
+    - pump_authenticated_session_material
+    - wallet_private_key
+    - wallet_seed
+    - challenge_signature
+    - transaction_builder_or_submitter_capability
+
+network:
+  listeners: []
+  publicEndpoints: []
+  firewallChanges: []
+  tailscaleChanges: []
+  dnsChanges: []
+  replicaTransport: blocked_until_adapter_and_bidirectional_canary
+  healthAccess: local_cli_over_separately_authenticated_management_session
+
+artifact:
+  releaseManifest: ../release/RELEASE_MANIFEST.required.yaml
+  installCommands: []
+  status: blocked_no_collector_artifact_no_source_revision
+
+mutationStages:
+  - stage: os_repair
+    status: separate_destructive_packet_required
+    commands: []
+  - stage: identity_and_paths
+    status: rendered_but_not_authorized
+    dependsOn:
+      - supported_os_revalidated
+      - exact_backup_and_os_rollback_plan
+  - stage: artifact_install
+    status: blocked
+    commands: []
+  - stage: service_install_enable_start
+    status: blocked
+    commands: []
+  - stage: credential_placement
+    status: blocked
+    commands: []
+  - stage: lid_suspend_or_reboot_canary
+    status: separate_host_action_approval_required
+    commands: []
+
+topologyDiagnostics:
+  authority: non_authoritative_packet_diagnostic_root_witness_owns_status
+  beforeCanary: qualified_local_operational_candidate_subject_to_root_witness
+  afterSuccessfulApprovedCollectorCanary: remote_collector_candidate_replica_unqualified_subject_to_root_witness
+  neverAssertedByThisPacket:
+    - qualified_local_operational
+    - qualified_remote_resilient

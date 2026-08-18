@@ -1,0 +1,14 @@
+{
+  "at_risk_unit": "selected_decision_candidate",
+  "censoring_semantics": "right_censored_is_unknown_not_no_event",
+  "competing_risks": [
+    "drawdown_stop",
+    "liquidity_exit",
+    "profit_target"
+  ],
+  "contract": "joshi.analysis.label_spec/v1",
+  "horizon_minutes": "20",
+  "label_observation_cutoff": "2026-08-16T18:00:00.000000Z",
+  "spec_id": "label:crackle-competing-risk-20m/v1",
+  "version": "1"
+}

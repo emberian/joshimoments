@@ -1,0 +1,26 @@
+[package]
+name = "joshi-wallet-admission"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-admission = { path = "../joshi-admission" }
+joshi-domain = { path = "../joshi-domain" }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-sources = { path = "../joshi-sources" }
+joshi-store = { path = "../joshi-store" }
+joshi-wallet-source = { path = "../joshi-wallet-source" }
+joshi-wallet-topology = { path = "../joshi-wallet-topology" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

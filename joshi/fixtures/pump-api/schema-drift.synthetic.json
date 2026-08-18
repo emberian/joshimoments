@@ -1,0 +1,18 @@
+{
+  "mint": "Mint111111111111111111111111111111111111111",
+  "name": "Exact Number Fixture",
+  "symbol": "LEXEME",
+  "creator": "Creator11111111111111111111111111111111111",
+  "complete": "formerly-a-boolean",
+  "created_timestamp": 18446744073709551615,
+  "last_trade_timestamp": 9007199254740993,
+  "virtual_sol_reserves": 30000000000,
+  "virtual_token_reserves": 1000000000000000,
+  "market_cap": 1.2300e-7,
+  "usd_market_cap": 0.0001000,
+  "reply_count": 0,
+  "token_program": "TokenProgramProviderAssertion",
+  "is_currently_live": false,
+  "verified": false,
+  "new_unreviewed_field": {"nested": true}
+}

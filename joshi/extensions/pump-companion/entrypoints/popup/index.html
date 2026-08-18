@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Joshi Pump Companion</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">JOSHI</p>
+          <h1>Pump companion</h1>
+        </div>
+        <span id="health" class="status" data-health="paused" role="status" aria-live="polite">
+          Paused
+        </span>
+      </header>
+
+      <p class="boundary">
+        Copies only allowlisted JSON responses already delivered to this Pump tab. It never reads
+        cookies, request headers, browser storage, wallet prompts, or keys.
+      </p>
+
+      <button id="capture-toggle" class="primary" type="button">Start capture</button>
+
+      <section aria-labelledby="source-heading">
+        <h2 id="source-heading">Deliberately allowed sources</h2>
+        <label>
+          <input id="origin-pump-frontend" type="checkbox" />
+          <span>
+            <strong>Pump frontend</strong>
+            <small>Exact coin, callout, and outgoing-follow responses</small>
+          </span>
+        </label>
+        <label>
+          <input id="origin-coin-communities" type="checkbox" />
+          <span>
+            <strong>Coin Communities</strong>
+            <small>Third-party community/feed responses rendered by Pump</small>
+          </span>
+        </label>
+        <label>
+          <input id="origin-pump-profile" type="checkbox" />
+          <span>
+            <strong>Authenticated Pump social</strong>
+            <small>Off by default; approved community response routes only</small>
+          </span>
+        </label>
+      </section>
+
+      <section aria-labelledby="retention-heading">
+        <h2 id="retention-heading">Retention</h2>
+        <label class="warning">
+          <input id="raw-capture" type="checkbox" />
+          <span>
+            <strong>Include exact private response bytes</strong>
+            <small>
+              Opt-in. Approved routes only, 512 KiB maximum. Bytes are unchanged, local-only,
+              classified authenticated-private evidence, and may contain personalized content.
+            </small>
+          </span>
+        </label>
+      </section>
+
+      <section aria-labelledby="delivery-heading">
+        <div class="section-title">
+          <h2 id="delivery-heading">Loopback delivery</h2>
+          <button id="flush" class="secondary" type="button">Retry now</button>
+        </div>
+        <dl>
+          <div><dt>Destination</dt><dd><code>127.0.0.1:43119</code></dd></div>
+          <div><dt>Queued</dt><dd id="queued">0 acquisitions + 0 gaps / 0 B</dd></div>
+          <div><dt>Accepted</dt><dd id="accepted">0</dd></div>
+          <div><dt>Delivered</dt><dd id="delivered">0</dd></div>
+          <div><dt>Dropped</dt><dd id="dropped">0</dd></div>
+          <div><dt>Last capture</dt><dd id="last-capture">Never</dd></div>
+          <div><dt>Last delivery</dt><dd id="last-delivery">Never</dd></div>
+        </dl>
+        <p id="last-error" class="error" hidden></p>
+      </section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

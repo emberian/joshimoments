@@ -1,0 +1,66 @@
+{
+  "contract": "joshi.operational.status_view/v1",
+  "observedAt": "2026-08-18T12:00:00.000000Z",
+  "authority": "read_only_no_execution",
+  "durableProgress": [
+    {
+      "contract": "joshi.operational.durable_progress/v1",
+      "progressId": "gap:pump:3",
+      "kind": "gap",
+      "scopeId": "scope:pump:live",
+      "sourceFamily": "pump_portal_websocket",
+      "state": "open",
+      "durableCommit": "43",
+      "contentDigest": null,
+      "observedAt": "2026-08-18T11:58:00.000000Z",
+      "authority": "read_only_no_execution"
+    },
+    {
+      "contract": "joshi.operational.durable_progress/v1",
+      "progressId": "publication:glass:7",
+      "kind": "publication",
+      "scopeId": "scope:glass:daily",
+      "sourceFamily": null,
+      "state": "committed",
+      "durableCommit": "44",
+      "contentDigest": "sha256:glass-publication-7",
+      "observedAt": "2026-08-18T11:59:58.000000Z",
+      "authority": "read_only_no_execution"
+    },
+    {
+      "contract": "joshi.operational.durable_progress/v1",
+      "progressId": "receipt:catalog:42",
+      "kind": "receipt",
+      "scopeId": "scope:helius:census",
+      "sourceFamily": "helius_http",
+      "state": "committed",
+      "durableCommit": "42",
+      "contentDigest": "sha256:catalog-receipt-42",
+      "observedAt": "2026-08-18T11:59:59.000000Z",
+      "authority": "read_only_no_execution"
+    }
+  ],
+  "resourceSamples": [
+    {
+      "contract": "joshi.operational.resource_sample/v1",
+      "sampleId": "sample:host:cpu:1",
+      "kind": "cpu_millicores",
+      "observed": "220",
+      "limitOrFloor": "1000",
+      "status": "ready",
+      "sampledAt": "2026-08-18T12:00:00.000000Z",
+      "sampleClockId": "clock:host:boot-1"
+    },
+    {
+      "contract": "joshi.operational.resource_sample/v1",
+      "sampleId": "sample:host:disk:1",
+      "kind": "disk_free_bytes",
+      "observed": "50000000000",
+      "limitOrFloor": "1000000000",
+      "status": "ready",
+      "sampledAt": "2026-08-18T12:00:00.000000Z",
+      "sampleClockId": "clock:host:boot-1"
+    }
+  ],
+  "transitions": []
+}

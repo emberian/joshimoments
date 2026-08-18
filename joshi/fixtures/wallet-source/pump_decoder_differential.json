@@ -1,0 +1,103 @@
+{
+  "contract": "joshi.pump_decoder_differential.v1",
+  "oracle": {
+    "implementation": "@coral-xyz/anchor BorshInstructionCoder 0.31.1",
+    "pumpPublicDocsCommit": "9c82f61cb711b044a17f770ab8ce9f9bdf78f333",
+    "pumpIdlSha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+    "pumpAmmIdlSha256": "6b5c7ec4e5ef9742fa99dc57b0d75b1031b379bba02a7e1b3c5a4cad68d77e56",
+    "pumpSdkVersion": "1.36.0",
+    "pumpSdkNpmIntegrity": "sha512-X8rf+Wm/p/jhBj6zbwouM9blJ3UW8XJFSL7YTT8osBnpHsOH0ccT0DjCkIi6AAT7b6jf1nM3MXk7l78Fuf1M0g==",
+    "pumpSwapSdkVersion": "1.19.0",
+    "pumpSwapSdkNpmIntegrity": "sha512-ayLO7ESmPOpZfz1hQSiGJBanJVaQTQB/+8yRHiuZnaHIRMTwOYknH1EZr++tPNa+kYJgg8kccU98Jp9RGOdZLQ=="
+  },
+  "vectors": [
+    {
+      "caseId": "pump_buy",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "instructionDataBase58": "i43WeUBGKA6q2CSRB4LFDAccSme4GqLQd5",
+      "instructionDataHex": "66063d1201daebea64000000000000006f0000000000000000",
+      "expectedKind": "pump_buy",
+      "expectedIntentKind": "exact_base_out_buy",
+      "expectedTrackVolume": "idl_none",
+      "firstAtoms": "100",
+      "secondAtoms": "111"
+    },
+    {
+      "caseId": "pump_sell",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "instructionDataBase58": "5jRcjdixRUDemP9pKTYa4xnjjeTyS4AfR",
+      "instructionDataHex": "33e685a4017f83adc800000000000000be00000000000000",
+      "expectedKind": "pump_sell",
+      "expectedIntentKind": "exact_base_in_sell",
+      "expectedTrackVolume": "field_absent",
+      "firstAtoms": "200",
+      "secondAtoms": "190"
+    },
+    {
+      "caseId": "pump_buy_v2",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "instructionDataBase58": "HnQ14hy6fxG4jWLF8iUx84jH4KW2Gf5pB",
+      "instructionDataHex": "b817ee6167c5d33d2c010000000000004d01000000000000",
+      "expectedKind": "pump_buy_v2",
+      "expectedIntentKind": "exact_base_out_buy",
+      "expectedTrackVolume": "field_absent",
+      "firstAtoms": "300",
+      "secondAtoms": "333"
+    },
+    {
+      "caseId": "pump_sell_v2",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "instructionDataBase58": "9Zq9ZwMbe2c1syc5PjxL95gYjkMQJmio1",
+      "instructionDataHex": "5df6823ce7e940b290010000000000007c01000000000000",
+      "expectedKind": "pump_sell_v2",
+      "expectedIntentKind": "exact_base_in_sell",
+      "expectedTrackVolume": "field_absent",
+      "firstAtoms": "400",
+      "secondAtoms": "380"
+    },
+    {
+      "caseId": "pump_buy_exact_quote_in_v2",
+      "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "instructionDataBase58": "JkK5BJGr6ZHKY4uLrgmHgzkEYLgAi2xfH",
+      "instructionDataHex": "c2ab1c46684d5b2ff401000000000000c201000000000000",
+      "expectedKind": "pump_buy_exact_quote_in_v2",
+      "expectedIntentKind": "exact_quote_in_buy",
+      "expectedTrackVolume": "field_absent",
+      "firstAtoms": "500",
+      "secondAtoms": "450"
+    },
+    {
+      "caseId": "pumpswap_buy",
+      "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "instructionDataBase58": "i43WeUBGKA6iV6qAARGxLJGT6YZvkNtDuZ",
+      "instructionDataHex": "66063d1201daebea58020000000000009a0200000000000000",
+      "expectedKind": "pump_swap_buy",
+      "expectedIntentKind": "exact_base_out_buy",
+      "expectedTrackVolume": "idl_none",
+      "firstAtoms": "600",
+      "secondAtoms": "666"
+    },
+    {
+      "caseId": "pumpswap_buy_exact_quote_in",
+      "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "instructionDataBase58": "2Nk86asu1ki9dE5y4DSJcnXV1B66YqmL3fd",
+      "instructionDataHex": "c62e1552b4d9e870bc02000000000000760200000000000000",
+      "expectedKind": "pump_swap_buy_exact_quote_in",
+      "expectedIntentKind": "exact_quote_in_buy",
+      "expectedTrackVolume": "idl_none",
+      "firstAtoms": "700",
+      "secondAtoms": "630"
+    },
+    {
+      "caseId": "pumpswap_sell",
+      "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "instructionDataBase58": "5jRcjdixRUDJ2EeDVqALvVYYjLpzt852F",
+      "instructionDataHex": "33e685a4017f83ad2003000000000000f802000000000000",
+      "expectedKind": "pump_swap_sell",
+      "expectedIntentKind": "exact_base_in_sell",
+      "expectedTrackVolume": "field_absent",
+      "firstAtoms": "800",
+      "secondAtoms": "760"
+    }
+  ]
+}

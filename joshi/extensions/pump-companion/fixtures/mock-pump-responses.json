@@ -1,0 +1,89 @@
+{
+  "captures": [
+    {
+      "url": "https://frontend-api-v3.pump.fun/callout/recent?limit=2&pageToken=opaque",
+      "pagePath": "/",
+      "capturedAt": "2026-08-16T12:00:00.000Z",
+      "body": {
+        "callouts": [
+          {
+            "id": "call-1",
+            "userId": "CallerWallet1111111111111111111111111111111",
+            "coinMint": "MintAlpha11111111111111111111111111111111",
+            "thesis": "community is arriving",
+            "createdAt": 1786881600000,
+            "calloutPrice": 0.0000042,
+            "marketCap": 25000,
+            "multiple": 12.5,
+            "maxPriceSol": 0.0000525,
+            "peakTimestamp": 1786882600000
+          },
+          {
+            "id": "call-2",
+            "userId": "CallerWallet2222222222222222222222222222222",
+            "coinMint": "MintBeta222222222222222222222222222222222",
+            "thesis": "watching the handoff",
+            "createdAt": 1786881601000,
+            "calloutPrice": "0.0000081",
+            "marketCap": "42000"
+          }
+        ],
+        "nextPageToken": "not-exported"
+      }
+    },
+    {
+      "url": "https://api.coin-communities.xyz/api/v1/communities/MintAlpha11111111111111111111111111111111/messages/public?limit=2",
+      "pagePath": "/coin/MintAlpha11111111111111111111111111111111",
+      "capturedAt": "2026-08-16T12:00:01.000Z",
+      "body": {
+        "messages": [
+          {
+            "id": "message-1",
+            "userId": "user-uuid-1",
+            "username": "operator_one",
+            "walletAddress": "AuthorWallet111111111111111111111111111111",
+            "content": "creator replied in the stream",
+            "createdAt": "2026-08-16T11:59:59.000Z",
+            "likeCount": 3,
+            "replyCount": 1,
+            "isSpam": false,
+            "authorization": "Bearer never-export-this"
+          },
+          {
+            "id": "message-2",
+            "username": "operator_two",
+            "content": "same audience is crossing over",
+            "createdAt": "2026-08-16T12:00:00.500Z",
+            "likeCount": 1,
+            "replyCount": 0
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://frontend-api-v3.pump.fun/coins-v2/MintAlpha11111111111111111111111111111111",
+      "pagePath": "/coin/MintAlpha11111111111111111111111111111111",
+      "capturedAt": "2026-08-16T12:00:02.000Z",
+      "body": {
+        "mint": "MintAlpha11111111111111111111111111111111",
+        "name": "Alpha",
+        "symbol": "ALPHA",
+        "creator": "CreatorWallet1111111111111111111111111111",
+        "complete": false,
+        "reply_count": 17,
+        "market_cap": 25000,
+        "token_program": "not-canonical-and-not-exported",
+        "x-api-key": "never-export-this-either"
+      }
+    }
+  ],
+  "expected": {
+    "records": 5,
+    "digest": "637dd49060aa684e388484f156479876a8293a0c238296742164478fa1febed5",
+    "kinds": {
+      "callout-feed-item": 2,
+      "coin-current": 1,
+      "community-message": 2
+    }
+  }
+}

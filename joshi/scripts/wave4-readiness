@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_W4_CREATED_STATE=0
+if [ "${JOSHI_W4_STATE:-}" = "" ]; then
+  JOSHI_W4_STATE=$(mktemp -d /tmp/joshi-wave4-readiness.XXXXXX)
+  JOSHI_W4_CREATED_STATE=1
+fi
+case "$JOSHI_W4_STATE" in
+  /tmp/joshi-wave4-readiness.*) ;;
+  *)
+    echo "JOSHI_W4_STATE must be an explicit /tmp/joshi-wave4-readiness.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_W4_STATE
+unset JOSHI_READINESS_STATE
+
+cleanup() {
+  if [ "$JOSHI_W4_CREATED_STATE" -eq 1 ]; then
+    echo "wave4 witness retained at $JOSHI_W4_STATE/wave4-witness.json" >&2
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+# The existing root walk is the complete offline build/test/lint/doc/schema/Glass/companion/
+# analysis authority gate. It also rejects economic or signing dependencies in core.
+./scripts/offline-readiness
+
+# Re-run the deterministic component walk into a retained state so the Wave 4 witness can bind
+# its exact JSON rather than trusting terminal text emitted by the broader gate.
+mkdir -p "$JOSHI_W4_STATE/component"
+cargo run --locked --offline -p joshi-core -- offline-readiness \
+  --state "$JOSHI_W4_STATE/component" > "$JOSHI_W4_STATE/component-readiness.json"
+
+JOSHI_COMPONENT_SHA=$(shasum -a 256 "$JOSHI_W4_STATE/component-readiness.json" | awk '{print $1}')
+JOSHI_SCHEMA_SHA=$(shasum -a 256 schema/migrations/0008_semantic_artifact_durability.sql | awk '{print $1}')
+
+# `useful_partial` is deliberate and non-gameable. No fixture, schema row, or green unit test may
+# impersonate continuous live supervision, a durable publication/export/import walk, or an Ember
+# prospective episode supported by non-fixture evidence after protocol registration.
+printf '%s\n' "{\"contract\":\"joshi.wave4.operational_witness\",\"schemaVersion\":1,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"componentReadinessDigest\":\"sha256:$JOSHI_COMPONENT_SHA\",\"catalogMigrationDigest\":\"sha256:$JOSHI_SCHEMA_SHA\",\"gates\":{\"workspaceOffline\":\"passed\",\"schemaFreshAndUpgrade\":\"passed\",\"glassOffline\":\"passed\",\"companionOffline\":\"passed\",\"analysisOffline\":\"passed\",\"economicAuthorityDependencyAudit\":\"passed\"},\"openQualification\":{\"continuousNonfixtureSourceSupervision\":true,\"durableProjectionAndCockpitPublicationWalk\":true,\"productionExportValidationAndArtifactImportWalk\":true,\"launchBoundPairingAndStoreResolvedChoiceAdmission\":true,\"durableOutcomeInterviewKnowledgeClosure\":true,\"nonfixtureOccurrenceDuringProspectiveWindow\":true,\"emberProspectiveEpisode\":true},\"claim\":\"structural_and_fixture_readiness_only\"}" \
+  > "$JOSHI_W4_STATE/wave4-witness.json"
+
+cat "$JOSHI_W4_STATE/wave4-witness.json"

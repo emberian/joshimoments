@@ -1,0 +1,7 @@
+[alias]
+check-all = "check --workspace --all-targets"
+test-all = "test --workspace --all-targets"
+
+[term]
+color = "auto"
+

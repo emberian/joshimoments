@@ -1,0 +1,18 @@
+{
+  "normal": {
+    "pressureStage": "full",
+    "recordKinds": ["degraded", "desired", "desired", "degraded"],
+    "activeIntentIds": ["intent-high", "intent-losing"],
+    "absentIntentIds": ["intent-cold", "intent-model"],
+    "retainedCensusIds": ["census-independent-40"],
+    "inactiveModelProposalIntentIds": ["intent-model"]
+  },
+  "overload": {
+    "pressureStage": "denominator_only",
+    "recordKinds": ["degraded", "degraded", "degraded", "degraded"],
+    "activeIntentIds": [],
+    "absentIntentIds": ["intent-cold", "intent-high", "intent-losing", "intent-model"],
+    "retainedCensusIds": ["census-independent-40"],
+    "inactiveModelProposalIntentIds": ["intent-model"]
+  }
+}

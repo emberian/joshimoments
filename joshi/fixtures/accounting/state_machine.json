@@ -1,0 +1,260 @@
+{
+  "schema_version": "joshi.accounting.state_machine.v1",
+  "cases": [
+    {
+      "name": "partial_runner_flat_watch_reentry",
+      "episode_id": "episode-a",
+      "expected_total_realized": { "asset": "sol", "amount": { "numerator": "68", "denominator": "1" }, "quality": "known" },
+      "initial": [
+        { "account": "wallet-sol", "asset": "sol", "atoms": "200" },
+        { "account": "wallet-token-a", "asset": "token-a", "atoms": "0" }
+      ],
+      "steps": [
+        {
+          "effect_id": "buy-1",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "99" },
+            { "account": "wallet-token-a", "asset": "token-a", "atoms": "1000" }
+          ],
+          "classification": {
+            "kind": "acquisition",
+            "asset": "token-a",
+            "quantity_atoms": "1000",
+            "lot_id": "lot-a",
+            "basis_asset": "sol",
+            "basis_atoms": "101",
+            "epoch_index": "1",
+            "cash_atoms": "101"
+          },
+          "episode_quantity_after": "1000",
+          "expected": {
+            "observed_atoms": "1000",
+            "lot_atoms": "1000",
+            "basis_quality": "known",
+            "basis_asset": "sol",
+            "basis": { "numerator": "101", "denominator": "1" },
+            "realized": null,
+            "capital": { "kind": "not_recovered", "atoms": "101" },
+            "episode_phase": "invested",
+            "epoch_index": "1"
+          }
+        },
+        {
+          "effect_id": "sell-partial",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "218" },
+            { "account": "wallet-token-a", "asset": "token-a", "atoms": "400" }
+          ],
+          "classification": {
+            "kind": "disposal",
+            "asset": "token-a",
+            "quantity_atoms": "600",
+            "allocations": [
+              { "lot_id": "lot-a", "quantity_atoms": "600" }
+            ],
+            "proceeds_asset": "sol",
+            "proceeds_atoms": "119",
+            "epoch_index": "1",
+            "cash_atoms": "119"
+          },
+          "episode_quantity_after": "400",
+          "expected": {
+            "observed_atoms": "400",
+            "lot_atoms": "400",
+            "basis_quality": "known",
+            "basis_asset": "sol",
+            "basis": { "numerator": "202", "denominator": "5" },
+            "realized": { "asset": "sol", "amount": { "numerator": "292", "denominator": "5" }, "quality": "known" },
+            "capital": { "kind": "recovered", "atoms": "18" },
+            "episode_phase": "invested",
+            "epoch_index": "1"
+          }
+        },
+        {
+          "effect_id": "sell-rest",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "268" },
+            { "account": "wallet-token-a", "asset": "token-a", "atoms": "0" }
+          ],
+          "classification": {
+            "kind": "disposal",
+            "asset": "token-a",
+            "quantity_atoms": "400",
+            "allocations": [
+              { "lot_id": "lot-a", "quantity_atoms": "400" }
+            ],
+            "proceeds_asset": "sol",
+            "proceeds_atoms": "50",
+            "epoch_index": "1",
+            "cash_atoms": "50"
+          },
+          "episode_quantity_after": "0",
+          "continue_watching_flat": true,
+          "expected": {
+            "observed_atoms": "0",
+            "lot_atoms": "0",
+            "basis_quality": "known",
+            "basis_asset": "sol",
+            "basis": { "numerator": "0", "denominator": "1" },
+            "realized": { "asset": "sol", "amount": { "numerator": "48", "denominator": "5" }, "quality": "known" },
+            "capital": { "kind": "recovered", "atoms": "68" },
+            "episode_phase": "watching_flat",
+            "epoch_index": "1"
+          }
+        },
+        {
+          "effect_id": "reenter-1",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "238" },
+            { "account": "wallet-token-a", "asset": "token-a", "atoms": "200" }
+          ],
+          "classification": {
+            "kind": "acquisition",
+            "asset": "token-a",
+            "quantity_atoms": "200",
+            "lot_id": "lot-b",
+            "basis_asset": "sol",
+            "basis_atoms": "30",
+            "epoch_index": "2",
+            "cash_atoms": "30"
+          },
+          "episode_quantity_after": "200",
+          "expected": {
+            "observed_atoms": "200",
+            "lot_atoms": "200",
+            "basis_quality": "known",
+            "basis_asset": "sol",
+            "basis": { "numerator": "30", "denominator": "1" },
+            "realized": null,
+            "capital": { "kind": "not_recovered", "atoms": "30" },
+            "episode_phase": "invested",
+            "epoch_index": "2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown_external_basis_and_outflow",
+      "episode_id": null,
+      "expected_total_realized": null,
+      "initial": [
+        { "account": "wallet-sol", "asset": "sol", "atoms": "10" },
+        { "account": "wallet-token-b", "asset": "token-b", "atoms": "0" }
+      ],
+      "steps": [
+        {
+          "effect_id": "external-in",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "10" },
+            { "account": "wallet-token-b", "asset": "token-b", "atoms": "777" }
+          ],
+          "classification": {
+            "kind": "external_inflow_unknown",
+            "asset": "token-b",
+            "quantity_atoms": "777",
+            "lot_id": "unknown-lot"
+          },
+          "episode_quantity_after": null,
+          "expected": {
+            "observed_atoms": "777",
+            "lot_atoms": "777",
+            "basis_quality": "unknown",
+            "basis_asset": null,
+            "basis": null,
+            "realized": null,
+            "capital": null,
+            "episode_phase": null,
+            "epoch_index": null
+          }
+        },
+        {
+          "effect_id": "external-out",
+          "after": [
+            { "account": "wallet-sol", "asset": "sol", "atoms": "10" },
+            { "account": "wallet-token-b", "asset": "token-b", "atoms": "700" }
+          ],
+          "classification": {
+            "kind": "external_outflow",
+            "asset": "token-b",
+            "quantity_atoms": "77",
+            "allocations": [
+              { "lot_id": "unknown-lot", "quantity_atoms": "77" }
+            ]
+          },
+          "episode_quantity_after": null,
+          "expected": {
+            "observed_atoms": "700",
+            "lot_atoms": "700",
+            "basis_quality": "unknown",
+            "basis_asset": null,
+            "basis": null,
+            "realized": null,
+            "capital": null,
+            "episode_phase": null,
+            "epoch_index": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "custody_move_has_zero_household_effect",
+      "episode_id": null,
+      "expected_total_realized": null,
+      "initial": [
+        { "account": "wallet-a", "asset": "token-c", "atoms": "10" },
+        { "account": "wallet-b", "asset": "token-c", "atoms": "0" }
+      ],
+      "steps": [
+        {
+          "effect_id": "internal-move",
+          "after": [
+            { "account": "wallet-a", "asset": "token-c", "atoms": "0" },
+            { "account": "wallet-b", "asset": "token-c", "atoms": "10" }
+          ],
+          "classification": { "kind": "custody_only" },
+          "episode_quantity_after": null,
+          "expected": {
+            "observed_atoms": "10",
+            "lot_atoms": "0",
+            "basis_quality": "known",
+            "basis_asset": null,
+            "basis": null,
+            "realized": null,
+            "capital": null,
+            "episode_phase": null,
+            "epoch_index": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unclassified_inflow_stays_a_visible_residual",
+      "episode_id": null,
+      "expected_total_realized": null,
+      "initial": [
+        { "account": "wallet-d", "asset": "token-d", "atoms": "0" }
+      ],
+      "steps": [
+        {
+          "effect_id": "mystery-in",
+          "after": [
+            { "account": "wallet-d", "asset": "token-d", "atoms": "25" }
+          ],
+          "classification": { "kind": "unclassified" },
+          "episode_quantity_after": null,
+          "expected": {
+            "observed_atoms": "25",
+            "lot_atoms": "0",
+            "basis_quality": "known",
+            "basis_asset": null,
+            "basis": null,
+            "realized": null,
+            "capital": null,
+            "episode_phase": null,
+            "epoch_index": null
+          }
+        }
+      ]
+    }
+  ]
+}
