@@ -124,6 +124,27 @@ impl SqliteStore {
         )
     }
 
+    /// Applies the forward-only ledger through the Wave 5 V9 baseline and stops before G0 tables.
+    ///
+    /// This narrow bootstrap boundary exists so one real prior Snapshot V2 export/import can be
+    /// committed before the same catalog advances to V10. It never removes a migration and refuses
+    /// a catalog that has already advanced beyond V9.
+    ///
+    /// # Errors
+    ///
+    /// Fails in read-only mode, on migration drift, after V10, or when `SQLite` rejects a migration.
+    pub fn migrate_wave5_baseline_v9(
+        &mut self,
+        applied_at: UtcTimestamp,
+    ) -> Result<MigrationReport> {
+        self.require_writer()?;
+        migration::migrate_through(
+            &mut self.connection,
+            positive_timestamp_us(applied_at, "migration applied_at")?,
+            9,
+        )
+    }
+
     /// Registers a versioned source contract, idempotently for an exact retry.
     ///
     /// # Errors

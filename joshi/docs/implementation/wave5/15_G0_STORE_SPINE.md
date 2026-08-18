@@ -24,6 +24,16 @@ or execution authority.
   `provider_body` observation. Ordinary direct admission does not accept or synthesize this
   selection, and the selection contract is permanently labeled `offline_fixture_only`.
 
+## Forward-only V9 baseline bootstrap
+
+`SqliteStore::migrate_wave5_baseline_v9` applies the compiled ledger only through migration 9 so
+the same new catalog can commit one real prior Snapshot V2 export/import before G0 relations exist.
+It is idempotent only while the catalog remains at V9. The ordinary `migrate` call then advances the
+same file to V10; any attempt to target V9 after that point refuses as a migration conflict. This is
+not a downgrade, alternate schema authority, or permission to operate indefinitely on an old
+catalog. Its sole purpose is to remove the first-V10 export/import history cycle without inserting
+synthetic rows.
+
 ## Frozen V10 relations
 
 Migration: `schema/migrations/0010_wave5_g0_store_spine.sql`.

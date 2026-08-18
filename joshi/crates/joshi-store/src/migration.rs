@@ -136,8 +136,24 @@ pub(crate) fn configure_reader(connection: &Connection) -> Result<()> {
 }
 
 pub(crate) fn migrate(connection: &mut Connection, applied_at_us: i64) -> Result<MigrationReport> {
+    let target = MIGRATIONS.last().map_or(0, |migration| migration.id);
+    migrate_through(connection, applied_at_us, target)
+}
+
+pub(crate) fn migrate_through(
+    connection: &mut Connection,
+    applied_at_us: i64,
+    target: i64,
+) -> Result<MigrationReport> {
+    let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current > target || !MIGRATIONS.iter().any(|migration| migration.id == target) {
+        return Err(StoreError::MigrationConflict {
+            migration: target.to_string(),
+            detail: format!("cannot move forward from migration {current} to target {target}"),
+        });
+    }
     let mut applied = Vec::new();
-    for migration in MIGRATIONS {
+    for migration in MIGRATIONS.iter().filter(|migration| migration.id <= target) {
         let digest = format!("{:x}", Sha256::digest(migration.sql.as_bytes()));
         let has_ledger: bool = connection
             .query_row(
@@ -268,4 +284,35 @@ pub(crate) fn verify_runtime(
         application_id,
         user_version,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wave5_baseline_target_is_forward_only_and_resumable() {
+        let root = tempfile::tempdir().expect("temporary migration root");
+        let path = root.path().join("catalog.sqlite");
+        let mut connection = Connection::open(&path).expect("open catalog");
+        configure_writer(&connection).expect("configure writer");
+
+        let baseline =
+            migrate_through(&mut connection, 1_786_000_000_000_000, 9).expect("apply V9 baseline");
+        assert_eq!(baseline.current, 9);
+        assert_eq!(baseline.applied, (1..=9).collect::<Vec<_>>());
+
+        let retry = migrate_through(&mut connection, 1_786_000_000_000_001, 9)
+            .expect("idempotent V9 retry");
+        assert_eq!(retry.current, 9);
+        assert!(retry.applied.is_empty());
+
+        let current = migrate(&mut connection, 1_786_000_000_000_002).expect("advance to V10");
+        assert_eq!(current.current, 10);
+        assert_eq!(current.applied, vec![10]);
+
+        let error = migrate_through(&mut connection, 1_786_000_000_000_003, 9)
+            .expect_err("baseline migration cannot downgrade V10");
+        assert!(matches!(error, StoreError::MigrationConflict { .. }));
+    }
 }

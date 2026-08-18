@@ -67,6 +67,12 @@ orchestration must resolve it from private store state, perform its own restart 
 pure exporter, and only then durably commit/qualify the exact output. The exporter never self-mints
 a store receipt.
 
+A fresh G0 catalog must not fabricate those prior export/import rows. The store therefore exposes a
+single forward-only bootstrap: migrate the new catalog through V9, commit and independently reopen
+one real Snapshot V2 plus restricted descriptive artifact, then apply migration 10. V10 export can
+only consume that retained history through the private store wrapper. Targeting V9 after V10 is a
+migration conflict, and direct SQL seeding does not satisfy this path.
+
 ## Durable snapshot validation
 
 Snapshot installation is preceded by a manifest-level independent directory reopen over the exact
