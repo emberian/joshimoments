@@ -47,11 +47,12 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one latest V12 catalog, commits the checked fixture, makes an exact idempotent
-retry, drops the writer, and independently loads the registration through a read-only store. Its
-JSON report fixes `status=fixture_only`, the unverified ceiling, zero consumed gates/provider
-units/external mutation units, and false operational/empirical/product/live fields. A repeated
-invocation returns the same original commit identity.
+It creates or reopens one latest V12 catalog, commits the checked fixture and all six registered
+schema documents, makes exact idempotent retries, drops the writer, and independently loads the
+registration/schema catalog through a read-only store. Its V2 JSON report fixes
+`status=fixture_only`, the unverified ceiling, zero consumed gates/provider units/external mutation
+units, and false operational/empirical/product/live fields. A repeated invocation returns the same
+original commit identities.
 
 ## Refusals and ceiling
 

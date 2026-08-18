@@ -13,6 +13,21 @@ const PROGRAM_ID: &str = "w6-program-fixture-001";
 const BATCH_ID: &str = "wave6:program-registration:fixture-001";
 const AUTHORITY: &str = "read_record_replay_propose_shadow_only";
 
+struct SchemaFixture {
+    kind_id: &'static str,
+    bytes: &'static [u8],
+}
+
+/// One exact schema row retained by the Core witness.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6ArtifactSchemaReport {
+    pub kind_id: String,
+    pub schema_id: String,
+    pub schema_digest: String,
+    pub commit_seq: String,
+}
+
 /// Machine-readable, non-promoting result of the N00 durable fixture walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +47,10 @@ pub struct Wave6ProgramRegistrationReport {
     pub retry_status: IdempotencyStatus,
     pub registration_persisted: bool,
     pub restart_reverified: bool,
+    pub registered_schema_count: String,
+    pub schemas: Vec<Wave6ArtifactSchemaReport>,
+    pub schema_catalog_persisted: bool,
+    pub schema_catalog_restart_reverified: bool,
     pub consumed_wave5_gate_count: &'static str,
     pub provider_units: &'static str,
     pub external_mutation_units: &'static str,
@@ -79,7 +98,8 @@ pub fn run_wave6_program_registration(
             "first Wave 6 registration returned an impossible receipt",
         ));
     }
-    let retry = store.commit_wave6_program_registration_v1(REGISTRATION, batch_id, writer_build)?;
+    let retry =
+        store.commit_wave6_program_registration_v1(REGISTRATION, batch_id, writer_build.clone())?;
     if retry.status != IdempotencyStatus::Idempotent
         || retry.program_id != accepted.program_id
         || retry.registration_digest != accepted.registration_digest
@@ -91,6 +111,7 @@ pub fn run_wave6_program_registration(
             "exact Wave 6 registration retry changed durable identity",
         ));
     }
+    let schema_reports = commit_schemas(&mut store, &accepted.program_id, &writer_build)?;
     drop(store);
 
     let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly)?;
@@ -112,10 +133,11 @@ pub fn run_wave6_program_registration(
             "Wave 6 registration changed across read-only reopen",
         ));
     }
+    verify_schemas(&reopened, &program_id, &schema_reports)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v1",
-        schema_version: 1,
+        contract: "joshi.core.wave6_program_registration_report.v2",
+        schema_version: 2,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -128,6 +150,10 @@ pub fn run_wave6_program_registration(
         retry_status: retry.status,
         registration_persisted: true,
         restart_reverified: true,
+        registered_schema_count: schema_reports.len().to_string(),
+        schemas: schema_reports,
+        schema_catalog_persisted: true,
+        schema_catalog_restart_reverified: true,
         consumed_wave5_gate_count: "0",
         provider_units: "0",
         external_mutation_units: "0",
@@ -137,6 +163,129 @@ pub fn run_wave6_program_registration(
         product_qualified: false,
         live_qualified: false,
     })
+}
+
+fn commit_schemas(
+    store: &mut SqliteStore,
+    program_id: &StableString,
+    writer_build: &StableString,
+) -> Result<Vec<Wave6ArtifactSchemaReport>, Wave6RegistrationError> {
+    let mut reports = Vec::with_capacity(schemas().len());
+    for fixture in schemas() {
+        let kind_id = StableString::new(fixture.kind_id)?;
+        let batch_id = StableString::new(format!("wave6:schema:{}", fixture.kind_id))?;
+        let accepted = store.commit_wave6_artifact_schema_v1(
+            program_id,
+            kind_id.clone(),
+            fixture.bytes,
+            batch_id.clone(),
+            writer_build.clone(),
+        )?;
+        if !matches!(
+            accepted.status,
+            IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+        ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 schema returned an impossible first receipt",
+            ));
+        }
+        let retry = store.commit_wave6_artifact_schema_v1(
+            program_id,
+            kind_id,
+            fixture.bytes,
+            batch_id,
+            writer_build.clone(),
+        )?;
+        if retry.status != IdempotencyStatus::Idempotent
+            || retry.kind_id != accepted.kind_id
+            || retry.schema_id != accepted.schema_id
+            || retry.schema_digest != accepted.schema_digest
+            || retry.commit_seq != accepted.commit_seq
+            || retry.commit_digest != accepted.commit_digest
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "exact Wave 6 schema retry changed durable identity",
+            ));
+        }
+        reports.push(Wave6ArtifactSchemaReport {
+            kind_id: accepted.kind_id.to_string(),
+            schema_id: accepted.schema_id.to_string(),
+            schema_digest: accepted.schema_digest.to_string(),
+            commit_seq: accepted.commit_seq.get().to_string(),
+        });
+    }
+    Ok(reports)
+}
+
+fn verify_schemas(
+    store: &SqliteStore,
+    program_id: &StableString,
+    reports: &[Wave6ArtifactSchemaReport],
+) -> Result<(), Wave6RegistrationError> {
+    if reports.len() != schemas().len() {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 schema catalog has the wrong cardinality",
+        ));
+    }
+    for (fixture, report) in schemas().into_iter().zip(reports) {
+        if fixture.kind_id != report.kind_id {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 schema order changed before restart readback",
+            ));
+        }
+        let kind_id = StableString::new(fixture.kind_id)?;
+        let stored = store
+            .load_wave6_artifact_schema_v1(program_id, &kind_id)?
+            .ok_or(Wave6RegistrationError::Invariant(
+                "Wave 6 schema was absent after restart",
+            ))?;
+        if stored.kind_id.as_str() != report.kind_id
+            || stored.schema_id.as_str() != report.schema_id
+            || stored.schema_digest.as_str() != report.schema_digest
+            || stored.commit_seq.get().to_string() != report.commit_seq
+            || stored.exact_bytes != fixture.bytes
+            || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 schema changed across read-only reopen",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn schemas() -> [SchemaFixture; 6] {
+    [
+        SchemaFixture {
+            kind_id: "campaign_registration_fixture",
+            bytes: include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json"),
+        },
+        SchemaFixture {
+            kind_id: "known_truth_evaluation_fixture",
+            bytes: include_bytes!("../../../fixtures/wave6/schemas/known_truth_evaluation_v1.json"),
+        },
+        SchemaFixture {
+            kind_id: "market_atlas_fixture",
+            bytes: include_bytes!("../../../fixtures/wave6/schemas/market_atlas_snapshot_v1.json"),
+        },
+        SchemaFixture {
+            kind_id: "protocol_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
+            ),
+        },
+        SchemaFixture {
+            kind_id: "research_proposal_fixture",
+            bytes: include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json"),
+        },
+        SchemaFixture {
+            kind_id: "structural_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
+            ),
+        },
+    ]
 }
 
 fn config(root: &Path) -> Result<StoreConfig, Wave6RegistrationError> {
@@ -192,6 +341,10 @@ mod tests {
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);
         assert!(first.restart_reverified);
+        assert_eq!(first.registered_schema_count, "6");
+        assert_eq!(first.schemas.len(), 6);
+        assert!(first.schema_catalog_persisted);
+        assert!(first.schema_catalog_restart_reverified);
         assert_eq!(first.consumed_wave5_gate_count, "0");
         assert!(!first.wave5_gates_resolved);
         assert!(!first.operational_release);
@@ -206,5 +359,6 @@ mod tests {
         assert_eq!(repeated.registration_digest, first.registration_digest);
         assert_eq!(repeated.document_digest, first.document_digest);
         assert_eq!(repeated.accepted_commit_seq, first.accepted_commit_seq);
+        assert_eq!(repeated.schemas, first.schemas);
     }
 }

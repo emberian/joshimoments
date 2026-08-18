@@ -11,10 +11,10 @@ retain, reparse and exact-reopen the canonical zero-provider/zero-mutation fixtu
 and all six schema documents named by its artifact-kind registry. Exact retries are idempotent;
 identity, bytes, kind and schema substitution refuse. This raises only fixture-contract
 durability: `consumedWave5Gates` remains empty, and every receipt remains
-`unverified_semantic_fixture_only`. The bounded Core command exercises fresh program commit, exact
-retry and read-only restart while emitting explicit false gate-resolution, operational, empirical,
-product and live fields. No artifact occurrence, operational release or empirical authority
-follows.
+`unverified_semantic_fixture_only`. The bounded Core V2 command exercises fresh program plus six
+schema commits, exact retries and read-only restart while emitting explicit false gate-resolution,
+operational, empirical, product and live fields. No artifact occurrence, operational release or
+empirical authority follows.
 
 Response-atlas repair re-audit on 2026-08-18 at HEAD
 `c32674a93a41351d9bef79ec25fa03d4da1a4b14` plus the current response-atlas worktree:
