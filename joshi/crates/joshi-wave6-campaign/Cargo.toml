@@ -1,0 +1,18 @@
+[package]
+name = "joshi-wave6-campaign"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+joshi-domain = { path = "../joshi-domain" }
+joshi-wave6-registry = { path = "../joshi-wave6-registry" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

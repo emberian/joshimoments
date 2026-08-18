@@ -1637,6 +1637,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "joshi-wave6-campaign"
+version = "0.1.0"
+dependencies = [
+ "joshi-domain",
+ "joshi-wave6-registry",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "joshi-wave6-registry"
 version = "0.1.0"
 dependencies = [
