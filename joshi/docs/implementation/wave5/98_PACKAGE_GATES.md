@@ -1,12 +1,12 @@
 # Wave 5 package gates
 
 Status: the root gate run was anchored at committed HEAD
-`d62a7cb4684bdc024c28076f1987d6497d5e394b`. The locked/offline workspace and root Wave 5
+`43e2dd1b0ea36aad78ff83e8be59eeae61e3a596`. The locked/offline workspace and root Wave 5
 readiness gates pass. The resulting witnesses are deliberately
 `useful_partial`; they do not qualify live providers, sustained nonfixture supervision,
 publication/product parity, product Glass use, retention, scientific, or economic capabilities.
 
-The root run includes the reviewed Wave 6 Python tree only as a package/test fact: 177 tests and
+The root run includes the reviewed Wave 6 Python tree only as a package/test fact: 187 tests and
 Ruff pass. It does not use those fixture-only analysis contracts to raise any Wave 5 or Wave 6
 semantic ceiling. This lane changed only this gate document.
 
@@ -45,7 +45,7 @@ All commands used `--locked --offline` and covered this focused set:
 | Schema | PASS | `./schema/validate.sh`; all checks passed, including SQLite 3.53.2 validation (10 migrations, 13 commits, 6 observations, 7 assertions). |
 | Glass | PASS | Root walk: 23 files / 157 tests; offline install, typecheck, and default build passed. The explicit G0 inspector build also passed separately. |
 | Pump companion | PASS | Root walk: lint, typecheck, 8 files / 46 tests, mock replay, Chrome/Firefox builds, and manifest audit passed. |
-| Analysis | PASS | `uv sync --frozen --offline --all-groups`, Ruff clean, `pytest`: 177 passed. |
+| Analysis | PASS | `uv sync --frozen --offline --all-groups`, Ruff clean, `pytest`: 187 passed. |
 | Root Wave 5 readiness | PASS, `useful_partial` | `./scripts/wave5-readiness` completed with the Wave 4 structural witness plus Wave 5 ignition, circulation, and partial G0 component witnesses; no live/provider I/O. |
 
 The Wave 6 implementations and review docs are excluded from the Wave 5 qualification claim. No
@@ -53,7 +53,7 @@ production or manifest files were edited by this lane.
 
 ## Witness and exact claim ceiling
 
-The fresh root run retained `/tmp/joshi-wave5-readiness.HgiI6x/wave5-witness.json` and exited
+The fresh root run retained `/tmp/joshi-wave5-readiness.GcVHjU/wave5-witness.json` and exited
 `RC:0`.
 Wave 4 component witness:
 
@@ -71,15 +71,15 @@ Wave 5 witness (`wave5-witness.json`):
 schemaVersion=3
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0ComponentDigest=sha256:dac7a87016be8de40f4c5fab13910385781ff6d62b6698c77eb654a82858a440
-g0EvidenceBundleDigest=sha256:030cb38c1d706178e1cf5012851179210f024bc956644d34a64905befe00aebf
-g0SnapshotId=sha256:d3116eca20358912bf963115dd91f1e4feca626f018aa7a27a4e51f3669a64d1
+g0ComponentDigest=sha256:9eb04a8f7492950147a0a93124d9ab6654610d6614a8d1b8003953a3034b8df0
+g0EvidenceBundleDigest=sha256:51ca4550c151b4eadc0def4354952c1317ee9c327cba19434e6865db8ac921a6
+g0SnapshotId=sha256:439e56c48579f34d27a6d565af3b4cff0d97f38008a9f57926359e011a6b3b98
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
-g0CatalogMigrationDigest=sha256:2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800
+g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
          store_resolved_fixture_source, headed_cockpit_v2_publication,
-         partial_scientific_memory, nonempty_v10_export_import, v10_export_recovered,
-         artifact_bearing_backup_restore, g0_component_28_prefix_recovery
+         censored_scientific_memory, nonempty_v10_export_import, v10_export_recovered,
+         artifact_bearing_backup_restore, g0_component_30_prefix_recovery
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
 criticalSurfaceAccessibility=false; broadParity=false
@@ -87,13 +87,14 @@ claim=offline_run_registration_public_c0_and_partial_g0_component_closure_only
 ```
 
 The ignition detail (`ignition-readiness.json`) independently reports
-`registrationDigest=sha256:13fdba0911e9678e9b87586f1795f69f87bd6dd8cac6ba12c23ce3e38b5c1b4d`,
+`registrationDigest=sha256:7780d28bd1d1a1c6d36f19718eec58f518baed4ad5fde3f1331880bdbde83fcd`,
 `acceptedCommitSeq=1`, `retryStatus=idempotent`, `changedSameIdRefused=true`,
 `durableProgressCount=2`, `circulationClosed=true`, `originSegmentRetained=true`,
 `catalogAckReverified=true`, `restartReverified=true`, and `providerIo=false`.
 
 The same root invocation executes `wave5-g0-source-publication`, checks its fifteen-role evidence
-bundle and nonempty V10 snapshot identity, and refuses to emit the witness if any partial component
+bundle, the eight-occurrence censored-memory closure, and nonempty V10 snapshot identity, and
+refuses to emit the witness if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
 offline component, not a W5-G0/product/live pass.
 
