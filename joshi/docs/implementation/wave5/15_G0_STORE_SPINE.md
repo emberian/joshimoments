@@ -61,8 +61,9 @@ The following table and column names are frozen for G0 readers:
   `created_commit_seq`.
 - `cockpit_v2_head_v1`: `publication_id`, `source_occurrence_id`, `head_sha256`, `head_bytes`,
   `head_byte_length`, `supersedes_head_publication_id`, `authority`, `created_commit_seq`.
-- `scientific_memory_occurrence_v1`: exact act/episode bytes and SHA-256, session and headed-scene
-  identities, opening/closing act identities, logical tick bounds, store-allocated
+- `scientific_memory_occurrence_v1`: exact act, episode, replay, session-close, knowledge-closure,
+  outcome-at-horizon, and interview-disposition bytes and SHA-256; session and headed-scene
+  identities; opening/closing act identities; logical tick bounds; store-allocated
   `queue_generation`, fixture qualification, authority, and `created_commit_seq`.
 - `wave5_g0_pairing_epoch_v1`: origin/epoch, exact wall sample, persisted rate policy, last wall
   observation, carried attempt/issue window IDs, used counts and wall deadlines, invalidation
@@ -104,17 +105,21 @@ Source and publication:
   sole store, checks a two-subject one-hot/one-cold partition, commits prepare/body/head in strict
   order, reopens every exact artifact read-only, and proves an identical second invocation is
   idempotent. A component-local matrix additionally interrupts immediately before and after
-  semantic fact, prepare, body, head, memory act and partial episode, then proves exact convergence
-  after reopen. The act is bound to the exact headed scene with a typed `not_mounted` presentation
-  gap; the episode is partial with only unknown/unresolved/no-trade effects. Its report keeps
-  `fullOfflineFaultWalk`, product and live qualification false because the complete memory closure,
-  other G0 seams and 18-step harness remain outside this component.
+  semantic fact, prepare, body, head, memory act, partial episode, and six-event censored closure,
+  then proves exact convergence after reopen. The act is bound to the exact headed scene with a
+  typed `not_mounted` presentation gap; the episode is partial with only
+  unknown/unresolved/no-trade effects. The closure contains hidden replay, incomplete close,
+  explicitly gapped partial knowledge, missing outcome, retrospective replay, and interview. Its
+  report keeps `fullOfflineFaultWalk`, product and live qualification false because actual
+  presentation, qualified knowledge/outcome, other G0 seams and the 18-step harness remain outside
+  this component.
 
 Scientific memory:
 
 - `commit_scientific_memory_occurrence_v1` holds an immediate writer transaction while rebuilding
-  the durable `MemoryKernel` prefix and validating the next act/episode. Queue generation is
-  store-allocated. Only partial, unresolved G0 episodes are admitted.
+  the durable `MemoryKernel` prefix and validating the next occurrence. Queue generation is
+  store-allocated. Only partial, unresolved G0 episodes and explicitly nonclosed/censored closure
+  states are admitted; complete session, closed knowledge, and available outcome refuse.
 - `load_scientific_memory_occurrence_v1` rebuilds the prefix and revalidates the exact headed
   Cockpit V2 scene.
 

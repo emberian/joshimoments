@@ -79,9 +79,9 @@ relations and parsed again after restart by both Rust and locked offline Python.
 G0 relations. Pairing and backup are deliberately absent; they are separate store/root witnesses,
 not analysis relations. Exact fixture identities are:
 
-- catalog: `sha256:7d8d6b677ddf215ae81b0c6be9bd6e359a9b7d4748db585a2eb63a0b89b4593d`;
-- snapshot: `sha256:fe6facdcf91733f5bb483a53fbda60ed54d40e4ea1384bcdd8111fadc92ecac0`;
-- manifest: `sha256:c3ec855a838a32d3467122170f2e2113a854e169020adf1f1e29783db6a3be2f`.
+- catalog: `sha256:c3857f874eda776c15cf3d6bd6bc225ce674275645f2c591d20f3c539cf1f0d0`;
+- snapshot: `sha256:7027d8751401ff0eff8f2d0a76ade9ac3204d53a9f5b47b046608001e934b0a2`;
+- manifest: `sha256:b639eb93ed95dd3c5488ccc84c735d4a8675dfea1eddd9d76ea01e7cc5b2dec3`.
 
 Regenerate only into absent paths:
 
@@ -97,3 +97,5 @@ uv run --locked --offline --directory analysis joshi-analysis validate --snapsho
 The expected validation receipt reports `table_count=24` and `total_row_count=10`. The public CAS
 readback descriptor is neutral and cannot establish store authority; only store-owned orchestration
 may resolve it from private state and durably qualify/commit the resulting export.
+The analysis snapshot intentionally exports the act and episode semantic relations only. The six
+later censored-memory occurrences are store/restart evidence, not yet frozen analysis relations.

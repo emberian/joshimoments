@@ -61,11 +61,11 @@ artifact index rather than a completed root occurrence and keeps every qualifica
 | Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **PASS only as a joined durable offline-fixture component; BLOCKED root/live** | `wave5-g0-source-publication` derives the source occurrence from the receipt over the supervisor-owned Pump segment and decoded provider bytes, then fully rederives it after read-only reopen and exact retry. A nonfixture source and the remaining root components are absent. |
 | Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The explicit inspector returns a bounded, store-rederived head index and those exact body/head bytes under a durable scoped session, but default `Serve` and the product remain unmounted and the other root seams are absent. |
 | Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication + Glass inspection protocol; BLOCKED default-product/root G0** | The SQLite exchange opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. The explicit Glass inspector independently parses and recomputes the V2 closure without action sinks. Default `Serve`/Glass remain unavailable, no browser instance was connected for UI QA, and no product presentation occurrence or complete root evidence bundle exists. |
-| Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable act + partial episode prefix; BLOCKED complete chain/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap plus one partial unresolved/no-trade episode in strict queue order. The store intentionally refuses the later session/outcome/reveal/interview states, so the required complete chain remains absent. |
+| Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable censored fixture chain; BLOCKED qualified presentation/outcome/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap, a partial unresolved/no-trade episode, hidden replay, incomplete close, explicitly gapped partial knowledge, missing outcome, retrospective replay, and interview in strict queue/commit order. Complete session, closed knowledge, and available outcome are adversarially refused. The chain remains `unverified_semantic`: no actual product presentation or qualified outcome exists. |
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS as a joined durable offline-fixture component; BLOCKED complete root/live** | Core copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the restricted manifest plus Parquet CAS. It then creates an immutable input backup, runs the private backup-bound 24-table V10 wrapper, independently validates Rust/Python readback, commits the exact snapshot, and captures it in the final backup. This remains fixture-only and does not imply status recovery, product use, or root completion. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS as a joined durable offline-fixture export recovery; BLOCKED root/live** | Core commits `export_stale`, starts recovery before the immutable input backup, commits the V10 snapshot, and adds a canonical same-run export binding. `RecoveryVerified/Ready` cites only that binding's exact commit sequence and commit digest; store semantics reject a production receipt or unrelated commit. The full chain reopens exactly but does not imply product, live, or root readiness. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS as isolated durable and joined partial store backup/restore; BLOCKED complete inventory/fault/root** | The public-API test still proves original-root removal and tamper refusal. Core now additionally joins the actual writer to the same partial occurrence, with a 1 KiB external source object, nonempty inventory, distinct backup/restore roots, exact retry and restart readback. That joined path does not hide the original roots or include the separate supervisor spool inventory, so it is not the final recovery set. |
-| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + partial baseline mapping; BLOCKED full executable/root** | The source/publication/memory/status/export/backup implementation passes twenty-eight exact before/after component interruptions, including recovery start, V10 input backup, production export, run binding, and recovery-ready boundaries. The root-workspace harness still maps only fifteen exact artifacts to `observed_partial`; reservation fault injection and the other required steps are incomplete and it does not execute all 37 scenarios. |
+| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + partial baseline mapping; BLOCKED full executable/root** | The source/publication/memory/status/export/backup implementation passes thirty exact before/after component interruptions, adding the censored memory closure boundary to recovery start, V10 input backup, production export, run binding, and recovery-ready boundaries. The root-workspace harness still maps only fifteen exact artifacts to `observed_partial`; reservation fault injection and the other required steps are incomplete and it does not execute all 37 scenarios. |
 | Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as a fifteen-role partial artifact bundle; BLOCKED root** | The component report binds reservation, origin, receipt, binding, ACK, fact, prepare, head, act, episode, committed V10 export manifest, restricted import, recovered status, backup and restore identities/digests, with one exact role per observed step. Paired-read fault evidence and final no-original-root reopen remain absent; both qualification bits stay false. |
 
 ## Red-team invariants for landing components
@@ -177,8 +177,9 @@ W5-G0 remain **BLOCKED**.
 The private scientific-memory writer initially had a parallel atomicity defect: it rebuilt and
 validated the semantic kernel prefix before opening its `IMMEDIATE` transaction. That validation
 and idempotency check now run beneath the writer transaction, closing the stale-prefix race. The
-writer still deliberately admits only operator acts and partial unresolved episodes, not the
-complete G0 memory chain.
+writer now also admits the exact nonclosed/censored fixture states through interview, while
+refusing complete session, closed knowledge, and available outcome. This closes a censored durable
+prefix only, not qualified presentation, outcome, or the complete root chain.
 
 ### P0 intercepted — initial pairing wire/state changes did not round-trip
 
@@ -394,7 +395,7 @@ validation unconditionally rejects a positive root Boolean.
 ## Targeted verification during this review
 
 - Final store/schema audit used frozen migration 0010 SHA-256
-  `2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800`.
+  `92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b`.
   `cargo fmt --all -- --check`, schema validation, store all-target tests (14 unit plus one
   authority integration), strict store Clippy and store rustdoc all pass on that frozen tree.
 - `cargo check --locked --offline -p joshi-store -p joshi-export -p joshi-core
@@ -433,14 +434,14 @@ validation unconditionally rejects a positive root Boolean.
 - That combined result initially predated the backup reservation/snapshot edits to migration 0010,
   and this review reproduced its migration-hash refusal. After store freeze, the fixture was
   regenerated with the exact migration hash
-  `2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800`.
+  `92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b`.
   The focused Rust G0 export tests now pass 2/2, including lower-bound/CAS adversaries and the
   positive cross-runtime reopen. Focused locked/offline Python tests pass; root's complete rerun
   reports export/artifact 30/30, focused Python 36, and direct validation of 24 tables/10 rows.
   Checked fixture identities are catalog
-  `sha256:7d8d6b677ddf215ae81b0c6be9bd6e359a9b7d4748db585a2eb63a0b89b4593d`,
-  snapshot `sha256:fe6facdcf91733f5bb483a53fbda60ed54d40e4ea1384bcdd8111fadc92ecac0`
-  and manifest `sha256:c3ec855a838a32d3467122170f2e2113a854e169020adf1f1e29783db6a3be2f`.
+  `sha256:c3857f874eda776c15cf3d6bd6bc225ce674275645f2c591d20f3c539cf1f0d0`,
+  snapshot `sha256:7027d8751401ff0eff8f2d0a76ade9ac3204d53a9f5b47b046608001e934b0a2`
+  and manifest `sha256:b639eb93ed95dd3c5488ccc84c735d4a8675dfea1eddd9d76ea01e7cc5b2dec3`.
 - The focused backup helper regression passes after the restored inventory-entry repair, strict
   store Clippy is green, and the public authority integration test passes the complete nonempty
   backup/restore/retry/no-original-root/restart/tamper lifecycle. This qualifies the isolated

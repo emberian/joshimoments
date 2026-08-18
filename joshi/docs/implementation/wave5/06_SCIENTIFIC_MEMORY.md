@@ -1,9 +1,18 @@
 # Wave 5 — scientific memory and retrieval boundary
 
-Status: pure unverified semantic memory kernel delivered; durable store, Glass transport, and release
-materialization remain integration-owned.
+Status: pure unverified semantic memory kernel delivered; the offline G0 store now retains one
+exact censored fixture chain, while presentation capture, qualified outcomes, Glass transport, and
+release materialization remain integration-owned.
 
-The current kernel pass remains deliberately below durable qualification. Before promotion, the
+The current kernel pass remains deliberately below research qualification. The sole store can now
+append and reopen an eight-occurrence fixture prefix: scene-bound act, partial episode, hidden
+replay, incomplete session close, partial knowledge with an explicit gap, missing/censored outcome,
+retrospective replay, and interview disposition. The writer allocates queue/commit order under one
+immediate transaction per append and reconstructs the exact prior kernel prefix. It explicitly
+refuses `Complete` session close, `Closed` knowledge, and `Available` outcome at this fixture
+authority ceiling. This is durable evidence of a censored chain, not a complete or known outcome.
+
+Before promotion, the
 store/Glass seam must mint a real reveal/outcome occurrence rather than treating the hidden replay
 ID as the reveal relation, enforce `revealed_at <= retrospective.recorded_at`, and witness the
 actual append/receipt clock so cross-append recorded/commit rollback cannot be hidden behind a
@@ -59,7 +68,9 @@ retrospective reveal resolves the exact earlier hidden replay ID.
 
 ## Exact store ports
 
-The store owner should add these ports to the sole catalog authority:
+The sole catalog now implements the fixture-authority act, episode, replay, incomplete close,
+gapped knowledge, censored outcome, retrospective replay, and interview append/readback waist.
+The following remain the promotion contract and must not be inferred from that fixture path:
 
 1. `joshi.store.scientific_memory_scene_ref.v1`: resolve `(scene_id, scene_digest,
    catalog_cutoff)` against an immutable committed Glass publication. Unknown or superseded scenes
@@ -85,7 +96,8 @@ The store owner should add these ports to the sole catalog authority:
    availability cutoff. Hidden artifacts must not reference later outcome evidence.
 7. `joshi.store.scientific_memory_closure.v1`: append session-close, knowledge, outcome, and
    interview DTOs with exact contracts, horizon/deadline/cutoff ordering, typed gaps, and durable
-   relations. A closure receipt is not an economic result.
+   relations. The G0 implementation admits only explicitly nonclosed/censored fixture states; a
+   closure receipt is not an economic result or a qualified outcome.
 
 ## Glass ports and golden relation
 
@@ -117,7 +129,9 @@ reconstruction cannot observe retrospective outcome data.
 ## Fault/restart walk
 
 Crash after scene read, presentation-gap append, act queue fsync, queue receipt readback, correction
-append, and closure append. Replay must produce either the prior complete prefix or the same exact
+append, and closure append. The G0 component now injects immediately before and after its six-event
+censored closure and proves exact eight-event queue convergence after reopen. Replay must produce
+either the prior complete prefix or the same exact
 new occurrence; never a missing act, mixed scene/presentation pair, inferred fill, or hidden replay
 with future information. A failed presentation capture opens a gap while preserving ordinary product
 use and the durable act.

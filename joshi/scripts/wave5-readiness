@@ -43,7 +43,8 @@ cargo run --locked --offline -p joshi-core -- wave5-ignition-readiness \
   --state "$JOSHI_W5_STATE/ignition" > "$JOSHI_W5_STATE/ignition-readiness.json"
 
 # Exercise the joined offline G0 component without promoting it to the complete 37-scenario root
-# walk: sole-store source semantics, headed Cockpit V2 publication, partial memory, nonempty V10
+# walk: sole-store source semantics, headed Cockpit V2 publication, censored memory closure,
+# nonempty V10
 # export/import, exact export recovery, artifact-bearing backup/restore, and restart readback.
 mkdir -p "$JOSHI_W5_STATE/g0"
 cargo run --locked --offline -p joshi-core -- wave5-g0-source-publication \
@@ -56,6 +57,9 @@ jq -e '
   and .sourceSemanticsClosed == true
   and .publicationPrepareBodyHeadClosed == true
   and .partialMemoryChainClosed == true
+  and .censoredMemoryChainClosed == true
+  and .memoryClosureCount == 6
+  and .memoryQueueThrough == 8
   and .baselineExportImportClosed == true
   and .nonemptyV10ExportClosed == true
   and .v10ExportRecoveryClosed == true
@@ -77,7 +81,7 @@ JOSHI_G0_MIGRATION_SHA=$(shasum -a 256 schema/migrations/0010_wave5_g0_store_spi
 JOSHI_G0_EVIDENCE_SHA=$(jq -er '.partialFaultResult.evidenceBundle.digest' "$JOSHI_W5_STATE/g0-source-publication.json")
 JOSHI_G0_SNAPSHOT_ID=$(jq -er '.v10ExportSnapshotId' "$JOSHI_W5_STATE/g0-source-publication.json")
 
-printf '%s\n' "{\"contract\":\"joshi.wave5.living_instrument_witness\",\"schemaVersion\":3,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"circulationWalkDigest\":\"sha256:$JOSHI_IGNITION_SHA\",\"g0ComponentDigest\":\"sha256:$JOSHI_G0_SHA\",\"g0EvidenceBundleDigest\":\"$JOSHI_G0_EVIDENCE_SHA\",\"g0SnapshotId\":\"$JOSHI_G0_SNAPSHOT_ID\",\"catalogMigrationDigest\":\"sha256:$JOSHI_MIGRATION_SHA\",\"g0CatalogMigrationDigest\":\"sha256:$JOSHI_G0_MIGRATION_SHA\",\"attainedCapabilities\":[\"run_registered\",\"public_c0_spool_catalog_closed\",\"component_restart_readback\",\"store_resolved_fixture_source\",\"headed_cockpit_v2_publication\",\"partial_scientific_memory\",\"nonempty_v10_export_import\",\"v10_export_recovered\",\"artifact_bearing_backup_restore\",\"g0_component_28_prefix_recovery\"],\"qualification\":{\"fullOfflineFaultWalk\":false,\"boundedNonfixture\":false,\"restartRecovered\":false,\"sustainedObserved\":false,\"liveReadOnly\":false,\"preliminaryEmberUse\":false,\"criticalSurfaceAccessibility\":false,\"broadParity\":false},\"claim\":\"offline_run_registration_public_c0_and_partial_g0_component_closure_only\"}" \
+printf '%s\n' "{\"contract\":\"joshi.wave5.living_instrument_witness\",\"schemaVersion\":3,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"circulationWalkDigest\":\"sha256:$JOSHI_IGNITION_SHA\",\"g0ComponentDigest\":\"sha256:$JOSHI_G0_SHA\",\"g0EvidenceBundleDigest\":\"$JOSHI_G0_EVIDENCE_SHA\",\"g0SnapshotId\":\"$JOSHI_G0_SNAPSHOT_ID\",\"catalogMigrationDigest\":\"sha256:$JOSHI_MIGRATION_SHA\",\"g0CatalogMigrationDigest\":\"sha256:$JOSHI_G0_MIGRATION_SHA\",\"attainedCapabilities\":[\"run_registered\",\"public_c0_spool_catalog_closed\",\"component_restart_readback\",\"store_resolved_fixture_source\",\"headed_cockpit_v2_publication\",\"censored_scientific_memory\",\"nonempty_v10_export_import\",\"v10_export_recovered\",\"artifact_bearing_backup_restore\",\"g0_component_30_prefix_recovery\"],\"qualification\":{\"fullOfflineFaultWalk\":false,\"boundedNonfixture\":false,\"restartRecovered\":false,\"sustainedObserved\":false,\"liveReadOnly\":false,\"preliminaryEmberUse\":false,\"criticalSurfaceAccessibility\":false,\"broadParity\":false},\"claim\":\"offline_run_registration_public_c0_and_partial_g0_component_closure_only\"}" \
   > "$JOSHI_W5_STATE/wave5-witness.json"
 
 cat "$JOSHI_W5_STATE/wave5-witness.json"

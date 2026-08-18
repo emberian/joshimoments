@@ -68,7 +68,7 @@ durable producer/store readback rather than booleans:
 - the prefix is either absent or exactly once durable after reopen;
 - retry uses the same reservation/idempotency identity and exact origin bytes;
 - no duplicate or conflicting receipt, catalog binding, fact, publication,
-  pairing consumption, memory act/episode, export/import, or backup record is
+  pairing consumption, memory act/episode/closure, export/import, or backup record is
   created;
 - records after the injected seam are absent until their adapter replays them;
 - catalog ACK does not authorize deletion; and
@@ -101,12 +101,13 @@ Any duplicate, reordering, identifier change, or content-digest substitution is
 invalid. A qualifying future bundle must contain exact producer/store identities
 for the reservation, origin segment, durable store receipt, catalog binding,
 catalog ACK, source/fact artifact, publication prepare/head, pairing and Glass
-read, memory act/episode, export/import, status, backup, restore, and reopen.
+read, memory act/episode/censored closure, export/import, status, backup, restore, and reopen.
 It must bind the corresponding physical bytes or store readback—not booleans.
 The adapter-free result legitimately emits an empty, correctly digested bundle.
 The current Core component result carries fifteen exact roles: supervisor reservation,
 origin segment, store receipt, catalog binding, catalog ACK, semantic fact,
-publication prepare, publication head, memory act, memory episode, the committed nonempty V10
+publication prepare, publication head, memory act, memory episode, the terminal disposition of the
+six-occurrence censored closure, the committed nonempty V10
 export manifest,
 the V10 restricted-import readback, and durable export-recovery readback, plus an artifact-bearing
 backup manifest and distinct-root restore readback. Their identities may contain
@@ -116,6 +117,9 @@ same immutable segment before the run binding and ACK. Pairing/Glass fault evide
 root reopen remain absent and therefore cannot appear
 `observed_partial`. The partial backup contains the store-reachable external source object,
 but not the separate supervisor spool inventory, and does not make the original roots unavailable.
+The component-local recovery matrix now includes before/after interruption points around the
+censored memory closure, for thirty exact points total. This does not add a harness step or turn the
+separate 37-scenario root matrix true.
 
 ## Backup, restore, and reopen requirements
 

@@ -1,7 +1,7 @@
 # Wave 5 integration — Living Instrument authority spine
 
 Status: **implementation in progress / useful partial**. No full Phase-0 fault walk, live,
-product-parity, complete publication, nonempty V10 export/import, repeated-use, or remote qualification is claimed by
+product-parity, qualified memory/outcome, repeated-use, or remote qualification is claimed by
 this document. The runnable Wave 5 readiness target now closes registration plus one public C0
 origin-segment/store-receipt/catalog-binding/ACK/reopen component walk; it must not be promoted
 beyond the explicit closed boundaries and open joins below.
@@ -131,19 +131,23 @@ The final script output must continue to state `useful_partial`,
 `qualification.fullOfflineFaultWalk: false`, and false for bounded-nonfixture,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk reports
-`public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because complete
-memory, default product mount, and the full 37-scenario crash boundary remain open. The separate
+`public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because qualified
+presentation/outcome memory, default product mount, and the full 37-scenario crash boundary remain
+open. The separate
 `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
 then binds its receipt to the run before the supervisor spool records the ACK. The full 37-scenario
-crash matrix, default product mount, complete memory closure and final
+crash matrix, default product mount, qualified memory closure and final
 no-original-root reopen remain outside that component.
 The component now also
-retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
-interview memory closure remains outside it. This component exercises the canonical Pump policy
+retains one exact headed-scene act, partial unresolved episode, hidden reconstruction, incomplete
+session close, explicitly gapped partial knowledge, missing outcome, retrospective reveal, and
+interview disposition in eight strict queue positions. The store refuses complete session, closed
+knowledge, and available outcome at this fixture ceiling; actual presentation and qualified
+outcome remain outside it. This component exercises the canonical Pump policy
 bytes without network I/O. The supervisor's separate generic synthetic adapter still uses the
 fixture-only `joshi.store.policy.v1` contract and does not qualify production circulation.
 Before the V10 G0 prefix, the same command copies the checked V8 operational catalog and its exact
