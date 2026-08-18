@@ -1,7 +1,8 @@
 # Wave 6 — machine research desk
 
-Status: bounded deterministic research-design prototype. It is intentionally a proposal desk,
-not a data plane, analyst replacement, Glass surface, claim promoter, or action engine.
+Status: bounded deterministic research-design prototype with one exact `N00`/`N01` fixture packet.
+It is intentionally a proposal desk, not a data plane, analyst replacement, Glass surface, claim
+promoter, or action engine.
 
 ## Boundary
 
@@ -86,6 +87,38 @@ continuation. The bounded V1 ledger has no cross-lineage promotion mechanism. A 
 must likewise follow the proposal creation clock it reviews. These are intrinsic ordering checks,
 not durable proof that a person, clock, review, policy registration, or append-only store is real.
 
+## N00/N01 fixture packet
+
+`fixture_packet.py` supplies the first bounded `N02` integration path. It independently:
+
+1. parses the exact compact Rust `Wave6ProgramRegistrationV1` bytes;
+2. recomputes the registration self-digest and full document digest;
+3. requires zero consumed Wave 5 gates, zero provider/external-mutation budgets, the fixed fixture
+   data policy, desk operation list, claim/source/output/side-effect prohibitions, artifact claim
+   boundaries, and sorted local symbols;
+4. rehashes every registered artifact schema document, including an Arrow-derived market-atlas
+   schema and the research-proposal contract descriptor;
+5. rebuilds and evaluates the exact eight-case `N01` signed-flow known-truth suite;
+6. admits that evaluation only as a fixture `DESIGN` descriptor; and
+7. produces one deterministic protocol draft for comparing a separately implemented candidate
+   against the same frozen cases.
+
+The packet binds program and registration identity, complete N01 suite/evaluation digests, the full
+research proposal, status, authority, claim scope, `executable=false`, and `query_count=0` under a
+recomputed packet ID/digest. The proposal's only experiment manifest is likewise non-executable
+with zero queries.
+
+The packet authority is:
+
+```text
+fixture_inspection_proposal_only_no_query_no_action_no_claim_promotion
+```
+
+This join proves deterministic cross-contract fixture closure, not that the registration, schema,
+known-truth result, descriptor, or review is store-resolved. The exact N00 fixture consumes no Wave
+5 gates. Consequently the packet remains `fixture_inspector`/`protocol_draft`; it cannot become a
+`release_inspector`, replication result, admitted prospective protocol, or product action.
+
 ## Focused verification
 
 ```bash
@@ -99,6 +132,11 @@ and gap cutoffs, unit/topology mismatch, missing controls or denominators, dupli
 identities, non-executable manifest enforcement, unadmitted experiment evidence, per-experiment
 budget escape, deterministic policy/evidence/commitment IDs, review-time ordering, and
 outcome-targeted, same-policy-ID budget-replacement, and provenance-swap supersession edits.
+
+The fixture-packet tests additionally cover Rust/Python registration digest parity, exact artifact
+schema bytes, unknown/reordered registration fields, provider-budget widening, schema
+substitution, deterministic packet construction, exact N01 evidence closure, packet identity,
+authority, and evaluation substitution.
 
 ## Deferred work
 
