@@ -1,7 +1,7 @@
 # Wave 6 exact artifact-schema catalog
 
-Status: **PASS for durable exact schema bytes under N00; BLOCKED for every artifact/result
-occurrence and every empirical claim.**
+Status: **PASS for durable exact schema bytes under N00; V13 separately retains three evaluation
+contents; BLOCKED for every artifact-DAG/result occurrence and every empirical claim.**
 
 Migration V12 adds `wave6_registered_artifact_schema_v1`. It is a one-way join from the exact N00
 program row to the six checked schema documents already named by that registration.
@@ -46,11 +46,11 @@ was useful. The store returns only `unverified_semantic_fixture_only`; it does n
 gate or introduce provider, presentation, wallet, signing, transaction, deployment or mutation
 authority.
 
-The three checked evaluation artifacts under `fixtures/wave6/artifacts` now exactly implement
-their registered schema fields and are independently regenerated and reparsed by the Python
-known-truth suite. V12 still stores only their schemas. Persisting those exact output bytes and
-binding a later artifact DAG requires a separate store occurrence and receipt; their repository
-presence alone does not raise this catalog's ceiling.
+The three checked evaluation artifacts under `fixtures/wave6/artifacts` exactly implement their
+registered schema fields and are independently regenerated and reparsed by the Python known-truth
+suite. V13 now retains those exact output bytes under a separate content-only receipt. Binding a
+later artifact DAG still requires a distinct occurrence with explicit time and parent closure;
+repository or content-row presence alone does not raise this catalog's ceiling.
 
 ## Verification
 

@@ -18,6 +18,11 @@ struct SchemaFixture {
     bytes: &'static [u8],
 }
 
+struct ArtifactFixture {
+    kind_id: &'static str,
+    bytes: &'static [u8],
+}
+
 /// One exact schema row retained by the Core witness.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +30,19 @@ pub struct Wave6ArtifactSchemaReport {
     pub kind_id: String,
     pub schema_id: String,
     pub schema_digest: String,
+    pub commit_seq: String,
+}
+
+/// One exact fixture evaluation retained and reparsed by the sole store.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureArtifactReport {
+    pub artifact_id: String,
+    pub kind_id: String,
+    pub schema_id: String,
+    pub content_digest: String,
+    pub evaluation_digest: String,
+    pub result_count: String,
     pub commit_seq: String,
 }
 
@@ -51,6 +69,10 @@ pub struct Wave6ProgramRegistrationReport {
     pub schemas: Vec<Wave6ArtifactSchemaReport>,
     pub schema_catalog_persisted: bool,
     pub schema_catalog_restart_reverified: bool,
+    pub fixture_artifact_content_count: String,
+    pub fixture_artifacts: Vec<Wave6FixtureArtifactReport>,
+    pub fixture_artifact_content_persisted: bool,
+    pub fixture_artifact_content_restart_reverified: bool,
     pub consumed_wave5_gate_count: &'static str,
     pub provider_units: &'static str,
     pub external_mutation_units: &'static str,
@@ -76,9 +98,9 @@ pub fn run_wave6_program_registration(
     let store_config = config(state)?;
     let mut store = SqliteStore::open(store_config.clone(), StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
-    if migration.current != 12 {
+    if migration.current != 13 {
         return Err(Wave6RegistrationError::Invariant(
-            "Wave 6 registration did not reach V12",
+            "Wave 6 registration did not reach V13",
         ));
     }
     let batch_id = StableString::new(BATCH_ID)?;
@@ -91,7 +113,7 @@ pub fn run_wave6_program_registration(
     if !matches!(
         accepted.status,
         IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
-    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v12"
+    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v13"
         || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     {
         return Err(Wave6RegistrationError::Invariant(
@@ -112,6 +134,7 @@ pub fn run_wave6_program_registration(
         ));
     }
     let schema_reports = commit_schemas(&mut store, &accepted.program_id, &writer_build)?;
+    let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
     drop(store);
 
     let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly)?;
@@ -134,10 +157,11 @@ pub fn run_wave6_program_registration(
         ));
     }
     verify_schemas(&reopened, &program_id, &schema_reports)?;
+    verify_artifacts(&reopened, &artifact_reports)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v2",
-        schema_version: 2,
+        contract: "joshi.core.wave6_program_registration_report.v3",
+        schema_version: 3,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -154,6 +178,10 @@ pub fn run_wave6_program_registration(
         schemas: schema_reports,
         schema_catalog_persisted: true,
         schema_catalog_restart_reverified: true,
+        fixture_artifact_content_count: artifact_reports.len().to_string(),
+        fixture_artifacts: artifact_reports,
+        fixture_artifact_content_persisted: true,
+        fixture_artifact_content_restart_reverified: true,
         consumed_wave5_gate_count: "0",
         provider_units: "0",
         external_mutation_units: "0",
@@ -255,6 +283,102 @@ fn verify_schemas(
     Ok(())
 }
 
+fn commit_artifacts(
+    store: &mut SqliteStore,
+    program_id: &StableString,
+    writer_build: &StableString,
+) -> Result<Vec<Wave6FixtureArtifactReport>, Wave6RegistrationError> {
+    let mut reports = Vec::with_capacity(artifacts().len());
+    for fixture in artifacts() {
+        let kind_id = StableString::new(fixture.kind_id)?;
+        let batch_id = StableString::new(format!("wave6:artifact:{}", fixture.kind_id))?;
+        let accepted = store.commit_wave6_fixture_artifact_v1(
+            program_id,
+            kind_id.clone(),
+            fixture.bytes,
+            batch_id.clone(),
+            writer_build.clone(),
+        )?;
+        if !matches!(
+            accepted.status,
+            IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+        ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 fixture artifact returned an impossible first receipt",
+            ));
+        }
+        let retry = store.commit_wave6_fixture_artifact_v1(
+            program_id,
+            kind_id,
+            fixture.bytes,
+            batch_id,
+            writer_build.clone(),
+        )?;
+        if retry.status != IdempotencyStatus::Idempotent
+            || retry.artifact_id != accepted.artifact_id
+            || retry.kind_id != accepted.kind_id
+            || retry.schema_id != accepted.schema_id
+            || retry.content_digest != accepted.content_digest
+            || retry.evaluation_digest != accepted.evaluation_digest
+            || retry.result_count != accepted.result_count
+            || retry.commit_seq != accepted.commit_seq
+            || retry.commit_digest != accepted.commit_digest
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "exact Wave 6 artifact retry changed durable identity",
+            ));
+        }
+        reports.push(Wave6FixtureArtifactReport {
+            artifact_id: accepted.artifact_id.to_string(),
+            kind_id: accepted.kind_id.to_string(),
+            schema_id: accepted.schema_id.to_string(),
+            content_digest: accepted.content_digest.to_string(),
+            evaluation_digest: accepted.evaluation_digest.to_string(),
+            result_count: accepted.result_count.to_string(),
+            commit_seq: accepted.commit_seq.get().to_string(),
+        });
+    }
+    Ok(reports)
+}
+
+fn verify_artifacts(
+    store: &SqliteStore,
+    reports: &[Wave6FixtureArtifactReport],
+) -> Result<(), Wave6RegistrationError> {
+    if reports.len() != artifacts().len() {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture artifact catalog has the wrong cardinality",
+        ));
+    }
+    for (fixture, report) in artifacts().into_iter().zip(reports) {
+        if fixture.kind_id != report.kind_id {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 artifact order changed before restart readback",
+            ));
+        }
+        let artifact_id = StableString::new(report.artifact_id.clone())?;
+        let stored = store.load_wave6_fixture_artifact_v1(&artifact_id)?.ok_or(
+            Wave6RegistrationError::Invariant("Wave 6 fixture artifact was absent after restart"),
+        )?;
+        if stored.artifact_id.as_str() != report.artifact_id
+            || stored.kind_id.as_str() != report.kind_id
+            || stored.schema_id.as_str() != report.schema_id
+            || stored.content_digest.as_str() != report.content_digest
+            || stored.evaluation_digest.as_str() != report.evaluation_digest
+            || stored.result_count.to_string() != report.result_count
+            || stored.commit_seq.get().to_string() != report.commit_seq
+            || stored.exact_bytes != fixture.bytes
+            || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        {
+            return Err(Wave6RegistrationError::Invariant(
+                "Wave 6 fixture artifact changed across read-only reopen",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn schemas() -> [SchemaFixture; 6] {
     [
         SchemaFixture {
@@ -283,6 +407,29 @@ fn schemas() -> [SchemaFixture; 6] {
             kind_id: "structural_known_truth_evaluation_fixture",
             bytes: include_bytes!(
                 "../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
+            ),
+        },
+    ]
+}
+
+fn artifacts() -> [ArtifactFixture; 3] {
+    [
+        ArtifactFixture {
+            kind_id: "known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/artifacts/known_truth_evaluation_v1.json"
+            ),
+        },
+        ArtifactFixture {
+            kind_id: "protocol_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json"
+            ),
+        },
+        ArtifactFixture {
+            kind_id: "structural_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json"
             ),
         },
     ]
@@ -336,7 +483,7 @@ mod tests {
         let first =
             run_wave6_program_registration(state.path()).expect("first registration witness");
         assert_eq!(first.status, "fixture_only");
-        assert_eq!(first.catalog_schema, "joshi.sqlite.v12");
+        assert_eq!(first.catalog_schema, "joshi.sqlite.v13");
         assert_eq!(first.first_status, IdempotencyStatus::Accepted);
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);
@@ -345,6 +492,10 @@ mod tests {
         assert_eq!(first.schemas.len(), 6);
         assert!(first.schema_catalog_persisted);
         assert!(first.schema_catalog_restart_reverified);
+        assert_eq!(first.fixture_artifact_content_count, "3");
+        assert_eq!(first.fixture_artifacts.len(), 3);
+        assert!(first.fixture_artifact_content_persisted);
+        assert!(first.fixture_artifact_content_restart_reverified);
         assert_eq!(first.consumed_wave5_gate_count, "0");
         assert!(!first.wave5_gates_resolved);
         assert!(!first.operational_release);
@@ -360,5 +511,6 @@ mod tests {
         assert_eq!(repeated.document_digest, first.document_digest);
         assert_eq!(repeated.accepted_commit_seq, first.accepted_commit_seq);
         assert_eq!(repeated.schemas, first.schemas);
+        assert_eq!(repeated.fixture_artifacts, first.fixture_artifacts);
     }
 }

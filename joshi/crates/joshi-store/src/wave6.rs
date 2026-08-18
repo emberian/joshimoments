@@ -6,13 +6,15 @@
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError};
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
 use joshi_wave6_registry::{
-    SemanticCeilingV1, ValidatedProgramRegistration, parse_program_registration_exact,
+    SemanticCeilingV1, ValidatedProgramRegistration, parse_evaluation_artifact_exact,
+    parse_program_registration_exact,
 };
 use rusqlite::{OptionalExtension as _, Transaction, params};
 use sha2::{Digest as _, Sha256};
 
 const MAX_REGISTRATION_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 256 * 1024;
+const MAX_FIXTURE_ARTIFACT_BYTES: usize = 512 * 1024;
 
 /// Durable receipt for an exact fixture-only Wave 6 program registration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +75,44 @@ pub struct StoredWave6ArtifactSchema {
     pub semantic_ceiling: SemanticCeilingV1,
 }
 
+/// Durable byte-retention receipt for one exact fixture-only evaluation artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wave6FixtureArtifactReceipt {
+    pub catalog_id: StableString,
+    pub catalog_schema: StableString,
+    pub batch_id: StableString,
+    pub artifact_id: StableString,
+    pub program_id: StableString,
+    pub kind_id: StableString,
+    pub schema_id: StableString,
+    pub content_digest: ValueDigest,
+    pub evaluation_digest: ValueDigest,
+    pub result_count: u64,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+    pub status: IdempotencyStatus,
+}
+
+/// Exact fixture artifact content re-parsed and reverified after durable readback.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave6FixtureArtifact {
+    pub batch_id: StableString,
+    pub artifact_id: StableString,
+    pub program_id: StableString,
+    pub kind_id: StableString,
+    pub schema_id: StableString,
+    pub schema_digest: ValueDigest,
+    pub schema_commit_seq: CommitSeq,
+    pub exact_bytes: Vec<u8>,
+    pub content_digest: ValueDigest,
+    pub evaluation_digest: ValueDigest,
+    pub result_count: u64,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+}
+
 struct RegistrationRow {
     batch_id: String,
     family_id: String,
@@ -108,6 +148,23 @@ struct ArtifactSchemaRow {
     bytes: Vec<u8>,
     byte_length: i64,
     authority: String,
+    semantic_ceiling: String,
+    commit_seq: i64,
+    commit_digest_raw: String,
+}
+
+struct FixtureArtifactRow {
+    batch_id: String,
+    program_id: String,
+    kind_id: String,
+    schema_id: String,
+    schema_raw: String,
+    schema_commit_seq: i64,
+    content_raw: String,
+    evaluation_raw: String,
+    bytes: Vec<u8>,
+    byte_length: i64,
+    result_count: i64,
     semantic_ceiling: String,
     commit_seq: i64,
     commit_digest_raw: String,
@@ -429,6 +486,180 @@ impl SqliteStore {
         };
         stored_artifact_schema(self, program_id, kind_id, row).map(Some)
     }
+
+    /// Persists one exact evaluation output under its prior registered kind/schema.
+    ///
+    /// This receipt proves byte durability only. The content remains fixture-only and has no
+    /// information-cutoff, artifact-DAG, Wave 5 gate, empirical, product, or live authority.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an absent schema, unsupported or noncanonical artifact bytes, changed fixture
+    /// inputs/denominator/self-digest, oversized content, a conflicting identity, read-only state,
+    /// exhausted fixture budget, or failed exact readback.
+    #[allow(clippy::too_many_lines)] // Keeps parse, atomic append, and exact readback adjacent.
+    pub fn commit_wave6_fixture_artifact_v1(
+        &mut self,
+        program_id: &StableString,
+        kind_id: StableString,
+        exact_bytes: &[u8],
+        batch_id: StableString,
+        writer_build: StableString,
+    ) -> Result<Wave6FixtureArtifactReceipt> {
+        if exact_bytes.is_empty() || exact_bytes.len() > MAX_FIXTURE_ARTIFACT_BYTES {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture artifact is empty or exceeds the exact-byte limit".into(),
+            ));
+        }
+        let schema = self
+            .load_wave6_artifact_schema_v1(program_id, &kind_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 artifact schema",
+                identity: format!("{}:{}", program_id.as_str(), kind_id.as_str()),
+            })?;
+        let parsed = parse_evaluation_artifact_exact(&kind_id, &schema.schema_id, exact_bytes)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let content_digest = parsed.content_digest().clone();
+        let evaluation_digest = parsed.evaluation_digest().clone();
+        let result_count =
+            u64::try_from(parsed.value().result_count()).map_err(|_| StoreError::IntegerRange {
+                field: "Wave 6 fixture result count",
+                value: parsed.value().result_count().to_string(),
+            })?;
+        let artifact_id = artifact_content_id(program_id, &kind_id, &content_digest)?;
+        reject_second_artifact_batch(self, &artifact_id, &batch_id)?;
+        let operation_digest = artifact_operation_digest(
+            program_id,
+            &kind_id,
+            &schema.schema_id,
+            &schema.schema_digest,
+            &content_digest,
+            &evaluation_digest,
+        )?;
+        let context = self.begin_wave5_commit(batch_id.clone(), writer_build)?;
+        let generic = self.commit_wave5(
+            &context,
+            "maintenance",
+            &artifact_id,
+            &content_digest,
+            &operation_digest,
+            |tx, seq| {
+                tx.execute(
+                    "INSERT INTO wave6_fixture_artifact_content_v1
+                     (artifact_id,program_id,kind_id,schema_id,schema_sha256,
+                      schema_created_commit_seq,content_sha256,evaluation_semantic_sha256,
+                      artifact_bytes,artifact_byte_length,result_count,semantic_ceiling,
+                      created_commit_seq)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    params![
+                        artifact_id.as_str(),
+                        program_id.as_str(),
+                        kind_id.as_str(),
+                        schema.schema_id.as_str(),
+                        raw_digest(&schema.schema_digest, "Wave 6 artifact schema digest")?,
+                        sqlite_u64(schema.commit_seq.get(), "Wave 6 schema commit")?,
+                        raw_digest(&content_digest, "Wave 6 artifact content digest")?,
+                        raw_digest(&evaluation_digest, "Wave 6 evaluation digest")?,
+                        exact_bytes,
+                        sqlite_len(exact_bytes.len(), "Wave 6 artifact bytes")?,
+                        sqlite_u64(result_count, "Wave 6 fixture result count")?,
+                        "unverified_semantic_fixture_only",
+                        seq,
+                    ],
+                )?;
+                Ok(())
+            },
+        )?;
+        let stored = self
+            .load_wave6_fixture_artifact_v1(&artifact_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture artifact",
+                identity: artifact_id.to_string(),
+            })?;
+        if stored.batch_id != batch_id
+            || stored.program_id != *program_id
+            || stored.kind_id != kind_id
+            || stored.schema_id != schema.schema_id
+            || stored.schema_digest != schema.schema_digest
+            || stored.schema_commit_seq != schema.commit_seq
+            || stored.exact_bytes != exact_bytes
+            || stored.content_digest != content_digest
+            || stored.evaluation_digest != evaluation_digest
+            || stored.result_count != result_count
+            || stored.commit_seq != generic.commit_seq
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture artifact readback differs from its exact commit".into(),
+            ));
+        }
+        Ok(Wave6FixtureArtifactReceipt {
+            catalog_id: generic.catalog_id,
+            catalog_schema: generic.catalog_schema,
+            batch_id,
+            artifact_id,
+            program_id: program_id.clone(),
+            kind_id,
+            schema_id: stored.schema_id,
+            content_digest: stored.content_digest,
+            evaluation_digest: stored.evaluation_digest,
+            result_count: stored.result_count,
+            commit_seq: stored.commit_seq,
+            commit_digest: stored.commit_digest,
+            semantic_ceiling: stored.semantic_ceiling,
+            status: generic.status,
+        })
+    }
+
+    /// Loads and independently reparses one exact fixture-only evaluation artifact.
+    ///
+    /// # Errors
+    ///
+    /// Refuses changed bytes, schema mapping, semantic/physical digest, result count, ceiling or
+    /// commit lineage.
+    pub fn load_wave6_fixture_artifact_v1(
+        &self,
+        artifact_id: &StableString,
+    ) -> Result<Option<StoredWave6FixtureArtifact>> {
+        let row: Option<FixtureArtifactRow> = self
+            .connection
+            .query_row(
+                "SELECT commit_row.commit_id,artifact.program_id,artifact.kind_id,
+                        artifact.schema_id,artifact.schema_sha256,
+                        artifact.schema_created_commit_seq,artifact.content_sha256,
+                        artifact.evaluation_semantic_sha256,artifact.artifact_bytes,
+                        artifact.artifact_byte_length,artifact.result_count,
+                        artifact.semantic_ceiling,artifact.created_commit_seq,
+                        commit_row.commit_digest
+                 FROM wave6_fixture_artifact_content_v1 artifact
+                 JOIN ingest_commit commit_row
+                   ON commit_row.commit_seq=artifact.created_commit_seq
+                 WHERE artifact.artifact_id=?1",
+                [artifact_id.as_str()],
+                |row| {
+                    Ok(FixtureArtifactRow {
+                        batch_id: row.get(0)?,
+                        program_id: row.get(1)?,
+                        kind_id: row.get(2)?,
+                        schema_id: row.get(3)?,
+                        schema_raw: row.get(4)?,
+                        schema_commit_seq: row.get(5)?,
+                        content_raw: row.get(6)?,
+                        evaluation_raw: row.get(7)?,
+                        bytes: row.get(8)?,
+                        byte_length: row.get(9)?,
+                        result_count: row.get(10)?,
+                        semantic_ceiling: row.get(11)?,
+                        commit_seq: row.get(12)?,
+                        commit_digest_raw: row.get(13)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        stored_fixture_artifact(self, artifact_id, row).map(Some)
+    }
 }
 
 fn validate_canonical_schema(bytes: &[u8]) -> Result<()> {
@@ -566,6 +797,131 @@ fn stored_artifact_schema(
         schema_digest: actual_digest,
         commit_seq: CommitSeq::new(u64_from_i64(row.commit_seq, "Wave 6 schema commit")?),
         commit_digest: qualified_digest(&row.commit_digest_raw, "Wave 6 schema commit digest")?,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    })
+}
+
+fn reject_second_artifact_batch(
+    store: &SqliteStore,
+    artifact_id: &StableString,
+    batch_id: &StableString,
+) -> Result<()> {
+    let existing: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT commit_row.commit_id
+             FROM wave6_fixture_artifact_content_v1 artifact
+             JOIN ingest_commit commit_row
+               ON commit_row.commit_seq=artifact.created_commit_seq
+             WHERE artifact.artifact_id=?1",
+            [artifact_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|value| value != batch_id.as_str())
+    {
+        return Err(StoreError::IdentityConflict {
+            kind: "Wave 6 fixture artifact",
+            identity: artifact_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn artifact_content_id(
+    program_id: &StableString,
+    kind_id: &StableString,
+    content_digest: &ValueDigest,
+) -> Result<StableString> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_artifact_identity.v1",
+        program_id,
+        kind_id,
+        content_digest,
+    ))?;
+    let digest = digest_bytes(&bytes)?;
+    stable(
+        &format!(
+            "wave6-artifact:{}",
+            raw_digest(&digest, "Wave 6 artifact identity digest")?
+        ),
+        "Wave 6 fixture artifact ID",
+    )
+}
+
+fn artifact_operation_digest(
+    program_id: &StableString,
+    kind_id: &StableString,
+    schema_id: &StableString,
+    schema_digest: &ValueDigest,
+    content_digest: &ValueDigest,
+    evaluation_digest: &ValueDigest,
+) -> Result<ValueDigest> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_artifact_commit.v1",
+        program_id,
+        kind_id,
+        schema_id,
+        schema_digest,
+        content_digest,
+        evaluation_digest,
+    ))?;
+    digest_bytes(&bytes)
+}
+
+fn stored_fixture_artifact(
+    store: &SqliteStore,
+    artifact_id: &StableString,
+    row: FixtureArtifactRow,
+) -> Result<StoredWave6FixtureArtifact> {
+    let program_id = stable(&row.program_id, "Wave 6 artifact program ID")?;
+    let kind_id = stable(&row.kind_id, "Wave 6 artifact kind ID")?;
+    let schema = store
+        .load_wave6_artifact_schema_v1(&program_id, &kind_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 artifact schema",
+            identity: format!("{}:{}", program_id.as_str(), kind_id.as_str()),
+        })?;
+    let parsed = parse_evaluation_artifact_exact(&kind_id, &schema.schema_id, &row.bytes)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let expected_id = artifact_content_id(&program_id, &kind_id, parsed.content_digest())?;
+    let result_count =
+        u64::try_from(parsed.value().result_count()).map_err(|_| StoreError::IntegerRange {
+            field: "Wave 6 fixture result count",
+            value: parsed.value().result_count().to_string(),
+        })?;
+    if expected_id != *artifact_id
+        || row.schema_id != schema.schema_id.as_str()
+        || row.schema_raw != raw_digest(&schema.schema_digest, "Wave 6 artifact schema digest")?
+        || u64_from_i64(row.schema_commit_seq, "Wave 6 artifact schema commit")?
+            != schema.commit_seq.get()
+        || row.content_raw != raw_digest(parsed.content_digest(), "Wave 6 artifact content digest")?
+        || row.evaluation_raw != raw_digest(parsed.evaluation_digest(), "Wave 6 evaluation digest")?
+        || usize_from_i64(row.byte_length, "Wave 6 artifact byte length")? != row.bytes.len()
+        || u64_from_i64(row.result_count, "Wave 6 fixture result count")? != result_count
+        || row.semantic_ceiling != "unverified_semantic_fixture_only"
+        || row.schema_commit_seq >= row.commit_seq
+    {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 artifact differs from exact bytes or registered schema".into(),
+        ));
+    }
+    Ok(StoredWave6FixtureArtifact {
+        batch_id: stable(&row.batch_id, "Wave 6 artifact batch ID")?,
+        artifact_id: artifact_id.clone(),
+        program_id,
+        kind_id,
+        schema_id: schema.schema_id,
+        schema_digest: schema.schema_digest,
+        schema_commit_seq: schema.commit_seq,
+        exact_bytes: row.bytes,
+        content_digest: parsed.content_digest().clone(),
+        evaluation_digest: parsed.evaluation_digest().clone(),
+        result_count,
+        commit_seq: CommitSeq::new(u64_from_i64(row.commit_seq, "Wave 6 artifact commit")?),
+        commit_digest: qualified_digest(&row.commit_digest_raw, "Wave 6 artifact commit digest")?,
         semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
     })
 }
@@ -803,6 +1159,27 @@ mod tests {
         ]
     }
 
+    fn artifacts() -> [(&'static str, &'static [u8]); 3] {
+        [
+            (
+                "known_truth_evaluation_fixture",
+                include_bytes!("../../../fixtures/wave6/artifacts/known_truth_evaluation_v1.json"),
+            ),
+            (
+                "protocol_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json"
+                ),
+            ),
+            (
+                "structural_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json"
+                ),
+            ),
+        ]
+    }
+
     fn config(root: &std::path::Path) -> StoreConfig {
         StoreConfig {
             catalog_path: root.join("catalog.sqlite"),
@@ -829,7 +1206,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 12);
+        assert_eq!(migration.current, 13);
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -837,7 +1214,7 @@ mod tests {
             .commit_wave6_program_registration_v1(REGISTRATION, batch_id.clone(), build.clone())
             .expect("accepted registration");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v12");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
         assert_eq!(
             accepted.semantic_ceiling,
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
@@ -980,7 +1357,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("schema commit {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v12");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
             let retry = store
                 .commit_wave6_artifact_schema_v1(
                     &program_id,
@@ -1045,6 +1422,118 @@ mod tests {
                 stored.semantic_ceiling,
                 SemanticCeilingV1::UnverifiedSemanticFixtureOnly
             );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One lifecycle covers schema, commit, retry, and reopen.
+    fn exact_evaluation_artifacts_are_schema_bound_idempotent_and_restart_safe() {
+        let root = tempfile::tempdir().expect("temporary store");
+        let store_config = config(root.path());
+        let mut store =
+            SqliteStore::open(store_config.clone(), StoreMode::SingleWriter).expect("writer store");
+        store
+            .migrate(
+                "2026-08-18T16:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("latest migration");
+        let program_id = StableString::new("w6-program-fixture-001").expect("program ID");
+        let writer_build = StableString::new("wave6-store-test").expect("writer build");
+        store
+            .commit_wave6_program_registration_v1(
+                REGISTRATION,
+                StableString::new("wave6:program-registration:fixture-001")
+                    .expect("registration batch"),
+                writer_build.clone(),
+            )
+            .expect("program registration");
+        for (kind, bytes) in schemas() {
+            store
+                .commit_wave6_artifact_schema_v1(
+                    &program_id,
+                    StableString::new(kind).expect("kind ID"),
+                    bytes,
+                    StableString::new(format!("wave6:schema:{kind}")).expect("schema batch"),
+                    writer_build.clone(),
+                )
+                .unwrap_or_else(|error| panic!("schema {kind}: {error}"));
+        }
+
+        let mut accepted_artifacts = Vec::new();
+        for (kind, bytes) in artifacts() {
+            let kind_id = StableString::new(kind).expect("kind ID");
+            let batch_id =
+                StableString::new(format!("wave6:artifact:{kind}")).expect("artifact batch");
+            let accepted = store
+                .commit_wave6_fixture_artifact_v1(
+                    &program_id,
+                    kind_id.clone(),
+                    bytes,
+                    batch_id.clone(),
+                    writer_build.clone(),
+                )
+                .unwrap_or_else(|error| panic!("artifact {kind}: {error}"));
+            assert_eq!(accepted.status, IdempotencyStatus::Accepted);
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v13");
+            assert!(accepted.result_count > 0);
+            assert_eq!(
+                accepted.semantic_ceiling,
+                SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+            );
+            let retry = store
+                .commit_wave6_fixture_artifact_v1(
+                    &program_id,
+                    kind_id,
+                    bytes,
+                    batch_id,
+                    writer_build.clone(),
+                )
+                .expect("exact artifact retry");
+            assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+            assert_eq!(retry.artifact_id, accepted.artifact_id);
+            assert_eq!(retry.commit_seq, accepted.commit_seq);
+            assert_eq!(retry.commit_digest, accepted.commit_digest);
+            accepted_artifacts.push((bytes, accepted));
+        }
+
+        assert!(
+            store
+                .commit_wave6_fixture_artifact_v1(
+                    &program_id,
+                    StableString::new("protocol_known_truth_evaluation_fixture").expect("kind ID"),
+                    artifacts()[0].1,
+                    StableString::new("wave6:artifact:wrong-kind").expect("batch ID"),
+                    writer_build.clone(),
+                )
+                .is_err()
+        );
+        let first = &accepted_artifacts[0].1;
+        assert!(matches!(
+            store.commit_wave6_fixture_artifact_v1(
+                &program_id,
+                first.kind_id.clone(),
+                artifacts()[0].1,
+                StableString::new("wave6:artifact:second-batch").expect("batch ID"),
+                writer_build,
+            ),
+            Err(StoreError::IdentityConflict { .. })
+        ));
+        drop(store);
+
+        let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly).expect("reader store");
+        for (bytes, accepted) in accepted_artifacts {
+            let stored = reopened
+                .load_wave6_fixture_artifact_v1(&accepted.artifact_id)
+                .expect("artifact readback")
+                .expect("stored artifact");
+            assert_eq!(stored.exact_bytes, bytes);
+            assert_eq!(stored.content_digest, accepted.content_digest);
+            assert_eq!(stored.evaluation_digest, accepted.evaluation_digest);
+            assert_eq!(stored.result_count, accepted.result_count);
+            assert!(stored.schema_commit_seq < stored.commit_seq);
+            assert_eq!(stored.commit_digest, accepted.commit_digest);
         }
     }
 }
