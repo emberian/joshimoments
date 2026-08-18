@@ -219,9 +219,11 @@ export function OperationalGlassShell({
               autoComplete="one-time-code"
               inputMode="text"
               spellCheck={false}
+              autoCapitalize="characters"
               required
-              minLength={6}
-              maxLength={128}
+              minLength={45}
+              maxLength={45}
+              pattern="JOSHI-(?:[0-9A-HJKMNP-TV-Z]{4}-){7}[0-9A-HJKMNP-TV-Z]{4}"
               value={oneTimeCode}
               onChange={(event) => setOneTimeCode(event.target.value)}
               aria-describedby="pairing-help"

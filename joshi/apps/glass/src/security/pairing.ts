@@ -1,7 +1,14 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 import { exactUtcInstantSchema } from "../contract/instant";
 
 const pairingTokenPattern = /^[0-9a-f]{64}$/;
-const opaqueCapabilityPattern = /^[A-Za-z0-9._~-]{32,512}$/;
+export const ordinaryPairingCodePattern = /^JOSHI-(?:[0-9A-HJKMNP-TV-Z]{4}-){7}[0-9A-HJKMNP-TV-Z]{4}$/;
+const ordinaryCapabilityPattern = /^jpc1_[0-9a-f]{64}$/;
+const canonicalEpochPattern = /^[1-9][0-9]*$/;
+const canonicalOrdinalPattern = /^[1-9][0-9]*$/;
+const originTagDomain = "joshi.pairing.origin.v1\0";
 
 export const OPERATIONAL_SESSION_SCOPES = [
   "cockpit_read",
@@ -14,10 +21,50 @@ export type OperationalSessionScope = typeof OPERATIONAL_SESSION_SCOPES[number];
 
 export type PairingSessionDescriptor = {
   sessionId: string;
+  origin: string;
+  epoch: string;
   expiresAt: string;
   scopes: readonly OperationalSessionScope[];
   authority: "read_only_no_execution";
 };
+
+export function canonicalPairingCode(value: string): string {
+  const canonical = value.trim().toUpperCase();
+  if (!ordinaryPairingCodePattern.test(canonical)) {
+    throw new Error("pairing code must be the canonical 160-bit JOSHI grouped code");
+  }
+  return canonical;
+}
+
+export function isLoopbackHostname(value: string): boolean {
+  if (value === "localhost" || value === "[::1]") return true;
+  return /^127(?:\.[0-9]{1,3}){3}$/.test(value)
+    && value.split(".").every((part) => Number(part) <= 255);
+}
+
+export function pairingOriginTag(origin: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode(originTagDomain + origin)));
+}
+
+export function canonicalPairingSessionId(origin: string, epoch: string, ordinal: string): string {
+  if (!canonicalEpochPattern.test(epoch) || !canonicalOrdinalPattern.test(ordinal)) {
+    throw new Error("pairing session identity coordinates must be canonical positive decimals");
+  }
+  return `pair-session-${pairingOriginTag(origin)}-${epoch}-${ordinal}`;
+}
+
+export function isCanonicalPairingSessionId(sessionId: string, origin: string, epoch: string): boolean {
+  const prefix = `pair-session-${pairingOriginTag(origin)}-${epoch}-`;
+  return sessionId.startsWith(prefix) && canonicalOrdinalPattern.test(sessionId.slice(prefix.length));
+}
+
+function exactLoopbackOrigin(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.origin !== value || parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
+    throw new Error("pairing session origin must be the exact HTTP loopback page origin");
+  }
+  return parsed.origin;
+}
 
 export class PairingRequiredError extends Error {
   constructor(message = "Joshi client is not paired; no request was sent") {
@@ -45,6 +92,8 @@ export class MemoryOnlyPairingSession {
     this.#token = token;
     this.#descriptor = {
       sessionId: "legacy-manual-handoff",
+      origin: window.location.origin,
+      epoch: "1",
       expiresAt: "9999-12-31T23:59:59.999999Z",
       scopes: OPERATIONAL_SESSION_SCOPES,
       authority: "read_only_no_execution",
@@ -53,20 +102,25 @@ export class MemoryOnlyPairingSession {
   }
 
   establish(capability: string, descriptor: PairingSessionDescriptor): void {
-    if (!opaqueCapabilityPattern.test(capability)) {
-      throw new Error("pairing capability must be bounded opaque ASCII without whitespace");
+    if (!ordinaryCapabilityPattern.test(capability)) {
+      throw new Error("ordinary pairing capability must use the exact domain-separated V1 form");
     }
+    const origin = exactLoopbackOrigin(descriptor.origin);
+    if (origin !== window.location.origin) throw new Error("pairing session origin does not match this exact page origin");
+    if (!canonicalEpochPattern.test(descriptor.epoch)) throw new Error("pairing epoch must be a canonical positive decimal string");
     const parsedExpiry = exactUtcInstantSchema.parse(descriptor.expiresAt);
     if (Date.parse(parsedExpiry) <= Date.now()) throw new Error("pairing session is already expired");
-    if (descriptor.sessionId.length < 1 || descriptor.sessionId.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(descriptor.sessionId)) {
-      throw new Error("pairing session ID must be a canonical ASCII identity");
+    if (!isCanonicalPairingSessionId(descriptor.sessionId, origin, descriptor.epoch)) {
+      throw new Error("pairing session ID must bind the exact origin and epoch");
     }
     if (descriptor.authority !== "read_only_no_execution") throw new Error("pairing session authority exceeds the Glass ceiling");
-    if (descriptor.scopes.length !== OPERATIONAL_SESSION_SCOPES.length || descriptor.scopes.some((scope, index) => scope !== OPERATIONAL_SESSION_SCOPES[index])) {
-      throw new Error("pairing session scopes do not match the fixed evidence-only V1 scope set");
+    if (descriptor.scopes.length === 0
+      || descriptor.scopes.some((scope) => !OPERATIONAL_SESSION_SCOPES.includes(scope))
+      || descriptor.scopes.some((scope, index) => index > 0 && descriptor.scopes[index - 1]! >= scope)) {
+      throw new Error("pairing session scopes must be a nonempty sorted subset of the evidence-only V1 scope set");
     }
     this.#token = capability;
-    this.#descriptor = { ...descriptor, expiresAt: parsedExpiry, scopes: OPERATIONAL_SESSION_SCOPES };
+    this.#descriptor = { ...descriptor, origin, expiresAt: parsedExpiry, scopes: [...descriptor.scopes] };
     this.#emit();
   }
 

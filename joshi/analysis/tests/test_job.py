@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -82,21 +83,102 @@ def test_cli_validate_and_run(tmp_path: Path, capsys: object) -> None:
 
 def test_exact_atom_ratios_do_not_collapse_above_javascript_integer_width() -> None:
     rows = pq.read_table(FIXTURE / "chart_samples.parquet").slice(0, 2).to_pylist()
-    adjacent = 2**53
+    rows[0]["price_base_atoms"] = Decimal(2**53 + 1)
+    rows[0]["price_quote_atoms"] = Decimal(2**53 + 3)
+    rows[1]["price_base_atoms"] = Decimal(2**53 + 5)
+    rows[1]["price_quote_atoms"] = Decimal(2**53 + 5 + 22_517_998_138)
     for index, row in enumerate(rows):
         row["sample_index"] = index
         row["expected_sample_count"] = 2
-        row["price_base_atoms"] = Decimal(1)
-        row["price_quote_atoms"] = Decimal(adjacent + index)
     table = pa.Table.from_pylist(rows, schema=CHART_SAMPLE_SCHEMA)
     result = descriptive_chart_features(table).to_pylist()[0]
     assert result["path_signature"] == "+"
-    assert result["signed_change_ppm"] == 0
+    assert result["signed_change_ppm"] == 2
+    assert result["start_price_base_atoms"] == Decimal(2**53 + 1)
+    assert result["end_price_quote_atoms"] == Decimal(2**53 + 5 + 22_517_998_138)
 
 
 def test_atom_width_beyond_u64_refuses_before_analysis() -> None:
     rows = pq.read_table(FIXTURE / "chart_samples.parquet").slice(0, 2).to_pylist()
+    for index, row in enumerate(rows):
+        row["sample_index"] = index
+        row["expected_sample_count"] = 2
     rows[0]["price_quote_atoms"] = Decimal(2**64)
     table = pa.Table.from_pylist(rows, schema=CHART_SAMPLE_SCHEMA)
     with pytest.raises(ManifestError, match="u64 atom boundary"):
+        descriptive_chart_features(table)
+
+
+def test_derived_availability_uses_latest_contributing_input() -> None:
+    rows = pq.read_table(FIXTURE / "chart_samples.parquet").slice(0, 2).to_pylist()
+    for index, row in enumerate(rows):
+        row["sample_index"] = index
+        row["expected_sample_count"] = 2
+    later = rows[1]["decision_available_at"] + timedelta(microseconds=7)
+    rows[1]["decision_available_at"] = later
+    rows[1]["available_at"] = later
+    table = pa.Table.from_pylist(rows, schema=CHART_SAMPLE_SCHEMA)
+    result = descriptive_chart_features(table).to_pylist()[0]
+    assert result["decision_available_at"] == later
+
+
+def test_gap_row_cannot_smuggle_a_foreign_series_identity() -> None:
+    rows = pq.read_table(FIXTURE / "chart_samples.parquet").slice(0, 2).to_pylist()
+    for index, row in enumerate(rows):
+        row["sample_index"] = index
+        row["expected_sample_count"] = 2
+    rows[1]["candidate_id"] = "candidate-foreign-gap"
+    rows[1]["coverage_status"] = "gap"
+    rows[1]["position_state"] = "unknown"
+    rows[1]["price_base_atoms"] = None
+    rows[1]["price_quote_atoms"] = None
+    rows[1]["buy_volume_base_atoms"] = None
+    rows[1]["sell_volume_base_atoms"] = None
+    rows[1]["coverage_gap_id"] = "gap-foreign"
+    rows[1]["source_assertion_id"] = None
+    rows[1]["source_observation_id"] = None
+    table = pa.Table.from_pylist(rows, schema=CHART_SAMPLE_SCHEMA)
+    with pytest.raises(ManifestError, match="changes candidate_id"):
+        descriptive_chart_features(table)
+
+
+def _all_gap_rows() -> list[dict[str, object]]:
+    rows = pq.read_table(FIXTURE / "chart_samples.parquet").slice(0, 2).to_pylist()
+    for index, row in enumerate(rows):
+        row["sample_index"] = index
+        row["expected_sample_count"] = 2
+        row["coverage_status"] = "gap"
+        row["position_state"] = "unknown"
+        row["price_base_atoms"] = None
+        row["price_quote_atoms"] = None
+        row["buy_volume_base_atoms"] = None
+        row["sell_volume_base_atoms"] = None
+        row["coverage_gap_id"] = f"gap-all-{index}"
+        row["source_assertion_id"] = None
+        row["source_observation_id"] = None
+    return rows
+
+
+def test_valid_all_gap_series_has_an_explicit_no_metric_outcome() -> None:
+    table = pa.Table.from_pylist(_all_gap_rows(), schema=CHART_SAMPLE_SCHEMA)
+    assert descriptive_chart_features(table).num_rows == 0
+
+
+@pytest.mark.parametrize("adversary", ["identity", "status", "measurement", "clock"])
+def test_all_gap_series_cannot_launder_invalid_rows(adversary: str) -> None:
+    rows = _all_gap_rows()
+    if adversary == "identity":
+        rows[1]["candidate_id"] = "candidate-foreign-all-gap"
+        match = "changes candidate_id"
+    elif adversary == "status":
+        rows[1]["coverage_status"] = "missing"
+        match = "not separated exactly"
+    elif adversary == "measurement":
+        rows[1]["price_base_atoms"] = Decimal(7)
+        match = "not separated exactly"
+    else:
+        rows[1]["observed_at"] = rows[1]["event_time"] - timedelta(microseconds=1)  # type: ignore[operator]
+        match = "clocks are not ordered"
+    table = pa.Table.from_pylist(rows, schema=CHART_SAMPLE_SCHEMA)
+    with pytest.raises(ManifestError, match=match):
         descriptive_chart_features(table)

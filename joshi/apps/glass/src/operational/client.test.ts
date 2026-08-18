@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MemoryOnlyPairingSession } from "../security/pairing";
+import { MemoryOnlyPairingSession, canonicalPairingSessionId } from "../security/pairing";
 import { SameOriginOperationalClient } from "./client";
 import {
   canonicalExplicitAbstention,
@@ -15,6 +15,8 @@ import {
 } from "./contract";
 import { fixtureCockpitIndex, fixtureCockpitLaunch, fixtureSessionLaunch } from "./fixtures";
 
+const PAIRING_CODE = "JOSHI-040G-7080-XPTK-366S-YS65-1JRN-4N5D-NJ7N";
+
 function productionLaunch(): CockpitLaunchEnvelopeV1 {
   const envelope = structuredClone(fixtureCockpitLaunch);
   envelope.launch.snapshot.transport = "loopback";
@@ -28,12 +30,15 @@ describe("same-origin operational client", () => {
   it("consumes a one-time code, keeps the capability in memory, and explicitly opens one durable ID", async () => {
     const session = new MemoryOnlyPairingSession();
     const launch = productionLaunch();
-    const capability = "cap_" + "a".repeat(61);
+    const capability = "jpc1_" + "a".repeat(64);
+    const sessionId = canonicalPairingSessionId(window.location.origin, "1", "1");
     const responses = [
       new Response(JSON.stringify({
         contract: "joshi.pairing.session",
         schemaVersion: 1,
-        sessionId: "paired-session-1",
+        sessionId,
+        origin: window.location.origin,
+        epoch: "1",
         expiresAt: "2099-08-18T00:00:00.000000Z",
         scopes: ["cockpit_read", "operator_evidence_write", "presentation_evidence_write", "replay_read"],
         authority: "read_only_no_execution",
@@ -46,14 +51,14 @@ describe("same-origin operational client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const client = new SameOriginOperationalClient(session);
 
-    const descriptor = await client.exchange("EMBER-482901");
+    const descriptor = await client.exchange(PAIRING_CODE.toLowerCase());
     expect(descriptor).not.toHaveProperty("capability");
-    expect(session.descriptor()).toMatchObject({ sessionId: "paired-session-1", authority: "read_only_no_execution" });
+    expect(session.descriptor()).toMatchObject({ sessionId, authority: "read_only_no_execution" });
     const exchangeCall = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(exchangeCall[0].pathname).toBe("/api/v1/pairing/exchange");
     expect(exchangeCall[1]).toMatchObject({ credentials: "omit", cache: "no-store" });
     expect(exchangeCall[1].headers).not.toHaveProperty("X-Joshi-Pairing-Token");
-    expect(exchangeCall[1].body).toBe('{"contract":"joshi.pairing.exchange","schemaVersion":1,"oneTimeCode":"EMBER-482901"}');
+    expect(exchangeCall[1].body).toBe(`{"contract":"joshi.pairing.exchange","schemaVersion":1,"oneTimeCode":"${PAIRING_CODE}"}`);
 
     await client.listPublications();
     const opened = await client.openPublication(launch.launch.cockpitPublication.cockpitPublicationId);

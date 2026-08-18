@@ -6,9 +6,16 @@ from datetime import timedelta
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
-from joshi_analysis.canonical import canonical_json_bytes, sha256_bytes
+from joshi_analysis.canonical import (
+    canonical_json_bytes,
+    logical_table_sha256,
+    qualified_sha256_bytes,
+    qualified_sha256_file,
+    sha256_bytes,
+)
 from joshi_analysis.contracts import TABLE_CONTRACTS
 from joshi_analysis.errors import (
     CoverageError,
@@ -21,11 +28,33 @@ from joshi_analysis.fixture import fixture_rows, fixture_tables, write_fixture_s
 from joshi_analysis.snapshot import validate_snapshot
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "snapshot_v1"
+G0_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "export"
+    / "operational_snapshot_v10"
+)
 
 
 def _rehash_manifest(manifest: dict[str, object]) -> None:
     preimage = {key: value for key, value in manifest.items() if key != "snapshot_id"}
     manifest["snapshot_id"] = "sha256:" + sha256_bytes(canonical_json_bytes(preimage))
+
+
+def _replace_g0_table(destination: Path, name: str, table: pa.Table) -> None:
+    manifest_path = destination / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    table_manifest = next(item for item in manifest["tables"] if item["name"] == name)
+    table_path = destination / table_manifest["path"]
+    pq.write_table(table, table_path, compression="zstd", use_dictionary=False)
+    table_manifest["physical_digest"] = qualified_sha256_file(table_path)
+    table_manifest["logical_digest"] = logical_table_sha256(
+        table, table_manifest["primary_key"]
+    )
+    table_manifest["byte_length"] = table_path.stat().st_size
+    table_manifest["row_count"] = table.num_rows
+    _rehash_manifest(manifest)
+    manifest_path.write_bytes(canonical_json_bytes(manifest, newline=True))
 
 
 def test_manifested_fixture_validates() -> None:
@@ -62,6 +91,56 @@ def test_manifested_fixture_validates() -> None:
         for field in ("schema_digest", "physical_digest", "logical_digest")
     )
     assert snapshot.manifest["catalog"]["as_of"]["catalog_commit"] == "120"
+
+
+def test_rust_produced_g0_fixture_reopens_exact_24_relation_semantics() -> None:
+    snapshot = validate_snapshot(G0_FIXTURE)
+    assert snapshot.manifest["catalog"]["catalog_schema"] == "joshi.sqlite.v10"
+    assert len(snapshot.tables) == 24
+    assert snapshot.tables["source_fact_occurrences"].num_rows == 1
+    assert snapshot.tables["act_occurrences"]["logical_start_tick"].to_pylist() == [
+        "9007199254740993"
+    ]
+
+
+def test_g0_rehashed_malformed_source_bytes_are_semantically_refused(tmp_path: Path) -> None:
+    destination = tmp_path / "g0-source-tamper"
+    shutil.copytree(G0_FIXTURE, destination)
+    table = pq.read_table(destination / "source_fact_occurrences.parquet")
+    rows = table.to_pylist()
+    rows[0]["descriptor_bytes"] = b"{}"
+    rows[0]["descriptor_digest"] = qualified_sha256_bytes(b"{}")
+    rows[0]["descriptor_byte_length"] = 2
+    _replace_g0_table(
+        destination,
+        "source_fact_occurrences",
+        pa.Table.from_pylist(rows, schema=table.schema),
+    )
+    with pytest.raises(ManifestError, match="source descriptor"):
+        validate_snapshot(destination)
+
+
+def test_g0_rehashed_memory_tick_above_u64_is_refused(tmp_path: Path) -> None:
+    destination = tmp_path / "g0-tick-tamper"
+    shutil.copytree(G0_FIXTURE, destination)
+    table = pq.read_table(destination / "act_occurrences.parquet")
+    rows = table.to_pylist()
+    occurrence = json.loads(rows[0]["occurrence_bytes"])
+    occurrence["value"]["occurredAt"] = "18446744073709551616"
+    forged = json.dumps(
+        occurrence, ensure_ascii=False, sort_keys=False, separators=(",", ":")
+    ).encode()
+    rows[0]["occurrence_bytes"] = forged
+    rows[0]["occurrence_digest"] = qualified_sha256_bytes(forged)
+    rows[0]["occurrence_byte_length"] = len(forged)
+    rows[0]["logical_start_tick"] = "18446744073709551616"
+    _replace_g0_table(
+        destination,
+        "act_occurrences",
+        pa.Table.from_pylist(rows, schema=table.schema),
+    )
+    with pytest.raises(ManifestError, match="exceeds u64"):
+        validate_snapshot(destination)
 
 
 def test_physical_hash_tampering_is_rejected(tmp_path: Path) -> None:

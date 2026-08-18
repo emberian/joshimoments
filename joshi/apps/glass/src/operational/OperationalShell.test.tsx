@@ -7,19 +7,28 @@ import { OfflineFixtureOperatorSink } from "../operator/client";
 import type { OperatorCommandV2 } from "../operator/contract";
 import { OfflineFixturePresentationSink, type PresentationSink } from "../presentation/client";
 import type { ExplorationBundleV1, PresentationPolicyV1, PresentationSceneReceiptV1, PresentationSceneV1 } from "../presentation/contract";
-import { MemoryOnlyPairingSession, OPERATIONAL_SESSION_SCOPES } from "../security/pairing";
+import {
+  MemoryOnlyPairingSession,
+  OPERATIONAL_SESSION_SCOPES,
+  canonicalPairingSessionId,
+} from "../security/pairing";
 import { CockpitPublicationDataSource } from "./client";
 import { fixtureCockpitIndex, fixtureCockpitLaunch, fixtureSessionLaunch } from "./fixtures";
 import { OperationalGlassShell, type OperationalClient, type OperationalRuntime } from "./OperationalShell";
 
+const PAIRING_CODE = "JOSHI-040G-7080-XPTK-366S-YS65-1JRN-4N5D-NJ7N";
+
 function fixtureClient(session: MemoryOnlyPairingSession) {
   let exchanges = 0;
+  const sessionId = canonicalPairingSessionId(window.location.origin, "1", "1");
   const client: OperationalClient = {
     async exchange(code) {
       exchanges += 1;
-      if (exchanges > 1 || code !== "EMBER-482901") throw new Error("Pairing code is invalid, expired, or already consumed.");
-      session.establish("a".repeat(64), {
-        sessionId: "session-shell-test",
+      if (exchanges > 1 || code !== PAIRING_CODE) throw new Error("Pairing code is invalid, expired, or already consumed.");
+      session.establish("jpc1_" + "a".repeat(64), {
+        sessionId,
+        origin: window.location.origin,
+        epoch: "1",
         expiresAt: "2099-08-18T00:00:00.000000Z",
         scopes: OPERATIONAL_SESSION_SCOPES,
         authority: "read_only_no_execution",
@@ -27,7 +36,9 @@ function fixtureClient(session: MemoryOnlyPairingSession) {
       return {
         contract: "joshi.pairing.session" as const,
         schemaVersion: 1 as const,
-        sessionId: "session-shell-test",
+        sessionId,
+        origin: window.location.origin,
+        epoch: "1",
         expiresAt: "2099-08-18T00:00:00.000000Z",
         scopes: [...OPERATIONAL_SESSION_SCOPES],
         authority: "read_only_no_execution" as const,
@@ -59,7 +70,7 @@ describe("operational Glass shell", () => {
     expect(screen.queryByText(/RADON/)).not.toBeInTheDocument();
 
     const code = screen.getByLabelText(/one-time pairing code/i);
-    await user.type(code, "EMBER-482901");
+    await user.type(code, PAIRING_CODE);
     await user.click(screen.getByRole("button", { name: /pair locally/i }));
     expect(await screen.findByRole("heading", { name: /choose an immutable cockpit publication/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/one-time pairing code/i)).not.toBeInTheDocument();
@@ -90,7 +101,7 @@ describe("operational Glass shell", () => {
       presentationSink: delayedPresentation,
     });
     render(<OperationalGlassShell session={session} client={client} runtimeFactory={runtimeFactory} />);
-    await user.type(screen.getByLabelText(/one-time pairing code/i), "EMBER-482901");
+    await user.type(screen.getByLabelText(/one-time pairing code/i), PAIRING_CODE);
     await user.click(screen.getByRole("button", { name: /pair locally/i }));
     await user.click(await screen.findByRole("button", { name: /open exact publication/i }));
     expect(await screen.findByText(/staging the exact presentation policy/i)).toBeInTheDocument();
@@ -129,7 +140,7 @@ describe("operational Glass shell", () => {
       presentationSink: failingPresentation,
     });
     render(<OperationalGlassShell session={session} client={fixtureClient(session)} runtimeFactory={runtimeFactory} />);
-    await user.type(screen.getByLabelText(/one-time pairing code/i), "EMBER-482901");
+    await user.type(screen.getByLabelText(/one-time pairing code/i), PAIRING_CODE);
     await user.click(screen.getByRole("button", { name: /pair locally/i }));
     await user.click(await screen.findByRole("button", { name: /open exact publication/i }));
     expect(await screen.findByRole("heading", { name: /radon radon/i })).toBeInTheDocument();
@@ -142,7 +153,7 @@ describe("operational Glass shell", () => {
     const session = new MemoryOnlyPairingSession();
     const user = userEvent.setup();
     render(<OperationalGlassShell session={session} client={fixtureClient(session)} />);
-    await user.type(screen.getByLabelText(/one-time pairing code/i), "EMBER-482901");
+    await user.type(screen.getByLabelText(/one-time pairing code/i), PAIRING_CODE);
     await user.click(screen.getByRole("button", { name: /pair locally/i }));
     expect(await screen.findByRole("heading", { name: /choose an immutable cockpit publication/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /end session/i }));
@@ -170,7 +181,7 @@ describe("operational Glass shell", () => {
       presentationSink,
     });
     render(<OperationalGlassShell mode="prospective" session={session} client={client} runtimeFactory={runtimeFactory} />);
-    await user.type(screen.getByLabelText(/one-time pairing code/i), "EMBER-482901");
+    await user.type(screen.getByLabelText(/one-time pairing code/i), PAIRING_CODE);
     await user.click(screen.getByRole("button", { name: /pair locally/i }));
     expect(await screen.findByRole("heading", { name: /radon radon/i })).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`registered launch ${fixtureSessionLaunch.registration.launchId}`, "i"))).toBeInTheDocument();

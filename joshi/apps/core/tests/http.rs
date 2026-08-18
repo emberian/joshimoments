@@ -447,7 +447,7 @@ async fn one_time_pairing_exchange_is_not_mounted_without_a_session_registry() {
                 .header("sec-fetch-mode", "cors")
                 .header("sec-fetch-dest", "empty")
                 .body(Body::from(
-                    r#"{"contract":"joshi.pairing.exchange","schemaVersion":1,"oneTimeCode":"EMBER-482901"}"#,
+                    include_str!("../../../fixtures/pairing/exchange_request_v1.json").trim_end(),
                 ))
                 .expect("pairing exchange request"),
         )

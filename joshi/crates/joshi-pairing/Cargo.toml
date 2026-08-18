@@ -10,7 +10,9 @@ publish.workspace = true
 joshi-domain = { path = "../joshi-domain" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+time.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

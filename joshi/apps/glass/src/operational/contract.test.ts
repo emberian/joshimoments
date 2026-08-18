@@ -19,6 +19,7 @@ import {
   digestProspectiveNomination,
   prospectiveNominationCommandV1Schema,
   prospectiveNominationReceiptV1Schema,
+  pairingExchangeV1Schema,
   pairingSessionV1Schema,
   parseCockpitLaunchEnvelope,
   sessionLaunchV1Schema,
@@ -42,6 +43,13 @@ function digestExact(value: string): string {
 }
 
 describe("operational Glass exact contracts", () => {
+  it("pins the exact Rust ordinary pairing request and response bytes", () => {
+    const request = readFileSync(resolve(process.cwd(), "../../fixtures/pairing/exchange_request_v1.json"), "utf8").trimEnd();
+    const response = readFileSync(resolve(process.cwd(), "../../fixtures/pairing/exchange_response_v1.json"), "utf8").trimEnd();
+    expect(JSON.stringify(pairingExchangeV1Schema.parse(JSON.parse(request) as unknown))).toBe(request);
+    expect(JSON.stringify(pairingSessionV1Schema.parse(JSON.parse(response) as unknown))).toBe(response);
+  });
+
   it("pins the exact Rust durable cockpit publication bytes and digest preimage", () => {
     const durable = durableCockpitPublicationV1Schema.parse(JSON.parse(GOLDEN_DURABLE_COCKPIT_V1_JSON) as unknown);
     expect(JSON.stringify(durable)).toBe(GOLDEN_DURABLE_COCKPIT_V1_JSON);
@@ -98,10 +106,12 @@ describe("operational Glass exact contracts", () => {
       contract: "joshi.pairing.session",
       schemaVersion: 1,
       sessionId: "session-test",
+      origin: window.location.origin,
+      epoch: "1",
       expiresAt: "2026-08-18T00:00:00.000000Z",
       scopes: ["cockpit_read", "operator_evidence_write", "presentation_evidence_write", "trade"],
       authority: "read_only_no_execution",
-      capability: "a".repeat(64),
+      capability: "jpc1_" + "a".repeat(64),
     })).toThrow();
   });
 

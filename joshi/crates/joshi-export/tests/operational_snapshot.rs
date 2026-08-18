@@ -2,6 +2,7 @@ use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
 use joshi_export::{
     ExportError, OperationalExportRequestV2, OperationalPublicationV2,
     ProjectionPublicationInputV2, PythonValidatorV2, export_operational_snapshot_v2,
+    validate_operational_snapshot_v2_directory,
 };
 use rusqlite::Connection;
 use std::{
@@ -23,6 +24,14 @@ fn workspace() -> PathBuf {
         .and_then(Path::parent)
         .expect("workspace")
         .to_owned()
+}
+
+fn copy_snapshot(source: &Path, destination: &Path) {
+    fs::create_dir(destination).expect("create snapshot copy");
+    for entry in fs::read_dir(source).expect("read snapshot fixture") {
+        let entry = entry.expect("snapshot entry");
+        fs::copy(entry.path(), destination.join(entry.file_name())).expect("copy snapshot part");
+    }
 }
 
 fn request(catalog: PathBuf, destination: PathBuf) -> OperationalExportRequestV2 {
@@ -70,7 +79,25 @@ fn request(catalog: PathBuf, destination: PathBuf) -> OperationalExportRequestV2
             program: PathBuf::from("uv"),
             analysis_directory: workspace().join("analysis"),
         },
+        g0_import_artifact: None,
     }
+}
+
+#[test]
+fn independent_restart_reopen_rehashes_every_manifested_part() {
+    let fixture = workspace().join("fixtures/export/operational_snapshot_v2");
+    let receipt =
+        validate_operational_snapshot_v2_directory(&fixture).expect("independent restart readback");
+    assert_eq!(receipt.table_count(), 14);
+
+    let temporary = tempfile::tempdir().expect("temporary snapshot root");
+    let copied = temporary.path().join("snapshot");
+    copy_snapshot(&fixture, &copied);
+    let part = copied.join("chart_samples.parquet");
+    let mut bytes = fs::read(&part).expect("chart bytes");
+    bytes.push(0);
+    fs::write(part, bytes).expect("tamper copied part");
+    assert!(validate_operational_snapshot_v2_directory(&copied).is_err());
 }
 
 #[test]

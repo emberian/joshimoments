@@ -65,3 +65,35 @@ unrecoverable recoveries refuse because Snapshot V2 cannot carry them losslessly
 prospective decision-study witness. Source/fact artifacts, protocol/launch/session rows, nominations,
 abstentions, outcomes, and interviews remain fail-closed until a successor relation set represents
 their frozen DTOs.
+
+## Wave 5 G0 V10 exact-byte witness
+
+`operational_catalog_v10.sqlite` extends the frozen V8 witness through migrations 0009/0010 and
+canonical public builders. It contains one connected run-rooted source/publication/head/scene,
+one exact wide-tick act and partial episode, one ready export binding, and one restricted import
+bound to the independently reopened derived-artifact manifest and Parquet CAS part. The source,
+publication, head, scene, act, episode, and import-manifest bytes are retained in the Parquet
+relations and parsed again after restart by both Rust and locked offline Python.
+
+`operational_snapshot_v10/` contains exactly 24 tables: the legacy fourteen plus the ten frozen
+G0 relations. Pairing and backup are deliberately absent; they are separate store/root witnesses,
+not analysis relations. Exact fixture identities are:
+
+- catalog: `sha256:917a163a49c25b6517336b0e89bd0805f497544a26e429676e4c86891ce26b81`;
+- snapshot: `sha256:b95c19cdd63de7ed08953d7a9cad6d9c5f9118b93d1cb9a5fa0d9083b6ab8b07`;
+- manifest: `sha256:d28e8406094ab91a883fed0b092040b381a742926751d85f16e498866d7dde15`.
+
+Regenerate only into absent paths:
+
+```sh
+cargo run --locked --offline -p joshi-export --example build_g0_catalog_fixture -- \
+  /tmp/joshi-g0-catalog.sqlite
+cargo run --locked --offline -p joshi-export --example build_g0_operational_fixture -- \
+  /tmp/joshi-g0-catalog.sqlite /tmp/joshi-g0-snapshot
+uv run --locked --offline --directory analysis joshi-analysis validate --snapshot \
+  /tmp/joshi-g0-snapshot
+```
+
+The expected validation receipt reports `table_count=24` and `total_row_count=10`. The public CAS
+readback descriptor is neutral and cannot establish store authority; only store-owned orchestration
+may resolve it from private state and durably qualify/commit the resulting export.

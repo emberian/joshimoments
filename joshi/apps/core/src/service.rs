@@ -27,6 +27,11 @@ use std::{
 use tower::limit::ConcurrencyLimitLayer;
 use zeroize::Zeroize as _;
 
+use crate::pairing::{
+    OrdinaryPairingError, OrdinaryPairingService, PairingAuthorizer, ordinary_pairing_router,
+};
+use joshi_pairing::{PairingConfig, PairingOrigin, PairingScope};
+
 const COMPANION_DIGEST_HEADER: &str = "x-joshi-batch-digest";
 const COMPANION_SCHEMA_HEADER: &str = "x-joshi-companion-schema";
 const PAIRING_TOKEN_HEADER: &str = "x-joshi-pairing-token";
@@ -43,9 +48,10 @@ pub struct CoreService {
 }
 
 struct Inner {
-    store: Mutex<SqliteStore>,
+    store: Arc<Mutex<SqliteStore>>,
     companion_installation_id: Option<String>,
     pairing: PairingCapability,
+    ordinary_pairing: Option<Arc<OrdinaryPairingService>>,
     monotonic_epoch: Instant,
     monotonic_clock_id: String,
 }
@@ -123,17 +129,75 @@ impl CoreService {
             .map_or(0, |value| value.as_micros());
         Self {
             inner: Arc::new(Inner {
-                store: Mutex::new(store),
+                store: Arc::new(Mutex::new(store)),
                 companion_installation_id,
                 pairing,
+                ordinary_pairing: None,
                 monotonic_epoch: Instant::now(),
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
             }),
         }
     }
 
+    fn with_ordinary_pairing(
+        store: Arc<Mutex<SqliteStore>>,
+        companion_installation_id: Option<String>,
+        pairing: PairingCapability,
+        ordinary_pairing: Arc<OrdinaryPairingService>,
+    ) -> Self {
+        let started = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |value| value.as_micros());
+        Self {
+            inner: Arc::new(Inner {
+                store,
+                companion_installation_id,
+                pairing,
+                ordinary_pairing: Some(ordinary_pairing),
+                monotonic_epoch: Instant::now(),
+                monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
+            }),
+        }
+    }
+
+    /// Opt in to ordinary pairing through the sole `SQLite` journal adapter.
+    ///
+    /// The returned handle is the launcher/revocation waist; it cannot be replaced by a
+    /// caller-implemented journal or deterministic entropy/clock in a production build.
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
+    #[allow(dead_code)] // The default product router stays unmounted until the G0 harness opts in.
+    pub(crate) fn with_sqlite_pairing(
+        store: SqliteStore,
+        companion_installation_id: Option<String>,
+        pairing: PairingCapability,
+        origin: PairingOrigin,
+        config: PairingConfig,
+    ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
+        let store = Arc::new(Mutex::new(store));
+        let ordinary = Arc::new(OrdinaryPairingService::production_with_shared_store(
+            origin,
+            config,
+            store.clone(),
+        )?);
+        let service = Self::with_ordinary_pairing(
+            store,
+            companion_installation_id,
+            pairing,
+            ordinary.clone(),
+        );
+        Ok((service, ordinary))
+    }
+
     pub fn router(self) -> Router {
-        Router::new()
+        let pairing_router = self
+            .inner
+            .ordinary_pairing
+            .clone()
+            .map(ordinary_pairing_router);
+        let router = Router::new()
             .route("/api/v1/health", get(health))
             .route("/v1/observations/pump-companion", post(companion))
             .route("/api/v1/glass/snapshot", get(snapshot))
@@ -148,7 +212,11 @@ impl CoreService {
             // No stream route exists in V1: reconnect ordering/digest binding is not frozen.
             .layer(DefaultBodyLimit::max(MAX_COMPANION_BYTES))
             .layer(ConcurrencyLimitLayer::new(16))
-            .with_state(self)
+            .with_state(self);
+        match pairing_router {
+            Some(pairing) => router.merge(pairing),
+            None => router,
+        }
     }
 
     /// Serve the bounded router on an explicitly loopback socket.
@@ -171,7 +239,9 @@ async fn prospective_session_launch(
     State(service): State<CoreService>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = prospective_pairing_failure(&service, &headers) {
+    if let Some(response) =
+        prospective_pairing_failure(&service, &headers, PairingScope::CockpitRead)
+    {
         return response;
     }
     problem(
@@ -186,7 +256,9 @@ async fn prospective_nomination(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(response) = prospective_pairing_failure(&service, &headers) {
+    if let Some(response) =
+        prospective_pairing_failure(&service, &headers, PairingScope::OperatorEvidenceWrite)
+    {
         return response;
     }
     if headers
@@ -228,7 +300,9 @@ async fn explicit_abstention(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(response) = prospective_pairing_failure(&service, &headers) {
+    if let Some(response) =
+        prospective_pairing_failure(&service, &headers, PairingScope::OperatorEvidenceWrite)
+    {
         return response;
     }
     if headers
@@ -265,9 +339,18 @@ async fn explicit_abstention(
     )
 }
 
-fn prospective_pairing_failure(service: &CoreService, headers: &HeaderMap) -> Option<Response> {
-    let origin = header_text(headers, header::ORIGIN.as_str());
-    let host = header_text(headers, header::HOST.as_str());
+fn prospective_pairing_failure(
+    service: &CoreService,
+    headers: &HeaderMap,
+    scope: PairingScope,
+) -> Option<Response> {
+    match authorize_ordinary_if_configured(service, headers, scope) {
+        OrdinaryAuthorization::Authorized => return None,
+        OrdinaryAuthorization::NotConfigured => {}
+        OrdinaryAuthorization::Rejected(response) => return Some(response),
+    }
+    let origin = single_header_text(headers, header::ORIGIN.as_str());
+    let host = single_header_text(headers, header::HOST.as_str());
     if origin
         .as_deref()
         .zip(host.as_deref())
@@ -279,9 +362,9 @@ fn prospective_pairing_failure(service: &CoreService, headers: &HeaderMap) -> Op
             "prospective session requires exact matching loopback Host and Origin",
         ));
     }
-    if header_text(headers, SEC_FETCH_SITE_HEADER).as_deref() != Some("same-origin")
-        || header_text(headers, SEC_FETCH_MODE_HEADER).as_deref() != Some("cors")
-        || header_text(headers, SEC_FETCH_DEST_HEADER).as_deref() != Some("empty")
+    if single_header_text(headers, SEC_FETCH_SITE_HEADER).as_deref() != Some("same-origin")
+        || single_header_text(headers, SEC_FETCH_MODE_HEADER).as_deref() != Some("cors")
+        || single_header_text(headers, SEC_FETCH_DEST_HEADER).as_deref() != Some("empty")
     {
         return Some(problem(
             StatusCode::FORBIDDEN,
@@ -300,6 +383,72 @@ fn prospective_pairing_failure(service: &CoreService, headers: &HeaderMap) -> Op
         ));
     }
     None
+}
+
+enum OrdinaryAuthorization {
+    NotConfigured,
+    Authorized,
+    Rejected(Response),
+}
+
+fn authorize_ordinary_if_configured(
+    service: &CoreService,
+    headers: &HeaderMap,
+    scope: PairingScope,
+) -> OrdinaryAuthorization {
+    let Some(authorizer) = &service.inner.ordinary_pairing else {
+        return OrdinaryAuthorization::NotConfigured;
+    };
+    let origin = single_header_text(headers, header::ORIGIN.as_str());
+    let host = single_header_text(headers, header::HOST.as_str());
+    if origin.as_deref() != Some(authorizer.configured_origin().as_str())
+        || origin
+            .as_deref()
+            .zip(host.as_deref())
+            .is_none_or(|(origin, host)| !exact_loopback_same_origin(origin, host))
+    {
+        return OrdinaryAuthorization::Rejected(problem(
+            StatusCode::FORBIDDEN,
+            "origin_rejected",
+            "ordinary session requires the configured exact loopback Host and Origin",
+        ));
+    }
+    if single_header_text(headers, SEC_FETCH_SITE_HEADER).as_deref() != Some("same-origin")
+        || single_header_text(headers, SEC_FETCH_MODE_HEADER).as_deref() != Some("cors")
+        || single_header_text(headers, SEC_FETCH_DEST_HEADER).as_deref() != Some("empty")
+    {
+        return OrdinaryAuthorization::Rejected(problem(
+            StatusCode::FORBIDDEN,
+            "browser_posture_rejected",
+            "ordinary session requires same-origin browser Fetch Metadata",
+        ));
+    }
+    let Some(capability) = single_header_text(headers, PAIRING_TOKEN_HEADER) else {
+        return OrdinaryAuthorization::Rejected(problem(
+            StatusCode::UNAUTHORIZED,
+            "pairing_required",
+            "ordinary local pairing capability is required",
+        ));
+    };
+    match authorizer.authorize(
+        &capability,
+        origin.as_deref().expect("checked origin"),
+        scope,
+    ) {
+        Ok(()) => OrdinaryAuthorization::Authorized,
+        Err(OrdinaryPairingError::Journal(_) | OrdinaryPairingError::Unavailable) => {
+            OrdinaryAuthorization::Rejected(problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_writer_unavailable",
+                "ordinary session state could not be durably resolved",
+            ))
+        }
+        Err(OrdinaryPairingError::Pairing(_)) => OrdinaryAuthorization::Rejected(problem(
+            StatusCode::UNAUTHORIZED,
+            "pairing_required",
+            "ordinary local session is invalid, expired, revoked, or lacks the required scope",
+        )),
+    }
 }
 
 fn exact_loopback_same_origin(origin: &str, host: &str) -> bool {
@@ -490,8 +639,14 @@ struct SnapshotQuery {
 
 async fn snapshot(
     State(service): State<CoreService>,
+    headers: HeaderMap,
     Query(query): Query<SnapshotQuery>,
 ) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
     let Some(scene) = query.basis_scene_id else {
         return problem(
             StatusCode::CONFLICT,
@@ -504,8 +659,14 @@ async fn snapshot(
 
 async fn historical_scene(
     State(service): State<CoreService>,
+    headers: HeaderMap,
     Path(scene_id): Path<String>,
 ) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
     scene_response(&service, &scene_id, None)
 }
 
@@ -583,6 +744,7 @@ fn mode_name(mode: SceneMode) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keeps the fail-closed authorization/admission order explicit.
 async fn operator_command(
     State(service): State<CoreService>,
     headers: HeaderMap,
@@ -613,15 +775,22 @@ async fn operator_command(
             "operator mutation origin is not an allowed loopback UI",
         );
     }
-    if !headers
-        .get(PAIRING_TOKEN_HEADER)
-        .is_some_and(|value| service.inner.pairing.matches_header(value.as_bytes()))
+    match authorize_ordinary_if_configured(&service, &headers, PairingScope::OperatorEvidenceWrite)
     {
-        return problem(
-            StatusCode::UNAUTHORIZED,
-            "pairing_required",
-            "valid local pairing capability is required",
-        );
+        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::NotConfigured => {
+            if !headers
+                .get(PAIRING_TOKEN_HEADER)
+                .is_some_and(|value| service.inner.pairing.matches_header(value.as_bytes()))
+            {
+                return problem(
+                    StatusCode::UNAUTHORIZED,
+                    "pairing_required",
+                    "valid local pairing capability is required",
+                );
+            }
+        }
+        OrdinaryAuthorization::Rejected(response) => return response,
     }
     let Ok(command) = ValidatedOperatorCommandV1::parse_exact(&body) else {
         return problem(
@@ -710,6 +879,15 @@ fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+fn single_header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    value.to_str().ok().map(str::to_owned)
 }
 
 fn now(service: &CoreService) -> Result<(UtcTimestamp, u64), String> {

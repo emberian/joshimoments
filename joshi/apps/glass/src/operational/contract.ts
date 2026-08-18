@@ -10,7 +10,12 @@ import {
   explorationBundleV1Schema,
   presentationPolicyV1Schema,
 } from "../presentation/contract";
-import { OPERATIONAL_SESSION_SCOPES } from "../security/pairing";
+import {
+  OPERATIONAL_SESSION_SCOPES,
+  isCanonicalPairingSessionId,
+  isLoopbackHostname,
+  ordinaryPairingCodePattern,
+} from "../security/pairing";
 
 const asciiIdentity = z.string().min(1).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/);
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/);
@@ -33,23 +38,47 @@ const presentationReference = z.object({ presentationId: asciiIdentity, presenta
 export const pairingExchangeV1Schema = z.object({
   contract: z.literal("joshi.pairing.exchange"),
   schemaVersion: z.literal(1),
-  oneTimeCode: z.string().min(6).max(128).regex(/^[A-Za-z0-9-]+$/),
+  oneTimeCode: z.string().length(45).regex(ordinaryPairingCodePattern),
 }).strict();
+
+const pairingOrigin = z.string().refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.origin === value
+      && parsed.protocol === "http:"
+      && isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}, "must be an exact HTTP loopback origin");
+
+const pairingScopes = z.array(z.enum(OPERATIONAL_SESSION_SCOPES)).min(1).max(4).superRefine((scopes, refinement) => {
+  for (let index = 1; index < scopes.length; index += 1) {
+    if (scopes[index - 1]! >= scopes[index]!) {
+      refinement.addIssue({ code: "custom", message: "pairing scopes must be strictly sorted and unique", path: [index] });
+    }
+  }
+});
 
 export const pairingSessionV1Schema = z.object({
   contract: z.literal("joshi.pairing.session"),
   schemaVersion: z.literal(1),
   sessionId: asciiIdentity,
+  origin: pairingOrigin,
+  epoch: wireU64.refine((value) => value !== "0", "pairing epoch must be positive"),
   expiresAt: exactUtcInstantSchema,
-  scopes: z.tuple([
-    z.literal(OPERATIONAL_SESSION_SCOPES[0]),
-    z.literal(OPERATIONAL_SESSION_SCOPES[1]),
-    z.literal(OPERATIONAL_SESSION_SCOPES[2]),
-    z.literal(OPERATIONAL_SESSION_SCOPES[3]),
-  ]),
+  scopes: pairingScopes,
   authority: z.literal("read_only_no_execution"),
-  capability: z.string().min(32).max(512).regex(/^[A-Za-z0-9._~-]+$/),
-}).strict();
+  capability: z.string().regex(/^jpc1_[0-9a-f]{64}$/),
+}).strict().superRefine((session, refinement) => {
+  if (!isCanonicalPairingSessionId(session.sessionId, session.origin, session.epoch)) {
+    refinement.addIssue({
+      code: "custom",
+      message: "pairing session ID must bind the exact origin and epoch",
+      path: ["sessionId"],
+    });
+  }
+});
 
 const artifactReference = z.object({ artifactId: asciiIdentity, artifactDigest: digest }).strict();
 const publicationReference = z.object({ publicationId: asciiIdentity, publicationDigest: digest }).strict();

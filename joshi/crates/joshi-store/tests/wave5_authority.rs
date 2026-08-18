@@ -1,13 +1,20 @@
-use joshi_domain::{StableString, UtcTimestamp};
+use joshi_domain::{
+    AcquisitionClocks, AcquisitionId, BatchDigest, ObservationId, OpenVariant, RequestFingerprint,
+    SourceId, StableString, UtcTimestamp, ValueDigest, WireU64,
+};
+use joshi_evidence::{
+    AcquisitionRecord, DurableIngestBatch, MonotonicReading, ObservationDraft,
+    ObservationEventTime, ObservationMetadata, ObservationTiming,
+};
 use joshi_operational_status::DurableProgressState;
 use joshi_store::{
-    IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, Wave5CommitContext,
-    Wave5OperationalRecordKind, Wave5OperationalRecordV1, Wave5OperationalState,
-    Wave5RunRegistrationByteBundle,
+    IdempotencyStatus, ObservationStorage, SourceRegistration, SqliteStore, StoreConfig,
+    StoreIngestBatch, StoreMode, Wave5CommitContext, Wave5OperationalRecordKind,
+    Wave5OperationalRecordV1, Wave5OperationalState, Wave5RunRegistrationByteBundle,
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
-use std::{str::FromStr, time::Duration};
+use std::{collections::BTreeMap, fs, path::Path, str::FromStr, time::Duration};
 use tempfile::TempDir;
 
 const AUTHORITY: &str = "read_only_no_execution";
@@ -69,33 +76,157 @@ fn context(store: &SqliteStore, id: &str) -> Wave5CommitContext {
         .expect("store-owned commit context")
 }
 
+fn config(root: &Path) -> StoreConfig {
+    StoreConfig {
+        catalog_path: root.join("catalog.sqlite"),
+        blob_root: root.join("blobs"),
+        export_root: root.join("exports"),
+        inline_blob_max_bytes: 1_024,
+        busy_timeout: Duration::from_secs(1),
+        catalog_id: stable("catalog:test"),
+        max_observations_per_batch: 64,
+        max_raw_bytes_per_batch: 4 * 1024 * 1024,
+    }
+}
+
 fn store() -> (TempDir, SqliteStore) {
     let root = TempDir::new().expect("temporary root");
-    let mut store = SqliteStore::open(
-        StoreConfig {
-            catalog_path: root.path().join("catalog.sqlite"),
-            blob_root: root.path().join("blobs"),
-            export_root: root.path().join("exports"),
-            inline_blob_max_bytes: 1_024,
-            busy_timeout: Duration::from_secs(1),
-            catalog_id: stable("catalog:test"),
-            max_observations_per_batch: 64,
-            max_raw_bytes_per_batch: 4 * 1024 * 1024,
-        },
-        StoreMode::SingleWriter,
-    )
-    .expect("open store");
+    let mut store =
+        SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
     let report = store
         .migrate(timestamp("2026-08-18T00:00:00.000000Z"))
         .expect("migrate");
-    assert_eq!(report.current, 9);
+    assert_eq!(report.current, 10);
     (root, store)
+}
+
+#[allow(clippy::too_many_lines)]
+fn commit_external_observation(store: &mut SqliteStore) {
+    let source_id = SourceId::new("backup-source").expect("source id");
+    store
+        .register_source(&SourceRegistration {
+            source_id: source_id.clone(),
+            namespace: stable("fixture.backup"),
+            contract_version: stable("v1"),
+            collector_build: stable("backup-test"),
+            configuration_digest: ValueDigest::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("configuration digest"),
+        })
+        .expect("register backup source");
+    let committed_at = context(store, "clock:external-observation").committed_at();
+    let acquisition = AcquisitionRecord {
+        acquisition_id: AcquisitionId::new("backup-acquisition").expect("acquisition id"),
+        source_id,
+        acquisition_kind: OpenVariant::known("fixture").expect("kind"),
+        transport_kind: OpenVariant::known("fixture").expect("transport"),
+        parent_acquisition_id: None,
+        request_fingerprint: RequestFingerprint::new(format!("sha256:{}", "1".repeat(64)))
+            .expect("request fingerprint"),
+        contract_version: stable("v1"),
+        started_at: committed_at,
+        started_monotonic: Some(MonotonicReading {
+            clock_id: stable("backup-clock"),
+            nanoseconds: WireU64::new(1),
+        }),
+        source_locator: Some(stable("fixture://backup")),
+        source_cursor: None,
+        clocks: AcquisitionClocks {
+            requested_at: Some(committed_at),
+            received_at: committed_at,
+            persisted_at: committed_at,
+            monotonic_elapsed_ns: Some(WireU64::new(1)),
+            monotonic_domain: Some(stable("backup-clock")),
+        },
+    };
+    let observation_id = ObservationId::new("backup-observation").expect("observation id");
+    let mut batch = StoreIngestBatch {
+        evidence: DurableIngestBatch {
+            contract_version: stable("joshi.durable_ingest_batch.v1"),
+            batch_id: stable("backup-observation-batch"),
+            expected_digest: BatchDigest::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("placeholder digest"),
+            observations: vec![ObservationDraft {
+                acquisition,
+                observation: ObservationMetadata {
+                    observation_id: observation_id.clone(),
+                    acquisition_ordinal: WireU64::new(0),
+                    observation_kind: OpenVariant::known("fixture").expect("observation kind"),
+                    source_events: Vec::new(),
+                    source_variant: OpenVariant::known("fixture.payload").expect("variant"),
+                    event_time: ObservationEventTime {
+                        status: OpenVariant::known("exact").expect("event status"),
+                        lower: Some(
+                            UtcTimestamp::new(
+                                committed_at.as_datetime() - time::Duration::microseconds(1),
+                            )
+                            .expect("event lower"),
+                        ),
+                        upper: Some(committed_at),
+                        precision_us: Some(WireU64::new(1)),
+                    },
+                    chain: None,
+                    source_cursor: None,
+                    timing: ObservationTiming {
+                        received_at: committed_at,
+                        received_monotonic: MonotonicReading {
+                            clock_id: stable("backup-clock"),
+                            nanoseconds: WireU64::new(2),
+                        },
+                        persisted_at: committed_at,
+                        available_at: committed_at,
+                    },
+                    parse_disposition: OpenVariant::known("decoded").expect("parse disposition"),
+                    quality_code: None,
+                    media_type: stable("application/octet-stream"),
+                },
+                payload: vec![7; 2_048],
+            }],
+            source_events: Vec::new(),
+            assertions: Vec::new(),
+            coverage_windows: Vec::new(),
+            coverage_gaps: Vec::new(),
+            coverage_recoveries: Vec::new(),
+            cursor_advances: Vec::new(),
+        },
+        observation_storage: BTreeMap::from([(
+            observation_id.to_string(),
+            ObservationStorage {
+                retention_class: stable("fixture"),
+                content_encoding: None,
+                force_external: true,
+            },
+        )]),
+        coverage_gap_severity: BTreeMap::new(),
+        committed_at,
+        writer_clock_id: stable("backup-store-clock"),
+        committed_mono_ns: 1,
+        writer_build: stable("backup-test"),
+    };
+    batch.evidence.expected_digest =
+        SqliteStore::canonical_batch_digest(&batch.evidence).expect("canonical batch digest");
+    store.commit_ingest(&batch).expect("external observation");
+}
+
+fn first_regular_file(root: &Path) -> Option<std::path::PathBuf> {
+    for entry in fs::read_dir(root).ok()? {
+        let path = entry.ok()?.path();
+        let metadata = fs::symlink_metadata(&path).ok()?;
+        if metadata.file_type().is_file() {
+            return Some(path);
+        }
+        if metadata.file_type().is_dir()
+            && let Some(value) = first_regular_file(&path)
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 #[test]
 #[allow(clippy::too_many_lines)]
 fn exact_run_bytes_are_durable_idempotent_and_required_by_operational_records() {
-    let (_root, mut store) = store();
+    let (root, mut store) = store();
     let source_tree = format!(
         r#"{{"contract":"joshi.wave5.source_tree_manifest","schemaVersion":1,"repositoryId":"joshi","head":{{"kind":"commit","object_id":"{}"}},"dirty":false,"workingTreeDigest":"{}","diffDigest":null,"authority":"{}"}}"#,
         "1".repeat(40),
@@ -359,5 +490,71 @@ fn exact_run_bytes_are_durable_idempotent_and_required_by_operational_records() 
                 &context(&store, "commit:widened"),
             )
             .is_err()
+    );
+
+    commit_external_observation(&mut store);
+    let backup_id = stable("backup:test");
+    let backup_catalog = root.path().join("backup/catalog.sqlite");
+    let backup_artifacts = root.path().join("backup/artifacts");
+    let backup_context = context(&store, "commit:backup");
+    let backup = store
+        .commit_wave5_g0_backup_v1(
+            &backup_id,
+            &stable("run:test"),
+            &backup_catalog,
+            &backup_artifacts,
+            &backup_context,
+        )
+        .expect("artifact-bearing backup");
+    assert!(backup.artifact_count > 0);
+    let retry = store
+        .commit_wave5_g0_backup_v1(
+            &backup_id,
+            &stable("run:test"),
+            &backup_catalog,
+            &backup_artifacts,
+            &backup_context,
+        )
+        .expect("exact backup retry");
+    assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+
+    fs::rename(
+        root.path().join("blobs"),
+        root.path().join("blobs-unavailable"),
+    )
+    .expect("hide original blobs");
+    fs::rename(
+        root.path().join("exports"),
+        root.path().join("exports-unavailable"),
+    )
+    .expect("hide original exports");
+    let restore_id = stable("restore:test");
+    let restored_catalog = root.path().join("restored/catalog.sqlite");
+    let restored_artifacts = root.path().join("restored/artifacts");
+    let restore_context = context(&store, "commit:restore");
+    store
+        .commit_wave5_g0_backup_restore_v1(
+            &restore_id,
+            &backup_id,
+            &restored_catalog,
+            &restored_artifacts,
+            &restore_context,
+        )
+        .expect("restore without original artifact roots");
+    drop(store);
+
+    let reopened = SqliteStore::open(config(root.path()), StoreMode::SingleWriter)
+        .expect("reopen authority catalog");
+    reopened
+        .load_wave5_g0_backup_restore_v1(&restore_id)
+        .expect("restart exact restore readback")
+        .expect("restore occurrence");
+    let restored_file = first_regular_file(&restored_artifacts).expect("restored artifact");
+    fs::write(&restored_file, b"tampered after restore commit").expect("tamper restored file");
+    assert!(
+        reopened
+            .load_wave5_g0_backup_restore_v1(&restore_id)
+            .is_err(),
+        "postcommit restored-root tampering must fail exact load"
     );
 }

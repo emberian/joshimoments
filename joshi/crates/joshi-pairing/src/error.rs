@@ -12,6 +12,8 @@ pub enum PairingError {
     Entropy,
     #[error("pairing monotonic clock moved backwards")]
     ClockRollback,
+    #[error("pairing wall-clock display instant is unavailable or out of range")]
+    InvalidWallClock,
     #[error("pairing entropy produced a duplicate active secret")]
     DuplicateSecret,
     #[error("pairing code is malformed")]

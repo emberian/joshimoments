@@ -10,6 +10,9 @@ publish.workspace = true
 arrow-array = "59.1.0"
 arrow-schema = "59.1.0"
 joshi-domain = { path = "../joshi-domain" }
+joshi-projection = { path = "../joshi-projection" }
+joshi-publication = { path = "../joshi-publication" }
+joshi-scientific-memory = { path = "../joshi-scientific-memory" }
 parquet = { version = "59.1.0", default-features = false, features = ["arrow", "zstd"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "extra_check"] }
 serde.workspace = true

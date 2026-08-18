@@ -2,21 +2,23 @@ use crate::{
     ExportError, Result, ValidatedTableArtifactV1,
     coverage::selected_coverage_batches,
     snapshot::{
-        logical_table_digest, qualified_sha256, qualified_sha256_file, read_parquet,
-        schema_descriptor, sync_directory, write_file_durable, write_parquet,
+        logical_table_digest, parse_json_without_duplicate_keys, qualified_sha256,
+        qualified_sha256_file, read_parquet, relation_rows, schema_descriptor, sync_directory,
+        write_file_durable, write_parquet,
     },
-    specs::TABLE_SPECS,
+    specs::{G0_TABLE_SPECS, TABLE_SPECS, TableSpec},
 };
 use arrow_array::{
     Array, ArrayRef, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
 };
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
+use joshi_publication::{parse_cockpit_v2_head, parse_cockpit_v2_publication};
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -26,9 +28,10 @@ use std::{
 const APPLICATION_ID: i32 = 0x4a4f_5348;
 const SNAPSHOT_V2: &str = "joshi.analysis.snapshot/v2";
 const VALIDATION_RECEIPT: &str = "joshi.export.snapshot-validation-receipt/v2";
+const MAXIMUM_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MINIMUM_CATALOG_SCHEMA: i64 = 8;
-const MAXIMUM_CATALOG_SCHEMA: i64 = 9;
-const MIGRATIONS: [(i64, &str, &str); 9] = [
+const MAXIMUM_CATALOG_SCHEMA: i64 = 10;
+const MIGRATIONS: [(i64, &str, &str); 10] = [
     (
         1,
         "0001_evidence.sql",
@@ -74,6 +77,11 @@ const MIGRATIONS: [(i64, &str, &str); 9] = [
         "0009_wave5_living_instrument.sql",
         include_str!("../../../schema/migrations/0009_wave5_living_instrument.sql"),
     ),
+    (
+        10,
+        "0010_wave5_g0_store_spine.sql",
+        include_str!("../../../schema/migrations/0010_wave5_g0_store_spine.sql"),
+    ),
 ];
 
 /// Exact independent Python validator invocation. No shell is involved.
@@ -83,6 +91,34 @@ pub struct PythonValidatorV2 {
     pub program: PathBuf,
     /// Locked analysis project directory.
     pub analysis_directory: PathBuf,
+}
+
+/// One exact imported artifact part readback descriptor.
+///
+/// This public value is neutral and confers no store authority. A sole-store adapter must resolve
+/// it from private state, reopen every path, and retain its own durable qualification.
+#[derive(Clone, Debug)]
+pub struct G0ImportPartReadbackV1 {
+    pub path: PathBuf,
+    pub relative_path: StableString,
+    pub schema_id: StableString,
+    pub schema_digest: ValueDigest,
+    pub physical_digest: ValueDigest,
+    pub logical_digest: ValueDigest,
+    pub primary_key: Vec<StableString>,
+    pub byte_length: u64,
+    pub row_count: u64,
+}
+
+/// Exact imported artifact manifest and all-part readback input.
+///
+/// Supplying this public DTO does not prove store provenance and never mints a store receipt.
+#[derive(Clone, Debug)]
+pub struct G0ImportArtifactReadbackV1 {
+    pub import_id: StableString,
+    pub artifact_id: ValueDigest,
+    pub manifest_path: PathBuf,
+    pub parts: Vec<G0ImportPartReadbackV1>,
 }
 
 /// Catalog-owned immutable read input and explicit publication selection.
@@ -114,6 +150,8 @@ pub struct OperationalExportRequestV2 {
     pub destination: PathBuf,
     /// Independent locked Python semantic validator.
     pub python_validator: PythonValidatorV2,
+    /// Required neutral import/CAS readback descriptor for V10; absent before V10.
+    pub g0_import_artifact: Option<G0ImportArtifactReadbackV1>,
 }
 
 /// Store-validated neutral publication input. It carries exact identities/digests without making
@@ -195,6 +233,16 @@ impl ValidationReceiptV2 {
     #[must_use]
     pub fn receipt_digest(&self) -> &ValueDigest {
         &self.receipt_digest
+    }
+    /// Exact number of reopened typed relations.
+    #[must_use]
+    pub const fn table_count(&self) -> u64 {
+        self.table_count
+    }
+    /// Exact number of reopened logical rows across all relations.
+    #[must_use]
+    pub const fn total_row_count(&self) -> u64 {
+        self.total_row_count
     }
 }
 
@@ -287,7 +335,7 @@ impl ValidatedProductionSnapshotV2 {
     pub fn truth_fingerprint(&self) -> &Value {
         &self.truth_fingerprint
     }
-    /// Exact fourteen-part closure.
+    /// Exact frozen closure: fourteen legacy relations, plus ten G0 relations for V10.
     #[must_use]
     pub fn tables(&self) -> &[ValidatedTableArtifactV1] {
         &self.tables
@@ -311,8 +359,20 @@ struct PublicationClosure {
     publication_ids: Vec<StableString>,
 }
 
-/// Query an immutable operational catalog backup at an explicit cutoff, materialize all fourteen
-/// frozen typed relations, independently re-read them in Rust, run the locked Python semantic
+fn table_specs(catalog_version: i64) -> Vec<&'static TableSpec> {
+    TABLE_SPECS
+        .iter()
+        .chain(
+            (catalog_version >= 10)
+                .then_some(G0_TABLE_SPECS)
+                .into_iter()
+                .flatten(),
+        )
+        .collect()
+}
+
+/// Query an immutable operational catalog backup at an explicit cutoff, materialize the exact
+/// frozen typed relation profile, independently re-read it in Rust, run the locked Python semantic
 /// validator, and only then atomically install the snapshot directory.
 ///
 /// V2 intentionally permits presently absent decision-study relations to be valid empty tables.
@@ -342,8 +402,18 @@ pub fn export_operational_snapshot_v2(
     )?;
     connection.pragma_update(None, "query_only", true)?;
     let catalog_version = validate_catalog(&connection, request)?;
-    refuse_unmapped_operational_facts(&connection, request.through_commit_seq, catalog_version)?;
-    let publications = load_publications(&connection, request)?;
+    if (catalog_version >= 10) != request.g0_import_artifact.is_some() {
+        return Err(invalid(
+            "V10 requires exactly one neutral G0 import artifact readback",
+        ));
+    }
+    refuse_unmapped_operational_facts(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+        catalog_version,
+    )?;
+    let publications = load_publications(&connection, request, catalog_version)?;
     let producer_projection = publications
         .projections
         .iter()
@@ -355,16 +425,29 @@ pub fn export_operational_snapshot_v2(
             )
         })
         .ok_or_else(|| invalid("primary producer projection is absent from publication closure"))?;
-    let sources = source_as_of(&connection, request.through_commit_seq)?;
+    let sources = source_as_of(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+    )?;
     if sources.is_empty() {
         return Err(invalid(
             "operational snapshot requires at least one represented source",
         ));
     }
-    let chain = chain_as_of(&connection, request.through_commit_seq)?;
-    let scenes = scene_batch(&connection, request.through_commit_seq)?;
+    let chain = chain_as_of(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+    )?;
+    let scenes = scene_batch(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+    )?;
     let coverage = selected_coverage_batches(
         &connection,
+        request.from_commit_seq,
         request.through_commit_seq,
         &request.coverage_window_ids,
     )?;
@@ -374,9 +457,22 @@ pub fn export_operational_snapshot_v2(
             "maximum scene decision availability exceeds snapshot creation",
         ));
     }
-    let truth_fingerprint =
-        truth_fingerprint(&connection, request.through_commit_seq, &publications)?;
-    let relations = relation_batches(&scenes, &coverage.windows, &coverage.gaps);
+    let truth_fingerprint = truth_fingerprint(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+        &publications,
+    )?;
+    let specs = table_specs(catalog_version);
+    let mut relations = relation_batches(&scenes, &coverage.windows, &coverage.gaps);
+    if catalog_version >= 10 {
+        relations.extend(crate::g0::relation_batches(
+            &connection,
+            request.from_commit_seq,
+            request.through_commit_seq,
+            request.g0_import_artifact.as_ref(),
+        )?);
+    }
 
     let parent = request
         .destination
@@ -387,10 +483,10 @@ pub fn export_operational_snapshot_v2(
         .prefix(".joshi-production-export-")
         .tempdir_in(parent)
         .map_err(|error| ExportError::io(parent, error))?;
-    let mut table_manifests = Vec::with_capacity(TABLE_SPECS.len());
-    let mut table_artifacts = Vec::with_capacity(TABLE_SPECS.len());
+    let mut table_manifests = Vec::with_capacity(specs.len());
+    let mut table_artifacts = Vec::with_capacity(specs.len());
     let mut total_rows = 0_u64;
-    for (ordinal, spec) in TABLE_SPECS.iter().enumerate() {
+    for (ordinal, spec) in specs.iter().enumerate() {
         let batches = relations
             .get(spec.name)
             .ok_or_else(|| invalid(format!("missing typed relation {}", spec.name)))?;
@@ -515,19 +611,14 @@ pub fn export_operational_snapshot_v2(
     let manifest_digest_text = qualified_sha256(&manifest_bytes);
     write_file_durable(&staging.path().join("manifest.json"), &manifest_bytes)?;
     sync_directory(staging.path())?;
-    let rust_validation = validation_receipt(
-        "rust_independent_readback",
-        &snapshot_id_text,
-        &manifest_digest_text,
-        u64::try_from(TABLE_SPECS.len()).map_err(|_| invalid("table count exceeds u64"))?,
-        total_rows,
-    )?;
+    let rust_validation = validate_operational_snapshot_v2_directory(staging.path())?;
     let python_validation = run_python_validator(
         &request.python_validator,
         staging.path(),
         &snapshot_id_text,
         &manifest_digest_text,
         total_rows,
+        specs.len(),
     )?;
     let catalog_after_length = fs::metadata(&request.catalog_snapshot_path)
         .map_err(|error| ExportError::io(&request.catalog_snapshot_path, error))?
@@ -561,6 +652,261 @@ pub fn export_operational_snapshot_v2(
         rust_validation,
         python_validation,
     })
+}
+
+/// Independently reopens and validates a complete immutable Snapshot V2 directory.
+///
+/// This is the restart readback port for the store/root integrator. It reparses the canonical
+/// self-hashed manifest and reopens every exact Parquet part; it does not create a store receipt.
+///
+/// # Errors
+///
+/// Refuses duplicate/noncanonical manifests, an incomplete V8/V9/V10 table set, unsafe or extra
+/// paths, physical/schema/logical/row drift, false bounds/coverage, or inconsistent totals.
+#[allow(clippy::too_many_lines)]
+pub fn validate_operational_snapshot_v2_directory(root: &Path) -> Result<ValidationReceiptV2> {
+    let manifest_path = root.join("manifest.json");
+    let metadata = fs::symlink_metadata(&manifest_path)
+        .map_err(|error| ExportError::io(&manifest_path, error))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAXIMUM_MANIFEST_BYTES
+    {
+        return Err(invalid(
+            "snapshot manifest must be a bounded real regular file",
+        ));
+    }
+    let manifest_bytes =
+        fs::read(&manifest_path).map_err(|error| ExportError::io(&manifest_path, error))?;
+    let manifest = parse_json_without_duplicate_keys(&manifest_bytes)?;
+    let mut canonical = serde_json::to_vec(&manifest)?;
+    canonical.push(b'\n');
+    if canonical != manifest_bytes {
+        return Err(invalid(
+            "snapshot manifest is not canonical JSON plus one newline",
+        ));
+    }
+    let object = manifest
+        .as_object()
+        .ok_or_else(|| invalid("snapshot manifest must be an object"))?;
+    let expected_head = BTreeSet::from([
+        "catalog",
+        "created_at",
+        "knowledge_mode",
+        "manifest_version",
+        "maximum_decision_available_at",
+        "origin",
+        "producer",
+        "publications",
+        "snapshot_id",
+        "tables",
+        "truth_fingerprint",
+    ]);
+    let actual_head = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if actual_head != expected_head
+        || manifest["manifest_version"] != SNAPSHOT_V2
+        || manifest["knowledge_mode"] != "as_known"
+    {
+        return Err(invalid("snapshot V2 manifest head differs"));
+    }
+    let snapshot_id = manifest["snapshot_id"]
+        .as_str()
+        .ok_or_else(|| invalid("snapshot identity is absent"))?;
+    let mut preimage = object.clone();
+    preimage.remove("snapshot_id");
+    if qualified_sha256(&serde_json::to_vec(&Value::Object(preimage))?) != snapshot_id {
+        return Err(invalid("snapshot self-identity differs"));
+    }
+    let catalog_schema = manifest["catalog"]["catalog_schema"]
+        .as_str()
+        .ok_or_else(|| invalid("catalog schema is absent"))?;
+    let version = catalog_schema
+        .strip_prefix("joshi.sqlite.v")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| invalid("catalog schema is invalid"))?;
+    if !(MINIMUM_CATALOG_SCHEMA..=MAXIMUM_CATALOG_SCHEMA).contains(&version) {
+        return Err(invalid("catalog schema is unsupported"));
+    }
+    let specs = table_specs(version);
+    let from_commit_seq = manifest["catalog"]["from_commit_seq"]
+        .as_str()
+        .ok_or_else(|| invalid("catalog lower commit is absent"))?;
+    let through_commit_seq = manifest["catalog"]["through_commit_seq"]
+        .as_str()
+        .ok_or_else(|| invalid("catalog upper commit is absent"))?;
+    let from_commit = parse_manifest_commit(from_commit_seq, "catalog lower commit")?;
+    let through_commit = parse_manifest_commit(through_commit_seq, "catalog upper commit")?;
+    if from_commit == 0 || from_commit > through_commit {
+        return Err(invalid("catalog commit range is invalid"));
+    }
+    let table_values = manifest["tables"]
+        .as_array()
+        .ok_or_else(|| invalid("snapshot tables must be an array"))?;
+    if table_values.len() != specs.len() {
+        return Err(invalid(
+            "snapshot table set has the wrong exact cardinality",
+        ));
+    }
+    let mut by_name = BTreeMap::new();
+    for table in table_values {
+        let name = table["name"]
+            .as_str()
+            .ok_or_else(|| invalid("snapshot table name is absent"))?;
+        if by_name.insert(name, table).is_some() {
+            return Err(invalid(format!("duplicate snapshot table {name}")));
+        }
+    }
+    let expected_children = specs
+        .iter()
+        .map(|spec| format!("{}.parquet", spec.name))
+        .chain(["manifest.json".to_owned()])
+        .collect::<BTreeSet<_>>();
+    let actual_children = fs::read_dir(root)
+        .map_err(|error| ExportError::io(root, error))?
+        .map(|entry| entry.map(|value| value.file_name().to_string_lossy().into_owned()))
+        .collect::<std::result::Result<BTreeSet<_>, _>>()
+        .map_err(|error| ExportError::io(root, error))?;
+    if actual_children != expected_children {
+        return Err(invalid(
+            "snapshot directory has missing or unmanifested children",
+        ));
+    }
+    let expected_table_keys = BTreeSet::from([
+        "byte_length",
+        "chain_bounds",
+        "commit_bounds",
+        "coverage",
+        "event_bounds",
+        "export_manifest_id",
+        "logical_digest",
+        "name",
+        "path",
+        "physical_digest",
+        "primary_key",
+        "row_count",
+        "schema",
+        "schema_digest",
+        "schema_id",
+    ]);
+    let mut total_rows = 0_u64;
+    let mut g0_rows = BTreeMap::new();
+    for spec in &specs {
+        let table = by_name
+            .get(spec.name)
+            .ok_or_else(|| invalid(format!("missing snapshot table {}", spec.name)))?;
+        let table_object = table
+            .as_object()
+            .ok_or_else(|| invalid("snapshot table manifest must be an object"))?;
+        if table_object
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != expected_table_keys
+        {
+            return Err(invalid(format!("{} manifest keys differ", spec.name)));
+        }
+        let path_name = format!("{}.parquet", spec.name);
+        if table["path"] != path_name
+            || table["schema_id"] != spec.schema_id
+            || table["primary_key"] != json!(spec.primary_key)
+        {
+            return Err(invalid(format!(
+                "{} identity/schema path differs",
+                spec.name
+            )));
+        }
+        let path = root.join(&path_name);
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|error| ExportError::io(&path, error))?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(invalid(format!("{} is not a real regular file", spec.name)));
+        }
+        if table["byte_length"].as_u64() != Some(metadata.len())
+            || table["physical_digest"].as_str() != Some(&qualified_sha256_file(&path)?)
+        {
+            return Err(invalid(format!("{} physical closure differs", spec.name)));
+        }
+        let batches = read_parquet(&path)?;
+        let schema = spec.schema();
+        if batches.first().map(RecordBatch::schema).as_deref() != Some(&schema) {
+            return Err(invalid(format!("{} Arrow schema differs", spec.name)));
+        }
+        let descriptor = schema_descriptor(&schema)?;
+        if table["schema"] != descriptor
+            || table["schema_digest"].as_str()
+                != Some(&qualified_sha256(&serde_json::to_vec(&descriptor)?))
+            || table["logical_digest"].as_str()
+                != Some(&logical_table_digest(&batches, spec.primary_key)?)
+        {
+            return Err(invalid(format!("{} typed relation differs", spec.name)));
+        }
+        let rows = batches
+            .iter()
+            .try_fold(0_u64, |sum, batch| {
+                sum.checked_add(u64::try_from(batch.num_rows()).ok()?)
+            })
+            .ok_or_else(|| invalid("snapshot row count exceeds u64"))?;
+        if table["row_count"].as_u64() != Some(rows)
+            || table["commit_bounds"]
+                != json!({
+                    "from_commit_seq": from_commit_seq,
+                    "through_commit_seq": through_commit_seq,
+                })
+            || table["event_bounds"] != event_bounds(spec.name, &batches)?
+            || table["coverage"] != coverage_manifest(spec.name, &batches)?
+            || !table["chain_bounds"].is_null()
+        {
+            return Err(invalid(format!(
+                "{} row/bounds/coverage differs",
+                spec.name
+            )));
+        }
+        for (commit_index, field) in schema.fields().iter().enumerate() {
+            if !field.name().ends_with("commit_seq") {
+                continue;
+            }
+            let commits = batches
+                .iter()
+                .map(|batch| {
+                    batch
+                        .column(commit_index)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or_else(|| invalid("commit column is not int64"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if commits.iter().any(|values| {
+                (0..values.len()).any(|index| {
+                    !values.is_null(index)
+                        && (values.value(index) < from_commit
+                            || values.value(index) > through_commit)
+                })
+            }) {
+                return Err(invalid(format!(
+                    "{} {} escapes the exact catalog range",
+                    spec.name,
+                    field.name()
+                )));
+            }
+        }
+        total_rows = total_rows
+            .checked_add(rows)
+            .ok_or_else(|| invalid("snapshot total row count exceeds u64"))?;
+        if version >= 10 && G0_TABLE_SPECS.iter().any(|g0| g0.name == spec.name) {
+            g0_rows.insert(spec.name, relation_rows(&batches)?);
+        }
+    }
+    if version >= 10 {
+        crate::g0::validate_connected_closure(&g0_rows)?;
+        crate::g0::validate_manifest_publication(&g0_rows, &manifest["publications"])?;
+    }
+    validation_receipt(
+        "rust_independent_readback",
+        snapshot_id,
+        &qualified_sha256(&manifest_bytes),
+        u64::try_from(specs.len()).map_err(|_| invalid("table count exceeds u64"))?,
+        total_rows,
+    )
 }
 
 fn validate_request(value: &OperationalExportRequestV2) -> Result<()> {
@@ -619,17 +965,11 @@ fn validate_catalog(connection: &Connection, request: &OperationalExportRequestV
     let application: i32 =
         connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    let maximum: i64 = connection.query_row(
-        "SELECT COALESCE(MAX(commit_seq),0) FROM ingest_commit",
-        [],
-        |row| row.get(0),
-    )?;
     let cutoff = i64::try_from(request.through_commit_seq.get())
         .map_err(|_| invalid("cutoff exceeds SQLite i64"))?;
     if application != APPLICATION_ID
         || request.catalog_schema.as_str() != format!("joshi.sqlite.v{version}")
         || !(MINIMUM_CATALOG_SCHEMA..=MAXIMUM_CATALOG_SCHEMA).contains(&version)
-        || cutoff > maximum
     {
         return Err(invalid("catalog application/schema/cutoff closure differs"));
     }
@@ -668,12 +1008,13 @@ fn validate_catalog(connection: &Connection, request: &OperationalExportRequestV
 
 fn refuse_unmapped_operational_facts(
     connection: &Connection,
+    from: CommitSeq,
     cutoff: CommitSeq,
     catalog_version: i64,
 ) -> Result<()> {
+    let from = sql_commit(from)?;
     let cutoff = sql_commit(cutoff)?;
-    for (table, label) in [
-        ("source_fact_artifact", "typed source/fact artifact"),
+    let mut unmapped = vec![
         ("episode_protocol_v1", "prospective episode protocol"),
         ("episode_launch_v1", "prospective episode launch"),
         ("episode_pairing_session_v1", "prospective pairing session"),
@@ -682,16 +1023,21 @@ fn refuse_unmapped_operational_facts(
             "prospective nomination",
         ),
         ("operator_explicit_abstention_v1", "explicit abstention"),
-    ] {
-        let sql = format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq<=?1");
-        let count: i64 = connection.query_row(&sql, [cutoff], |row| row.get(0))?;
+    ];
+    if catalog_version < 10 {
+        unmapped.push(("source_fact_artifact", "typed source/fact artifact"));
+    }
+    for (table, label) in unmapped {
+        let sql =
+            format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq BETWEEN ?1 AND ?2");
+        let count: i64 = connection.query_row(&sql, params![from, cutoff], |row| row.get(0))?;
         if count != 0 {
             return Err(invalid(format!(
                 "catalog contains {label} rows without a frozen Snapshot V2 relation adapter"
             )));
         }
     }
-    if catalog_version >= 9 {
+    if catalog_version == 9 {
         for (table, label) in [
             ("wave5_run_registration_v1", "Wave 5 run registration"),
             (
@@ -705,8 +1051,9 @@ fn refuse_unmapped_operational_facts(
             ),
             ("wave5_restricted_artifact_v1", "Wave 5 restricted artifact"),
         ] {
-            let sql = format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq<=?1");
-            let count: i64 = connection.query_row(&sql, [cutoff], |row| row.get(0))?;
+            let sql =
+                format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq BETWEEN ?1 AND ?2");
+            let count: i64 = connection.query_row(&sql, params![from, cutoff], |row| row.get(0))?;
             if count != 0 {
                 return Err(invalid(format!(
                     "catalog contains {label} rows without a frozen Snapshot V2 relation adapter"
@@ -721,7 +1068,9 @@ fn refuse_unmapped_operational_facts(
 fn load_publications(
     connection: &Connection,
     request: &OperationalExportRequestV2,
+    catalog_version: i64,
 ) -> Result<PublicationClosure> {
+    let from = sql_commit(request.from_commit_seq)?;
     let cutoff = sql_commit(request.through_commit_seq)?;
     let mut projections = Vec::new();
     let mut rows = Vec::new();
@@ -743,8 +1092,9 @@ fn load_publications(
                     "SELECT artifact_bytes,publication_bytes,result_sha256,artifact_sha256,
                             input_closure_sha256,through_commit_seq,created_commit_seq,
                             publication_sha256,publication_bytes_sha256
-                     FROM projection_publication WHERE publication_id=?1",
-                    [publication.publication_id.as_str()],
+                     FROM projection_publication WHERE publication_id=?1
+                     AND created_commit_seq BETWEEN ?2 AND ?3",
+                    params![publication.publication_id.as_str(), from, cutoff],
                     |row| {
                         Ok((
                             row.get(0)?,
@@ -808,8 +1158,9 @@ fn load_publications(
                             projection_publication_id,projection_publication_sha256,
                             projection_result_sha256,projection_artifact_sha256,
                             created_commit_seq,scene_id,query_policy
-                     FROM cockpit_publication WHERE cockpit_publication_id=?1",
-                    [publication.publication_id.as_str()],
+                     FROM cockpit_publication WHERE cockpit_publication_id=?1
+                     AND created_commit_seq BETWEEN ?2 AND ?3",
+                    params![publication.publication_id.as_str(), from, cutoff],
                     |row| {
                         Ok((
                             row.get(0)?,
@@ -859,12 +1210,103 @@ fn load_publications(
             }
         }
     }
+    if catalog_version >= 10 {
+        let mut statement = connection.prepare(
+            "SELECT p.publication_id,p.publication_contract,p.publication_sha256,
+                    p.publication_bytes_sha256,p.publication_bytes,p.source_occurrence_id,
+                    p.semantic_sha256,p.container_sha256,p.checkpoint_sha256,p.through_commit_seq,
+                    p.supersedes_publication_id,p.created_commit_seq,h.head_sha256,h.head_bytes,
+                    h.supersedes_head_publication_id,h.created_commit_seq,h.authority
+             FROM cockpit_v2_publication_v1 p JOIN cockpit_v2_head_v1 h USING(publication_id)
+             JOIN cockpit_v2_preparation_v1 prep ON prep.preparation_id=p.preparation_id
+                 AND prep.source_occurrence_id=p.source_occurrence_id
+             JOIN wave5_source_occurrence_v1 s USING(source_occurrence_id)
+             WHERE p.created_commit_seq BETWEEN ?1 AND ?2
+               AND h.created_commit_seq BETWEEN ?1 AND ?2
+               AND prep.created_commit_seq BETWEEN ?1 AND ?2
+               AND s.created_commit_seq BETWEEN ?1 AND ?2
+               AND p.through_commit_seq BETWEEN ?1 AND ?2
+               AND prep.through_commit_seq BETWEEN ?1 AND ?2
+               AND s.known_through_commit_seq BETWEEN ?1 AND ?2
+             ORDER BY p.publication_id",
+        )?;
+        let stored = statement
+            .query_map(params![from, cutoff], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, Vec<u8>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, i64>(15)?,
+                    row.get::<_, String>(16)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if stored.is_empty() {
+            return Err(invalid("V10 requires a headed Cockpit V2 publication"));
+        }
+        for value in stored {
+            let publication = parse_cockpit_v2_publication(&value.4)
+                .map_err(|error| invalid(format!("stored Cockpit V2 publication: {error}")))?;
+            let head = parse_cockpit_v2_head(&value.13)
+                .map_err(|error| invalid(format!("stored Cockpit V2 head: {error}")))?;
+            head.validate_against(&publication)
+                .map_err(|error| invalid(format!("stored Cockpit V2 head/body: {error}")))?;
+            if format!("{:x}", Sha256::digest(&value.4)) != value.3
+                || publication.publication_id.as_str() != value.0.as_str()
+                || publication.contract.as_str() != value.1.as_str()
+                || publication.publication_digest.as_str() != qualified_raw(&value.2)
+                || publication.manifest.semantic_digest.as_str() != qualified_raw(&value.6)
+                || publication.manifest.container_digest.as_str() != qualified_raw(&value.7)
+                || publication.checkpoint.checkpoint_digest.as_str() != qualified_raw(&value.8)
+                || i64::try_from(publication.commit_seq.get()).ok() != Some(value.11)
+                || head.head_digest.as_str() != qualified_raw(&value.12)
+            {
+                return Err(invalid(
+                    "stored Cockpit V2 publication/head semantic closure differs",
+                ));
+            }
+            ids.push(stable(&value.0)?);
+            rows.push(json!({
+                "kind":"cockpit_v2",
+                "publication_id":value.0,
+                "publication_contract":value.1,
+                "publication_digest":qualified_raw(&value.2),
+                "publication_bytes_digest":qualified_raw(&value.3),
+                "source_occurrence_id":value.5,
+                "semantic_digest":qualified_raw(&value.6),
+                "container_digest":qualified_raw(&value.7),
+                "checkpoint_digest":qualified_raw(&value.8),
+                "through_commit_seq":value.9.to_string(),
+                "supersedes_publication_id":value.10,
+                "publication_commit_seq":value.11.to_string(),
+                "head_digest":qualified_raw(&value.12),
+                "supersedes_head_publication_id":value.14,
+                "published_commit_seq":value.15.to_string(),
+                "authority":value.16,
+            }));
+        }
+    }
     rows.sort_by(|left, right| {
         left["publication_id"]
             .as_str()
             .cmp(&right["publication_id"].as_str())
     });
     ids.sort();
+    if ids.windows(2).any(|window| window[0] == window[1]) {
+        return Err(invalid("publication closure contains a duplicate identity"));
+    }
     Ok(PublicationClosure {
         manifest_rows: rows,
         projections,
@@ -872,12 +1314,15 @@ fn load_publications(
     })
 }
 
-fn source_as_of(connection: &Connection, cutoff: CommitSeq) -> Result<Vec<Value>> {
+fn source_as_of(connection: &Connection, from: CommitSeq, cutoff: CommitSeq) -> Result<Vec<Value>> {
     let mut statement = connection.prepare(
         "SELECT o.source_id,MAX(o.commit_seq),MAX(o.received_wall_us)
-         FROM observation o WHERE o.commit_seq<=?1 GROUP BY o.source_id ORDER BY o.source_id",
+         FROM observation o WHERE o.commit_seq BETWEEN ?1 AND ?2
+         GROUP BY o.source_id ORDER BY o.source_id",
     )?;
-    let source_rows = statement.query_map([sql_commit(cutoff)?], |row| {
+    let from = sql_commit(from)?;
+    let cutoff = sql_commit(cutoff)?;
+    let source_rows = statement.query_map(params![from, cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, i64>(1)?,
@@ -890,14 +1335,15 @@ fn source_as_of(connection: &Connection, cutoff: CommitSeq) -> Result<Vec<Value>
         let mut cursor_statement = connection.prepare(
             "SELECT c.scope_kind,cc.scope_subject,c.cursor_kind,c.cursor_value,c.advanced_commit_seq
              FROM source_cursor c JOIN source_cursor_contract cc USING(cursor_id)
-             WHERE c.source_id=?1 AND c.advanced_commit_seq<=?2 AND NOT EXISTS (
+             WHERE c.source_id=?1 AND c.advanced_commit_seq BETWEEN ?2 AND ?3 AND NOT EXISTS (
                 SELECT 1 FROM source_cursor later WHERE later.source_id=c.source_id
                 AND later.scope_kind=c.scope_kind AND later.scope_key=c.scope_key
-                AND later.cursor_kind=c.cursor_kind AND later.advanced_commit_seq<=?2
+                AND later.cursor_kind=c.cursor_kind
+                AND later.advanced_commit_seq BETWEEN ?2 AND ?3
                 AND (later.advanced_commit_seq>c.advanced_commit_seq OR
                      (later.advanced_commit_seq=c.advanced_commit_seq AND later.cursor_id>c.cursor_id)))
              ORDER BY c.scope_kind,COALESCE(cc.scope_subject,''),c.cursor_kind")?;
-        let cursors = cursor_statement.query_map(params![source_id, sql_commit(cutoff)?], |row| {
+        let cursors = cursor_statement.query_map(params![source_id, from, cutoff], |row| {
             Ok(json!({"family":row.get::<_,String>(0)?,"subject":row.get::<_,Option<String>>(1)?,
                 "cursor_kind":row.get::<_,String>(2)?,"value":row.get::<_,String>(3)?,
                 "advanced_through":row.get::<_,i64>(4)?.to_string()}))
@@ -910,23 +1356,27 @@ fn source_as_of(connection: &Connection, cutoff: CommitSeq) -> Result<Vec<Value>
     Ok(output)
 }
 
-fn chain_as_of(connection: &Connection, cutoff: CommitSeq) -> Result<Value> {
+fn chain_as_of(connection: &Connection, from: CommitSeq, cutoff: CommitSeq) -> Result<Value> {
     let value: Option<i64> = connection.query_row(
-        "SELECT MAX(chain_slot) FROM observation WHERE commit_seq<=?1 AND chain_commitment='finalized'",
-        [sql_commit(cutoff)?], |row| row.get(0))?;
+        "SELECT MAX(chain_slot) FROM observation WHERE commit_seq BETWEEN ?1 AND ?2
+         AND chain_commitment='finalized'",
+        params![sql_commit(from)?, sql_commit(cutoff)?],
+        |row| row.get(0),
+    )?;
     Ok(value.map_or(Value::Null, |slot| json!({"cluster":"solana:mainnet-beta","slot":slot.to_string(),"finality":"finalized"})))
 }
 
-fn scene_batch(connection: &Connection, cutoff: CommitSeq) -> Result<RecordBatch> {
+fn scene_batch(connection: &Connection, from: CommitSeq, cutoff: CommitSeq) -> Result<RecordBatch> {
     let mut statement = connection.prepare(
         "SELECT scene_id,scene_mode,view_contract,view_contract_version,view_sha256,source_mode,
                 rendered_wall_us,knowledge_cutoff_commit_seq,captured_commit_seq
-         FROM scene WHERE captured_commit_seq<=?1 AND knowledge_cutoff_commit_seq<=?1
-         AND (outcome_cutoff_commit_seq IS NULL OR outcome_cutoff_commit_seq<=?1)
+         FROM scene WHERE captured_commit_seq BETWEEN ?1 AND ?2
+         AND knowledge_cutoff_commit_seq BETWEEN ?1 AND ?2
+         AND (outcome_cutoff_commit_seq IS NULL OR outcome_cutoff_commit_seq BETWEEN ?1 AND ?2)
          ORDER BY scene_id",
     )?;
     let rows = statement
-        .query_map([sql_commit(cutoff)?], |row| {
+        .query_map(params![sql_commit(from)?, sql_commit(cutoff)?], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1026,28 +1476,30 @@ fn projection_as_of(values: &[ProjectionPublicationInputV2]) -> Result<Vec<Value
 
 fn truth_fingerprint(
     connection: &Connection,
+    from: CommitSeq,
     cutoff: CommitSeq,
     publications: &PublicationClosure,
 ) -> Result<Value> {
+    let from = sql_commit(from)?;
     let cutoff = sql_commit(cutoff)?;
     let observations: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM observation WHERE commit_seq<=?1",
-        [cutoff],
+        "SELECT COUNT(*) FROM observation WHERE commit_seq BETWEEN ?1 AND ?2",
+        params![from, cutoff],
         |row| row.get(0),
     )?;
     let assertions: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM assertion WHERE produced_commit_seq<=?1",
-        [cutoff],
+        "SELECT COUNT(*) FROM assertion WHERE produced_commit_seq BETWEEN ?1 AND ?2",
+        params![from, cutoff],
         |row| row.get(0),
     )?;
-    let effects: i64 = connection.query_row("SELECT COUNT(*) FROM assertion WHERE produced_commit_seq<=?1 AND assertion_kind LIKE 'wallet_effect%'",[cutoff],|row|row.get(0))?;
+    let effects: i64 = connection.query_row("SELECT COUNT(*) FROM assertion WHERE produced_commit_seq BETWEEN ?1 AND ?2 AND assertion_kind LIKE 'wallet_effect%'",params![from, cutoff],|row|row.get(0))?;
     let mut evidence = Sha256::new();
     for sql in [
-        "SELECT observation_id||'|'||commit_seq||'|'||blob_id FROM observation WHERE commit_seq<=?1 ORDER BY observation_id",
-        "SELECT assertion_id||'|'||produced_commit_seq||'|'||value_sha256 FROM assertion WHERE produced_commit_seq<=?1 ORDER BY assertion_id",
+        "SELECT observation_id||'|'||commit_seq||'|'||blob_id FROM observation WHERE commit_seq BETWEEN ?1 AND ?2 ORDER BY observation_id",
+        "SELECT assertion_id||'|'||produced_commit_seq||'|'||value_sha256 FROM assertion WHERE produced_commit_seq BETWEEN ?1 AND ?2 ORDER BY assertion_id",
     ] {
         let mut statement = connection.prepare(sql)?;
-        for row in statement.query_map([cutoff], |row| row.get::<_, String>(0))? {
+        for row in statement.query_map(params![from, cutoff], |row| row.get::<_, String>(0))? {
             evidence.update(row?.as_bytes());
             evidence.update(b"\n");
         }
@@ -1071,8 +1523,9 @@ fn event_bounds(name: &str, batches: &[RecordBatch]) -> Result<Value> {
         "episodes" | "coverage_gaps" => Some("opened_at"),
         "operator_gestures" => Some("issued_at"),
         "operator_interviews" => Some("elicited_at"),
-        "provenance_assertions" => Some("observed_at"),
+        "provenance_assertions" | "status_occurrences" => Some("observed_at"),
         "coverage_windows" => Some("lower_time"),
+        "source_fact_occurrences" | "import_occurrences" => Some("maximum_input_available_at"),
         _ => None,
     };
     let Some(field) = field else {
@@ -1193,6 +1646,7 @@ fn run_python_validator(
     snapshot_id: &str,
     manifest_digest: &str,
     total_rows: u64,
+    table_count: usize,
 ) -> Result<ValidationReceiptV2> {
     let output = Command::new(&validator.program)
         .arg("--directory")
@@ -1200,6 +1654,7 @@ fn run_python_validator(
         .args([
             "run",
             "--locked",
+            "--offline",
             "joshi-analysis",
             "validate",
             "--snapshot",
@@ -1219,8 +1674,7 @@ fn run_python_validator(
         || parsed.snapshot_id != snapshot_id
         || parsed.manifest_digest != manifest_digest
         || parsed.manifest_version != SNAPSHOT_V2
-        || parsed.table_count
-            != u64::try_from(TABLE_SPECS.len()).map_err(|_| invalid("table count"))?
+        || parsed.table_count != u64::try_from(table_count).map_err(|_| invalid("table count"))?
         || parsed.total_row_count != total_rows
         || parsed.knowledge_mode != "as_known"
     {
@@ -1257,6 +1711,9 @@ fn bare(value: &ValueDigest) -> Result<String> {
         .map(str::to_owned)
         .ok_or_else(|| invalid("digest algorithm is not sha256"))
 }
+fn qualified_raw(value: &str) -> String {
+    format!("sha256:{value}")
+}
 fn stable(value: &str) -> Result<StableString> {
     StableString::new(value).map_err(|error| invalid(error.to_string()))
 }
@@ -1265,4 +1722,16 @@ fn digest(value: &str) -> Result<ValueDigest> {
 }
 fn invalid(message: impl Into<String>) -> ExportError {
     ExportError::Invalid(message.into())
+}
+
+fn parse_manifest_commit(value: &str, context: &str) -> Result<i64> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.starts_with('0') && value != "0")
+    {
+        return Err(invalid(format!("{context} is not canonical")));
+    }
+    value
+        .parse::<i64>()
+        .map_err(|_| invalid(format!("{context} exceeds SQLite i64")))
 }

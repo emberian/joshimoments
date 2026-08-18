@@ -78,6 +78,7 @@ fn main() {
             program: PathBuf::from("uv"),
             analysis_directory: workspace.join("analysis"),
         },
+        g0_import_artifact: None,
     };
     let artifact = export_operational_snapshot_v2(&request).expect("operational fixture export");
     println!("{}", artifact.snapshot_id());

@@ -5,15 +5,17 @@
 
 mod coverage;
 mod error;
+mod g0;
 mod production;
 mod snapshot;
 mod specs;
 
 pub use error::{ExportError, Result};
 pub use production::{
-    CockpitPublicationInputV2, OperationalExportRequestV2, OperationalPublicationV2,
-    ProjectionPublicationInputV2, PythonValidatorV2, ValidatedProductionSnapshotV2,
-    ValidationReceiptV2, export_operational_snapshot_v2,
+    CockpitPublicationInputV2, G0ImportArtifactReadbackV1, G0ImportPartReadbackV1,
+    OperationalExportRequestV2, OperationalPublicationV2, ProjectionPublicationInputV2,
+    PythonValidatorV2, ValidatedProductionSnapshotV2, ValidationReceiptV2,
+    export_operational_snapshot_v2, validate_operational_snapshot_v2_directory,
 };
 pub use snapshot::{
     ExportSnapshotReceiptV1, ExportSnapshotStatus, ValidatedExportSnapshotV1,

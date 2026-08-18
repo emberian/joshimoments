@@ -6,6 +6,7 @@
 
 mod blob;
 mod error;
+mod g0;
 mod migration;
 mod model;
 mod operational;
@@ -15,6 +16,15 @@ mod wave5_status;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
 pub use error::{Result, StoreError};
+pub use g0::{
+    CockpitV2CommitReceipt, PairingEpochReceipt, PairingJournalReceipt, PairingOccurrenceKind,
+    PairingRateBootstrap, PairingRatePolicyV1, PairingRateWindowBootstrap,
+    ScientificMemoryCommitReceipt, StoredCockpitV2Head, StoredCockpitV2Preparation,
+    StoredCockpitV2Publication, StoredPairingOccurrence, StoredScientificMemoryOccurrence,
+    StoredWave5SourceOccurrence, Wave5G0BackupOccurrence, Wave5G0BackupRestoreOccurrence,
+    Wave5G0ExportOccurrence, Wave5G0ImportOccurrence, Wave5G0OccurrencePorts,
+    Wave5G0StatusOccurrence, Wave5SourceOccurrenceV1,
+};
 pub use migration::{MigrationReport, RuntimeStatus};
 pub use model::{
     AdmittedCounts, BackupManifest, DurableReceipt, EffectiveAssertion, GapOutcome,

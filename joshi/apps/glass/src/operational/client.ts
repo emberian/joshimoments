@@ -6,6 +6,8 @@ import type { ExplorationBundleV1, PresentationPolicyV1 } from "../presentation/
 import {
   MemoryOnlyPairingSession,
   PairingSessionRejectedError,
+  canonicalPairingCode,
+  isLoopbackHostname,
   type OperationalSessionScope,
 } from "../security/pairing";
 import {
@@ -43,9 +45,8 @@ type StrictParser<T> = { parse(input: unknown): T };
 function exactSameOriginBase(origin: string): URL {
   const parsed = new URL(origin);
   const current = new URL(window.location.origin);
-  const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
   if (parsed.origin !== current.origin) throw new Error("operational Glass requires the exact page origin");
-  if (parsed.protocol !== "http:" || !loopbackHosts.has(parsed.hostname)) {
+  if (parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
     throw new Error("operational Glass must be served from an HTTP loopback origin");
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
@@ -103,7 +104,7 @@ export class SameOriginOperationalClient {
     const request = pairingExchangeV1Schema.parse({
       contract: "joshi.pairing.exchange",
       schemaVersion: 1,
-      oneTimeCode,
+      oneTimeCode: canonicalPairingCode(oneTimeCode),
     });
     const body = JSON.stringify(request);
     if (new TextEncoder().encode(body).byteLength > MAX_PAIRING_BYTES) throw new Error("pairing exchange exceeds the browser request bound");

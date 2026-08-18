@@ -13,7 +13,10 @@ joshi-evidence = { path = "../joshi-evidence" }
 joshi-export = { path = "../joshi-export" }
 joshi-operator = { path = "../joshi-operator" }
 joshi-operational-status = { path = "../joshi-operational-status" }
+joshi-pairing = { path = "../joshi-pairing" }
 joshi-publication = { path = "../joshi-publication" }
+joshi-projection = { path = "../joshi-projection" }
+joshi-scientific-memory = { path = "../joshi-scientific-memory" }
 joshi-surface = { path = "../joshi-surface" }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled", "extra_check"] }
 serde.workspace = true

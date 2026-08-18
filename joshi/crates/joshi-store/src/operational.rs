@@ -1,5 +1,7 @@
 //! Private-capability persistence for Wave 4 immutable operational artifacts.
 
+#![allow(clippy::items_after_statements)]
+
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError};
 use joshi_artifact_admission::{
     DERIVED_ARTIFACT_CONTRACT_V2, DISPLAY_CLASS, ValidatedDerivedArtifactV2,
@@ -982,8 +984,8 @@ impl SqliteStore {
         )
     }
 
-    /// Atomically registers one independently validated production Snapshot V2 and all fourteen
-    /// immutable Parquet parts, preserving the export-request occurrence separately from the
+    /// Atomically registers one independently validated production Snapshot V2 with the exact
+    /// legacy or V10 table set, preserving the export-request occurrence separately from the
     /// content-derived snapshot identity.
     ///
     /// # Errors
@@ -991,7 +993,7 @@ impl SqliteStore {
     /// Returns an error for a foreign/stale catalog closure, missing publication or projection,
     /// changed prepared bytes, identity conflict, or failed durable commit.
     #[allow(clippy::too_many_lines)]
-    pub fn commit_production_export_snapshot_v2(
+    pub(crate) fn commit_production_export_snapshot_v2(
         &mut self,
         validation_id: &StableString,
         snapshot: &ValidatedProductionSnapshotV2,
@@ -999,25 +1001,105 @@ impl SqliteStore {
     ) -> Result<ProductionExportCommitReceipt> {
         self.require_writer()?;
         let (from_commit, through_commit) = snapshot.commit_range();
+        const V10_TABLES: &[(&str, &str)] = &[
+            ("scenes", "joshi.analysis.scene/v1"),
+            ("territories", "joshi.analysis.territory/v1"),
+            ("candidates", "joshi.analysis.candidate/v1"),
+            (
+                "candidate_social_assertions",
+                "joshi.analysis.candidate-social-assertion/v1",
+            ),
+            ("decisions", "joshi.analysis.decision/v1"),
+            ("choice_members", "joshi.analysis.choice-member/v1"),
+            ("episodes", "joshi.analysis.episode/v1"),
+            ("chart_samples", "joshi.analysis.chart-sample/v1"),
+            ("operator_gestures", "joshi.analysis.operator-gesture/v1"),
+            (
+                "operator_interviews",
+                "joshi.analysis.operator-interview/v1",
+            ),
+            ("outcomes", "joshi.analysis.competing-risk-outcome/v1"),
+            (
+                "provenance_assertions",
+                "joshi.analysis.provenance-assertion/v1",
+            ),
+            ("coverage_windows", "joshi.analysis.coverage-window/v1"),
+            ("coverage_gaps", "joshi.analysis.coverage-gap/v1"),
+            (
+                "source_fact_occurrences",
+                "joshi.analysis.source-fact-occurrence/v1",
+            ),
+            (
+                "publication_occurrences",
+                "joshi.analysis.publication-occurrence/v1",
+            ),
+            ("scene_occurrences", "joshi.analysis.scene-occurrence/v1"),
+            ("act_occurrences", "joshi.analysis.act-occurrence/v1"),
+            (
+                "episode_occurrences",
+                "joshi.analysis.episode-occurrence/v1",
+            ),
+            ("run_occurrences", "joshi.analysis.run-occurrence/v1"),
+            (
+                "spool_catalog_occurrences",
+                "joshi.analysis.spool-catalog-occurrence/v1",
+            ),
+            ("status_occurrences", "joshi.analysis.status-occurrence/v1"),
+            ("export_occurrences", "joshi.analysis.export-occurrence/v1"),
+            ("import_occurrences", "joshi.analysis.import-occurrence/v1"),
+        ];
+        let legacy_tables = &V10_TABLES[..14];
+        let expected_tables = match snapshot.catalog_schema().as_str() {
+            "joshi.sqlite.v8" | "joshi.sqlite.v9" => legacy_tables,
+            "joshi.sqlite.v10" => V10_TABLES,
+            _ => &[],
+        };
+        let exact_tables = snapshot.tables().iter().enumerate().all(|(index, table)| {
+            expected_tables.get(index).is_some_and(|(name, schema)| {
+                table.name().as_str() == *name
+                    && table.schema_id().as_str() == *schema
+                    && table.ordinal() == u64::try_from(index).unwrap_or(u64::MAX)
+            })
+        });
         if snapshot.catalog_id() != &self.config.catalog_id
-            || snapshot.catalog_schema() != &self.catalog_schema_id()?
             || from_commit.get() == 0
             || through_commit > self.max_commit_seq()?
-            || snapshot.tables().len() != 14
+            || expected_tables.is_empty()
+            || snapshot.tables().len() != expected_tables.len()
+            || !exact_tables
         {
             return Err(StoreError::InvalidBatch(
                 "production snapshot catalog/range/table closure differs from this store".into(),
             ));
         }
         for publication_id in snapshot.publication_ids() {
-            let exists: bool = self.connection.query_row(
+            let query = if snapshot.catalog_schema().as_str() == "joshi.sqlite.v10" {
                 "SELECT EXISTS(
                     SELECT 1 FROM projection_publication
                     WHERE publication_id=?1 AND created_commit_seq<=?2
                     UNION ALL
                     SELECT 1 FROM cockpit_publication
                     WHERE cockpit_publication_id=?1 AND created_commit_seq<=?2
-                 )",
+                    UNION ALL
+                    SELECT 1 FROM cockpit_v2_publication_v1 publication
+                    JOIN cockpit_v2_head_v1 head
+                      ON head.publication_id=publication.publication_id
+                     AND head.source_occurrence_id=publication.source_occurrence_id
+                    WHERE publication.publication_id=?1
+                      AND publication.created_commit_seq<=?2
+                      AND head.created_commit_seq<=?2
+                 )"
+            } else {
+                "SELECT EXISTS(
+                    SELECT 1 FROM projection_publication
+                    WHERE publication_id=?1 AND created_commit_seq<=?2
+                    UNION ALL
+                    SELECT 1 FROM cockpit_publication
+                    WHERE cockpit_publication_id=?1 AND created_commit_seq<=?2
+                 )"
+            };
+            let exists: bool = self.connection.query_row(
+                query,
                 params![
                     publication_id.as_str(),
                     sqlite_u64(through_commit.get(), "snapshot publication cutoff")?
@@ -1858,6 +1940,7 @@ mod tests {
                 program: PathBuf::from("uv"),
                 analysis_directory: workspace().join("analysis"),
             },
+            g0_import_artifact: None,
         })
         .expect("validated production snapshot")
     }

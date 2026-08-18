@@ -1,6 +1,8 @@
 use joshi_artifact_admission::{
-    ArtifactAdmissionError, validate_derived_artifact_v2, validate_derived_artifact_v2_part,
+    ArtifactAdmissionError, StoreResolvedChartSamplesV1, StoreResolvedParquetPartV2,
+    validate_derived_artifact_v2, validate_derived_artifact_v2_part,
 };
+use joshi_domain::{StableString, ValueDigest};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -12,6 +14,65 @@ const ARTIFACT: &str = "../../fixtures/artifact/derived-759c5d7d2be1f318fcbc213d
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARTIFACT)
+}
+
+fn stable(value: &str) -> StableString {
+    StableString::new(value).expect("stable test value")
+}
+
+fn digest(value: &str) -> ValueDigest {
+    ValueDigest::new(value).expect("test digest")
+}
+
+fn artifact_part(root: &Path) -> StoreResolvedParquetPartV2 {
+    StoreResolvedParquetPartV2 {
+        path: root.join("descriptive_chart_shapes.parquet"),
+        relative_path: stable("descriptive_chart_shapes.parquet"),
+        schema_id: stable("joshi.analysis.descriptive-chart-shape/v2"),
+        schema_digest: digest(
+            "sha256:e86c6fec68c8f6fa24b512fafb5cfd48caabe673f9872ccfa030b97d822aaff7",
+        ),
+        physical_digest: digest(
+            "sha256:37ac32ee54b10f5558ed8bf724a576f5242d4a8ece1fe87c487723b5959b79b0",
+        ),
+        logical_digest: digest(
+            "sha256:6e08dc1a38d278ccf38744c5c58ba29861ae9339fa5f05725000c510fe8c910f",
+        ),
+        byte_length: 4439,
+        row_count: 0,
+    }
+}
+
+fn chart_samples() -> StoreResolvedChartSamplesV1 {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace")
+        .to_owned();
+    StoreResolvedChartSamplesV1 {
+        snapshot_id: digest(
+            "sha256:e9ecd5990b24c88650ebed19b4afa8c3b60d647948865fe3d2cac9df6fd71845",
+        ),
+        snapshot_manifest_digest: digest(
+            "sha256:4fb25f95de1568b0c68c0e61ad64aa5b2a9f9b516979caa1075dff9e99c2475f",
+        ),
+        part: StoreResolvedParquetPartV2 {
+            path: workspace.join("fixtures/export/operational_snapshot_v2/chart_samples.parquet"),
+            relative_path: stable("chart_samples.parquet"),
+            schema_id: stable("joshi.analysis.chart-sample/v1"),
+            schema_digest: digest(
+                "sha256:0ddd21d4a5df4db60e19b5262d2bac08e84c87d567c3b27d003f8f164ca2f9c3",
+            ),
+            physical_digest: digest(
+                "sha256:460d599fe424f1a59922318f8b5fb6f7868dd54776cce4e7a1a1f91a5dd38b33",
+            ),
+            logical_digest: digest(
+                "sha256:4025cebaba910b1477edd3ecba91f2fbd8af95bf0645439358740a2b670c5c61",
+            ),
+            byte_length: 3204,
+            row_count: 0,
+        },
+    }
 }
 
 fn copy_fixture(destination: &Path) {
@@ -56,16 +117,25 @@ fn independently_reads_operational_v2_artifact_with_no_authority() {
 fn store_resolved_part_uses_the_same_physical_and_semantic_validation() {
     let root = fixture();
     let manifest = fs::read(root.join("manifest.json")).expect("manifest bytes");
-    let value = validate_derived_artifact_v2_part(
-        &manifest,
-        &root.join("descriptive_chart_shapes.parquet"),
-    )
-    .expect("store-resolved part");
+    let value =
+        validate_derived_artifact_v2_part(&manifest, &artifact_part(&root), &chart_samples())
+            .expect("store-resolved part");
     assert_eq!(
         value.artifact_id().as_str(),
         "sha256:759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55"
     );
     assert!(value.rows().is_empty());
+}
+
+#[test]
+fn incomplete_or_different_store_descriptor_is_refused() {
+    let root = fixture();
+    let manifest = fs::read(root.join("manifest.json")).expect("manifest bytes");
+    let mut part = artifact_part(&root);
+    part.byte_length += 1;
+    let error = validate_derived_artifact_v2_part(&manifest, &part, &chart_samples())
+        .expect_err("different store descriptor");
+    assert!(error.to_string().contains("store-resolved"));
 }
 
 #[test]

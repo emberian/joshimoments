@@ -1,1 +1,1 @@
-{"contract":"joshi.pairing.session","schemaVersion":1,"sessionId":"pair-session-1-2","origin":"https://localhost:9443","epoch":1,"issuedAtMs":100,"expiresAtMs":200,"scopes":["cockpit_read","replay_read"],"authority":"read_only_no_execution"}
+{"contract":"joshi.pairing.session","schemaVersion":1,"sessionId":"pair-session-57d735b9c189b41426a4e6c40b217edda92f19d354a230542126af9e8182f9da-1-2","origin":"http://127.0.0.1:8787","epoch":"1","expiresAt":"2026-08-18T12:15:00.000000Z","scopes":["cockpit_read","replay_read"],"authority":"read_only_no_execution"}

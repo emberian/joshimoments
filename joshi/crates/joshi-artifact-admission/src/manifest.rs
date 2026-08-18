@@ -1,7 +1,10 @@
 use crate::{
     ArtifactAdmissionError, CLAIM_SCOPE, DERIVED_ARTIFACT_CONTRACT_V2, DERIVED_AUTHORITY,
     DESCRIPTIVE_ARTIFACT_FAMILY, DISPLAY_CLASS, Result,
-    readback::{read_descriptive_part, schema_descriptor},
+    readback::{
+        read_chart_samples_part, read_descriptive_part, schema_descriptor,
+        validate_descriptive_metrics,
+    },
 };
 use arrow_array::RecordBatch;
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
@@ -141,6 +144,42 @@ pub struct ArtifactPartV1 {
     row_count: u64,
 }
 
+/// Exact immutable Parquet descriptor resolved from the sole durable store.
+///
+/// A filesystem path alone is not an admission boundary. Every field is required so restart
+/// readback must agree with the store's persisted schema/logical/physical closure as well as with
+/// the untrusted artifact manifest.
+#[derive(Clone, Debug)]
+pub struct StoreResolvedParquetPartV2 {
+    /// Store-resolved immutable object path.
+    pub path: PathBuf,
+    /// Safe semantic child name retained by the manifest or export registration.
+    pub relative_path: StableString,
+    /// Exact Arrow schema identity.
+    pub schema_id: StableString,
+    /// Exact Arrow schema descriptor digest.
+    pub schema_digest: ValueDigest,
+    /// Exact physical Parquet digest.
+    pub physical_digest: ValueDigest,
+    /// Canonical typed-relation digest.
+    pub logical_digest: ValueDigest,
+    /// Exact physical byte length.
+    pub byte_length: u64,
+    /// Exact logical row count.
+    pub row_count: u64,
+}
+
+/// Store-resolved chart-sample feature input used to independently reproduce derived metrics.
+#[derive(Clone, Debug)]
+pub struct StoreResolvedChartSamplesV1 {
+    /// Registered input snapshot identity.
+    pub snapshot_id: ValueDigest,
+    /// Registered exact snapshot-manifest digest.
+    pub snapshot_manifest_digest: ValueDigest,
+    /// Exact `chart_samples` Parquet part registration and CAS/readback path.
+    pub part: StoreResolvedParquetPartV2,
+}
+
 impl ArtifactPartV1 {
     /// Absolute immutable artifact path.
     #[must_use]
@@ -190,14 +229,52 @@ pub struct DescriptiveChartShapeRowV2 {
     pub episode_id: StableString,
     /// Candidate identity.
     pub candidate_id: StableString,
+    /// Territory identity.
+    pub territory_id: StableString,
+    /// Exact base-asset identity.
+    pub base_asset_id: StableString,
+    /// Exact quote-asset identity.
+    pub quote_asset_id: StableString,
     /// Decision-time information cutoff.
     pub decision_available_at: UtcTimestamp,
+    /// First represented source event.
+    pub first_event_time: UtcTimestamp,
+    /// Last represented source event.
+    pub last_event_time: UtcTimestamp,
     /// Number of expected chart samples.
     pub expected_samples: u64,
     /// Number of observed samples.
     pub observed_samples: u64,
     /// Number of explicit gap samples.
     pub gap_samples: u64,
+    /// Exact integer coverage ratio.
+    pub coverage_ratio_ppm: u64,
+    /// First observed exact base atoms.
+    pub start_price_base_atoms: u64,
+    /// First observed exact quote atoms.
+    pub start_price_quote_atoms: u64,
+    /// Last observed exact base atoms.
+    pub end_price_base_atoms: u64,
+    /// Last observed exact quote atoms.
+    pub end_price_quote_atoms: u64,
+    /// Exact signed rational change in parts per million.
+    pub signed_change_ppm: i64,
+    /// Exact rational range in parts per million.
+    pub range_ppm: i64,
+    /// Exact maximum drawdown in parts per million.
+    pub max_drawdown_ppm: i64,
+    /// Number of nonzero direction changes.
+    pub direction_changes: u64,
+    /// Exact per-step path signature.
+    pub path_signature: String,
+    /// Observed samples in the exposed position state.
+    pub exposed_samples: u64,
+    /// Observed samples in the flat-watch position state.
+    pub flat_watch_samples: u64,
+    /// Observed samples in the runner position state.
+    pub runner_samples: u64,
+    /// Frozen feature transform version.
+    pub feature_version: StableString,
     /// Literal descriptive-only claim.
     pub claim_scope: StableString,
 }
@@ -382,7 +459,7 @@ pub fn validate_derived_artifact_v2(root: &Path) -> Result<ValidatedDerivedArtif
         return Err(invalid("artifact directory contains unmanifested entries"));
     }
 
-    validate_parsed_derived_artifact(manifest_bytes, &manifest, part_path, root.to_owned())
+    validate_parsed_derived_artifact(manifest_bytes, &manifest, part_path, root.to_owned(), None)
 }
 
 /// Validate exact canonical manifest bytes against one store-resolved immutable Parquet part.
@@ -398,7 +475,8 @@ pub fn validate_derived_artifact_v2(root: &Path) -> Result<ValidatedDerivedArtif
 /// Arrow schema, row-count, logical relation, support, cutoff, or authority mismatch.
 pub fn validate_derived_artifact_v2_part(
     manifest_bytes: &[u8],
-    part_path: &Path,
+    artifact_part: &StoreResolvedParquetPartV2,
+    chart_samples: &StoreResolvedChartSamplesV1,
 ) -> Result<ValidatedDerivedArtifactV2> {
     if manifest_bytes.len() > usize::try_from(MAX_MANIFEST_BYTES).unwrap_or(usize::MAX) {
         return Err(invalid("manifest exceeds its bounded size"));
@@ -409,14 +487,27 @@ pub fn validate_derived_artifact_v2_part(
         .first()
         .ok_or_else(|| invalid("one artifact part is required"))?;
     safe_direct_child(&part_wire.path)?;
-    let root = part_path
+    let root = artifact_part
+        .path
         .parent()
         .map_or_else(PathBuf::new, Path::to_path_buf);
+    validate_store_part_descriptor(part_wire, artifact_part)?;
+    if manifest.input.snapshot_id != chart_samples.snapshot_id.as_str()
+        || manifest.input.snapshot_manifest_digest
+            != chart_samples.snapshot_manifest_digest.as_str()
+        || chart_samples.part.relative_path.as_str() != "chart_samples.parquet"
+        || chart_samples.part.schema_id.as_str() != "joshi.analysis.chart-sample/v1"
+    {
+        return Err(invalid(
+            "store-resolved chart input differs from the artifact snapshot closure",
+        ));
+    }
     validate_parsed_derived_artifact(
         manifest_bytes.to_vec(),
         &manifest,
-        part_path.to_owned(),
+        artifact_part.path.clone(),
         root,
+        Some(chart_samples),
     )
 }
 
@@ -439,6 +530,7 @@ fn validate_parsed_derived_artifact(
     manifest: &DerivedManifestV1,
     part_path: PathBuf,
     root: PathBuf,
+    chart_samples: Option<&StoreResolvedChartSamplesV1>,
 ) -> Result<ValidatedDerivedArtifactV2> {
     let part_wire = manifest
         .artifacts
@@ -472,6 +564,20 @@ fn validate_parsed_derived_artifact(
     if row_count != u64::try_from(rows.len()).map_err(|_| invalid("row count exceeds u64"))? {
         return Err(digest_error("part row count differs"));
     }
+    let resolved_support = if rows.is_empty() {
+        if let Some(chart_samples) = chart_samples {
+            let input = read_store_resolved_chart_samples(chart_samples)?;
+            Some(validate_descriptive_metrics(&input, &rows)?)
+        } else {
+            None
+        }
+    } else {
+        let input = chart_samples.ok_or_else(|| {
+            invalid("nonempty derived metrics require a store-resolved chart-sample input")
+        })?;
+        let input = read_store_resolved_chart_samples(input)?;
+        Some(validate_descriptive_metrics(&input, &rows)?)
+    };
     let output_rows = parse_u64(&manifest.support.output_rows, "support.output_rows")?;
     let input_rows = parse_u64(&manifest.support.input_rows, "support.input_rows")?;
     let observed = parse_u64(&manifest.support.observed_inputs, "support.observed_inputs")?;
@@ -491,6 +597,20 @@ fn validate_parsed_derived_artifact(
     )?;
     if maximum_input_available_at > fit_cutoff {
         return Err(invalid("future-known input exceeds the fit cutoff"));
+    }
+    if let Some(actual) = resolved_support
+        && (actual.input_rows != input_rows
+            || actual.observed_inputs != observed
+            || actual.gap_inputs != gaps
+            || actual.window_ids != manifest.support.window_ids
+            || actual.gap_ids != manifest.support.gap_ids
+            || actual
+                .maximum_available_at
+                .is_some_and(|maximum| maximum != maximum_input_available_at))
+    {
+        return Err(invalid(
+            "artifact support differs from the exact store-resolved chart input",
+        ));
     }
 
     Ok(ValidatedDerivedArtifactV2 {
@@ -550,6 +670,58 @@ fn validate_parsed_derived_artifact(
         },
         rows,
     })
+}
+
+fn validate_store_part_descriptor(
+    wire: &ArtifactPartWireV1,
+    value: &StoreResolvedParquetPartV2,
+) -> Result<()> {
+    if wire.path != value.relative_path.as_str()
+        || wire.schema_id != value.schema_id.as_str()
+        || wire.schema_digest != value.schema_digest.as_str()
+        || wire.physical_digest != value.physical_digest.as_str()
+        || wire.logical_digest != value.logical_digest.as_str()
+        || parse_u64(&wire.byte_length, "part byte_length")? != value.byte_length
+        || parse_u64(&wire.row_count, "part row_count")? != value.row_count
+    {
+        return Err(invalid(
+            "artifact manifest differs from the store-resolved part descriptor",
+        ));
+    }
+    Ok(())
+}
+
+fn read_store_resolved_chart_samples(
+    value: &StoreResolvedChartSamplesV1,
+) -> Result<Vec<crate::readback::ChartSampleRowV1>> {
+    let metadata = fs::symlink_metadata(&value.part.path)
+        .map_err(|error| ArtifactAdmissionError::io(&value.part.path, error))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_PART_BYTES
+        || metadata.len() != value.part.byte_length
+    {
+        return Err(invalid(
+            "store-resolved chart input is not the declared bounded regular file",
+        ));
+    }
+    let bytes = fs::read(&value.part.path)
+        .map_err(|error| ArtifactAdmissionError::io(&value.part.path, error))?;
+    if qualified_sha256(&bytes) != value.part.physical_digest.as_str() {
+        return Err(digest_error(
+            "store-resolved chart input physical bytes differ",
+        ));
+    }
+    let (rows, schema_digest, logical_digest) = read_chart_samples_part(bytes)?;
+    if schema_digest != value.part.schema_digest.as_str()
+        || logical_digest != value.part.logical_digest.as_str()
+        || u64::try_from(rows.len()).ok() != Some(value.part.row_count)
+    {
+        return Err(digest_error(
+            "store-resolved chart input schema, logical relation, or row count differs",
+        ));
+    }
+    Ok(rows)
 }
 
 fn validate_fixed_semantics(value: &DerivedManifestV1) -> Result<()> {

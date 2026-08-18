@@ -3,8 +3,8 @@ use crate::{
     specs::{TABLE_SPECS, TableSpec},
 };
 use arrow_array::{
-    Array, BooleanArray, Decimal128Array, Int32Array, Int64Array, RecordBatch, StringArray,
-    TimestampMicrosecondArray,
+    Array, BinaryArray, BooleanArray, Decimal128Array, Int32Array, Int64Array, RecordBatch,
+    StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
+    fmt::Write as FmtWrite,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -681,6 +682,32 @@ pub(crate) fn logical_table_digest(
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+pub(crate) fn relation_rows(batches: &[RecordBatch]) -> Result<Vec<Value>> {
+    let schema = batches
+        .first()
+        .map(RecordBatch::schema)
+        .ok_or_else(|| ExportError::Invalid("table has no batches".into()))?;
+    let mut rows = Vec::new();
+    for batch in batches {
+        if batch.schema() != schema {
+            return Err(ExportError::Invalid(
+                "record batches disagree on Arrow schema".into(),
+            ));
+        }
+        for row in 0..batch.num_rows() {
+            let mut object = Map::new();
+            for (column, field) in batch.columns().iter().zip(schema.fields()) {
+                object.insert(
+                    field.name().clone(),
+                    scalar_json(column.as_ref(), field, row)?,
+                );
+            }
+            rows.push(Value::Object(object));
+        }
+    }
+    Ok(rows)
+}
+
 fn compare_rows(left: &Value, right: &Value, primary_key: &[&str]) -> Ordering {
     for key in primary_key {
         let ordering = compare_scalar(&left[*key], &right[*key]);
@@ -715,6 +742,19 @@ fn scalar_json(array: &dyn Array, field: &Field, row: usize) -> Result<Value> {
                 .value(row)
                 .to_owned(),
         )),
+        DataType::Binary => {
+            let bytes = array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| ExportError::Invalid("binary array downcast failed".into()))?
+                .value(row);
+            let mut hex = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                FmtWrite::write_fmt(&mut hex, format_args!("{byte:02x}"))
+                    .expect("writing to String is infallible");
+            }
+            Ok(json!({"bytes_hex": hex}))
+        }
         DataType::Int32 => Ok(Value::from(
             array
                 .as_any()
@@ -778,6 +818,7 @@ pub(crate) fn schema_descriptor(schema: &Schema) -> Result<Value> {
 fn python_type_name(value: &DataType) -> Result<&'static str> {
     match value {
         DataType::Utf8 => Ok("string"),
+        DataType::Binary => Ok("binary"),
         DataType::Int32 => Ok("int32"),
         DataType::Int64 => Ok("int64"),
         DataType::Boolean => Ok("bool"),
@@ -808,7 +849,7 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>> {
     serde_json::to_vec(value).map_err(ExportError::Json)
 }
 
-fn parse_json_without_duplicate_keys(bytes: &[u8]) -> Result<Value> {
+pub(crate) fn parse_json_without_duplicate_keys(bytes: &[u8]) -> Result<Value> {
     struct ExactValue;
     impl<'de> DeserializeSeed<'de> for ExactValue {
         type Value = Value;

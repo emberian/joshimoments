@@ -54,6 +54,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0009_wave5_living_instrument.sql",
         sql: include_str!("../../../schema/migrations/0009_wave5_living_instrument.sql"),
     },
+    Migration {
+        id: 10,
+        name: "0010_wave5_g0_store_spine.sql",
+        sql: include_str!("../../../schema/migrations/0010_wave5_g0_store_spine.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.

@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,6 +23,7 @@ from .canonical import (
     schema_sha256,
 )
 from .contracts import (
+    G0_TABLE_CONTRACTS,
     SNAPSHOT_MANIFEST_VERSION,
     SNAPSHOT_MANIFEST_VERSION_V2,
     TABLE_CONTRACTS,
@@ -291,6 +293,7 @@ def _validate_manifest_shape(manifest: dict[str, Any]) -> dict[str, dict[str, An
             raise ManifestError("scene identity/mode must be non-empty")
         _digest(scene["view_digest"], "scene.view_digest")
 
+    contracts = _contracts_for_manifest(manifest)
     tables = manifest["tables"]
     if not isinstance(tables, list) or not tables:
         raise ManifestError("tables must be a non-empty array")
@@ -319,11 +322,11 @@ def _validate_manifest_shape(manifest: dict[str, Any]) -> dict[str, dict[str, An
             f"tables[{index}]",
         )
         name = table["name"]
-        if name not in TABLE_CONTRACTS or name in by_name:
+        if name not in contracts or name in by_name:
             raise ManifestError(f"unsupported or duplicate snapshot table: {name!r}")
         if not isinstance(table["export_manifest_id"], str) or not table["export_manifest_id"]:
             raise ManifestError(f"{name}.export_manifest_id must be non-empty")
-        contract = TABLE_CONTRACTS[name]
+        contract = contracts[name]
         if table["schema_id"] != contract.schema_id or table["primary_key"] != list(
             contract.primary_key
         ):
@@ -341,11 +344,19 @@ def _validate_manifest_shape(manifest: dict[str, Any]) -> dict[str, dict[str, An
         if table_start < start or table_start > table_through or table_through > through:
             raise ManifestError(f"{name} commit bounds escape catalog closure")
         by_name[name] = table
-    if set(by_name) != set(TABLE_CONTRACTS):
+    if set(by_name) != set(contracts):
         raise ManifestError(
-            f"snapshot table closure differs: missing={sorted(set(TABLE_CONTRACTS) - set(by_name))}"
+            f"snapshot table closure differs: missing={sorted(set(contracts) - set(by_name))}"
         )
     return by_name
+
+
+def _contracts_for_manifest(manifest: dict[str, Any]) -> dict[str, TableContract]:
+    catalog = manifest.get("catalog")
+    schema = catalog.get("catalog_schema") if isinstance(catalog, dict) else None
+    if schema == "joshi.sqlite.v10":
+        return {**TABLE_CONTRACTS, **G0_TABLE_CONTRACTS}
+    return TABLE_CONTRACTS
 
 
 def _validate_operational_v2(
@@ -392,8 +403,7 @@ def _validate_operational_v2(
     publication_ids: list[str] = []
     catalog_cutoff = _parse_commit(catalog["through_commit_seq"], "catalog cutoff")
     projection_vector = {
-        (item["name"], item["version"]): item
-        for item in catalog["as_of"]["projections"]
+        (item["name"], item["version"]): item for item in catalog["as_of"]["projections"]
     }
     projection_publications: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(publications):
@@ -452,17 +462,64 @@ def _validate_operational_v2(
                 "projection_publication_id",
                 "query_policy",
             )
+        elif kind == "cockpit_v2":
+            _require_exact_keys(
+                publication,
+                common
+                | {
+                    "publication_bytes_digest",
+                    "source_occurrence_id",
+                    "semantic_digest",
+                    "container_digest",
+                    "checkpoint_digest",
+                    "through_commit_seq",
+                    "supersedes_publication_id",
+                    "publication_commit_seq",
+                    "head_digest",
+                    "supersedes_head_publication_id",
+                },
+                f"publications[{index}]",
+            )
+            required_strings = (
+                "publication_id",
+                "publication_contract",
+                "source_occurrence_id",
+            )
         else:
-            raise ManifestError("publication.kind must be projection or cockpit")
+            raise ManifestError("publication.kind must be projection, cockpit, or cockpit_v2")
         for key in required_strings:
             if not isinstance(publication[key], str) or not publication[key]:
                 raise ManifestError(f"publication.{key} must be non-empty")
         publication_ids.append(publication["publication_id"])
-        digest_keys = ["publication_digest", "result_digest", "artifact_digest"]
+        digest_keys = ["publication_digest"]
         if kind == "projection":
-            digest_keys.extend(("input_closure_digest", "publication_bytes_digest"))
+            digest_keys.extend(
+                (
+                    "result_digest",
+                    "artifact_digest",
+                    "input_closure_digest",
+                    "publication_bytes_digest",
+                )
+            )
+        elif kind == "cockpit":
+            digest_keys.extend(
+                (
+                    "result_digest",
+                    "artifact_digest",
+                    "manifest_digest",
+                    "projection_publication_digest",
+                )
+            )
         else:
-            digest_keys.extend(("manifest_digest", "projection_publication_digest"))
+            digest_keys.extend(
+                (
+                    "publication_bytes_digest",
+                    "semantic_digest",
+                    "container_digest",
+                    "checkpoint_digest",
+                    "head_digest",
+                )
+            )
         for key in digest_keys:
             _digest(publication[key], f"publication.{key}")
         published = _parse_commit(
@@ -488,6 +545,19 @@ def _validate_operational_v2(
                     "publication is not closed by the exact as-of projection vector"
                 )
             projection_publications[publication["publication_id"]] = publication
+        elif kind == "cockpit_v2":
+            start = _parse_commit(catalog["from_commit_seq"], "catalog lower commit")
+            through = _parse_commit(publication["through_commit_seq"], "Cockpit V2 through")
+            publication_commit = _parse_commit(
+                publication["publication_commit_seq"], "Cockpit V2 publication commit"
+            )
+            if not start <= through < publication_commit < published <= catalog_cutoff:
+                raise ManifestError("Cockpit V2 commits do not close the selected range")
+            for field in ("supersedes_publication_id", "supersedes_head_publication_id"):
+                if publication[field] is not None and (
+                    not isinstance(publication[field], str) or not publication[field]
+                ):
+                    raise ManifestError(f"publication.{field} must be null or non-empty")
     if publication_ids != sorted(publication_ids) or len(publication_ids) != len(
         set(publication_ids)
     ):
@@ -497,8 +567,7 @@ def _validate_operational_v2(
             projection = projection_publications.get(publication["projection_publication_id"])
             if (
                 projection is None
-                or projection["publication_digest"]
-                != publication["projection_publication_digest"]
+                or projection["publication_digest"] != publication["projection_publication_digest"]
                 or projection["result_digest"] != publication["result_digest"]
                 or projection["artifact_digest"] != publication["artifact_digest"]
                 or _parse_commit(projection["published_commit_seq"], "projection publication")
@@ -507,8 +576,7 @@ def _validate_operational_v2(
                 raise ManifestError("cockpit publication lacks its prior exact projection closure")
     if not any(
         item["kind"] == "projection"
-        and
-        item["projection_name"] == producer["projection_name"]
+        and item["projection_name"] == producer["projection_name"]
         and item["projection_version"] == producer["projection_version"]
         and item["result_digest"] == producer["projection_state_digest"]
         for item in publications
@@ -583,12 +651,15 @@ def _coverage_from_table(table: pa.Table) -> dict[str, Any]:
 def _validate_bounds_and_coverage(
     table: pa.Table, table_manifest: dict[str, Any], contract: TableContract
 ) -> None:
-    commits = table.column("available_commit_seq").to_pylist()
     bounds = table_manifest["commit_bounds"]
     lower_commit = _parse_commit(bounds["from_commit_seq"], "table commit lower")
     upper_commit = _parse_commit(bounds["through_commit_seq"], "table commit upper")
-    if commits and (min(commits) < lower_commit or max(commits) > upper_commit):
-        raise ManifestError(f"{table_manifest['name']} row commit escapes its part bounds")
+    for field in contract.schema:
+        if not field.name.endswith("commit_seq"):
+            continue
+        commits = [value for value in table.column(field.name).to_pylist() if value is not None]
+        if commits and (min(commits) < lower_commit or max(commits) > upper_commit):
+            raise ManifestError(f"{table_manifest['name']}.{field.name} escapes its part bounds")
 
     event_bounds = table_manifest["event_bounds"]
     values = []
@@ -646,6 +717,52 @@ def _validate_bounds_and_coverage(
 
 def _rows(table: pa.Table) -> list[dict[str, Any]]:
     return table.to_pylist()
+
+
+def _wire_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _exact_wire_json(
+    value: Any, context: str, *, allow_trailing_newline: bool = False
+) -> tuple[bytes, dict[str, Any]]:
+    if not isinstance(value, bytes):
+        raise ManifestError(f"{context} must retain exact binary bytes")
+    try:
+        parsed = _require_dict(
+            json.loads(
+                value.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_object_keys,
+                parse_constant=_reject_nonfinite_json,
+            ),
+            context,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ManifestError(f"{context} is not exact UTF-8 JSON") from error
+    canonical = _wire_json_bytes(parsed)
+    if canonical != value and (not allow_trailing_newline or canonical + b"\n" != value):
+        raise ManifestError(f"{context} is not canonical exact JSON")
+    return value, parsed
+
+
+def _positive_u64(value: Any, context: str) -> int:
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not value.isdigit()
+        or value.startswith("0")
+    ):
+        raise ManifestError(f"{context} must be a positive canonical decimal string")
+    parsed = int(value)
+    if not 0 < parsed <= 18_446_744_073_709_551_615:
+        raise ManifestError(f"{context} exceeds u64")
+    return parsed
 
 
 def _validate_semantics(tables: dict[str, pa.Table], manifest: dict[str, Any]) -> None:
@@ -934,6 +1051,374 @@ def _validate_semantics(tables: dict[str, pa.Table], manifest: dict[str, Any]) -
             or scene["view_digest"] != binding["view_digest"]
         ):
             raise ManifestError("top-level scene binding differs from exported scene DTO identity")
+    if "source_fact_occurrences" in tables:
+        _validate_g0_semantics(tables, manifest)
+
+
+def _validate_g0_semantics(tables: dict[str, pa.Table], manifest: dict[str, Any]) -> None:
+    rows = {name: _rows(tables[name]) for name in G0_TABLE_CONTRACTS}
+    singular = {
+        "source_fact_occurrences",
+        "publication_occurrences",
+        "scene_occurrences",
+        "episode_occurrences",
+        "run_occurrences",
+        "export_occurrences",
+        "import_occurrences",
+    }
+    if any(len(rows[name]) != 1 for name in singular):
+        raise ManifestError("G0 semantic roots must each contain one exact occurrence")
+    if any(not values for name, values in rows.items() if name not in singular):
+        raise ManifestError("G0 support relations must be non-empty")
+
+    _validate_g0_exact_bytes(rows)
+
+    def one(name: str) -> dict[str, Any]:
+        return rows[name][0]
+
+    run_id = one("run_occurrences")["run_registration_id"]
+    for name in (
+        "source_fact_occurrences",
+        "spool_catalog_occurrences",
+        "status_occurrences",
+        "export_occurrences",
+        "import_occurrences",
+    ):
+        if any(row["run_registration_id"] != run_id for row in rows[name]):
+            raise ManifestError("G0 relations mix distinct run registrations")
+    source = one("source_fact_occurrences")
+    if source["catalog_admission_id"] not in {
+        row["catalog_admission_id"] for row in rows["spool_catalog_occurrences"]
+    }:
+        raise ManifestError("G0 source occurrence lacks spool/catalog support")
+    source_spool = [
+        row
+        for row in rows["spool_catalog_occurrences"]
+        if row["catalog_admission_id"] == source["catalog_admission_id"]
+    ]
+    if (
+        len(source_spool) != 1
+        or source_spool[0]["store_commit_seq"] != source["known_through_commit_seq"]
+    ):
+        raise ManifestError("G0 source lacks its exact in-range spool store commit")
+    publication = one("publication_occurrences")
+    scene = one("scene_occurrences")
+    if (
+        publication["source_occurrence_id"] != source["source_occurrence_id"]
+        or publication["through_commit_seq"] != source["known_through_commit_seq"]
+        or scene["source_occurrence_id"] != source["source_occurrence_id"]
+        or scene["scene_publication_id"] != publication["publication_id"]
+        or scene["publication_digest"] != publication["publication_digest"]
+        or scene["head_digest"] != publication["head_digest"]
+    ):
+        raise ManifestError("G0 publication/scene/source closure differs")
+    headed = [row for row in manifest["publications"] if row["kind"] == "cockpit_v2"]
+    if len(headed) != 1:
+        raise ManifestError("G0 requires one exact Cockpit V2 publication in the manifest")
+    headed_publication = headed[0]
+    publication_fields = {
+        "publication_id": "publication_id",
+        "publication_contract": "publication_contract",
+        "publication_digest": "publication_digest",
+        "publication_bytes_digest": "publication_bytes_digest",
+        "source_occurrence_id": "source_occurrence_id",
+        "semantic_digest": "semantic_digest",
+        "container_digest": "container_digest",
+        "checkpoint_digest": "checkpoint_digest",
+        "supersedes_publication_id": "supersedes_publication_id",
+        "head_digest": "head_digest",
+        "supersedes_head_publication_id": "supersedes_head_publication_id",
+        "authority": "authority",
+    }
+    if any(
+        headed_publication[manifest_field] != publication[relation_field]
+        for manifest_field, relation_field in publication_fields.items()
+    ) or any(
+        _parse_commit(headed_publication[manifest_field], manifest_field)
+        != publication[relation_field]
+        for manifest_field, relation_field in (
+            ("through_commit_seq", "through_commit_seq"),
+            ("publication_commit_seq", "publication_commit_seq"),
+            ("published_commit_seq", "available_commit_seq"),
+        )
+    ):
+        raise ManifestError("G0 manifest publication differs from its exact relation")
+    publication_id = publication["publication_id"]
+    acts = rows["act_occurrences"]
+    episode = one("episode_occurrences")
+    if any(
+        row["scene_publication_id"] != publication_id or row["session_id"] != episode["session_id"]
+        for row in acts
+    ):
+        raise ManifestError("G0 act is foreign to the selected scene/session")
+    act_ids = {row["act_id"] for row in acts}
+    if (
+        episode["scene_publication_id"] != publication_id
+        or episode["opening_act_id"] not in act_ids
+        or (episode["closing_act_id"] is not None and episode["closing_act_id"] not in act_ids)
+    ):
+        raise ManifestError("G0 episode lacks exact in-range act support")
+    export = one("export_occurrences")
+    imported = one("import_occurrences")
+    if (
+        any(
+            imported[key] != export[key]
+            for key in ("export_request_id", "snapshot_id", "truth_fingerprint_digest")
+        )
+        or imported["export_binding_id"] != export["export_binding_id"]
+    ):
+        raise ManifestError("G0 import does not close exact export/truth")
+    if not any(
+        row["component"] == "export"
+        and row["state"] == "ready"
+        and row["evidence_commit_seq"] == export["available_commit_seq"]
+        for row in rows["status_occurrences"]
+    ):
+        raise ManifestError("G0 status is not bound to the exact ready export")
+    status_ids = {row["record_id"] for row in rows["status_occurrences"]}
+    if any(
+        row["predecessor_record_id"] is not None and row["predecessor_record_id"] not in status_ids
+        for row in rows["status_occurrences"]
+    ):
+        raise ManifestError("G0 status lacks its in-range predecessor")
+    if (
+        publication["supersedes_publication_id"] is not None
+        or publication["supersedes_head_publication_id"] is not None
+    ):
+        raise ManifestError("G0 publication lacks its in-range supersession predecessor")
+    if source["protection_class"] != "public_integrity" or any(
+        row["qualification"] != "fixture_authority_unverified_semantic"
+        for row in acts + rows["episode_occurrences"]
+    ):
+        raise ManifestError("G0 source/memory qualification differs")
+    if imported["claim_scope"] != "descriptive_noncausal":
+        raise ManifestError("G0 import exceeds its descriptive claim scope")
+    for values in rows.values():
+        if any(row["authority"] != "read_only_no_execution" for row in values):
+            raise ManifestError("G0 occurrence exceeds read_only_no_execution")
+
+
+def _validate_g0_exact_bytes(rows: dict[str, list[dict[str, Any]]]) -> None:
+    source = rows["source_fact_occurrences"][0]
+    source_bytes, source_wire = _exact_wire_json(
+        source["descriptor_bytes"], "G0 source descriptor"
+    )
+    _require_exact_keys(
+        source_wire,
+        {
+            "contract",
+            "schemaVersion",
+            "sourceOccurrenceId",
+            "runRegistrationId",
+            "catalogAdmissionId",
+            "sourceReceiptDigest",
+            "sourceId",
+            "surfaceProfile",
+            "facts",
+            "eligibleSubjects",
+            "memberships",
+            "coverage",
+            "gaps",
+            "renderedSubjects",
+            "omissions",
+            "knownThroughCommitSeq",
+            "maximumInputAvailableAt",
+            "protection",
+            "authority",
+        },
+        "G0 source descriptor",
+    )
+    source_fields = {
+        "contract": "descriptor_contract",
+        "sourceOccurrenceId": "source_occurrence_id",
+        "runRegistrationId": "run_registration_id",
+        "catalogAdmissionId": "catalog_admission_id",
+        "sourceReceiptDigest": "receipt_digest",
+        "sourceId": "source_id",
+    }
+    if source_wire["schemaVersion"] != 1 or any(
+        source_wire[wire] != source[field] for wire, field in source_fields.items()
+    ):
+        raise ManifestError("G0 source descriptor identity differs from its relation")
+    if (
+        qualified_sha256_bytes(source_bytes) != source["descriptor_digest"]
+        or len(source_bytes) != source["descriptor_byte_length"]
+        or source_wire["surfaceProfile"].get("profileDigest")
+        != source["surface_profile_digest"]
+        or len(source_wire["facts"]) != source["fact_count"]
+        or len(source_wire["eligibleSubjects"]) != source["eligible_subject_count"]
+        or len(source_wire["memberships"]) != source["membership_count"]
+        or len(source_wire["coverage"]) != source["coverage_count"]
+        or len(source_wire["gaps"]) != source["gap_count"]
+        or len(source_wire["renderedSubjects"]) != source["rendered_subject_count"]
+        or len(source_wire["omissions"]) != source["omission_count"]
+        or sum(item.get("membership") == "hot" for item in source_wire["memberships"])
+        != source["hot_subject_count"]
+        or sum(item.get("membership") == "cold_control" for item in source_wire["memberships"])
+        != source["cold_control_subject_count"]
+        or _positive_u64(source_wire["knownThroughCommitSeq"], "source known-through")
+        != source["known_through_commit_seq"]
+        or _parse_utc(source_wire["maximumInputAvailableAt"], "source maximum availability")
+        != source["maximum_input_available_at"]
+        or source_wire["protection"] != "public"
+        or source_wire["authority"] != "read_only_no_execution"
+    ):
+        raise ManifestError("G0 source descriptor scalar/partition closure differs")
+
+    publication = rows["publication_occurrences"][0]
+    publication_bytes, publication_wire = _exact_wire_json(
+        publication["publication_bytes"], "G0 Cockpit V2 publication"
+    )
+    head_bytes, head_wire = _exact_wire_json(publication["head_bytes"], "G0 Cockpit V2 head")
+    if (
+        qualified_sha256_bytes(publication_bytes) != publication["publication_bytes_digest"]
+        or len(publication_bytes) != publication["publication_byte_length"]
+        or len(head_bytes) != publication["head_byte_length"]
+        or publication_wire.get("publicationId") != publication["publication_id"]
+        or publication_wire.get("contract") != publication["publication_contract"]
+        or publication_wire.get("publicationDigest") != publication["publication_digest"]
+        or publication_wire.get("commitSeq")
+        != str(publication["publication_commit_seq"])
+        or publication_wire.get("supersedesPublicationId")
+        != publication["supersedes_publication_id"]
+        or publication_wire.get("authority") != "read_only_no_execution"
+    ):
+        raise ManifestError("G0 Cockpit V2 publication bytes differ from stored scalars")
+    body_without_digest = {
+        key: value for key, value in publication_wire.items() if key != "publicationDigest"
+    }
+    if qualified_sha256_bytes(_wire_json_bytes(body_without_digest)) != publication[
+        "publication_digest"
+    ]:
+        raise ManifestError("G0 Cockpit V2 publication semantic digest differs")
+    publication_manifest = _require_dict(publication_wire.get("manifest"), "Cockpit V2 manifest")
+    checkpoint = _require_dict(publication_wire.get("checkpoint"), "Cockpit V2 checkpoint")
+    if (
+        publication_manifest.get("semanticDigest") != publication["semantic_digest"]
+        or publication_manifest.get("containerDigest") != publication["container_digest"]
+        or checkpoint.get("checkpointDigest") != publication["checkpoint_digest"]
+        or publication_manifest.get("surfaceProfile") != source_wire["surfaceProfile"]
+        or publication_manifest.get("sourceFacts") != source_wire["facts"]
+        or publication_manifest.get("memberships") != source_wire["memberships"]
+        or publication_manifest.get("coverage") != source_wire["coverage"]
+        or publication_manifest.get("gaps") != source_wire["gaps"]
+        or publication_manifest.get("renderedSubjects") != source_wire["renderedSubjects"]
+        or publication_manifest.get("omissions") != source_wire["omissions"]
+        or _require_dict(
+            publication_manifest.get("observedUniverse"), "Cockpit V2 universe"
+        ).get("eligibleSubjects")
+        != source_wire["eligibleSubjects"]
+        or _require_dict(publication_manifest.get("cutoff"), "Cockpit V2 cutoff").get(
+            "commitThrough"
+        )
+        != source_wire["knownThroughCommitSeq"]
+        or publication_manifest["cutoff"].get("knowledgeAt")
+        != source_wire["maximumInputAvailableAt"]
+    ):
+        raise ManifestError("G0 publication does not retain exact source semantics")
+    if (
+        head_wire.get("publicationId") != publication["publication_id"]
+        or head_wire.get("publicationDigest") != publication["publication_digest"]
+        or head_wire.get("commitSeq") != str(publication["publication_commit_seq"])
+        or head_wire.get("headDigest") != publication["head_digest"]
+        or head_wire.get("authority") != "read_only_no_execution"
+    ):
+        raise ManifestError("G0 Cockpit V2 head bytes differ from stored semantic scalars")
+    head_without_digest = {key: value for key, value in head_wire.items() if key != "headDigest"}
+    if qualified_sha256_bytes(_wire_json_bytes(head_without_digest)) != publication["head_digest"]:
+        raise ManifestError("G0 Cockpit V2 semantic head digest differs")
+    scene = rows["scene_occurrences"][0]
+    if (
+        scene["publication_bytes"] != publication_bytes
+        or scene["head_bytes"] != head_bytes
+    ):
+        raise ManifestError("G0 scene does not retain exact publication/head bytes")
+
+    parsed_memory: list[tuple[int, str, dict[str, Any], dict[str, Any]]] = []
+    for relation, expected_kind, id_field in (
+        ("act_occurrences", "operator_act", "act_id"),
+        ("episode_occurrences", "episode", "episode_id"),
+    ):
+        for row in rows[relation]:
+            memory_bytes, memory_wire = _exact_wire_json(
+                row["occurrence_bytes"], f"G0 {expected_kind}"
+            )
+            value = _require_dict(memory_wire.get("value"), f"G0 {expected_kind} value")
+            identity_kind = "act" if expected_kind == "operator_act" else "episode"
+            identity_field = "actId" if expected_kind == "operator_act" else "episodeId"
+            occurrence_id = f"{identity_kind}:{value.get(identity_field)}"
+            if (
+                memory_wire.get("kind") != expected_kind
+                or qualified_sha256_bytes(memory_bytes) != row["occurrence_digest"]
+                or len(memory_bytes) != row["occurrence_byte_length"]
+                or occurrence_id != row[id_field]
+                or value.get("sessionId") != row["session_id"]
+            ):
+                raise ManifestError(f"G0 {expected_kind} bytes differ from stored scalars")
+            start_field = "occurredAt" if expected_kind == "operator_act" else "startedAt"
+            if _positive_u64(value.get(start_field), f"G0 {expected_kind} start") != int(
+                row["logical_start_tick"]
+            ):
+                raise ManifestError(f"G0 {expected_kind} start tick differs")
+            if expected_kind == "operator_act":
+                scene_binding = _require_dict(value.get("scene"), "G0 act scene")
+                scene_value = _require_dict(scene_binding.get("value"), "G0 act committed scene")
+                if (
+                    scene_binding.get("status") != "committed"
+                    or scene_value.get("sceneId") != row["scene_publication_id"]
+                    or scene_value.get("sceneDigest") != publication["publication_digest"]
+                    or _positive_u64(scene_value.get("catalogCutoff"), "G0 scene cutoff")
+                    != publication["publication_commit_seq"]
+                    or row["logical_end_tick"] is not None
+                ):
+                    raise ManifestError("G0 act committed scene closure differs")
+            else:
+                act_ids = value.get("actIds")
+                if not isinstance(act_ids, list) or not act_ids:
+                    raise ManifestError("G0 episode has no exact act prefix")
+                ended = value.get("endedAt")
+                if (
+                    "act:" + str(act_ids[0]) != row["opening_act_id"]
+                    or "act:" + str(act_ids[-1]) != row["closing_act_id"]
+                    or (None if ended is None else str(_positive_u64(ended, "G0 episode end")))
+                    != row["logical_end_tick"]
+                ):
+                    raise ManifestError("G0 episode act/tick closure differs")
+            parsed_memory.append((row["queue_generation"], expected_kind, value, row))
+    parsed_memory.sort(key=lambda item: item[0])
+    if any(left[0] >= right[0] for left, right in pairwise(parsed_memory)):
+        raise ManifestError("G0 memory queue generations are not strictly increasing")
+    known_acts: set[str] = set()
+    for _, kind, value, _ in parsed_memory:
+        if kind == "operator_act":
+            known_acts.add(str(value["actId"]))
+        elif any(str(act) not in known_acts for act in value["actIds"]):
+            raise ManifestError("G0 episode escapes its exact prior act prefix")
+
+    imported = rows["import_occurrences"][0]
+    import_bytes, import_wire = _exact_wire_json(
+        imported["manifest_bytes"],
+        "G0 imported artifact manifest",
+        allow_trailing_newline=True,
+    )
+    if (
+        qualified_sha256_bytes(import_bytes) != imported["manifest_digest"]
+        or len(import_bytes) != imported["manifest_byte_length"]
+        or import_wire.get("artifact_id") != imported["artifact_id"]
+        or import_wire.get("manifest_version") != imported["artifact_contract"]
+        or import_wire.get("analysis_run_id") != imported["analysis_run_id"]
+        or _require_dict(import_wire.get("input"), "G0 imported artifact input").get(
+            "snapshot_id"
+        )
+        != imported["snapshot_id"]
+        or not isinstance(import_wire.get("artifacts"), list)
+        or len(import_wire["artifacts"]) != 1
+        or import_wire["artifacts"][0].get("physical_digest")
+        != imported["cas_physical_digest"]
+        or int(import_wire["artifacts"][0].get("byte_length", "-1"))
+        != imported["cas_byte_length"]
+    ):
+        raise ManifestError("G0 import manifest bytes differ from exact CAS registration")
 
 
 def validate_snapshot(snapshot_root: str | Path) -> ValidatedSnapshot:
@@ -960,7 +1445,8 @@ def validate_snapshot(snapshot_root: str | Path) -> ValidatedSnapshot:
     table_manifests = _validate_manifest_shape(manifest)
     _validate_snapshot_id(manifest)
     tables: dict[str, pa.Table] = {}
-    for name, contract in TABLE_CONTRACTS.items():
+    contracts = _contracts_for_manifest(manifest)
+    for name, contract in contracts.items():
         table_manifest = table_manifests[name]
         table_path = _safe_table_path(root, table_manifest["path"])
         if table_manifest["physical_digest"] != qualified_sha256_file(table_path):

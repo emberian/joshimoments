@@ -5,15 +5,19 @@
 //! No caller-supplied Rust struct is accepted as proof.  All records retain the literal
 //! `read_only_no_execution` ceiling.
 
-#![allow(clippy::too_many_lines)]
+#![allow(clippy::items_after_statements, clippy::too_many_lines)]
 
 use crate::{
     BlobStore, IdempotencyStatus, ObservationStorage, Result, SqliteStore, StoreError,
     blob::verify_file,
 };
-use joshi_artifact_admission::{ValidatedDerivedArtifactV2, validate_derived_artifact_v2_part};
+use joshi_artifact_admission::{
+    StoreResolvedChartSamplesV1, StoreResolvedParquetPartV2, ValidatedDerivedArtifactV2,
+    validate_derived_artifact_v2_part,
+};
 use joshi_domain::{CommitSeq, OpenVariant, StableString, UtcTimestamp, ValueDigest};
 use joshi_evidence::{Boundary, CoverageScope, DurableIngestBatch};
+use joshi_export::{G0ImportArtifactReadbackV1, G0ImportPartReadbackV1};
 use joshi_surface::DailyUseSurfaceProfileV1;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{
@@ -63,11 +67,11 @@ static WAVE5_CLOCK_ID: OnceLock<StableString> = OnceLock::new();
 /// Writer-owned clock/build material for one Wave 5 append.
 #[derive(Clone, Debug)]
 pub struct Wave5CommitContext {
-    batch_id: StableString,
-    committed_at: UtcTimestamp,
-    writer_clock_id: StableString,
-    committed_mono_ns: u64,
-    writer_build: StableString,
+    pub(crate) batch_id: StableString,
+    pub(crate) committed_at: UtcTimestamp,
+    pub(crate) writer_clock_id: StableString,
+    pub(crate) committed_mono_ns: u64,
+    pub(crate) writer_build: StableString,
 }
 
 impl Wave5CommitContext {
@@ -1565,7 +1569,15 @@ impl SqliteStore {
             stable(ARTIFACT_STORAGE_DOMAIN, "artifact storage domain")?,
             true,
         )?;
+        let prepared_manifest = blob_store.prepare(
+            &capability.manifest_bytes,
+            stable("application/json", "artifact manifest content type")?,
+            None,
+            stable(ARTIFACT_STORAGE_DOMAIN, "artifact manifest storage domain")?,
+            true,
+        )?;
         blob_store.verify(&prepared)?;
+        blob_store.verify(&prepared_manifest)?;
         let artifact_path = prepared
             .relative_path
             .as_ref()
@@ -1575,7 +1587,7 @@ impl SqliteStore {
                     "restricted artifact did not receive external CAS placement".into(),
                 )
             })?;
-        validate_artifact_part_capability(&capability, &artifact_path)?;
+        validate_artifact_part_capability(self, &capability, &artifact_path)?;
         let occurrence = capability.import_id.clone();
         let document_digest = capability.digest.clone();
         let digest = operation_digest(&(
@@ -1591,6 +1603,7 @@ impl SqliteStore {
             &digest,
             |tx, seq| {
                 insert_prepared_blob(tx, &prepared, seq)?;
+                insert_prepared_blob(tx, &prepared_manifest, seq)?;
                 tx.execute(
                     "INSERT INTO wave5_restricted_artifact_v1
                      (import_id,run_registration_id,run_registration_sha256,export_binding_id,
@@ -1644,6 +1657,22 @@ impl SqliteStore {
                         sqlite_u64(prepared.content_length, "artifact byte length")?,
                     ],
                 )?;
+                tx.execute(
+                    "INSERT INTO wave5_g0_restricted_manifest_cas_v1
+                     (import_id,blob_id,storage_domain,manifest_sha256,
+                      manifest_byte_length,created_commit_seq)
+                     VALUES (?1,?2,?3,?2,?4,?5)",
+                    params![
+                        capability.import_id.as_str(),
+                        prepared_manifest.raw_sha256,
+                        prepared_manifest.storage_domain.as_str(),
+                        sqlite_u64(
+                            prepared_manifest.content_length,
+                            "artifact manifest byte length",
+                        )?,
+                        seq,
+                    ],
+                )?;
                 Ok(())
             },
         )
@@ -1669,17 +1698,27 @@ impl SqliteStore {
             i64,
             i64,
             i64,
+            String,
+            String,
+            i64,
         );
         let row: Option<Row> = self
             .connection
             .query_row(
                 "SELECT a.registration_bytes,a.registration_sha256,a.manifest_bytes,
                         p.blob_id,o.storage_mode,o.relative_path,p.byte_length,
-                        a.created_commit_seq,c.committed_wall_us
+                        a.created_commit_seq,c.committed_wall_us,
+                        manifest_blob.storage_mode,manifest_blob.relative_path,
+                        manifest_cas.manifest_byte_length
                  FROM wave5_restricted_artifact_v1 a
                  JOIN wave5_restricted_artifact_part_v1 p ON p.import_id=a.import_id
                  JOIN blob_object o ON o.blob_id=p.blob_id AND o.storage_domain=p.storage_domain
                  JOIN ingest_commit c ON c.commit_seq=a.created_commit_seq
+                 JOIN wave5_g0_restricted_manifest_cas_v1 manifest_cas
+                   ON manifest_cas.import_id=a.import_id
+                 JOIN blob_object manifest_blob
+                   ON manifest_blob.blob_id=manifest_cas.blob_id
+                  AND manifest_blob.storage_domain=manifest_cas.storage_domain
                  WHERE a.import_id=?1 AND p.part_ordinal=0",
                 [import_id.as_str()],
                 |row| {
@@ -1693,6 +1732,9 @@ impl SqliteStore {
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -1707,6 +1749,9 @@ impl SqliteStore {
             length,
             seq,
             committed_us,
+            manifest_mode,
+            manifest_path,
+            manifest_length,
         )) = row
         else {
             return Ok(None);
@@ -1714,6 +1759,25 @@ impl SqliteStore {
         if mode != "external" {
             return Err(StoreError::InvalidBatch(
                 "restricted artifact must remain in external CAS".into(),
+            ));
+        }
+        if manifest_mode != "external" {
+            return Err(StoreError::InvalidBatch(
+                "restricted artifact manifest must remain in external CAS".into(),
+            ));
+        }
+        let manifest_absolute = self.config.blob_root.join(&manifest_path);
+        let manifest_digest = bytes_digest(&manifest)?;
+        verify_file(
+            &manifest_absolute,
+            raw_digest(&manifest_digest, "artifact manifest")?,
+            as_u64(manifest_length, "artifact manifest byte length")?,
+        )?;
+        let manifest_readback = fs::read(&manifest_absolute)
+            .map_err(|source| StoreError::io(&manifest_absolute, source))?;
+        if manifest_readback != manifest {
+            return Err(StoreError::InvalidBatch(
+                "restricted artifact manifest CAS differs from catalog bytes".into(),
             ));
         }
         let parsed = ArtifactCapability::parse_registration_only(&registration, &manifest)?;
@@ -1739,7 +1803,7 @@ impl SqliteStore {
         );
         let capability =
             ArtifactCapability::parse(self, &registration, &manifest, &artifact_bytes, &context)?;
-        validate_artifact_part_capability(&capability, &absolute)?;
+        validate_artifact_part_capability(self, &capability, &absolute)?;
         Ok(Some(StoredWave5RestrictedArtifact {
             registration: capability.document,
             registration_bytes: registration,
@@ -1751,7 +1815,71 @@ impl SqliteStore {
         }))
     }
 
-    fn commit_wave5<F>(
+    pub(crate) fn resolve_wave5_g0_import_artifact_v1(
+        &self,
+        import_id: &StableString,
+    ) -> Result<G0ImportArtifactReadbackV1> {
+        let stored = self
+            .load_wave5_restricted_artifact_v1(import_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 5 G0 restricted import",
+                identity: import_id.to_string(),
+            })?;
+        let manifest: DerivedManifestWire = parse_canonical(
+            &stored.manifest_bytes,
+            MAX_ARTIFACT_BYTES,
+            "G0 restricted artifact manifest",
+        )?;
+        if manifest.artifacts.len() != 1 {
+            return Err(StoreError::InvalidBatch(
+                "G0 restricted import must retain exactly one independently validated part".into(),
+            ));
+        }
+        let part = &manifest.artifacts[0];
+        type Paths = (String, String);
+        let (manifest_relative, part_relative): Paths = self.connection.query_row(
+            "SELECT manifest_blob.relative_path,part_blob.relative_path
+             FROM wave5_restricted_artifact_v1 artifact
+             JOIN wave5_g0_restricted_manifest_cas_v1 manifest_cas
+               ON manifest_cas.import_id=artifact.import_id
+             JOIN blob_object manifest_blob
+               ON manifest_blob.blob_id=manifest_cas.blob_id
+              AND manifest_blob.storage_domain=manifest_cas.storage_domain
+             JOIN wave5_restricted_artifact_part_v1 part
+               ON part.import_id=artifact.import_id AND part.part_ordinal=0
+             JOIN blob_object part_blob
+               ON part_blob.blob_id=part.blob_id AND part_blob.storage_domain=part.storage_domain
+             WHERE artifact.import_id=?1
+               AND manifest_blob.storage_mode='external' AND part_blob.storage_mode='external'",
+            [import_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let manifest_path = self.config.blob_root.join(manifest_relative);
+        let part_path = self.config.blob_root.join(part_relative);
+        let descriptor = G0ImportArtifactReadbackV1 {
+            import_id: import_id.clone(),
+            artifact_id: qualified_digest(&stored.registration.artifact_id, "artifact identity")?,
+            manifest_path,
+            parts: vec![G0ImportPartReadbackV1 {
+                path: part_path,
+                relative_path: stable(&part.path, "artifact part relative path")?,
+                schema_id: stable(&part.schema_id, "artifact part schema ID")?,
+                schema_digest: qualified_digest(&part.schema_digest, "artifact part schema")?,
+                physical_digest: qualified_digest(&part.physical_digest, "artifact part physical")?,
+                logical_digest: qualified_digest(&part.logical_digest, "artifact part logical")?,
+                primary_key: part
+                    .primary_key
+                    .iter()
+                    .map(|value| stable(value, "artifact part primary key"))
+                    .collect::<Result<_>>()?,
+                byte_length: parse_positive_wire(&part.byte_length, "artifact part bytes")?,
+                row_count: parse_wire(&part.row_count, "artifact part rows")?,
+            }],
+        };
+        Ok(descriptor)
+    }
+
+    pub(crate) fn commit_wave5<F>(
         &mut self,
         context: &Wave5CommitContext,
         commit_class: &'static str,
@@ -2476,17 +2604,104 @@ fn validate_artifact_commit_cutoff(
 }
 
 fn validate_artifact_part_capability(
+    store: &SqliteStore,
     capability: &ArtifactCapability,
     part_path: &std::path::Path,
 ) -> Result<()> {
-    let validated: ValidatedDerivedArtifactV2 =
-        validate_derived_artifact_v2_part(&capability.manifest_bytes, part_path).map_err(
-            |error| {
-                StoreError::InvalidBatch(format!(
-                    "restricted artifact failed independent Parquet validation: {error}"
-                ))
-            },
-        )?;
+    let part = &capability.manifest.artifacts[0];
+    let artifact_part = StoreResolvedParquetPartV2 {
+        path: part_path.to_owned(),
+        relative_path: stable(&part.path, "artifact part relative path")?,
+        schema_id: stable(&part.schema_id, "artifact part schema ID")?,
+        schema_digest: qualified_digest(&part.schema_digest, "artifact part schema")?,
+        physical_digest: qualified_digest(&part.physical_digest, "artifact part physical")?,
+        logical_digest: qualified_digest(&part.logical_digest, "artifact part logical")?,
+        byte_length: parse_positive_wire(&part.byte_length, "artifact part bytes")?,
+        row_count: parse_wire(&part.row_count, "artifact part rows")?,
+    };
+    type ChartRow = (String, String, String, i64, i64, String);
+    let chart: ChartRow = store.connection.query_row(
+        "SELECT m.relative_path,m.schema_sha256,m.file_sha256,m.byte_length,m.row_count,
+                s.manifest_relative_path
+         FROM production_export_request_v2 e
+         JOIN export_snapshot s ON s.export_snapshot_id=e.snapshot_id
+         JOIN export_snapshot_part p ON p.export_snapshot_id=e.snapshot_id
+         JOIN export_manifest m ON m.export_manifest_id=p.export_manifest_id
+         WHERE e.export_request_id=?1 AND e.snapshot_id=?2 AND m.family='chart_samples'",
+        params![
+            capability.document.export_request_id,
+            capability.document.snapshot_id
+        ],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    let snapshot_manifest: String = store.connection.query_row(
+        "SELECT snapshot_manifest_sha256 FROM production_export_request_v2
+         WHERE export_request_id=?1 AND snapshot_id=?2",
+        params![
+            capability.document.export_request_id,
+            capability.document.snapshot_id
+        ],
+        |row| row.get(0),
+    )?;
+    let snapshot_manifest_bytes = fs::read(store.config.export_root.join(&chart.5))
+        .map_err(|source| StoreError::io(store.config.export_root.join(&chart.5), source))?;
+    let snapshot_manifest_value: serde_json::Value =
+        serde_json::from_slice(&snapshot_manifest_bytes)?;
+    let chart_logical = snapshot_manifest_value
+        .get("tables")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tables| {
+            tables.iter().find(|table| {
+                table.get("name").and_then(serde_json::Value::as_str) == Some("chart_samples")
+            })
+        })
+        .and_then(|table| table.get("logical_digest"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            StoreError::InvalidBatch("snapshot manifest lacks chart_samples logical digest".into())
+        })?;
+    let chart_samples = StoreResolvedChartSamplesV1 {
+        snapshot_id: qualified_digest(&capability.document.snapshot_id, "snapshot identity")?,
+        snapshot_manifest_digest: qualified_digest(
+            &format!("sha256:{snapshot_manifest}"),
+            "snapshot manifest",
+        )?,
+        part: StoreResolvedParquetPartV2 {
+            path: store.config.export_root.join(&chart.0),
+            relative_path: stable("chart_samples.parquet", "chart samples relative path")?,
+            schema_id: stable("joshi.analysis.chart-sample/v1", "chart samples schema ID")?,
+            schema_digest: qualified_digest(
+                &format!("sha256:{}", chart.1),
+                "chart samples schema",
+            )?,
+            physical_digest: qualified_digest(
+                &format!("sha256:{}", chart.2),
+                "chart samples physical",
+            )?,
+            logical_digest: qualified_digest(chart_logical, "chart samples logical")?,
+            byte_length: as_u64(chart.3, "chart samples bytes")?,
+            row_count: as_u64(chart.4, "chart samples rows")?,
+        },
+    };
+    let validated: ValidatedDerivedArtifactV2 = validate_derived_artifact_v2_part(
+        &capability.manifest_bytes,
+        &artifact_part,
+        &chart_samples,
+    )
+    .map_err(|error| {
+        StoreError::InvalidBatch(format!(
+            "restricted artifact failed independent Parquet validation: {error}"
+        ))
+    })?;
     if validated.manifest_bytes() != capability.manifest_bytes
         || validated.manifest_digest() != &bytes_digest(&capability.manifest_bytes)?
         || validated.analysis_run_id().as_str() != capability.document.analysis_run_id

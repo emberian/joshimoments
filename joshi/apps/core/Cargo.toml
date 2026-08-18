@@ -9,10 +9,12 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 clap.workspace = true
+getrandom = "0.3.4"
 joshi-admission = { path = "../../crates/joshi-admission" }
 joshi-domain = { path = "../../crates/joshi-domain" }
 joshi-evidence = { path = "../../crates/joshi-evidence" }
 joshi-operator = { path = "../../crates/joshi-operator" }
+joshi-pairing = { path = "../../crates/joshi-pairing" }
 joshi-operational-status = { path = "../../crates/joshi-operational-status" }
 joshi-pump-adapter = { path = "../../crates/joshi-pump-adapter" }
 joshi-spool = { path = "../../crates/joshi-spool" }

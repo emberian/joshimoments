@@ -63,6 +63,70 @@ def _shape_row(group: list[dict[str, Any]]) -> dict[str, Any] | None:
     ordered = sorted(group, key=lambda row: row["sample_index"])
     if [row["sample_index"] for row in ordered] != list(range(len(ordered))):
         raise ManifestError("chart series sample indexes are not contiguous")
+    if any(row["expected_sample_count"] != len(ordered) for row in ordered):
+        raise ManifestError("chart series expected sample count differs")
+    if any(
+        not (
+            row["event_time"]
+            <= row["observed_at"]
+            <= row["available_at"]
+            <= row["decision_available_at"]
+        )
+        for row in ordered
+    ):
+        raise ManifestError("chart sample clocks are not ordered")
+    if [row["event_time"] for row in ordered] != sorted(row["event_time"] for row in ordered):
+        raise ManifestError("chart sample event times are not ordered")
+    for field in (
+        "scene_id",
+        "decision_id",
+        "episode_id",
+        "candidate_id",
+        "territory_id",
+        "base_asset_id",
+        "quote_asset_id",
+        "coverage_scope_id",
+        "coverage_window_id",
+    ):
+        _require_stable(ordered, field)
+    for row in ordered:
+        measured = (
+            row["price_base_atoms"],
+            row["price_quote_atoms"],
+            row["buy_volume_base_atoms"],
+            row["sell_volume_base_atoms"],
+        )
+        if row["coverage_status"] == "observed":
+            if (
+                any(value is None for value in measured)
+                or row["coverage_gap_id"] is not None
+                or row["source_assertion_id"] is None
+                or row["source_observation_id"] is None
+                or row["position_state"] not in {"exposed", "flat_watch", "runner"}
+            ):
+                raise ManifestError("chart feature/gap inputs are not separated exactly")
+            for field, value in zip(
+                (
+                    "price_base_atoms",
+                    "price_quote_atoms",
+                    "buy_volume_base_atoms",
+                    "sell_volume_base_atoms",
+                ),
+                measured,
+                strict=True,
+            ):
+                _atoms(value, field)
+        elif row["coverage_status"] == "gap":
+            if (
+                any(value is not None for value in measured)
+                or row["position_state"] != "unknown"
+                or row["coverage_gap_id"] is None
+                or row["source_assertion_id"] is not None
+                or row["source_observation_id"] is not None
+            ):
+                raise ManifestError("chart feature/gap inputs are not separated exactly")
+        else:
+            raise ManifestError("chart feature/gap inputs are not separated exactly")
     observed = [row for row in ordered if row["coverage_status"] == "observed"]
     if not observed:
         return None
@@ -121,14 +185,14 @@ def _shape_row(group: list[dict[str, Any]]) -> dict[str, Any] | None:
     )
 
     return {
-        "scene_id": _require_stable(observed, "scene_id"),
-        "decision_id": _require_stable(observed, "decision_id"),
-        "episode_id": _require_stable(observed, "episode_id"),
-        "candidate_id": _require_stable(observed, "candidate_id"),
-        "territory_id": _require_stable(observed, "territory_id"),
-        "base_asset_id": _require_stable(observed, "base_asset_id"),
-        "quote_asset_id": _require_stable(observed, "quote_asset_id"),
-        "decision_available_at": min(row["decision_available_at"] for row in observed),
+        "scene_id": _require_stable(ordered, "scene_id"),
+        "decision_id": _require_stable(ordered, "decision_id"),
+        "episode_id": _require_stable(ordered, "episode_id"),
+        "candidate_id": _require_stable(ordered, "candidate_id"),
+        "territory_id": _require_stable(ordered, "territory_id"),
+        "base_asset_id": _require_stable(ordered, "base_asset_id"),
+        "quote_asset_id": _require_stable(ordered, "quote_asset_id"),
+        "decision_available_at": max(row["decision_available_at"] for row in ordered),
         "first_event_time": min(row["event_time"] for row in observed),
         "last_event_time": max(row["event_time"] for row in observed),
         "expected_samples": len(ordered),
@@ -158,9 +222,5 @@ def descriptive_chart_features(chart_samples: pa.Table) -> pa.Table:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in chart_samples.to_pylist():
         groups[(row["scene_id"], row["episode_id"])].append(row)
-    rows = [
-        result
-        for key in sorted(groups)
-        if (result := _shape_row(groups[key])) is not None
-    ]
+    rows = [result for key in sorted(groups) if (result := _shape_row(groups[key])) is not None]
     return pa.Table.from_pylist(rows, schema=CHART_FEATURE_SCHEMA)

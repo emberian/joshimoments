@@ -55,16 +55,19 @@ type StoredRecovery = (String, String, Option<String>, Option<String>, i64, i64)
 /// refused here rather than rounded, substituted, or omitted from a requested closure.
 pub(crate) fn selected_coverage_batches(
     connection: &Connection,
+    from_commit_seq: CommitSeq,
     cutoff: CommitSeq,
     selected: &[StableString],
 ) -> Result<CoverageBatches> {
+    let from = sql_commit(from_commit_seq)?;
     let cutoff = sql_commit(cutoff)?;
     let mut windows = Vec::with_capacity(selected.len());
     let mut gaps = Vec::new();
     for selected_id in selected {
-        let window = load_window(connection, cutoff, selected_id.as_str())?;
+        let window = load_window(connection, from, cutoff, selected_id.as_str())?;
         gaps.extend(load_gaps(
             connection,
+            from,
             cutoff,
             &window.id,
             &window.scope_id,
@@ -80,7 +83,7 @@ pub(crate) fn selected_coverage_batches(
 }
 
 #[allow(clippy::too_many_lines)]
-fn load_window(connection: &Connection, cutoff: i64, id: &str) -> Result<WindowRow> {
+fn load_window(connection: &Connection, from: i64, cutoff: i64, id: &str) -> Result<WindowRow> {
     let row: Option<StoredWindow> = connection
         .query_row(
             "SELECT w.source_id,w.scope_kind,c.scope_family_recognition,c.scope_subject,
@@ -91,8 +94,8 @@ fn load_window(connection: &Connection, cutoff: i64, id: &str) -> Result<WindowR
                     c.state,c.state_recognition,w.opened_commit_seq
              FROM coverage_window w
              JOIN coverage_window_contract c USING(coverage_id)
-             WHERE w.coverage_id=?1 AND w.opened_commit_seq<=?2",
-            params![id, cutoff],
+             WHERE w.coverage_id=?1 AND w.opened_commit_seq BETWEEN ?2 AND ?3",
+            params![id, from, cutoff],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -160,6 +163,7 @@ fn load_window(connection: &Connection, cutoff: i64, id: &str) -> Result<WindowR
 
 fn load_gaps(
     connection: &Connection,
+    from: i64,
     cutoff: i64,
     window_id: &str,
     window_scope_id: &str,
@@ -173,10 +177,10 @@ fn load_gaps(
                 json_extract(c.lower_boundary_json,'$.value'),
                 json_extract(c.upper_boundary_json,'$.clock'),c.reason_recognition
          FROM coverage_gap g JOIN coverage_gap_contract c USING(gap_id)
-         WHERE g.coverage_id=?1 AND g.detected_commit_seq<=?2 ORDER BY g.gap_id",
+         WHERE g.coverage_id=?1 AND g.detected_commit_seq BETWEEN ?2 AND ?3 ORDER BY g.gap_id",
     )?;
     let raw = statement
-        .query_map(params![window_id, cutoff], |row| {
+        .query_map(params![window_id, from, cutoff], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -226,7 +230,7 @@ fn load_gaps(
                     return Err(unrepresentable(&id, "gap scope differs from its window"));
                 }
                 let (recovered_us, recovery_known_us, commit_seq) =
-                    load_recovery(connection, cutoff, &id, detected_commit, detected_us)?;
+                    load_recovery(connection, from, cutoff, &id, detected_commit, detected_us)?;
                 Ok(GapRow {
                     id,
                     window_id: window_id.to_owned(),
@@ -245,6 +249,7 @@ fn load_gaps(
 
 fn load_recovery(
     connection: &Connection,
+    from: i64,
     cutoff: i64,
     gap_id: &str,
     detected_commit: i64,
@@ -258,9 +263,9 @@ fn load_recovery(
                     c.available_wall_us,r.commit_seq
              FROM coverage_gap_recovery r
              JOIN coverage_recovery_contract c USING(recovery_id)
-             WHERE r.gap_id=?1 AND r.commit_seq<=?2
+             WHERE r.gap_id=?1 AND r.commit_seq BETWEEN ?2 AND ?3
              ORDER BY r.commit_seq DESC LIMIT 1",
-            params![gap_id, cutoff],
+            params![gap_id, from, cutoff],
             |row| {
                 Ok((
                     row.get(0)?,

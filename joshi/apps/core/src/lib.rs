@@ -1,5 +1,6 @@
 //! Offline fixture-to-versioned-query runner for the local JOSHI core.
 
+pub mod pairing;
 pub mod readiness;
 pub mod service;
 mod wave5_circulation;

@@ -10,8 +10,9 @@ mod readback;
 
 pub use error::{ArtifactAdmissionError, Result};
 pub use manifest::{
-    ArtifactPartV1, DescriptiveChartShapeRowV2, ValidatedDerivedArtifactV2,
-    validate_derived_artifact_v2, validate_derived_artifact_v2_part,
+    ArtifactPartV1, DescriptiveChartShapeRowV2, StoreResolvedChartSamplesV1,
+    StoreResolvedParquetPartV2, ValidatedDerivedArtifactV2, validate_derived_artifact_v2,
+    validate_derived_artifact_v2_part,
 };
 
 /// Occurrence-bound operational derived artifact contract.
