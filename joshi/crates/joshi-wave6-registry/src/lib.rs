@@ -16,6 +16,7 @@ mod dag;
 mod decision;
 mod error;
 mod evaluation;
+mod market_atlas;
 mod model;
 mod research;
 mod review;
@@ -44,6 +45,10 @@ pub use evaluation::{
     KnownTruthEvaluationV1, PROTOCOL_EVALUATION_KIND, PROTOCOL_EVALUATION_SCHEMA,
     ProtocolEvaluationV1, STRUCTURAL_EVALUATION_KIND, STRUCTURAL_EVALUATION_SCHEMA,
     StructuralEvaluationV1, ValidatedEvaluationArtifact, parse_evaluation_artifact_exact,
+};
+pub use market_atlas::{
+    MARKET_ATLAS_KIND, MARKET_ATLAS_SCHEMA, MarketAtlasFixtureArtifactV1, MarketAtlasSnapshotRowV1,
+    ValidatedMarketAtlasFixture, parse_market_atlas_fixture_exact,
 };
 pub use model::{
     ArtifactKindRegistrationV1, ClaimRungV1, DataPolicyV1, DeskOperationV1, FixtureMaturityV1,

@@ -5,10 +5,11 @@ use crate::{
     ArtifactOccurrenceV1, ArtifactRefV1, CAMPAIGN_LIFECYCLE_CONTRACT, CampaignLifecycleV1,
     CampaignStateV1, CampaignTransitionV1, ClaimCausalityV1, ClaimEconomicMeaningV1,
     ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimRungV1, ClaimVerbV1,
-    FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, ProgramAuthorityV1, RegistryError,
-    SemanticCeilingV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
-    parse_artifact_dag_exact, parse_campaign_lifecycle_exact, parse_decision_ledger_exact,
-    parse_evaluation_artifact_exact, parse_program_registration_exact, validate_claim_language,
+    FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, MARKET_ATLAS_KIND,
+    MARKET_ATLAS_SCHEMA, ProgramAuthorityV1, RegistryError, SemanticCeilingV1,
+    Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes, parse_artifact_dag_exact,
+    parse_campaign_lifecycle_exact, parse_decision_ledger_exact, parse_evaluation_artifact_exact,
+    parse_market_atlas_fixture_exact, parse_program_registration_exact, validate_claim_language,
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
@@ -30,6 +31,8 @@ const PROTOCOL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json");
 const STRUCTURAL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json");
+const MARKET_ATLAS_FIXTURE: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/market_atlas_snapshot_v1.json");
 const EVALUATION_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
 const EVALUATION_DECISIONS: &[u8] =
     include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
@@ -50,6 +53,20 @@ fn stable(value: &str) -> StableString {
 
 fn digest(value: &str) -> ValueDigest {
     digest_bytes(value.as_bytes()).expect("digest")
+}
+
+fn exact_json(value: &serde_json::Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(value).expect("canonical JSON");
+    bytes.push(b'\n');
+    bytes
+}
+
+fn reclose_market_atlas(value: &mut serde_json::Value) {
+    let mut material = value.as_object().expect("artifact object").clone();
+    material.remove("artifact_digest");
+    let digest = digest_bytes(&serde_json::to_vec(&material).expect("artifact material"))
+        .expect("artifact digest");
+    value["artifact_digest"] = serde_json::Value::String(digest.as_str().to_owned());
 }
 
 fn timestamp(value: &str) -> UtcTimestamp {
@@ -641,5 +658,125 @@ fn evaluation_mapping_canonicality_denominator_and_self_digest_substitution_refu
             &empty_bytes,
         ),
         Err(RegistryError::Evaluation("exact result denominator"))
+    ));
+}
+
+#[test]
+fn exact_python_market_atlas_cross_parses_without_market_authority() {
+    let parsed = parse_market_atlas_fixture_exact(
+        &stable(MARKET_ATLAS_KIND),
+        &stable(MARKET_ATLAS_SCHEMA),
+        MARKET_ATLAS_FIXTURE,
+    )
+    .expect("exact market-atlas fixture");
+    assert_eq!(parsed.exact_bytes(), MARKET_ATLAS_FIXTURE);
+    assert_eq!(
+        parsed.content_digest().as_str(),
+        "sha256:333ade5f5234b26dd09a1828eb1fdcb5bc4183c03ff23bb9b2ad1b9e510417d9"
+    );
+    assert_eq!(parsed.value().rows.len(), 6);
+    assert_eq!(
+        parsed.value().atlas_snapshot_digest.as_str(),
+        "sha256:d21afa5a4168318a62eac5b0aa89d34b2f2626317add1eafeab2ad7149b7ae4d"
+    );
+    assert_eq!(
+        parsed.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+}
+
+#[test]
+fn market_atlas_mapping_order_self_digest_and_canonicality_refuse() {
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable("research_proposal_fixture"),
+            &stable(MARKET_ATLAS_SCHEMA),
+            MARKET_ATLAS_FIXTURE,
+        ),
+        Err(RegistryError::MarketAtlas(
+            "unsupported registered market-atlas kind/schema mapping"
+        ))
+    ));
+
+    let mut changed_digest: serde_json::Value =
+        serde_json::from_slice(MARKET_ATLAS_FIXTURE).expect("market-atlas JSON");
+    changed_digest["artifact_digest"] =
+        serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable(MARKET_ATLAS_KIND),
+            &stable(MARKET_ATLAS_SCHEMA),
+            &exact_json(&changed_digest),
+        ),
+        Err(RegistryError::MarketAtlas(
+            "artifact semantic self-digest mismatch"
+        ))
+    ));
+
+    let mut input_substitution: serde_json::Value =
+        serde_json::from_slice(MARKET_ATLAS_FIXTURE).expect("market-atlas JSON");
+    input_substitution["input_logical_digest"] =
+        serde_json::Value::String(format!("sha256:{}", "1".repeat(64)));
+    for row in input_substitution["rows"]
+        .as_array_mut()
+        .expect("row array")
+    {
+        row["input_logical_digest"] =
+            serde_json::Value::String(format!("sha256:{}", "1".repeat(64)));
+    }
+    reclose_market_atlas(&mut input_substitution);
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable(MARKET_ATLAS_KIND),
+            &stable(MARKET_ATLAS_SCHEMA),
+            &exact_json(&input_substitution),
+        ),
+        Err(RegistryError::MarketAtlas(
+            "input snapshot semantic identity mismatch"
+        ))
+    ));
+
+    let mut reordered: serde_json::Value =
+        serde_json::from_slice(MARKET_ATLAS_FIXTURE).expect("market-atlas JSON");
+    reordered["rows"]
+        .as_array_mut()
+        .expect("row array")
+        .reverse();
+    reclose_market_atlas(&mut reordered);
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable(MARKET_ATLAS_KIND),
+            &stable(MARKET_ATLAS_SCHEMA),
+            &exact_json(&reordered),
+        ),
+        Err(RegistryError::MarketAtlas(
+            "row closure, coverage, clocks, identity, or uniqueness"
+        ))
+    ));
+
+    let mut unknown: serde_json::Value =
+        serde_json::from_slice(MARKET_ATLAS_FIXTURE).expect("market-atlas JSON");
+    unknown["storeReceipt"] = serde_json::json!({"commitSeq": "99"});
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable(MARKET_ATLAS_KIND),
+            &stable(MARKET_ATLAS_SCHEMA),
+            &exact_json(&unknown),
+        ),
+        Err(RegistryError::Json(_))
+    ));
+
+    let pretty = serde_json::to_vec_pretty(
+        &serde_json::from_slice::<serde_json::Value>(MARKET_ATLAS_FIXTURE)
+            .expect("market-atlas JSON"),
+    )
+    .expect("pretty JSON");
+    assert!(matches!(
+        parse_market_atlas_fixture_exact(
+            &stable(MARKET_ATLAS_KIND),
+            &stable(MARKET_ATLAS_SCHEMA),
+            &pretty,
+        ),
+        Err(RegistryError::NonCanonical)
     ));
 }

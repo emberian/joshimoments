@@ -56,6 +56,9 @@ pub enum RegistryError {
     /// A checked evaluation artifact violated its registered exact wire contract.
     #[error("fixture evaluation artifact failure: {0}")]
     Evaluation(&'static str),
+    /// A checked market-atlas fixture violated its exact registered wire contract.
+    #[error("fixture market-atlas artifact failure: {0}")]
+    MarketAtlas(&'static str),
     /// A checked research proposal widened authority, broke its commitment, or used future input.
     #[error("fixture research proposal failure: {0}")]
     Research(&'static str),

@@ -1,12 +1,21 @@
 # Wave 6 point-in-time market atlas
 
-Status: **implemented as a fixture-scale, read-only analysis prototype**
+Status: **implemented as a fixture-scale, read-only cross-runtime artifact contract**
 
 The implementation lives in
 [`analysis/src/joshi_analysis/wave6_market_atlas`](../../../analysis/src/joshi_analysis/wave6_market_atlas).
 It is a pure Arrow-table reducer: no network, store mutation, CLI, model fitting, inference of
 missing facts, or economic action is present. Every result names the machine-readable semantic
 ceiling `caller_fed_unverified_semantic_fixture_only`.
+
+The exact six-stratum fixture at
+[`fixtures/wave6/artifacts/market_atlas_snapshot_v1.json`](../../../fixtures/wave6/artifacts/market_atlas_snapshot_v1.json)
+is produced by the Python reducer and strictly parsed by `joshi-wave6-registry`. Its envelope binds
+the registered `market_atlas_fixture` kind/schema, one shared three-clock cut, the ordered six-row
+denominator, input and snapshot identities, and separate semantic and full-document digests. The
+Rust parser refuses unknown/noncanonical fields, reordered strata, duplicate identities, malformed
+coverage/clocks, and digest substitution. This cross-runtime agreement still confers no source,
+store, market, field-release, causal, strategy, or execution authority.
 
 ## Purpose and claim boundary
 
@@ -86,6 +95,7 @@ input permutation stability:
 ```text
 pytest analysis/tests/wave6_market_atlas -q
 ruff check analysis/src/joshi_analysis/wave6_market_atlas analysis/tests/wave6_market_atlas
+cargo test --locked --offline -p joshi-wave6-registry --lib
 ```
 
 This remains caller-fed `UnverifiedSemantic` fixture material. A typed source ID, event ID, version,
