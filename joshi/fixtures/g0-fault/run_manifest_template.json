@@ -1,0 +1,15 @@
+{
+  "contract": "joshi.g0.fault_run_manifest.v1",
+  "schemaVersion": 1,
+  "runId": "replace-with-lowercase-run-id",
+  "buildDigest": "sha256:replace-with-64-lowercase-hex-characters________________________",
+  "fixtureDigest": "sha256:replace-with-64-lowercase-hex-characters________________________",
+  "scheduleDigest": "sha256:derive-from-the-canonical-schedule-not-this-placeholder________",
+  "steps": [
+    "pre_io_reservation", "origin_fsync", "store_receipt", "catalog_binding", "catalog_ack",
+    "semantic_fact", "publication_prepare", "publication_head", "pairing_exchange", "glass_read",
+    "memory_act", "memory_episode", "export", "import", "status", "backup", "restore", "reopen"
+  ],
+  "authority": "fixture_harness_no_execution",
+  "requestedFullOfflineFaultWalk": false
+}
