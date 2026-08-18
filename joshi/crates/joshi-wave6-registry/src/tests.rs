@@ -30,6 +30,7 @@ const PROTOCOL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json");
 const STRUCTURAL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json");
+const EVALUATION_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
 
 fn fixture() -> Wave6ProgramRegistrationV1 {
     serde_json::from_slice(FIXTURE).expect("checked-in registration fixture")
@@ -536,6 +537,24 @@ fn exact_python_evaluation_artifacts_cross_parse_without_promotion() {
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
         );
     }
+}
+
+#[test]
+fn checked_evaluation_dag_parses_at_fixture_only_ceiling() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let dag = parse_artifact_dag_exact(EVALUATION_DAG, &registration).expect("evaluation DAG");
+    assert_eq!(dag.exact_bytes(), EVALUATION_DAG);
+    assert_eq!(dag.value().artifacts.len(), 3);
+    assert!(
+        dag.value()
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.parents.is_empty())
+    );
+    assert_eq!(
+        dag.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
 }
 
 #[test]
