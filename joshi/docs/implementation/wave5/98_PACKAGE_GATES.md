@@ -1,23 +1,30 @@
 # Wave 5 package gates
 
-Status: package-level compile/test/lint gates are green for the focused Wave 5 set, but the
-root readiness witness is blocked at the repository format gate. These results are build facts
-only; they do not qualify live providers, durable store bindings, restart recovery, publication,
-Glass, retention, scientific, or economic capabilities.
+Status: the root gate run was anchored at committed HEAD
+`c25daa22b9f3074b4f200d765c4817a2c36f55ea`; current HEAD
+`f178d741e8b09a53f1592342a5eaee42fbc33212` adds only the separately reviewed Wave 6
+Python and documentation commits described below. The locked/offline workspace and root Wave 5
+readiness gates pass. The resulting witnesses are deliberately
+`useful_partial`; they do not qualify live providers, sustained nonfixture supervision,
+publication/product parity, Glass use, retention, scientific, or economic capabilities.
+
+Wave 6 Python/docs were in flight during the root run and were not used to claim the Rust/root
+results. After their reviewed commits, root independently reran the final combined analysis tree:
+177 tests and Ruff pass. This lane changed only this gate document.
 
 ## Workspace enumeration
 
-`cargo metadata --no-deps --format-version 1 --offline` reported 40 packages:
+`cargo metadata --locked --offline --no-deps --format-version 1` reported 37 packages:
 
 `joshi-collector`, `joshi-domain`, `joshi-spool`, `joshi-evidence`, `joshi-store`,
 `joshi-artifact-admission`, `joshi-export`, `joshi-operational-status`, `joshi-operator`,
 `joshi-publication`, `joshi-projection`, `joshi-accounting`, `joshi-liquidity`, `joshi-market-math`,
 `joshi-surface`, `joshi-supervisor`, `joshi-admission`, `joshi-pump-api`, `joshi-sources`,
-`joshi-core`, `joshi-acquisition-policy`, `joshi-attention`, `joshi-census-bakeoff`,
-`joshi-episode-closure`, `joshi-epistemic-book`, `joshi-market-state`, `joshi-mechanics-capability`,
-`joshi-operational-circulation`, `joshi-pairing`, `joshi-pump-adapter`, `joshi-retention`,
-`joshi-scientific-memory`, `joshi-source-registry`, `joshi-wallet-admission`, `joshi-wallet-source`,
-and `joshi-wallet-topology`.
+`joshi-core`, `joshi-pump-adapter`, `joshi-acquisition-policy`, `joshi-attention`,
+`joshi-census-bakeoff`, `joshi-episode-closure`, `joshi-epistemic-admission`, `joshi-epistemic-book`,
+`joshi-market-state`, `joshi-mechanics-capability`, `joshi-operational-circulation`, `joshi-pairing`,
+`joshi-retention`, `joshi-scientific-memory`, `joshi-source-registry`, `joshi-wallet-admission`,
+`joshi-wallet-source`, and `joshi-wallet-topology`.
 
 ## Focused gate evidence
 
@@ -30,31 +37,58 @@ All commands used `--locked --offline` and covered this focused set:
 
 | Gate | Result | Command / qualification |
 | --- | --- | --- |
-| Formatting | PASS for focused invocation | `cargo fmt --all -- --check` completed before the root witness; the root rerun later exposed a source-set parse failure below. |
-| Check | PASS | `cargo check --locked --offline -p ...` finished `dev` profile successfully. |
-| Tests | PASS (build/test fact) | `cargo test --locked --offline -p ...` and scientific-memory all-target rerun completed without test failures. |
-| Clippy | PASS | `cargo clippy --locked --offline -p ... --all-targets -- -D warnings` completed cleanly. |
-| Rustdoc | BLOCKED | Strict `RUSTDOCFLAGS='-D warnings' cargo doc ... --no-deps` failed on scientific-memory model line 435. |
+| Formatting | PASS | `cargo fmt --all -- --check`. |
+| Workspace check | PASS | `cargo check --locked --offline --workspace --all-targets --all-features`. |
+| Workspace tests | PASS (build/test fact) | `cargo test --locked --offline --workspace --all-targets --all-features`. |
+| Focused Wave 5 tests | PASS (build/test fact) | 15-package `cargo test --locked --offline ... --all-targets`; all reported tests passed, including scientific-memory (15), surface (13), publication (16), supervisor (19), sources (43 + 4 golden), retention (9), and store-linked restart/fault tests. |
+| Clippy | PASS | `cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings`. |
+| Rustdoc | PASS | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --workspace --all-features --no-deps` generated 37 package docs. |
+| Schema | PASS | `./schema/validate.sh`; all checks passed, including SQLite 3.53.2 validation (9 migrations, 13 commits, 6 observations, 7 assertions). |
+| Glass | PASS | Root walk: 20 files / 148 tests; offline install, typecheck, and build passed. |
+| Pump companion | PASS | Root walk: lint, typecheck, 8 files / 46 tests, mock replay, Chrome/Firefox builds, and manifest audit passed. |
+| Analysis | PASS | `uv sync --frozen --offline --all-groups`, Ruff clean, `pytest`: 177 passed. |
+| Root Wave 5 readiness | PASS, `useful_partial` | `./scripts/wave5-readiness` completed with Wave 4 structural witness and Wave 5 ignition/circulation witnesses; no live/provider I/O. |
 
-The earlier successful focused format invocation and later root format invocation disagree because
-the shared workspace was being edited concurrently. The root readiness result is authoritative
-for the settled source snapshot at its invocation; rerun all gates after the owning lane settles.
+The Wave 6 implementations and review docs are excluded from the Wave 5 qualification claim. No
+production or manifest files were edited by this lane.
 
-## Exact blockers
+## Witness and exact claim ceiling
 
-1. `cargo fmt --all -- --check` (first command in `scripts/offline-readiness`) failed while
-   parsing `crates/joshi-scientific-memory/src/tests.rs:452:126`:
+The fresh root run used `/tmp/joshi-wave5-readiness.final.6UcakP` and exited `RC:0`.
+Wave 4 component witness:
 
-   `serde_json::json!("bad\u0000id")` uses a non-braced Unicode escape. Rust requires
-   `\u{0000}`. Because this is the first root gate, no root status or Wave 5 digest was emitted.
+```text
+componentReadinessDigest=sha256:0bec710d41bc0d1d2fc0d231757750ff3c13b925efb41fceace40051f730fa63
+catalogMigrationDigest=sha256:386c4ec473e0bf33408ac91c77aa46b8d3012cd0ec2f14d7c9acf0263d14d1c9
+status=useful_partial
+gates=workspaceOffline, schemaFreshAndUpgrade, glassOffline, companionOffline,
+       analysisOffline, economicAuthorityDependencyAudit: passed
+```
 
-2. Strict rustdoc failed at `crates/joshi-scientific-memory/src/model.rs:435:9` with
-   `duplicate serde attribute deny_unknown_fields`. This independently blocks the root doc gate.
+Wave 5 witness (`wave5-witness.json`):
 
-3. `/tmp/joshi-wave5-readiness.RBHriR/wave4-witness.json` exists but contains the captured
-   Wave 4 format diff; it is not a valid Wave 5 witness. No `wave5-witness.json`, status, or digest
-   was produced. The root script is therefore blocked at `offline-readiness` format, before
-   `wave5-ignition-readiness`.
+```text
+status=useful_partial
+circulationWalkDigest=sha256:702d3008b9afaf6ecfb2a3784328b79a7a89201770df65fc4d29abc33ac86505
+catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
+attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback
+fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
+sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
+criticalSurfaceAccessibility=false; broadParity=false
+claim=offline_run_registration_and_public_c0_spool_catalog_closure_only
+```
+
+The ignition detail (`ignition-readiness.json`) independently reports
+`registrationDigest=sha256:13fdba0911e9678e9b87586f1795f69f87bd6dd8cac6ba12c23ce3e38b5c1b4d`,
+`acceptedCommitSeq=1`, `retryStatus=idempotent`, `changedSameIdRefused=true`,
+`durableProgressCount=2`, `circulationClosed=true`, `originSegmentRetained=true`,
+`catalogAckReverified=true`, `restartReverified=true`, and `providerIo=false`.
+
+There is no red package/root gate in this current run. The remaining blockers are semantic
+qualification gates, not compile/test/tooling failures: no live provider I/O, no sustained
+nonfixture witness, no production publication qualification, and no broad/product/accessibility
+parity. The earlier transient stale-lock, format, and rustdoc failures are superseded by this
+clean current-HEAD run and are retained only in prior historical review context.
 
 ## Semantic ceiling
 
