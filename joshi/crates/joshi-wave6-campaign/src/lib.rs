@@ -11,7 +11,8 @@ use std::collections::BTreeSet;
 
 use joshi_domain::{StableString, UtcTimestamp, ValueDigest, WireU64};
 use joshi_wave6_registry::{
-    ProgramAuthorityV1, SemanticCeilingV1, ValidatedProgramRegistration, Wave6ProgramRegistrationV1,
+    ClaimRungV1, FixtureMaturityV1, ProgramAuthorityV1, SemanticCeilingV1,
+    ValidatedProgramRegistration, Wave6ProgramRegistrationV1,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -21,6 +22,11 @@ use thiserror::Error;
 pub const CAMPAIGN_REGISTRATION_CONTRACT: &str = "joshi.wave6.campaign-registration.v1";
 /// Exact frozen enrollment contract.
 pub const FROZEN_ENROLLMENT_CONTRACT: &str = "joshi.wave6.frozen-enrollment.v1";
+/// Exact N00 artifact kind required before this fixture contract may be parsed.
+pub const CAMPAIGN_ARTIFACT_KIND: &str = "campaign_registration_fixture";
+/// Frozen schema bytes whose digest must be admitted by N00.
+pub const CAMPAIGN_REGISTRATION_SCHEMA_BYTES: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json");
 
 /// Campaign contract result.
 pub type Result<T> = std::result::Result<T, CampaignError>;
@@ -499,11 +505,23 @@ impl CampaignRegistrationV1 {
     /// Refuses program/authority mismatch, incomplete universe, probability/safety/metric defects,
     /// nonzero provider/external budgets, incomplete censor grammar, bad chronology, or digest.
     pub fn validate(&self, program: &Wave6ProgramRegistrationV1) -> Result<()> {
+        let campaign_kind = program
+            .artifact_kinds
+            .iter()
+            .find(|kind| kind.kind_id.as_str() == CAMPAIGN_ARTIFACT_KIND)
+            .ok_or(CampaignError::Program)?;
         if self.contract.as_str() != CAMPAIGN_REGISTRATION_CONTRACT
             || self.program_id != program.program_id
             || self.program_registration_digest != program.registration_digest
             || self.authority != program.authority
             || self.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+            || campaign_kind.schema_id.as_str() != CAMPAIGN_REGISTRATION_CONTRACT
+            || campaign_kind.schema_digest != digest_bytes(CAMPAIGN_REGISTRATION_SCHEMA_BYTES)?
+            || campaign_kind.claim_rung != ClaimRungV1::H5Policy
+            || campaign_kind.max_fixture_maturity != FixtureMaturityV1::FixtureRoundtrip
+            || campaign_kind.permitted_claim.as_str() != "fixture_campaign_protocol_only"
+            || campaign_kind.prohibited_inference.as_str()
+                != "prospective_result_or_operational_campaign"
         {
             return Err(CampaignError::Program);
         }

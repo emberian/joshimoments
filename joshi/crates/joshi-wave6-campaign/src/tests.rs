@@ -1,7 +1,8 @@
 use joshi_domain::{StableString, UtcTimestamp, ValueDigest, WireU64};
 use joshi_wave6_registry::{
     ProgramAuthorityV1, SemanticCeilingV1, ValidatedProgramRegistration,
-    parse_program_registration_exact,
+    Wave6ProgramRegistrationV1, canonical_bytes as registry_canonical_bytes,
+    digest_bytes as registry_digest_bytes, parse_program_registration_exact,
 };
 
 use crate::{
@@ -29,6 +30,18 @@ fn timestamp(value: &str) -> UtcTimestamp {
 
 fn program() -> ValidatedProgramRegistration {
     parse_program_registration_exact(PROGRAM_FIXTURE).expect("checked N00 fixture")
+}
+
+fn program_with_campaign_claim(permitted_claim: &str) -> ValidatedProgramRegistration {
+    let mut value: Wave6ProgramRegistrationV1 =
+        serde_json::from_slice(PROGRAM_FIXTURE).expect("program fixture");
+    value.artifact_kinds[0].permitted_claim = stable(permitted_claim);
+    value.registration_digest = registry_digest_bytes(
+        &registry_canonical_bytes(&value.digest_material()).expect("program material"),
+    )
+    .expect("program digest");
+    parse_program_registration_exact(&registry_canonical_bytes(&value).expect("program bytes"))
+        .expect("valid altered N00 contract")
 }
 
 fn universe() -> CampaignUniverseV1 {
@@ -288,6 +301,21 @@ fn authority_censoring_budget_and_chronology_widening_refuse() {
     assert!(matches!(
         parse_campaign_registration_exact(&canonical_bytes(&capacity).expect("bytes"), &program),
         Err(CampaignError::Registration("authority or budget boundary"))
+    ));
+}
+
+#[test]
+fn campaign_requires_the_exact_n00_artifact_claim_boundary() {
+    let widened_program = program_with_campaign_claim("fixture_campaign_and_result");
+    let mut value = registration();
+    value.program_registration_digest = widened_program.value().registration_digest.clone();
+    reclose_registration(&mut value);
+    assert!(matches!(
+        parse_campaign_registration_exact(
+            &canonical_bytes(&value).expect("campaign bytes"),
+            &widened_program
+        ),
+        Err(CampaignError::Program)
     ));
 }
 

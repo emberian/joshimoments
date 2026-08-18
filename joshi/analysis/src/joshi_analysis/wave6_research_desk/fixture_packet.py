@@ -115,6 +115,12 @@ _EXPECTED_PROHIBITED_CLAIMS = [
     "operational_or_product_maturity",
 ]
 _EXPECTED_ARTIFACT_KIND_BOUNDARIES = {
+    "campaign_registration_fixture": (
+        "joshi.wave6.campaign-registration.v1",
+        "h5_policy",
+        "fixture_campaign_protocol_only",
+        "prospective_result_or_operational_campaign",
+    ),
     "market_atlas_fixture": (
         "joshi.analysis.wave6-market-atlas-snapshot/v1",
         "h2_descriptive",

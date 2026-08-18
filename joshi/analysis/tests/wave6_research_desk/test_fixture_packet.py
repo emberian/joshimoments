@@ -17,12 +17,14 @@ from joshi_analysis.wave6_research_desk.fixture_packet import research_proposal_
 
 ROOT = Path(__file__).resolve().parents[3]
 REGISTRATION = ROOT / "fixtures/wave6/program_registration_v1.json"
+CAMPAIGN_SCHEMA = ROOT / "fixtures/wave6/schemas/campaign_registration_v1.json"
 MARKET_SCHEMA = ROOT / "fixtures/wave6/schemas/market_atlas_snapshot_v1.json"
 RESEARCH_SCHEMA = ROOT / "fixtures/wave6/schemas/research_proposal_v1.json"
 
 
 def _schemas() -> dict[str, bytes]:
     return {
+        "campaign_registration_fixture": CAMPAIGN_SCHEMA.read_bytes(),
         "market_atlas_fixture": MARKET_SCHEMA.read_bytes(),
         "research_proposal_fixture": RESEARCH_SCHEMA.read_bytes(),
     }
