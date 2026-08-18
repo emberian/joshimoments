@@ -92,7 +92,10 @@ Source and publication:
 - `joshi-core wave5-g0-source-publication` exercises that exact fixture-only join through the
   sole store, checks a two-subject one-hot/one-cold partition, commits prepare/body/head in strict
   order, reopens every exact artifact read-only, and proves an identical second invocation is
-  idempotent. Its report keeps `fullOfflineFaultWalk`, product and live qualification false.
+  idempotent. A component-local matrix additionally interrupts immediately before and after
+  semantic fact, prepare, body and head, then proves exact convergence after reopen. Its report
+  keeps `fullOfflineFaultWalk`, product and live qualification false because the other G0 seams
+  and the complete 18-step harness remain outside this component.
 
 Scientific memory:
 

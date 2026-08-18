@@ -24,6 +24,19 @@ const DIRECT_C0_FILE: &[u8] =
 const OFFLINE_SELECTION_FILE: &[u8] =
     include_bytes!("../../../fixtures/pump-api/offline-fixture-selection-v1.json");
 
+/// Deterministic component-local interruption points. These do not cover the full G0 schedule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wave5G0SourcePublicationFaultPoint {
+    BeforeSemanticFact,
+    AfterSemanticFact,
+    BeforePublicationPrepare,
+    AfterPublicationPrepare,
+    BeforePublicationBody,
+    AfterPublicationBody,
+    BeforePublicationHead,
+    AfterPublicationHead,
+}
+
 /// Exact component evidence. Every positive field is reverified after a read-only reopen.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +81,22 @@ pub struct Wave5G0SourcePublicationReport {
 #[allow(clippy::too_many_lines)]
 pub fn run_wave5_g0_source_publication(
     state: &Path,
+) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
+    run_wave5_g0_source_publication_with_fault(state, None)
+}
+
+/// Execute the component with one deterministic process-loss injection.
+///
+/// Reinvoking [`run_wave5_g0_source_publication`] on the same state after an injected error must
+/// converge to the exact baseline report.
+///
+/// # Errors
+///
+/// Returns ordinary component errors or the requested deterministic interruption.
+#[allow(clippy::too_many_lines)]
+pub fn run_wave5_g0_source_publication_with_fault(
+    state: &Path,
+    fault: Option<Wave5G0SourcePublicationFaultPoint>,
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
     let (registration, bundle, _) = fixture_registration_bundles()?;
     let mut store = SqliteStore::open(config(state)?, StoreMode::SingleWriter)?;
@@ -119,6 +148,10 @@ pub fn run_wave5_g0_source_publication(
     )
     .map_err(|error| Wave5G0SourcePublicationError::Circulation(error.to_string()))?;
 
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeSemanticFact,
+    )?;
     let source_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:source")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
@@ -127,6 +160,7 @@ pub fn run_wave5_g0_source_publication(
         &circulation.catalog_receipt_bytes,
         &source_context,
     )?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterSemanticFact)?;
     let source = store
         .load_wave5_source_occurrence_v1(&source_receipt.occurrence_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -150,12 +184,20 @@ pub fn run_wave5_g0_source_publication(
         ));
     }
 
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforePublicationPrepare,
+    )?;
     let prepare_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:prepare")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     )?;
     let prepare_receipt =
         store.prepare_cockpit_v2_from_store_v1(&source_receipt.occurrence_id, &prepare_context)?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterPublicationPrepare,
+    )?;
     let preparation = store
         .load_cockpit_v2_preparation_v1(&prepare_receipt.occurrence_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -163,6 +205,10 @@ pub fn run_wave5_g0_source_publication(
         ))?;
     let publication_id = CockpitPublicationId::new("cockpit-v2-wave5-g0-offline-0001")
         .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid static publication ID"))?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforePublicationBody,
+    )?;
     let publication_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:body")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
@@ -173,11 +219,23 @@ pub fn run_wave5_g0_source_publication(
         None,
         &publication_context,
     )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterPublicationBody,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforePublicationHead,
+    )?;
     let head_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:head")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     )?;
     let head_receipt = store.append_cockpit_v2_head_v1(&publication_id, &head_context)?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterPublicationHead,
+    )?;
     let publication = store
         .load_cockpit_v2_publication_v1(&publication_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -259,6 +317,17 @@ pub fn run_wave5_g0_source_publication(
     })
 }
 
+fn inject(
+    requested: Option<Wave5G0SourcePublicationFaultPoint>,
+    current: Wave5G0SourcePublicationFaultPoint,
+) -> Result<(), Wave5G0SourcePublicationError> {
+    if requested == Some(current) {
+        Err(Wave5G0SourcePublicationError::Injected(current))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Wave5G0SourcePublicationError {
     #[error(transparent)]
@@ -273,6 +342,8 @@ pub enum Wave5G0SourcePublicationError {
     Readiness(#[from] crate::wave5_readiness::Wave5ReadinessError),
     #[error("Wave 5 G0 circulation failed: {0}")]
     Circulation(String),
+    #[error("injected Wave 5 G0 source/publication interruption at {0:?}")]
+    Injected(Wave5G0SourcePublicationFaultPoint),
     #[error("Wave 5 G0 source/publication invariant failed: {0}")]
     Invariant(&'static str),
 }
@@ -299,5 +370,33 @@ mod tests {
         let retry =
             run_wave5_g0_source_publication(state.path()).expect("idempotent G0 component retry");
         assert_eq!(retry, report);
+    }
+
+    #[test]
+    fn every_source_publication_prefix_resumes_to_one_exact_chain() {
+        let points = [
+            Wave5G0SourcePublicationFaultPoint::BeforeSemanticFact,
+            Wave5G0SourcePublicationFaultPoint::AfterSemanticFact,
+            Wave5G0SourcePublicationFaultPoint::BeforePublicationPrepare,
+            Wave5G0SourcePublicationFaultPoint::AfterPublicationPrepare,
+            Wave5G0SourcePublicationFaultPoint::BeforePublicationBody,
+            Wave5G0SourcePublicationFaultPoint::AfterPublicationBody,
+            Wave5G0SourcePublicationFaultPoint::BeforePublicationHead,
+            Wave5G0SourcePublicationFaultPoint::AfterPublicationHead,
+        ];
+        for point in points {
+            let state = tempfile::tempdir().expect("temporary G0 fault state");
+            assert!(matches!(
+                run_wave5_g0_source_publication_with_fault(state.path(), Some(point)),
+                Err(Wave5G0SourcePublicationError::Injected(actual)) if actual == point
+            ));
+            let recovered =
+                run_wave5_g0_source_publication(state.path()).expect("exact fault recovery");
+            let retry =
+                run_wave5_g0_source_publication(state.path()).expect("exact recovered retry");
+            assert_eq!(retry, recovered);
+            assert!(recovered.restart_reverified);
+            assert!(!recovered.full_offline_fault_walk);
+        }
     }
 }
