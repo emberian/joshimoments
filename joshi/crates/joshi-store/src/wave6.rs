@@ -6,8 +6,9 @@
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError};
 use joshi_domain::{CommitSeq, StableString, UtcTimestamp, ValueDigest};
 use joshi_wave6_registry::{
-    ArtifactDagV1, SemanticCeilingV1, ValidatedProgramRegistration, parse_artifact_dag_exact,
-    parse_evaluation_artifact_exact, parse_program_registration_exact,
+    ArtifactDagV1, ArtifactDecisionKindV1, SemanticCeilingV1, ValidatedProgramRegistration,
+    parse_artifact_dag_exact, parse_decision_ledger_exact, parse_evaluation_artifact_exact,
+    parse_program_registration_exact,
 };
 use rusqlite::{OptionalExtension as _, Transaction, params};
 use sha2::{Digest as _, Sha256};
@@ -16,6 +17,7 @@ const MAX_REGISTRATION_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 const MAX_FIXTURE_ARTIFACT_BYTES: usize = 512 * 1024;
 const MAX_FIXTURE_DAG_BYTES: usize = 512 * 1024;
+const MAX_FIXTURE_DECISION_BYTES: usize = 512 * 1024;
 
 /// Durable receipt for an exact fixture-only Wave 6 program registration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,6 +153,45 @@ pub struct StoredWave6FixtureArtifactDag {
     pub semantic_ceiling: SemanticCeilingV1,
 }
 
+/// Durable receipt for one exact fixture-only decision ledger.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wave6FixtureDecisionLedgerReceipt {
+    pub catalog_id: StableString,
+    pub catalog_schema: StableString,
+    pub batch_id: StableString,
+    pub ledger_id: StableString,
+    pub program_id: StableString,
+    pub dag_id: StableString,
+    pub ledger_digest: ValueDigest,
+    pub document_digest: ValueDigest,
+    pub decision_count: u64,
+    pub maximum_decided_at: UtcTimestamp,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+    pub status: IdempotencyStatus,
+}
+
+/// Exact fixture decision ledger re-parsed against its durable prior DAG after restart.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave6FixtureDecisionLedger {
+    pub batch_id: StableString,
+    pub ledger_id: StableString,
+    pub program_id: StableString,
+    pub dag_id: StableString,
+    pub registration_digest: ValueDigest,
+    pub dag_digest: ValueDigest,
+    pub dag_commit_seq: CommitSeq,
+    pub ledger_digest: ValueDigest,
+    pub document_digest: ValueDigest,
+    pub exact_bytes: Vec<u8>,
+    pub decision_count: u64,
+    pub maximum_decided_at: UtcTimestamp,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+}
+
 struct RegistrationRow {
     batch_id: String,
     family_id: String,
@@ -232,6 +273,44 @@ struct FixtureDagMemberRow {
     information_us: i64,
     produced_us: i64,
     parent_count: i64,
+    semantic_ceiling: String,
+}
+
+struct FixtureDecisionLedgerRow {
+    batch_id: String,
+    program_id: String,
+    dag_id: String,
+    registration_raw: String,
+    dag_raw: String,
+    ledger_raw: String,
+    document_raw: String,
+    bytes: Vec<u8>,
+    byte_length: i64,
+    decision_count: i64,
+    maximum_decided_us: i64,
+    semantic_ceiling: String,
+    commit_seq: i64,
+    commit_digest_raw: String,
+}
+
+struct FixtureDecisionRow {
+    ordinal: i64,
+    decision_id: String,
+    artifact_id: String,
+    content_raw: String,
+    predecessor_id: Option<String>,
+    decision_kind: String,
+    decided_us: i64,
+    evidence_count: i64,
+    reason: String,
+    authority: String,
+    semantic_ceiling: String,
+}
+
+struct FixtureDecisionEvidenceRow {
+    ordinal: i64,
+    artifact_id: String,
+    content_raw: String,
     semantic_ceiling: String,
 }
 
@@ -934,6 +1013,238 @@ impl SqliteStore {
         };
         stored_fixture_dag(self, dag_id, row).map(Some)
     }
+
+    /// Persists one exact fixture decision ledger after resolving its prior durable DAG.
+    ///
+    /// A fixture disposition does not resolve a Wave 5 gate or grant human approval, operational,
+    /// empirical, product, live, causal, policy-value, or economic authority.
+    ///
+    /// # Errors
+    ///
+    /// Refuses absent prior registration/DAG/content, noncanonical or oversized bytes, changed
+    /// target/evidence/predecessor/clock/digest material, a conflicting batch, or failed readback.
+    #[allow(clippy::too_many_lines)] // Keeps the exact ledger and normalized rows in one commit.
+    pub fn commit_wave6_fixture_decision_ledger_v1(
+        &mut self,
+        dag_id: &StableString,
+        exact_bytes: &[u8],
+        batch_id: StableString,
+        writer_build: StableString,
+    ) -> Result<Wave6FixtureDecisionLedgerReceipt> {
+        if exact_bytes.is_empty() || exact_bytes.len() > MAX_FIXTURE_DECISION_BYTES {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture decision ledger is empty or exceeds the exact-byte limit".into(),
+            ));
+        }
+        let dag = self
+            .load_wave6_fixture_artifact_dag_v1(dag_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture artifact DAG",
+                identity: dag_id.to_string(),
+            })?;
+        let registration = self
+            .load_wave6_program_registration_v1(&dag.program_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 program registration",
+                identity: dag.program_id.to_string(),
+            })?;
+        let parsed_registration = parse_program_registration_exact(&registration.exact_bytes)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let parsed_dag = parse_artifact_dag_exact(&dag.exact_bytes, &parsed_registration)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let parsed = parse_decision_ledger_exact(exact_bytes, &parsed_registration, &parsed_dag)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let ledger_digest = parsed.value().ledger_digest.clone();
+        let document_digest = parsed.document_digest().clone();
+        let ledger_id = fixture_decision_ledger_id(&dag.program_id, &ledger_digest)?;
+        let decision_count = u64::try_from(parsed.value().decisions.len()).map_err(|_| {
+            StoreError::IntegerRange {
+                field: "Wave 6 decision count",
+                value: parsed.value().decisions.len().to_string(),
+            }
+        })?;
+        let maximum_decided_at = parsed
+            .value()
+            .decisions
+            .iter()
+            .map(|decision| decision.decided_at)
+            .max()
+            .ok_or_else(|| StoreError::InvalidBatch("Wave 6 decision ledger is empty".into()))?;
+        reject_second_decision_batch(self, &ledger_id, &batch_id)?;
+        let operation_digest =
+            decision_operation_digest(&dag.program_id, dag_id, &ledger_digest, &document_digest)?;
+        let context = self.begin_wave5_commit(batch_id.clone(), writer_build)?;
+        let generic = self.commit_wave5(
+            &context,
+            "maintenance",
+            &ledger_id,
+            &document_digest,
+            &operation_digest,
+            |tx, seq| {
+                tx.execute(
+                    "INSERT INTO wave6_fixture_decision_ledger_v1
+                     (ledger_id,program_id,dag_id,registration_semantic_sha256,
+                      dag_semantic_sha256,ledger_semantic_sha256,ledger_document_sha256,
+                      ledger_bytes,ledger_byte_length,decision_count,maximum_decided_wall_us,
+                      semantic_ceiling,created_commit_seq)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    params![
+                        ledger_id.as_str(),
+                        dag.program_id.as_str(),
+                        dag_id.as_str(),
+                        raw_digest(
+                            &registration.registration_digest,
+                            "Wave 6 decision registration digest",
+                        )?,
+                        raw_digest(&dag.dag_digest, "Wave 6 decision DAG digest")?,
+                        raw_digest(&ledger_digest, "Wave 6 decision ledger digest")?,
+                        raw_digest(&document_digest, "Wave 6 decision document digest")?,
+                        exact_bytes,
+                        sqlite_len(exact_bytes.len(), "Wave 6 decision bytes")?,
+                        sqlite_u64(decision_count, "Wave 6 decision count")?,
+                        timestamp_us(maximum_decided_at, "Wave 6 maximum decision time")?,
+                        "unverified_semantic_fixture_only",
+                        seq,
+                    ],
+                )?;
+                for (decision_ordinal, decision) in parsed.value().decisions.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO wave6_fixture_decision_v1
+                         (ledger_id,ordinal,decision_id,artifact_id,content_sha256,
+                          predecessor_decision_id,decision_kind,decided_wall_us,evidence_count,
+                          reason,authority,semantic_ceiling)
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                        params![
+                            ledger_id.as_str(),
+                            sqlite_len(decision_ordinal, "Wave 6 decision ordinal")?,
+                            decision.decision_id.as_str(),
+                            decision.artifact.artifact_id.as_str(),
+                            raw_digest(
+                                &decision.artifact.content_digest,
+                                "Wave 6 decision target digest",
+                            )?,
+                            decision
+                                .predecessor_decision_id
+                                .as_ref()
+                                .map(StableString::as_str),
+                            decision_kind_wire(decision.decision),
+                            timestamp_us(decision.decided_at, "Wave 6 decision time")?,
+                            sqlite_len(decision.evidence.len(), "Wave 6 evidence count")?,
+                            decision.reason.as_str(),
+                            "read_record_replay_propose_shadow_only",
+                            "unverified_semantic_fixture_only",
+                        ],
+                    )?;
+                    for (evidence_ordinal, evidence) in decision.evidence.iter().enumerate() {
+                        tx.execute(
+                            "INSERT INTO wave6_fixture_decision_evidence_v1
+                             (ledger_id,decision_ordinal,evidence_ordinal,artifact_id,
+                              content_sha256,semantic_ceiling)
+                             VALUES (?1,?2,?3,?4,?5,?6)",
+                            params![
+                                ledger_id.as_str(),
+                                sqlite_len(decision_ordinal, "Wave 6 decision ordinal")?,
+                                sqlite_len(evidence_ordinal, "Wave 6 evidence ordinal")?,
+                                evidence.artifact_id.as_str(),
+                                raw_digest(
+                                    &evidence.content_digest,
+                                    "Wave 6 evidence content digest",
+                                )?,
+                                "unverified_semantic_fixture_only",
+                            ],
+                        )?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        let stored = self
+            .load_wave6_fixture_decision_ledger_v1(&ledger_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 fixture decision ledger",
+                identity: ledger_id.to_string(),
+            })?;
+        if stored.batch_id != batch_id
+            || stored.program_id != dag.program_id
+            || stored.dag_id != *dag_id
+            || stored.registration_digest != registration.registration_digest
+            || stored.dag_digest != dag.dag_digest
+            || stored.ledger_digest != ledger_digest
+            || stored.document_digest != document_digest
+            || stored.exact_bytes != exact_bytes
+            || stored.decision_count != decision_count
+            || stored.maximum_decided_at != maximum_decided_at
+            || stored.commit_seq != generic.commit_seq
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 fixture decision readback differs from its exact commit".into(),
+            ));
+        }
+        Ok(Wave6FixtureDecisionLedgerReceipt {
+            catalog_id: generic.catalog_id,
+            catalog_schema: generic.catalog_schema,
+            batch_id,
+            ledger_id,
+            program_id: stored.program_id,
+            dag_id: stored.dag_id,
+            ledger_digest: stored.ledger_digest,
+            document_digest: stored.document_digest,
+            decision_count: stored.decision_count,
+            maximum_decided_at: stored.maximum_decided_at,
+            commit_seq: stored.commit_seq,
+            commit_digest: stored.commit_digest,
+            semantic_ceiling: stored.semantic_ceiling,
+            status: generic.status,
+        })
+    }
+
+    /// Loads and independently reparses a fixture decision ledger against its prior durable DAG.
+    ///
+    /// # Errors
+    ///
+    /// Refuses changed exact bytes/scalars/normalized decisions/evidence or invalid commit lineage.
+    pub fn load_wave6_fixture_decision_ledger_v1(
+        &self,
+        ledger_id: &StableString,
+    ) -> Result<Option<StoredWave6FixtureDecisionLedger>> {
+        let row: Option<FixtureDecisionLedgerRow> = self
+            .connection
+            .query_row(
+                "SELECT commit_row.commit_id,ledger.program_id,ledger.dag_id,
+                        ledger.registration_semantic_sha256,ledger.dag_semantic_sha256,
+                        ledger.ledger_semantic_sha256,ledger.ledger_document_sha256,
+                        ledger.ledger_bytes,ledger.ledger_byte_length,ledger.decision_count,
+                        ledger.maximum_decided_wall_us,ledger.semantic_ceiling,
+                        ledger.created_commit_seq,commit_row.commit_digest
+                 FROM wave6_fixture_decision_ledger_v1 ledger
+                 JOIN ingest_commit commit_row ON commit_row.commit_seq=ledger.created_commit_seq
+                 WHERE ledger.ledger_id=?1",
+                [ledger_id.as_str()],
+                |row| {
+                    Ok(FixtureDecisionLedgerRow {
+                        batch_id: row.get(0)?,
+                        program_id: row.get(1)?,
+                        dag_id: row.get(2)?,
+                        registration_raw: row.get(3)?,
+                        dag_raw: row.get(4)?,
+                        ledger_raw: row.get(5)?,
+                        document_raw: row.get(6)?,
+                        bytes: row.get(7)?,
+                        byte_length: row.get(8)?,
+                        decision_count: row.get(9)?,
+                        maximum_decided_us: row.get(10)?,
+                        semantic_ceiling: row.get(11)?,
+                        commit_seq: row.get(12)?,
+                        commit_digest_raw: row.get(13)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        stored_fixture_decision_ledger(self, ledger_id, row).map(Some)
+    }
 }
 
 fn validate_canonical_schema(bytes: &[u8]) -> Result<()> {
@@ -1408,6 +1719,258 @@ fn stored_fixture_dag(
     })
 }
 
+fn reject_second_decision_batch(
+    store: &SqliteStore,
+    ledger_id: &StableString,
+    batch_id: &StableString,
+) -> Result<()> {
+    let existing: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT commit_row.commit_id
+             FROM wave6_fixture_decision_ledger_v1 ledger
+             JOIN ingest_commit commit_row ON commit_row.commit_seq=ledger.created_commit_seq
+             WHERE ledger.ledger_id=?1",
+            [ledger_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|value| value != batch_id.as_str())
+    {
+        return Err(StoreError::IdentityConflict {
+            kind: "Wave 6 fixture decision ledger",
+            identity: ledger_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn fixture_decision_ledger_id(
+    program_id: &StableString,
+    ledger_digest: &ValueDigest,
+) -> Result<StableString> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_decision_ledger_identity.v1",
+        program_id,
+        ledger_digest,
+    ))?;
+    let digest = digest_bytes(&bytes)?;
+    stable(
+        &format!(
+            "wave6-decisions:{}",
+            raw_digest(&digest, "Wave 6 decision identity digest")?
+        ),
+        "Wave 6 fixture decision ledger ID",
+    )
+}
+
+fn decision_operation_digest(
+    program_id: &StableString,
+    dag_id: &StableString,
+    ledger_digest: &ValueDigest,
+    document_digest: &ValueDigest,
+) -> Result<ValueDigest> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_fixture_decision_ledger_commit.v1",
+        program_id,
+        dag_id,
+        ledger_digest,
+        document_digest,
+    ))?;
+    digest_bytes(&bytes)
+}
+
+const fn decision_kind_wire(value: ArtifactDecisionKindV1) -> &'static str {
+    match value {
+        ArtifactDecisionKindV1::RetainContractOnly => "retain_contract_only",
+        ArtifactDecisionKindV1::PromoteFixtureRoundtrip => "promote_fixture_roundtrip",
+        ArtifactDecisionKindV1::Park => "park",
+        ArtifactDecisionKindV1::Reject => "reject",
+    }
+}
+
+#[allow(clippy::too_many_lines)] // Exact bytes, normalized decisions, and evidence close together.
+fn stored_fixture_decision_ledger(
+    store: &SqliteStore,
+    ledger_id: &StableString,
+    row: FixtureDecisionLedgerRow,
+) -> Result<StoredWave6FixtureDecisionLedger> {
+    let program_id = stable(&row.program_id, "Wave 6 decision program ID")?;
+    let dag_id = stable(&row.dag_id, "Wave 6 decision DAG ID")?;
+    let registration = store
+        .load_wave6_program_registration_v1(&program_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 program registration",
+            identity: program_id.to_string(),
+        })?;
+    let dag = store
+        .load_wave6_fixture_artifact_dag_v1(&dag_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 fixture artifact DAG",
+            identity: dag_id.to_string(),
+        })?;
+    let parsed_registration = parse_program_registration_exact(&registration.exact_bytes)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let parsed_dag = parse_artifact_dag_exact(&dag.exact_bytes, &parsed_registration)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let parsed = parse_decision_ledger_exact(&row.bytes, &parsed_registration, &parsed_dag)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let value = parsed.value();
+    let expected_id = fixture_decision_ledger_id(&program_id, &value.ledger_digest)?;
+    let decision_count =
+        u64::try_from(value.decisions.len()).map_err(|_| StoreError::IntegerRange {
+            field: "Wave 6 decision count",
+            value: value.decisions.len().to_string(),
+        })?;
+    let maximum_decided_at = value
+        .decisions
+        .iter()
+        .map(|decision| decision.decided_at)
+        .max()
+        .ok_or_else(|| StoreError::InvalidBatch("Wave 6 decision ledger is empty".into()))?;
+    let commit_seq = u64_from_i64(row.commit_seq, "Wave 6 decision commit")?;
+    if expected_id != *ledger_id
+        || value.program_id != program_id
+        || value.artifact_dag_digest != dag.dag_digest
+        || row.registration_raw
+            != raw_digest(
+                &registration.registration_digest,
+                "Wave 6 decision registration digest",
+            )?
+        || row.dag_raw != raw_digest(&dag.dag_digest, "Wave 6 decision DAG digest")?
+        || row.ledger_raw != raw_digest(&value.ledger_digest, "Wave 6 decision ledger digest")?
+        || row.document_raw
+            != raw_digest(parsed.document_digest(), "Wave 6 decision document digest")?
+        || usize_from_i64(row.byte_length, "Wave 6 decision byte length")? != row.bytes.len()
+        || u64_from_i64(row.decision_count, "Wave 6 decision count")? != decision_count
+        || timestamp_from_us(row.maximum_decided_us, "Wave 6 maximum decision time")?
+            != maximum_decided_at
+        || row.semantic_ceiling != "unverified_semantic_fixture_only"
+        || dag.commit_seq.get() >= commit_seq
+    {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 decision ledger differs from its exact bytes or prior DAG".into(),
+        ));
+    }
+
+    let mut statement = store.connection.prepare(
+        "SELECT ordinal,decision_id,artifact_id,content_sha256,predecessor_decision_id,
+                decision_kind,decided_wall_us,evidence_count,reason,authority,semantic_ceiling
+         FROM wave6_fixture_decision_v1
+         WHERE ledger_id=?1 ORDER BY ordinal",
+    )?;
+    let decisions = statement
+        .query_map([ledger_id.as_str()], |decision| {
+            Ok(FixtureDecisionRow {
+                ordinal: decision.get(0)?,
+                decision_id: decision.get(1)?,
+                artifact_id: decision.get(2)?,
+                content_raw: decision.get(3)?,
+                predecessor_id: decision.get(4)?,
+                decision_kind: decision.get(5)?,
+                decided_us: decision.get(6)?,
+                evidence_count: decision.get(7)?,
+                reason: decision.get(8)?,
+                authority: decision.get(9)?,
+                semantic_ceiling: decision.get(10)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if decisions.len() != value.decisions.len() {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 decision count differs from exact bytes".into(),
+        ));
+    }
+    for (ordinal, (stored, decision)) in decisions.iter().zip(&value.decisions).enumerate() {
+        if usize_from_i64(stored.ordinal, "Wave 6 decision ordinal")? != ordinal
+            || stored.decision_id != decision.decision_id.as_str()
+            || stored.artifact_id != decision.artifact.artifact_id.as_str()
+            || stored.content_raw
+                != raw_digest(
+                    &decision.artifact.content_digest,
+                    "Wave 6 decision target digest",
+                )?
+            || stored.predecessor_id.as_deref()
+                != decision
+                    .predecessor_decision_id
+                    .as_ref()
+                    .map(StableString::as_str)
+            || stored.decision_kind != decision_kind_wire(decision.decision)
+            || timestamp_from_us(stored.decided_us, "Wave 6 decision time")? != decision.decided_at
+            || usize_from_i64(stored.evidence_count, "Wave 6 evidence count")?
+                != decision.evidence.len()
+            || stored.reason != decision.reason.as_str()
+            || stored.authority != "read_record_replay_propose_shadow_only"
+            || stored.semantic_ceiling != "unverified_semantic_fixture_only"
+        {
+            return Err(StoreError::InvalidBatch(
+                "persisted Wave 6 decision differs from exact bytes".into(),
+            ));
+        }
+        let mut evidence_statement = store.connection.prepare(
+            "SELECT evidence_ordinal,artifact_id,content_sha256,semantic_ceiling
+             FROM wave6_fixture_decision_evidence_v1
+             WHERE ledger_id=?1 AND decision_ordinal=?2 ORDER BY evidence_ordinal",
+        )?;
+        let evidence_rows = evidence_statement
+            .query_map(
+                params![
+                    ledger_id.as_str(),
+                    sqlite_len(ordinal, "Wave 6 decision ordinal")?
+                ],
+                |evidence| {
+                    Ok(FixtureDecisionEvidenceRow {
+                        ordinal: evidence.get(0)?,
+                        artifact_id: evidence.get(1)?,
+                        content_raw: evidence.get(2)?,
+                        semantic_ceiling: evidence.get(3)?,
+                    })
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if evidence_rows.len() != decision.evidence.len() {
+            return Err(StoreError::InvalidBatch(
+                "persisted Wave 6 decision evidence count differs from exact bytes".into(),
+            ));
+        }
+        for (evidence_ordinal, (stored_evidence, evidence)) in
+            evidence_rows.iter().zip(&decision.evidence).enumerate()
+        {
+            if usize_from_i64(stored_evidence.ordinal, "Wave 6 evidence ordinal")?
+                != evidence_ordinal
+                || stored_evidence.artifact_id != evidence.artifact_id.as_str()
+                || stored_evidence.content_raw
+                    != raw_digest(&evidence.content_digest, "Wave 6 evidence content digest")?
+                || stored_evidence.semantic_ceiling != "unverified_semantic_fixture_only"
+            {
+                return Err(StoreError::InvalidBatch(
+                    "persisted Wave 6 decision evidence differs from exact bytes".into(),
+                ));
+            }
+        }
+    }
+    Ok(StoredWave6FixtureDecisionLedger {
+        batch_id: stable(&row.batch_id, "Wave 6 decision batch ID")?,
+        ledger_id: ledger_id.clone(),
+        program_id,
+        dag_id,
+        registration_digest: registration.registration_digest,
+        dag_digest: dag.dag_digest,
+        dag_commit_seq: dag.commit_seq,
+        ledger_digest: value.ledger_digest.clone(),
+        document_digest: parsed.document_digest().clone(),
+        exact_bytes: row.bytes,
+        decision_count,
+        maximum_decided_at,
+        commit_seq: CommitSeq::new(commit_seq),
+        commit_digest: qualified_digest(&row.commit_digest_raw, "Wave 6 decision commit digest")?,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    })
+}
+
 fn insert_registration(
     tx: &Transaction<'_>,
     seq: i64,
@@ -1611,13 +2174,16 @@ mod tests {
     use super::*;
     use crate::{StoreConfig, StoreMode};
     use joshi_wave6_registry::{
-        Wave5GateRefV1, Wave5GateV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
+        FixtureDecisionLedgerV1, Wave5GateRefV1, Wave5GateV1, Wave6ProgramRegistrationV1,
+        canonical_bytes, digest_bytes,
     };
     use std::time::Duration;
 
     const REGISTRATION: &[u8] =
         include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
     const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
+    const DECISION_LEDGER: &[u8] =
+        include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
 
     fn schemas() -> [(&'static str, &'static [u8]); 6] {
         [
@@ -1730,6 +2296,22 @@ mod tests {
         (program_id, accepted)
     }
 
+    fn prepare_fixture_dag(
+        store: &mut SqliteStore,
+        writer_build: &StableString,
+    ) -> (StableString, Wave6FixtureArtifactDagReceipt) {
+        let (program_id, _) = prepare_fixture_content(store, writer_build, 3);
+        let accepted = store
+            .commit_wave6_fixture_artifact_dag_v1(
+                &program_id,
+                ARTIFACT_DAG,
+                StableString::new("wave6:artifact-dag:fixture-001").expect("DAG batch"),
+                writer_build.clone(),
+            )
+            .expect("fixture DAG");
+        (program_id, accepted)
+    }
+
     #[test]
     fn exact_fixture_registration_is_durable_idempotent_and_never_promoted() {
         let root = tempfile::tempdir().expect("temporary store");
@@ -1743,7 +2325,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 14);
+        assert_eq!(migration.current, 15);
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -1751,7 +2333,7 @@ mod tests {
             .commit_wave6_program_registration_v1(REGISTRATION, batch_id.clone(), build.clone())
             .expect("accepted registration");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v15");
         assert_eq!(
             accepted.semantic_ceiling,
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
@@ -1894,7 +2476,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("schema commit {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v15");
             let retry = store
                 .commit_wave6_artifact_schema_v1(
                     &program_id,
@@ -2013,7 +2595,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("artifact {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v15");
             assert!(accepted.result_count > 0);
             assert_eq!(
                 accepted.semantic_ceiling,
@@ -2088,7 +2670,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 14);
+        assert_eq!(migration.current, 15);
         let writer_build = StableString::new("wave6-store-test").expect("writer build");
         let (program_id, artifacts) = prepare_fixture_content(&mut store, &writer_build, 3);
         let batch_id = StableString::new("wave6:artifact-dag:fixture-001").expect("DAG batch");
@@ -2101,7 +2683,7 @@ mod tests {
             )
             .expect("accepted artifact DAG");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v14");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v15");
         assert_eq!(accepted.artifact_count, 3);
         assert_eq!(
             accepted.maximum_information_cutoff,
@@ -2205,5 +2787,122 @@ mod tests {
             ),
             Err(StoreError::MissingIdentity { .. })
         ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Covers normalized decision/evidence, retry, and restart.
+    fn exact_fixture_decisions_resolve_the_prior_dag_without_operational_promotion() {
+        let root = tempfile::tempdir().expect("temporary store");
+        let store_config = config(root.path());
+        let mut store =
+            SqliteStore::open(store_config.clone(), StoreMode::SingleWriter).expect("writer store");
+        let migration = store
+            .migrate(
+                "2026-08-18T16:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("latest migration");
+        assert_eq!(migration.current, 15);
+        let writer_build = StableString::new("wave6-store-test").expect("writer build");
+        let (program_id, dag) = prepare_fixture_dag(&mut store, &writer_build);
+        let batch_id =
+            StableString::new("wave6:decision-ledger:fixture-001").expect("decision batch");
+        let accepted = store
+            .commit_wave6_fixture_decision_ledger_v1(
+                &dag.dag_id,
+                DECISION_LEDGER,
+                batch_id.clone(),
+                writer_build.clone(),
+            )
+            .expect("accepted decision ledger");
+        assert_eq!(accepted.status, IdempotencyStatus::Accepted);
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v15");
+        assert_eq!(accepted.program_id, program_id);
+        assert_eq!(accepted.dag_id, dag.dag_id);
+        assert_eq!(accepted.decision_count, 3);
+        assert_eq!(
+            accepted.ledger_digest.as_str(),
+            "sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09"
+        );
+        assert_eq!(
+            accepted.maximum_decided_at,
+            "2026-08-18T00:35:00.000000Z"
+                .parse()
+                .expect("decision time")
+        );
+        assert!(dag.commit_seq < accepted.commit_seq);
+        assert_eq!(
+            accepted.semantic_ceiling,
+            SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        );
+
+        let retry = store
+            .commit_wave6_fixture_decision_ledger_v1(
+                &dag.dag_id,
+                DECISION_LEDGER,
+                batch_id,
+                writer_build.clone(),
+            )
+            .expect("exact decision retry");
+        assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+        assert_eq!(retry.ledger_id, accepted.ledger_id);
+        assert_eq!(retry.commit_seq, accepted.commit_seq);
+        assert_eq!(retry.commit_digest, accepted.commit_digest);
+
+        assert!(matches!(
+            store.commit_wave6_fixture_decision_ledger_v1(
+                &dag.dag_id,
+                DECISION_LEDGER,
+                StableString::new("wave6:decision-ledger:second-batch").expect("second batch"),
+                writer_build.clone(),
+            ),
+            Err(StoreError::IdentityConflict { .. })
+        ));
+
+        let mut changed: FixtureDecisionLedgerV1 =
+            serde_json::from_slice(DECISION_LEDGER).expect("decision fixture");
+        changed.decisions[0].artifact.content_digest =
+            ValueDigest::new(format!("sha256:{}", "6".repeat(64))).expect("changed digest");
+        changed.ledger_digest = digest_bytes(
+            &canonical_bytes(&changed.digest_material()).expect("changed decision material"),
+        )
+        .expect("changed decision digest");
+        let changed_bytes = canonical_bytes(&changed).expect("changed decision bytes");
+        assert!(
+            store
+                .commit_wave6_fixture_decision_ledger_v1(
+                    &dag.dag_id,
+                    &changed_bytes,
+                    StableString::new("wave6:decision-ledger:changed-target")
+                        .expect("changed batch"),
+                    writer_build,
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            store.commit_wave6_fixture_decision_ledger_v1(
+                &StableString::new("wave6-dag:missing").expect("missing DAG ID"),
+                DECISION_LEDGER,
+                StableString::new("wave6:decision-ledger:missing-dag").expect("missing batch"),
+                StableString::new("wave6-store-test").expect("writer build"),
+            ),
+            Err(StoreError::MissingIdentity { .. })
+        ));
+        drop(store);
+
+        let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly).expect("reader store");
+        let stored = reopened
+            .load_wave6_fixture_decision_ledger_v1(&accepted.ledger_id)
+            .expect("decision readback")
+            .expect("stored decision ledger");
+        assert_eq!(stored.exact_bytes, DECISION_LEDGER);
+        assert_eq!(stored.ledger_digest, accepted.ledger_digest);
+        assert_eq!(stored.document_digest, accepted.document_digest);
+        assert_eq!(stored.decision_count, accepted.decision_count);
+        assert_eq!(stored.maximum_decided_at, accepted.maximum_decided_at);
+        assert_eq!(stored.commit_seq, accepted.commit_seq);
+        assert_eq!(stored.commit_digest, accepted.commit_digest);
+        assert!(stored.dag_commit_seq < stored.commit_seq);
     }
 }

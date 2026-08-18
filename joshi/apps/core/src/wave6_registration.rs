@@ -10,6 +10,7 @@ use thiserror::Error;
 
 const REGISTRATION: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
 const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
+const DECISION_LEDGER: &[u8] = include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
 const PROGRAM_ID: &str = "w6-program-fixture-001";
 const BATCH_ID: &str = "wave6:program-registration:fixture-001";
 const AUTHORITY: &str = "read_record_replay_propose_shadow_only";
@@ -60,6 +61,18 @@ pub struct Wave6FixtureArtifactDagReport {
     pub commit_seq: String,
 }
 
+/// One exact fixture disposition ledger retained after its DAG.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureDecisionLedgerReport {
+    pub ledger_id: String,
+    pub ledger_digest: String,
+    pub document_digest: String,
+    pub decision_count: String,
+    pub maximum_decided_at: String,
+    pub commit_seq: String,
+}
+
 /// Machine-readable, non-promoting result of the N00 durable fixture walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +103,9 @@ pub struct Wave6ProgramRegistrationReport {
     pub fixture_artifact_dag: Wave6FixtureArtifactDagReport,
     pub fixture_artifact_dag_persisted: bool,
     pub fixture_artifact_dag_restart_reverified: bool,
+    pub fixture_decision_ledger: Wave6FixtureDecisionLedgerReport,
+    pub fixture_decision_ledger_persisted: bool,
+    pub fixture_decision_ledger_restart_reverified: bool,
     pub consumed_wave5_gate_count: &'static str,
     pub provider_units: &'static str,
     pub external_mutation_units: &'static str,
@@ -108,6 +124,7 @@ pub struct Wave6ProgramRegistrationReport {
 /// # Errors
 ///
 /// Refuses filesystem, clock, migration, exact-registration, retry or readback failures.
+#[allow(clippy::too_many_lines)] // Keeps the exact ordered fixture chain and false ceilings local.
 pub fn run_wave6_program_registration(
     state: &Path,
 ) -> Result<Wave6ProgramRegistrationReport, Wave6RegistrationError> {
@@ -115,9 +132,9 @@ pub fn run_wave6_program_registration(
     let store_config = config(state)?;
     let mut store = SqliteStore::open(store_config.clone(), StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
-    if migration.current != 14 {
+    if migration.current != 15 {
         return Err(Wave6RegistrationError::Invariant(
-            "Wave 6 registration did not reach V14",
+            "Wave 6 registration did not reach V15",
         ));
     }
     let batch_id = StableString::new(BATCH_ID)?;
@@ -130,7 +147,7 @@ pub fn run_wave6_program_registration(
     if !matches!(
         accepted.status,
         IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
-    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v14"
+    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v15"
         || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     {
         return Err(Wave6RegistrationError::Invariant(
@@ -153,6 +170,7 @@ pub fn run_wave6_program_registration(
     let schema_reports = commit_schemas(&mut store, &accepted.program_id, &writer_build)?;
     let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
     let dag_report = commit_artifact_dag(&mut store, &accepted.program_id, &writer_build)?;
+    let decision_report = commit_decision_ledger(&mut store, &dag_report, &writer_build)?;
     drop(store);
 
     let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly)?;
@@ -177,10 +195,11 @@ pub fn run_wave6_program_registration(
     verify_schemas(&reopened, &program_id, &schema_reports)?;
     verify_artifacts(&reopened, &artifact_reports)?;
     verify_artifact_dag(&reopened, &dag_report)?;
+    verify_decision_ledger(&reopened, &decision_report)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v4",
-        schema_version: 4,
+        contract: "joshi.core.wave6_program_registration_report.v5",
+        schema_version: 5,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -204,6 +223,9 @@ pub fn run_wave6_program_registration(
         fixture_artifact_dag: dag_report,
         fixture_artifact_dag_persisted: true,
         fixture_artifact_dag_restart_reverified: true,
+        fixture_decision_ledger: decision_report,
+        fixture_decision_ledger_persisted: true,
+        fixture_decision_ledger_restart_reverified: true,
         consumed_wave5_gate_count: "0",
         provider_units: "0",
         external_mutation_units: "0",
@@ -212,6 +234,58 @@ pub fn run_wave6_program_registration(
         empirical_claim: false,
         product_qualified: false,
         live_qualified: false,
+    })
+}
+
+fn commit_decision_ledger(
+    store: &mut SqliteStore,
+    dag: &Wave6FixtureArtifactDagReport,
+    writer_build: &StableString,
+) -> Result<Wave6FixtureDecisionLedgerReport, Wave6RegistrationError> {
+    let dag_id = StableString::new(dag.dag_id.clone())?;
+    let batch_id = StableString::new("wave6:decision-ledger:fixture-001")?;
+    let accepted = store.commit_wave6_fixture_decision_ledger_v1(
+        &dag_id,
+        DECISION_LEDGER,
+        batch_id.clone(),
+        writer_build.clone(),
+    )?;
+    if !matches!(
+        accepted.status,
+        IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+    ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture decision ledger returned an impossible first receipt",
+        ));
+    }
+    let retry = store.commit_wave6_fixture_decision_ledger_v1(
+        &dag_id,
+        DECISION_LEDGER,
+        batch_id,
+        writer_build.clone(),
+    )?;
+    if retry.status != IdempotencyStatus::Idempotent
+        || retry.ledger_id != accepted.ledger_id
+        || retry.dag_id != accepted.dag_id
+        || retry.ledger_digest != accepted.ledger_digest
+        || retry.document_digest != accepted.document_digest
+        || retry.decision_count != accepted.decision_count
+        || retry.maximum_decided_at != accepted.maximum_decided_at
+        || retry.commit_seq != accepted.commit_seq
+        || retry.commit_digest != accepted.commit_digest
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "exact Wave 6 fixture decision retry changed durable identity",
+        ));
+    }
+    Ok(Wave6FixtureDecisionLedgerReport {
+        ledger_id: accepted.ledger_id.to_string(),
+        ledger_digest: accepted.ledger_digest.to_string(),
+        document_digest: accepted.document_digest.to_string(),
+        decision_count: accepted.decision_count.to_string(),
+        maximum_decided_at: accepted.maximum_decided_at.to_string(),
+        commit_seq: accepted.commit_seq.get().to_string(),
     })
 }
 
@@ -477,6 +551,31 @@ fn verify_artifact_dag(
     Ok(())
 }
 
+fn verify_decision_ledger(
+    store: &SqliteStore,
+    report: &Wave6FixtureDecisionLedgerReport,
+) -> Result<(), Wave6RegistrationError> {
+    let ledger_id = StableString::new(report.ledger_id.clone())?;
+    let stored = store
+        .load_wave6_fixture_decision_ledger_v1(&ledger_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture decision ledger was absent after restart",
+        ))?;
+    if stored.exact_bytes != DECISION_LEDGER
+        || stored.ledger_digest.as_str() != report.ledger_digest
+        || stored.document_digest.as_str() != report.document_digest
+        || stored.decision_count.to_string() != report.decision_count
+        || stored.maximum_decided_at.to_string() != report.maximum_decided_at
+        || stored.commit_seq.get().to_string() != report.commit_seq
+        || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture decision ledger changed across read-only reopen",
+        ));
+    }
+    Ok(())
+}
+
 fn schemas() -> [SchemaFixture; 6] {
     [
         SchemaFixture {
@@ -581,7 +680,7 @@ mod tests {
         let first =
             run_wave6_program_registration(state.path()).expect("first registration witness");
         assert_eq!(first.status, "fixture_only");
-        assert_eq!(first.catalog_schema, "joshi.sqlite.v14");
+        assert_eq!(first.catalog_schema, "joshi.sqlite.v15");
         assert_eq!(first.first_status, IdempotencyStatus::Accepted);
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);
@@ -597,6 +696,9 @@ mod tests {
         assert_eq!(first.fixture_artifact_dag.artifact_count, "3");
         assert!(first.fixture_artifact_dag_persisted);
         assert!(first.fixture_artifact_dag_restart_reverified);
+        assert_eq!(first.fixture_decision_ledger.decision_count, "3");
+        assert!(first.fixture_decision_ledger_persisted);
+        assert!(first.fixture_decision_ledger_restart_reverified);
         assert_eq!(first.consumed_wave5_gate_count, "0");
         assert!(!first.wave5_gates_resolved);
         assert!(!first.operational_release);
@@ -614,5 +716,9 @@ mod tests {
         assert_eq!(repeated.schemas, first.schemas);
         assert_eq!(repeated.fixture_artifacts, first.fixture_artifacts);
         assert_eq!(repeated.fixture_artifact_dag, first.fixture_artifact_dag);
+        assert_eq!(
+            repeated.fixture_decision_ledger,
+            first.fixture_decision_ledger
+        );
     }
 }

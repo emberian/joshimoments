@@ -33,7 +33,7 @@ The six retained documents are:
 | `research_proposal_fixture` | `joshi.analysis.wave6-research-desk/v1` |
 | `structural_known_truth_evaluation_fixture` | `joshi.analysis.wave6-structural-known-truth/v1` |
 
-The Core `wave6-program-registration` command commits all six in this exact order. Its V4 report
+The Core `wave6-program-registration` command commits all six in this exact order. Its V5 report
 emits each kind/schema/digest/commit tuple, requires `registeredSchemaCount="6"`, then proves the
 same tuples and bytes through a read-only reopen. Re-running the command yields the same six
 original commit identities.
