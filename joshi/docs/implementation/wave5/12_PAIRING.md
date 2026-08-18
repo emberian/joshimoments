@@ -45,6 +45,12 @@ the listener is bound. It does not enable write scopes or change the default ser
 isolated durable protocol/publication inspection seam, not a product mount, daily-use witness, or
 root G0 pass.
 
+`wave5-g0-inspector-smoke` is a finite, socket-free execution of that mounted route over an already
+completed fixture catalog. It performs a durable one-time exchange, opens the exact headed bytes,
+starts a higher SQLite epoch, proves the old capability is unauthorized, and repeats the same open
+under a fresh session. Its report retains only nonsecret occurrence/session IDs and digests. This
+is paired API/restart evidence, not a default mount, browser presentation, or product-use witness.
+
 Glass's explicit `VITE_JOSHI_G0_INSPECTOR=1` build now consumes this seam and only this seam. It
 independently verifies the bounded index plus exact V2 body/head and renders descriptive fixture
 facts without operator/presentation controls. The default build does not select it, and attached

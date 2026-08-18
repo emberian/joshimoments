@@ -159,6 +159,12 @@ local Core fixture launcher and inspector Vite server both started successfully,
 extension browser instance was connected. No screenshot, visual-layout, real screen-reader,
 pointer, touch, or actual Ember daily-use claim is inferred from DOM tests.
 
+Core's separate `wave5-g0-inspector-smoke` now exercises the real pairing exchange and exact
+Cockpit V2 route in process, refuses the old capability after restarting the SQLite epoch, and
+reopens byte-identical content under a fresh session. That closes an API/readback seam only. It
+does not run this Glass bundle, mount a browser, or change the attached-browser/accessibility
+status above.
+
 ## Remaining integration gates
 
 - Cross-review and freeze the repaired `joshi-surface` profile/cut/qualification contract, then

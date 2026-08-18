@@ -1,7 +1,7 @@
 # Wave 5 package gates
 
 Status: the root gate run was anchored at committed HEAD
-`43e2dd1b0ea36aad78ff83e8be59eeae61e3a596`. The locked/offline workspace and root Wave 5
+`fb736acfc4f3f0f4295ae8b4d3d34c71b4247ef8`. The locked/offline workspace and root Wave 5
 readiness gates pass. The resulting witnesses are deliberately
 `useful_partial`; they do not qualify live providers, sustained nonfixture supervision,
 publication/product parity, product Glass use, retention, scientific, or economic capabilities.
@@ -53,7 +53,7 @@ production or manifest files were edited by this lane.
 
 ## Witness and exact claim ceiling
 
-The fresh root run retained `/tmp/joshi-wave5-readiness.GcVHjU/wave5-witness.json` and exited
+The fresh root run retained `/tmp/joshi-wave5-readiness.8C74IJ/wave5-witness.json` and exited
 `RC:0`.
 Wave 4 component witness:
 
@@ -68,17 +68,19 @@ gates=workspaceOffline, schemaFreshAndUpgrade, glassOffline, companionOffline,
 Wave 5 witness (`wave5-witness.json`):
 
 ```text
-schemaVersion=3
+schemaVersion=4
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0ComponentDigest=sha256:9eb04a8f7492950147a0a93124d9ab6654610d6614a8d1b8003953a3034b8df0
-g0EvidenceBundleDigest=sha256:51ca4550c151b4eadc0def4354952c1317ee9c327cba19434e6865db8ac921a6
-g0SnapshotId=sha256:439e56c48579f34d27a6d565af3b4cff0d97f38008a9f57926359e011a6b3b98
+g0ComponentDigest=sha256:ae54f8118635426b9ab0340d1bf205b43a309a0190a2972607eabb47d84f7ad7
+g0InspectorSmokeDigest=sha256:181ae942333d4a1bb1265a7c9b2739e5c30255db4fa8c9f3cfb5170325bba5d4
+g0EvidenceBundleDigest=sha256:a34cacbaa187039468049d9ab7d2e8fcce0f477f8babe911e4d0007c2ace0141
+g0SnapshotId=sha256:7c7da6ef291acc42f815109745f08a0efe06aeba8d62c69ff0bd1d2eab7ba214
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
 g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
          store_resolved_fixture_source, headed_cockpit_v2_publication,
-         censored_scientific_memory, nonempty_v10_export_import, v10_export_recovered,
+         paired_fixture_api_reopen, censored_scientific_memory,
+         nonempty_v10_export_import, v10_export_recovered,
          artifact_bearing_backup_restore, g0_component_30_prefix_recovery
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
@@ -93,8 +95,10 @@ The ignition detail (`ignition-readiness.json`) independently reports
 `catalogAckReverified=true`, `restartReverified=true`, and `providerIo=false`.
 
 The same root invocation executes `wave5-g0-source-publication`, checks its fifteen-role evidence
-bundle, the eight-occurrence censored-memory closure, and nonempty V10 snapshot identity, and
-refuses to emit the witness if any partial component
+bundle, the eight-occurrence censored-memory closure, and nonempty V10 snapshot identity. It then
+executes the actual in-process pairing/open/restart smoke and binds its secret-free file digest. It
+refuses to emit the witness if the paired route changes bytes, accepts the prior capability, raises
+a browser/product/live bit, or if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
 offline component, not a W5-G0/product/live pass.
 

@@ -123,8 +123,9 @@ The migration validator, combined admission/artifact/store/core tests, operation
 mechanics-capability tests, and strict focused Clippy gates pass at this handoff. The standalone
 `wave5-ignition-readiness` command also emits the expected V9 `useful_partial` result. A fresh full
 `./scripts/wave5-readiness` run now passes the preserved workspace gate and executes both the C0
-ignition component and the joined partial G0 component. Its schema-V3 witness binds the exact G0
-component file, fifteen-role evidence bundle, V10 snapshot and V9/V10 migration digests while
+ignition component, the joined partial G0 component, and a separate one-shot paired route/restart
+smoke. Its schema-V4 witness binds the exact G0 component file, inspector-smoke file, fifteen-role
+component evidence bundle, V10 snapshot and V9/V10 migration digests while
 keeping every root/product/live qualification false.
 
 The final script output must continue to state `useful_partial`,
@@ -184,6 +185,11 @@ that exact V2 inspection contract, independently recomputes the Rust digest doma
 operator or presentation sink. No connected browser was available for real UI QA, and default
 Glass remains unavailable, so this local join is not recorded as product Glass use or as a
 completed root occurrence.
+The one-shot `wave5-g0-inspector-smoke` command exercises the actual exchange and exact Cockpit V2
+HTTP open in process, restarts the SQLite pairing epoch, proves the old capability is refused, and
+opens identical response bytes under a fresh scoped session. Its JSON is secret-free and keeps
+`browserPresented`, product/live qualification, and the full fault walk false. Root readiness binds
+the exact smoke-file digest separately from the component evidence bundle.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,

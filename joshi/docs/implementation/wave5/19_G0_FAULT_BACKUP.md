@@ -113,8 +113,11 @@ the V10 restricted-import readback, and durable export-recovery readback, plus a
 backup manifest and distinct-root restore readback. Their identities may contain
 the colon separators used by actual store/spool contracts. The reservation and later origin are
 now one ordered handoff: the supervisor fsyncs the exact Pump batch and the store consumes that
-same immutable segment before the run binding and ACK. Pairing/Glass fault evidence and the final
-root reopen remain absent and therefore cannot appear
+same immutable segment before the run binding and ACK. A separate one-shot root smoke now binds a
+durable pairing-consume occurrence, exact Cockpit HTTP response, old-capability restart refusal,
+and byte-identical fresh-session reopen. Those baseline artifacts are not yet attached to every
+before/after fault scenario, so pairing/Glass fault evidence and the final no-original-root reopen
+remain absent from this component bundle and therefore cannot appear
 `observed_partial`. The partial backup contains the store-reachable external source object,
 but not the separate supervisor spool inventory, and does not make the original roots unavailable.
 The component-local recovery matrix now includes before/after interruption points around the
