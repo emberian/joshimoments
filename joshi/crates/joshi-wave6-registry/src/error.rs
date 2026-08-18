@@ -50,4 +50,7 @@ pub enum RegistryError {
     /// A fixture decision branched, backdated, widened authority, or referenced unknown evidence.
     #[error("fixture decision ledger failure: {0}")]
     Decision(&'static str),
+    /// A campaign lifecycle skipped, branched, backdated, or mutated frozen commitment.
+    #[error("fixture campaign lifecycle failure: {0}")]
+    Campaign(&'static str),
 }

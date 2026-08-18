@@ -2,12 +2,13 @@ use joshi_domain::{StableString, UtcTimestamp, ValueDigest, WireU64};
 
 use crate::{
     ARTIFACT_DAG_CONTRACT, ArtifactDagV1, ArtifactDecisionKindV1, ArtifactDecisionV1,
-    ArtifactOccurrenceV1, ArtifactRefV1, ClaimCausalityV1, ClaimEconomicMeaningV1,
+    ArtifactOccurrenceV1, ArtifactRefV1, CAMPAIGN_LIFECYCLE_CONTRACT, CampaignLifecycleV1,
+    CampaignStateV1, CampaignTransitionV1, ClaimCausalityV1, ClaimEconomicMeaningV1,
     ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimRungV1, ClaimVerbV1,
     FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, ProgramAuthorityV1, RegistryError,
     SemanticCeilingV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
-    parse_artifact_dag_exact, parse_decision_ledger_exact, parse_program_registration_exact,
-    validate_claim_language,
+    parse_artifact_dag_exact, parse_campaign_lifecycle_exact, parse_decision_ledger_exact,
+    parse_program_registration_exact, validate_claim_language,
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
@@ -116,6 +117,70 @@ fn ledger(dag: &ArtifactDagV1) -> FixtureDecisionLedgerV1 {
     value.ledger_digest =
         digest_bytes(&canonical_bytes(&value.digest_material()).expect("ledger material"))
             .expect("ledger digest");
+    value
+}
+
+fn lifecycle_transition(
+    ordinal: usize,
+    from_state: Option<CampaignStateV1>,
+    to_state: CampaignStateV1,
+    frozen: Option<&ValueDigest>,
+) -> CampaignTransitionV1 {
+    CampaignTransitionV1 {
+        transition_id: stable(&format!("campaign-transition-{ordinal:02}")),
+        predecessor_transition_id: ordinal
+            .checked_sub(1)
+            .filter(|prior| *prior > 0)
+            .map(|prior| stable(&format!("campaign-transition-{prior:02}"))),
+        from_state,
+        to_state,
+        campaign_definition_digest: digest("campaign definition fixture bytes"),
+        frozen_commitment_digest: frozen.cloned(),
+        recorded_at: timestamp(&format!("2026-08-18T00:01:{ordinal:02}.000000Z")),
+        reason: stable(&format!("fixture_transition_{ordinal:02}")),
+        successor_campaign_id: (to_state == CampaignStateV1::ReviseAsNewCampaign)
+            .then(|| stable("campaign-fixture-successor-002")),
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    }
+}
+
+fn campaign_lifecycle() -> CampaignLifecycleV1 {
+    let commitment = digest("frozen campaign commitment fixture bytes");
+    let states = [
+        CampaignStateV1::DraftExploratory,
+        CampaignStateV1::Preregistered,
+        CampaignStateV1::EnrollmentFrozen,
+        CampaignStateV1::Running,
+        CampaignStateV1::Sealed,
+        CampaignStateV1::Censored,
+        CampaignStateV1::Adjudicated,
+        CampaignStateV1::Park,
+    ];
+    let transitions = states
+        .iter()
+        .enumerate()
+        .map(|(index, state)| {
+            let ordinal = index + 1;
+            lifecycle_transition(
+                ordinal,
+                index.checked_sub(1).map(|prior| states[prior]),
+                *state,
+                (ordinal >= 3).then_some(&commitment),
+            )
+        })
+        .collect();
+    let mut value = CampaignLifecycleV1 {
+        contract: stable(CAMPAIGN_LIFECYCLE_CONTRACT),
+        program_id: stable("w6-program-fixture-001"),
+        registration_digest: fixture().registration_digest,
+        campaign_id: stable("campaign-fixture-001"),
+        transitions,
+        lifecycle_digest: digest("placeholder lifecycle digest"),
+    };
+    value.lifecycle_digest =
+        digest_bytes(&canonical_bytes(&value.digest_material()).expect("lifecycle material"))
+            .expect("lifecycle digest");
     value
 }
 
@@ -330,5 +395,61 @@ fn fixture_decisions_are_append_only_and_never_store_promotion() {
             &parsed_dag
         ),
         Err(RegistryError::Decision("branch or clock rollback"))
+    ));
+}
+
+#[test]
+fn campaign_lifecycle_closes_censoring_and_parking_without_promotion() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let value = campaign_lifecycle();
+    let bytes = canonical_bytes(&value).expect("lifecycle bytes");
+    let parsed = parse_campaign_lifecycle_exact(&bytes, &registration).expect("lifecycle");
+    assert_eq!(parsed.value(), &value);
+    assert_eq!(
+        parsed.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+    assert_eq!(
+        parsed
+            .value()
+            .transitions
+            .last()
+            .map(|value| value.to_state),
+        Some(CampaignStateV1::Park)
+    );
+}
+
+#[test]
+fn campaign_skip_branch_and_commitment_mutation_refuse() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+
+    let mut skipped = campaign_lifecycle();
+    skipped.transitions[3].from_state = Some(CampaignStateV1::Preregistered);
+    skipped.lifecycle_digest =
+        digest_bytes(&canonical_bytes(&skipped.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_campaign_lifecycle_exact(&canonical_bytes(&skipped).expect("bytes"), &registration),
+        Err(RegistryError::Campaign("transition order"))
+    ));
+
+    let mut branched = campaign_lifecycle();
+    branched.transitions[5].predecessor_transition_id = Some(stable("campaign-transition-03"));
+    branched.lifecycle_digest =
+        digest_bytes(&canonical_bytes(&branched.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_campaign_lifecycle_exact(&canonical_bytes(&branched).expect("bytes"), &registration),
+        Err(RegistryError::Campaign("transition order"))
+    ));
+
+    let mut changed = campaign_lifecycle();
+    changed.transitions[6].frozen_commitment_digest = Some(digest("changed frozen commitment"));
+    changed.lifecycle_digest =
+        digest_bytes(&canonical_bytes(&changed.digest_material()).expect("material"))
+            .expect("digest");
+    assert!(matches!(
+        parse_campaign_lifecycle_exact(&canonical_bytes(&changed).expect("bytes"), &registration),
+        Err(RegistryError::Campaign("frozen commitment mutation"))
     ));
 }

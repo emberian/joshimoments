@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod campaign;
 mod canonical;
 mod claim;
 mod dag;
@@ -17,9 +18,13 @@ mod error;
 mod model;
 mod validate;
 
+pub use campaign::{
+    CampaignLifecycleDigestMaterialV1, CampaignLifecycleV1, CampaignStateV1, CampaignTransitionV1,
+};
 pub use canonical::{
     ValidatedExactArtifact, ValidatedProgramRegistration, canonical_bytes, digest_bytes,
-    parse_artifact_dag_exact, parse_decision_ledger_exact, parse_program_registration_exact,
+    parse_artifact_dag_exact, parse_campaign_lifecycle_exact, parse_decision_ledger_exact,
+    parse_program_registration_exact,
 };
 pub use claim::{
     ClaimCausalityV1, ClaimEconomicMeaningV1, ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimVerbV1,
@@ -43,6 +48,8 @@ pub const PROGRAM_REGISTRATION_CONTRACT: &str = "joshi.wave6.program-registratio
 pub const ARTIFACT_DAG_CONTRACT: &str = "joshi.wave6.artifact-dag.v1";
 /// Exact wire contract for append-only fixture dispositions.
 pub const FIXTURE_DECISION_LEDGER_CONTRACT: &str = "joshi.wave6.fixture-decision-ledger.v1";
+/// Exact wire contract for a caller-fed fixture campaign lifecycle.
+pub const CAMPAIGN_LIFECYCLE_CONTRACT: &str = "joshi.wave6.campaign-lifecycle.v1";
 
 #[cfg(test)]
 mod tests;

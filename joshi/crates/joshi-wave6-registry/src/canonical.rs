@@ -5,8 +5,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ArtifactDagV1, FixtureDecisionLedgerV1, RegistryError, Result, SemanticCeilingV1,
-    Wave6ProgramRegistrationV1,
+    ArtifactDagV1, CampaignLifecycleV1, FixtureDecisionLedgerV1, RegistryError, Result,
+    SemanticCeilingV1, Wave6ProgramRegistrationV1,
 };
 
 /// Any strictly decoded, exact, unverified fixture artifact.
@@ -157,6 +157,25 @@ pub fn parse_decision_ledger_exact(
 ) -> Result<ValidatedExactArtifact<FixtureDecisionLedgerV1>> {
     let value: FixtureDecisionLedgerV1 = decode_canonical(bytes)?;
     value.validate(registration.value(), dag.value())?;
+    Ok(ValidatedExactArtifact {
+        value,
+        exact_bytes: bytes.to_vec(),
+        document_digest: digest_bytes(bytes)?,
+    })
+}
+
+/// Strictly parses a caller-fed fixture campaign lifecycle.
+///
+/// # Errors
+///
+/// Refuses noncanonical bytes, skipped/branched/backdated phases, frozen-commitment mutation,
+/// authority widening, or digest mismatch.
+pub fn parse_campaign_lifecycle_exact(
+    bytes: &[u8],
+    registration: &ValidatedProgramRegistration,
+) -> Result<ValidatedExactArtifact<CampaignLifecycleV1>> {
+    let value: CampaignLifecycleV1 = decode_canonical(bytes)?;
+    value.validate(registration.value())?;
     Ok(ValidatedExactArtifact {
         value,
         exact_bytes: bytes.to_vec(),
