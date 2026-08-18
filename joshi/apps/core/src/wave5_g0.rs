@@ -60,6 +60,7 @@ const BASELINE_ARTIFACT_PART: &[u8] = include_bytes!(
 );
 const BASELINE_EXPORT_BINDING_ID: &str = "export-binding:wave5-g0-baseline-0001";
 const BASELINE_IMPORT_ID: &str = "import:wave5-g0-baseline-0001";
+const V10_EXPORT_BINDING_ID: &str = "export-binding:wave5-g0-v10-0001";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BaselineExportImportClosure {
@@ -84,10 +85,16 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterMemoryEpisode,
     BeforeStatus,
     AfterStatus,
+    BeforeExportRecoveryStart,
+    AfterExportRecoveryStart,
     BeforeExportInputBackup,
     AfterExportInputBackup,
     BeforeV10Export,
     AfterV10Export,
+    BeforeV10ExportBinding,
+    AfterV10ExportBinding,
+    BeforeExportRecoveryReady,
+    AfterExportRecoveryReady,
     BeforeBackup,
     AfterBackup,
     BeforeRestore,
@@ -137,6 +144,8 @@ pub struct Wave5G0SourcePublicationReport {
     pub v10_export_snapshot_id: String,
     pub v10_export_manifest_digest: String,
     pub v10_export_validation_digest: String,
+    pub v10_export_binding_id: String,
+    pub v10_export_binding_digest: String,
     pub status_record_id: String,
     pub status_record_digest: String,
     pub store_progress_count: usize,
@@ -156,6 +165,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub baseline_export_import_closed: bool,
     pub nonempty_v10_export_closed: bool,
     pub partial_status_closed: bool,
+    pub v10_export_recovery_closed: bool,
     pub partial_backup_restore_closed: bool,
     pub restart_reverified: bool,
     pub full_offline_fault_walk: bool,
@@ -536,13 +546,13 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "memory act/episode commit or queue order is not strict",
         ));
     }
-    let store_status_view = store.load_wave5_store_status_view_v1(&run_id)?;
-    if store_status_view.durable_progress.len() < 2
-        || !store_status_view
+    let initial_store_status_view = store.load_wave5_store_status_view_v1(&run_id)?;
+    if initial_store_status_view.durable_progress.len() < 2
+        || !initial_store_status_view
             .durable_progress
             .iter()
             .any(|value| value.progress_id.as_str().starts_with("run:"))
-        || !store_status_view
+        || !initial_store_status_view
             .durable_progress
             .iter()
             .any(|value| value.progress_id.as_str().starts_with("spool_catalog:"))
@@ -553,49 +563,69 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
     inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeStatus)?;
     let status_id = StableString::new("status:wave5-g0-export-stale-0001")?;
-    let status = if let Some(existing) = store.load_wave5_g0_status_occurrence_v1(&status_id)? {
-        existing
-    } else {
-        let status_context = store.begin_wave5_commit(
-            StableString::new("wave5:g0:source-publication:status")?,
-            StableString::new(env!("CARGO_PKG_VERSION"))?,
-        )?;
-        let status_record = Wave5OperationalRecordV1 {
-            contract: "joshi.wave5.operational_record.v1".into(),
-            schema_version: 1,
-            record_id: status_id.to_string(),
-            run_registration_id: run_id.to_string(),
-            run_registration_digest: registration_receipt.exact_document_digest.to_string(),
-            component: "export".into(),
-            kind: Wave5OperationalRecordKind::Degradation,
-            state: Wave5OperationalState::Degraded,
-            cause: Some("export_stale".into()),
-            predecessor_record_id: None,
-            evidence_commit_seq: None,
-            observed_at: status_context.committed_at(),
-            detail_digest: None,
-            authority: AUTHORITY.into(),
+    let degraded_status =
+        if let Some(existing) = store.load_wave5_g0_status_occurrence_v1(&status_id)? {
+            existing
+        } else {
+            let status_context = store.begin_wave5_commit(
+                StableString::new("wave5:g0:source-publication:status")?,
+                StableString::new(env!("CARGO_PKG_VERSION"))?,
+            )?;
+            let status_record = Wave5OperationalRecordV1 {
+                contract: "joshi.wave5.operational_record.v1".into(),
+                schema_version: 1,
+                record_id: status_id.to_string(),
+                run_registration_id: run_id.to_string(),
+                run_registration_digest: registration_receipt.exact_document_digest.to_string(),
+                component: "export".into(),
+                kind: Wave5OperationalRecordKind::Degradation,
+                state: Wave5OperationalState::Degraded,
+                cause: Some("export_stale".into()),
+                predecessor_record_id: None,
+                evidence_commit_seq: None,
+                observed_at: status_context.committed_at(),
+                detail_digest: None,
+                authority: AUTHORITY.into(),
+            };
+            let status_receipt = store.commit_wave5_operational_record_v1(
+                &serde_json::to_vec(&status_record)?,
+                &status_context,
+            )?;
+            let stored = store
+                .load_wave5_g0_status_occurrence_v1(&status_id)?
+                .ok_or(Wave5G0SourcePublicationError::Invariant(
+                    "degraded status occurrence was absent immediately after commit",
+                ))?;
+            if status_receipt.commit_seq != stored.available_commit_seq {
+                return Err(Wave5G0SourcePublicationError::Invariant(
+                    "degraded status receipt differs from readback",
+                ));
+            }
+            stored
         };
-        let status_receipt = store.commit_wave5_operational_record_v1(
-            &serde_json::to_vec(&status_record)?,
-            &status_context,
-        )?;
-        let stored = store
-            .load_wave5_g0_status_occurrence_v1(&status_id)?
-            .ok_or(Wave5G0SourcePublicationError::Invariant(
-                "degraded status occurrence was absent immediately after commit",
-            ))?;
-        if status_receipt.commit_seq != stored.available_commit_seq {
-            return Err(Wave5G0SourcePublicationError::Invariant(
-                "degraded status receipt differs from readback",
-            ));
-        }
-        stored
-    };
     inject(fault, Wave5G0SourcePublicationFaultPoint::AfterStatus)?;
-    if episode.commit_seq >= status.available_commit_seq {
+    if episode.commit_seq >= degraded_status.available_commit_seq {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "degraded status does not strictly follow the memory prefix",
+        ));
+    }
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryStart,
+    )?;
+    let export_recovery_start = ensure_v10_export_recovery_started(
+        &mut store,
+        &run_id,
+        registration_receipt.exact_document_digest.as_str(),
+        &degraded_status,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryStart,
+    )?;
+    if degraded_status.available_commit_seq >= export_recovery_start.available_commit_seq {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "V10 export recovery-start does not follow its degradation",
         ));
     }
     inject(
@@ -618,7 +648,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         fault,
         Wave5G0SourcePublicationFaultPoint::AfterExportInputBackup,
     )?;
-    if status.available_commit_seq >= export_input_backup.source_max_commit_seq
+    if export_recovery_start.available_commit_seq >= export_input_backup.source_max_commit_seq
         || export_input_backup.source_max_commit_seq >= export_input_backup.commit_seq
     {
         return Err(Wave5G0SourcePublicationError::Invariant(
@@ -651,6 +681,53 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "store-owned V10 export returned an invalid receipt",
         ));
     }
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeV10ExportBinding,
+    )?;
+    let v10_export_binding = ensure_v10_export_binding(
+        &mut store,
+        &run_id,
+        registration_receipt.exact_document_digest.as_str(),
+        &v10_export,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterV10ExportBinding,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryReady,
+    )?;
+    let recovered_status = ensure_v10_export_recovered(
+        &mut store,
+        &run_id,
+        registration_receipt.exact_document_digest.as_str(),
+        &export_recovery_start,
+        &v10_export_binding,
+    )?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryReady,
+    )?;
+    if v10_export.commit_seq() >= v10_export_binding.available_commit_seq
+        || v10_export_binding.available_commit_seq >= recovered_status.available_commit_seq
+        || recovered_status.evidence_commit_seq != Some(v10_export_binding.available_commit_seq)
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "V10 export recovery does not close its exact run binding",
+        ));
+    }
+    let store_status_view = store.load_wave5_store_status_view_v1(&run_id)?;
+    if !store_status_view
+        .durable_progress
+        .iter()
+        .any(|progress| progress.progress_id.as_str() == "export:export-binding:wave5-g0-v10-0001")
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "recovered V10 export is absent from store-derived progress",
+        ));
+    }
     inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeBackup)?;
     let backup_id = StableString::new("backup:wave5-g0-partial-0001")?;
     let backup_catalog = state.join("g0-backup/catalog.sqlite");
@@ -668,7 +745,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     )?;
     inject(fault, Wave5G0SourcePublicationFaultPoint::AfterBackup)?;
     if backup.artifact_count == 0
-        || v10_export.commit_seq() >= backup.source_max_commit_seq
+        || recovered_status.available_commit_seq >= backup.source_max_commit_seq
         || backup.source_max_commit_seq >= backup.commit_seq
     {
         return Err(Wave5G0SourcePublicationError::Invariant(
@@ -744,10 +821,16 @@ pub fn run_wave5_g0_source_publication_with_fault(
         .ok_or(Wave5G0SourcePublicationError::Invariant(
             "baseline import was absent after restart",
         ))?;
-    let reopened_status = reopened
-        .load_wave5_g0_status_occurrence_v1(&status_id)?
+    let reopened_v10_export_binding = reopened
+        .load_wave5_g0_export_occurrence_v1(&StableString::new(V10_EXPORT_BINDING_ID)?)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
-            "degraded status occurrence was absent after restart",
+            "V10 export binding was absent after restart",
+        ))?;
+    let recovered_status_id = StableString::new("status:wave5-g0-v10-export-ready")?;
+    let reopened_status = reopened
+        .load_wave5_g0_status_occurrence_v1(&recovered_status_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "recovered V10 export status was absent after restart",
         ))?;
     let reopened_store_status_view = reopened.load_wave5_store_status_view_v1(&run_id)?;
     let reopened_backup = reopened.load_wave5_g0_backup_v1(&backup_id)?.ok_or(
@@ -770,7 +853,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         || reopened_episode != episode
         || reopened_export != baseline.export
         || reopened_import != baseline.import
-        || reopened_status != status
+        || reopened_v10_export_binding != v10_export_binding
+        || reopened_status != recovered_status
         || reopened_store_status_view != store_status_view
         || reopened_backup != expected_backup
         || reopened_restore != expected_restore
@@ -797,7 +881,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         episode_receipt.occurrence_digest(),
         &v10_export,
         &baseline.import,
-        &status,
+        &recovered_status,
         &backup,
         &restore,
     )?;
@@ -841,8 +925,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         v10_export_snapshot_id: v10_export.snapshot_id().to_string(),
         v10_export_manifest_digest: v10_export.manifest_digest().to_string(),
         v10_export_validation_digest: v10_export.validation_digest().to_string(),
-        status_record_id: status.record_id.to_string(),
-        status_record_digest: status.record_bytes_digest.to_string(),
+        v10_export_binding_id: v10_export_binding.export_binding_id.to_string(),
+        v10_export_binding_digest: v10_export_binding.binding_bytes_digest.to_string(),
+        status_record_id: recovered_status.record_id.to_string(),
+        status_record_digest: recovered_status.record_bytes_digest.to_string(),
         store_progress_count: store_status_view.durable_progress.len(),
         backup_id: backup.backup_id.to_string(),
         backup_catalog_digest: backup.catalog_digest.to_string(),
@@ -860,6 +946,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         baseline_export_import_closed: true,
         nonempty_v10_export_closed: true,
         partial_status_closed: true,
+        v10_export_recovery_closed: true,
         partial_backup_restore_closed: true,
         restart_reverified: true,
         full_offline_fault_walk: false,
@@ -1184,6 +1271,128 @@ fn ensure_baseline_export_recovered(
         Wave5G0SourcePublicationError::Invariant(
             "baseline export ready status was absent after commit",
         ),
+    )
+}
+
+fn ensure_v10_export_recovery_started(
+    store: &mut SqliteStore,
+    run_id: &StableString,
+    run_registration_digest: &str,
+    degradation: &joshi_store::Wave5G0StatusOccurrence,
+) -> Result<joshi_store::Wave5G0StatusOccurrence, Wave5G0SourcePublicationError> {
+    let recovery_id = StableString::new("status:wave5-g0-v10-export-recovery-started")?;
+    if let Some(existing) = store.load_wave5_g0_status_occurrence_v1(&recovery_id)? {
+        return Ok(existing);
+    }
+    let context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:v10-export-recovery-started")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let record = Wave5OperationalRecordV1 {
+        contract: "joshi.wave5.operational_record.v1".into(),
+        schema_version: 1,
+        record_id: recovery_id.to_string(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: run_registration_digest.into(),
+        component: "export".into(),
+        kind: Wave5OperationalRecordKind::RecoveryStarted,
+        state: Wave5OperationalState::Recovering,
+        cause: None,
+        predecessor_record_id: Some(degradation.record_id.to_string()),
+        evidence_commit_seq: None,
+        observed_at: context.committed_at(),
+        detail_digest: None,
+        authority: AUTHORITY.into(),
+    };
+    store.commit_wave5_operational_record_v1(&serde_json::to_vec(&record)?, &context)?;
+    store
+        .load_wave5_g0_status_occurrence_v1(&recovery_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "V10 export recovery-start was absent after commit",
+        ))
+}
+
+fn ensure_v10_export_binding(
+    store: &mut SqliteStore,
+    run_id: &StableString,
+    run_registration_digest: &str,
+    export: &joshi_store::ProductionExportCommitReceipt,
+) -> Result<joshi_store::Wave5G0ExportOccurrence, Wave5G0SourcePublicationError> {
+    let binding_id = StableString::new(V10_EXPORT_BINDING_ID)?;
+    if let Some(existing) = store.load_wave5_g0_export_occurrence_v1(&binding_id)? {
+        if existing.run_registration_id != *run_id
+            || existing.export_request_id != *export.export_request_id()
+            || existing.validation_id != *export.validation_id()
+            || existing.snapshot_id != *export.snapshot_id()
+        {
+            return Err(Wave5G0SourcePublicationError::Invariant(
+                "stored V10 export binding differs from the exact production receipt",
+            ));
+        }
+        return Ok(existing);
+    }
+    let binding = Wave5ExportValidationBindingV1 {
+        contract: "joshi.wave5.export_validation_binding.v1".into(),
+        schema_version: 1,
+        export_binding_id: binding_id.to_string(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: run_registration_digest.into(),
+        export_request_id: export.export_request_id().to_string(),
+        validation_id: export.validation_id().to_string(),
+        snapshot_id: export.snapshot_id().to_string(),
+        manifest_digest: export.manifest_digest().to_string(),
+        rust_validation_digest: export.rust_validation_digest().to_string(),
+        python_validation_digest: export.python_validation_digest().to_string(),
+        validation_digest: export.validation_digest().to_string(),
+        truth_fingerprint: export.truth_fingerprint().to_string(),
+        authority: AUTHORITY.into(),
+    };
+    let context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:v10-export-binding")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    store.commit_wave5_export_validation_binding_v1(&serde_json::to_vec(&binding)?, &context)?;
+    store
+        .load_wave5_g0_export_occurrence_v1(&binding_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "V10 export binding was absent after commit",
+        ))
+}
+
+fn ensure_v10_export_recovered(
+    store: &mut SqliteStore,
+    run_id: &StableString,
+    run_registration_digest: &str,
+    recovery_start: &joshi_store::Wave5G0StatusOccurrence,
+    export_binding: &joshi_store::Wave5G0ExportOccurrence,
+) -> Result<joshi_store::Wave5G0StatusOccurrence, Wave5G0SourcePublicationError> {
+    let ready_id = StableString::new("status:wave5-g0-v10-export-ready")?;
+    if let Some(existing) = store.load_wave5_g0_status_occurrence_v1(&ready_id)? {
+        return Ok(existing);
+    }
+    let context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:v10-export-ready")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let record = Wave5OperationalRecordV1 {
+        contract: "joshi.wave5.operational_record.v1".into(),
+        schema_version: 1,
+        record_id: ready_id.to_string(),
+        run_registration_id: run_id.to_string(),
+        run_registration_digest: run_registration_digest.into(),
+        component: "export".into(),
+        kind: Wave5OperationalRecordKind::RecoveryVerified,
+        state: Wave5OperationalState::Ready,
+        cause: None,
+        predecessor_record_id: Some(recovery_start.record_id.to_string()),
+        evidence_commit_seq: Some(export_binding.available_commit_seq.get().to_string()),
+        observed_at: context.committed_at(),
+        detail_digest: Some(export_binding.available_commit_digest.to_string()),
+        authority: AUTHORITY.into(),
+    };
+    store.commit_wave5_operational_record_v1(&serde_json::to_vec(&record)?, &context)?;
+    store.load_wave5_g0_status_occurrence_v1(&ready_id)?.ok_or(
+        Wave5G0SourcePublicationError::Invariant("V10 export ready status was absent after commit"),
     )
 }
 
@@ -1567,6 +1776,7 @@ mod tests {
         assert!(report.baseline_export_import_closed);
         assert!(report.nonempty_v10_export_closed);
         assert!(report.partial_status_closed);
+        assert!(report.v10_export_recovery_closed);
         assert!(report.partial_backup_restore_closed);
         assert_eq!(report.memory_queue_through, 2);
         assert!(report.store_progress_count >= 2);
@@ -1592,6 +1802,7 @@ mod tests {
             .expect("status evidence");
         assert_eq!(status_evidence.evidence_id, report.status_record_id);
         assert_eq!(status_evidence.content_digest, report.status_record_digest);
+        assert_eq!(report.status_record_id, "status:wave5-g0-v10-export-ready");
         let export_evidence = report
             .partial_fault_result
             .evidence_bundle
@@ -1677,10 +1888,16 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
             Wave5G0SourcePublicationFaultPoint::BeforeStatus,
             Wave5G0SourcePublicationFaultPoint::AfterStatus,
+            Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryStart,
+            Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryStart,
             Wave5G0SourcePublicationFaultPoint::BeforeExportInputBackup,
             Wave5G0SourcePublicationFaultPoint::AfterExportInputBackup,
             Wave5G0SourcePublicationFaultPoint::BeforeV10Export,
             Wave5G0SourcePublicationFaultPoint::AfterV10Export,
+            Wave5G0SourcePublicationFaultPoint::BeforeV10ExportBinding,
+            Wave5G0SourcePublicationFaultPoint::AfterV10ExportBinding,
+            Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryReady,
+            Wave5G0SourcePublicationFaultPoint::AfterExportRecoveryReady,
             Wave5G0SourcePublicationFaultPoint::BeforeBackup,
             Wave5G0SourcePublicationFaultPoint::AfterBackup,
             Wave5G0SourcePublicationFaultPoint::BeforeRestore,

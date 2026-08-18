@@ -117,6 +117,7 @@ pub struct ProductionExportCommitReceipt {
     rust_validation_digest: ValueDigest,
     python_validation_digest: ValueDigest,
     validation_digest: ValueDigest,
+    truth_fingerprint: ValueDigest,
     commit_seq: CommitSeq,
     status: IdempotencyStatus,
 }
@@ -161,6 +162,10 @@ impl ProductionExportCommitReceipt {
     #[must_use]
     pub const fn validation_digest(&self) -> &ValueDigest {
         &self.validation_digest
+    }
+    #[must_use]
+    pub const fn truth_fingerprint(&self) -> &ValueDigest {
+        &self.truth_fingerprint
     }
     #[must_use]
     pub const fn commit_seq(&self) -> CommitSeq {
@@ -1378,6 +1383,7 @@ impl SqliteStore {
             rust_validation_digest: snapshot.rust_validation().receipt_digest().clone(),
             python_validation_digest: snapshot.python_validation().receipt_digest().clone(),
             validation_digest,
+            truth_fingerprint,
             commit_seq: structural.commit_seq,
             status: structural.status,
         })
@@ -2004,6 +2010,10 @@ mod tests {
         assert_eq!(accepted.status(), IdempotencyStatus::Accepted);
         assert_eq!(accepted.commit_seq(), CommitSeq::new(14));
         assert_eq!(accepted.export_request_id(), snapshot.export_request_id());
+        assert_eq!(
+            accepted.truth_fingerprint(),
+            &operation_digest(snapshot.truth_fingerprint()).expect("truth fingerprint")
+        );
         let retry = store
             .commit_production_export_snapshot_v2(&validation_id, &snapshot, &context)
             .expect("exact production export retry");

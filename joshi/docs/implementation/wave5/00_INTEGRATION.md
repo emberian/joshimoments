@@ -130,7 +130,7 @@ The final script output must continue to state `useful_partial`,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk may report
 `public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because complete
-memory, positive status recovery, default product mount, and the full backup/restore crash
+memory, default product mount, and the full backup/restore crash
 boundary remain open. The
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
@@ -138,7 +138,7 @@ prepare/body/head for one exact offline fixture and reports their artifact ident
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
 then binds its receipt to the run before the supervisor spool records the ACK. The full 37-scenario
-crash matrix, default product mount, complete memory closure, positive status recovery and final
+crash matrix, default product mount, complete memory closure and final
 no-original-root reopen remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
@@ -155,11 +155,13 @@ registered CAS import, executes the exact 24-table V10 exporter with independent
 locked-Python validation, commits and reopens the production snapshot, and includes its immutable
 files in the final backup/restore inventory. Exact retry derives export time from the durable input
 backup commit, so it reproduces the same snapshot and operation digest. This is a real nonempty V10
-component export/import closure, but it is not a recovered status or complete root walk.
-After the memory prefix, the component also persists and reopens one exact same-run `export_stale`
-degradation. It first resolves the store-derived run-registration and spool-catalog progress rows,
-then records the negative operational fact after the episode commit. This proves a durable degraded
-status only; it neither records `Ready` nor claims recovery, export completion, or root readiness.
+component export/import closure, but it is not a complete root walk.
+After the memory prefix, the component persists one exact same-run `export_stale` degradation,
+starts recovery before the immutable export-input backup, commits the production V10 snapshot, and
+then creates a same-run export binding. Only that binding's store commit sequence and commit digest
+may authorize the final `RecoveryVerified/Ready` occurrence. The complete chain is re-parsed and
+reopened after restart; no caller boolean or production-receipt field can bypass the binding. This
+proves positive recovery for the offline-fixture export component only, not root or live readiness.
 The component uses a 1 KiB inline threshold so the retained source body produces one genuine
 external immutable object, then executes the store-owned backup and restore writers into distinct
 roots. It requires a nonempty inventory, exact retry, restored catalog/artifact digest equality and
@@ -175,7 +177,8 @@ recorded as Glass use or as a completed root occurrence.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
-prepare, head, act, episode, committed V10 export manifest, restricted import, status, backup, and
+prepare, head, act, episode, committed V10 export manifest, restricted import, recovered status,
+backup, and
 restore), and
 each maps one-to-one to
 `observed_partial`. The provider plan

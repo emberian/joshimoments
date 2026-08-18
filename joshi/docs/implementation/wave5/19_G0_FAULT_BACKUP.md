@@ -108,12 +108,12 @@ The current Core component result carries fifteen exact roles: supervisor reserv
 origin segment, store receipt, catalog binding, catalog ACK, semantic fact,
 publication prepare, publication head, memory act, memory episode, the committed nonempty V10
 export manifest,
-the V10 restricted-import readback, and durable degraded-status readback, plus an artifact-bearing
+the V10 restricted-import readback, and durable export-recovery readback, plus an artifact-bearing
 backup manifest and distinct-root restore readback. Their identities may contain
 the colon separators used by actual store/spool contracts. The reservation and later origin are
 now one ordered handoff: the supervisor fsyncs the exact Pump batch and the store consumes that
-same immutable segment before the run binding and ACK. Pairing/Glass fault evidence, positive
-status recovery, and final root reopen remain absent and therefore cannot appear
+same immutable segment before the run binding and ACK. Pairing/Glass fault evidence and the final
+root reopen remain absent and therefore cannot appear
 `observed_partial`. The partial backup contains the store-reachable external source object,
 but not the separate supervisor spool inventory, and does not make the original roots unavailable.
 

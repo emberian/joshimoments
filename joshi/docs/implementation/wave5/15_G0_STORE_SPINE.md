@@ -150,6 +150,8 @@ Export/import/status and backup:
   import, then reopens the committed snapshot and captures its manifest/tables in a later nonempty
   backup. Export time is the immutable backup-commit time, so exact retry cannot mutate the
   content-derived snapshot under a fixed operation identity.
+  Core then commits a canonical same-run export binding and uses only that binding commit/digest as
+  the finite `RecoveryVerified/Ready` evidence. The production receipt alone cannot mint recovery.
 - `commit_wave5_g0_backup_v1` creates an online catalog backup, independently rederives all
   reachable external objects, and reserves exact initially absent destinations before file I/O.
   A private stage is regenerated until its exact digest/cutoff has its own durable settlement;
