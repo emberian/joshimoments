@@ -8,6 +8,17 @@
       "digest": "sha256:d79e01fab67daeb50068755da6cef7dea695a05505b80a923decceb575c919ec"
     }
   ],
+  "goldenChain": {
+    "description": "exact scene/presentation act through partial censoring; no item is a durable receipt",
+    "occurrences": [
+      "{\"kind\":\"operator_act\",\"value\":{\"actId\":\"act-episode\",\"sessionId\":\"session-1\",\"occurredAt\":\"12\",\"scene\":{\"status\":\"committed\",\"value\":{\"sceneId\":\"scene-1\",\"sceneDigest\":\"sha256:4f48f7207cebf92638debb5694e4a8677350cf88a9e98e73c6c466b6b1d43890\",\"catalogCutoff\":\"10\"}},\"presentation\":{\"status\":\"occurrence\",\"value\":{\"occurrenceId\":\"presentation-occurrence-1\",\"presentationId\":\"presentation-1\",\"scene\":{\"sceneId\":\"scene-1\",\"sceneDigest\":\"sha256:4f48f7207cebf92638debb5694e4a8677350cf88a9e98e73c6c466b6b1d43890\",\"catalogCutoff\":\"10\"},\"renderDigest\":\"sha256:887270d0cbc560af35f1326d55e9dbdc35ea2301c2cd26633fb6d4932deee268\",\"viewport\":\"1280x720\",\"focus\":\"candidate\",\"occurredAt\":\"11\"}},\"kind\":\"mark\",\"subject\":\"mint-1\",\"assertion\":{\"assertionId\":\"assertion-1\",\"disposition\":{\"kind\":\"cannot_articulate\"}}}}",
+      "{\"kind\":\"episode\",\"value\":{\"episodeId\":\"episode-1\",\"sessionId\":\"session-1\",\"actIds\":[\"act-episode\"],\"decisionCutoff\":\"20\",\"startedAt\":\"12\",\"endedAt\":\"20\",\"completeness\":\"partial\",\"segments\":[{\"segmentId\":\"segment-1\",\"startAt\":\"12\",\"endAt\":\"16\",\"path\":\"flat_watch\",\"effect\":{\"kind\":\"unknown\",\"value\":{\"reason\":\"manual effect not witnessed\"}},\"lot\":{\"kind\":\"unresolved\",\"value\":{\"reason\":\"no lot association\"}}},{\"segmentId\":\"segment-2\",\"startAt\":\"16\",\"endAt\":\"20\",\"path\":\"no_trade\",\"effect\":{\"kind\":\"not_applicable_by_no_trade\"},\"lot\":{\"kind\":\"not_applicable\"}}]}}",
+      "{\"kind\":\"replay\",\"value\":{\"replayId\":\"replay-hidden\",\"episodeId\":\"episode-1\",\"phase\":\"outcome_hidden_reconstruction\",\"visibility\":{\"kind\":\"hidden\"},\"contentRole\":\"outcome_hidden_reconstruction\",\"informationCutoff\":\"12\",\"witnessedScene\":{\"sceneId\":\"scene-1\",\"sceneDigest\":\"sha256:4f48f7207cebf92638debb5694e4a8677350cf88a9e98e73c6c466b6b1d43890\",\"catalogCutoff\":\"10\"},\"blobDigest\":\"sha256:e564b4081d7a9ea4b00dada53bdae70c99b87b6fce869f0c3dd4d2bfa1e53e1c\",\"recordedAt\":\"21\",\"qualification\":\"unverified_semantic\"}}",
+      "{\"kind\":\"session_close\",\"value\":{\"sessionId\":\"session-1\",\"closedAt\":\"21\",\"status\":\"incomplete_late\",\"cutoff\":\"20\",\"recordedAt\":\"21\",\"committedAt\":\"22\",\"qualification\":\"unverified_semantic\"}}",
+      "{\"kind\":\"knowledge_closure\",\"value\":{\"closureId\":\"knowledge-1\",\"episodeId\":\"episode-1\",\"knowledgeDeadline\":\"25\",\"evidenceCutoff\":\"24\",\"gapIds\":[\"gap-outcome\"],\"state\":\"partial\",\"recordedAt\":\"26\",\"committedAt\":\"27\",\"qualification\":\"unverified_semantic\"}}",
+      "{\"kind\":\"outcome_at_horizon\",\"value\":{\"outcomeId\":\"outcome-1\",\"episodeId\":\"episode-1\",\"horizon\":\"30\",\"knowledgeClosureId\":\"knowledge-1\",\"state\":{\"kind\":\"missing\",\"value\":{\"reason\":\"source gap\"}},\"interpretation\":null,\"outcomeKnownAt\":\"31\",\"recordedAt\":\"32\",\"committedAt\":\"33\",\"qualification\":\"unverified_semantic\"}}"
+    ]
+  },
   "cases": [
     {
       "name": "act_survives_missing_presentation",

@@ -6,6 +6,9 @@ use joshi_projection::ProjectionAuthority;
 use super::*;
 
 const V2_FIXTURE: &str = include_str!("../../../fixtures/publication/cockpit_v2_manifest_v1.json");
+const V2_RESOLVED_INPUT_FIXTURE: &str =
+    include_str!("../../../fixtures/publication/cockpit_v2_resolved_source_facts_input_v1.json");
+const V2_HEAD_FIXTURE: &str = include_str!("../../../fixtures/publication/cockpit_v2_head_v1.json");
 
 fn s(value: &str) -> StableString {
     StableString::new(value).unwrap()
@@ -405,4 +408,37 @@ fn v2_manifest_fixture_is_canonical() {
         parsed.canonical_bytes().unwrap(),
         V2_FIXTURE.trim_end().as_bytes()
     );
+}
+
+#[test]
+fn resolved_source_facts_fixture_prepares_the_frozen_manifest() {
+    let input = parse_cockpit_v2_resolved_source_facts_input(
+        V2_RESOLVED_INPUT_FIXTURE.trim_end().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        input.canonical_bytes().unwrap(),
+        V2_RESOLVED_INPUT_FIXTURE.trim_end().as_bytes()
+    );
+    let prepared = prepare_cockpit_v2_from_resolved_source_facts(input).unwrap();
+    assert_eq!(prepared.container_bytes, V2_FIXTURE.trim_end().as_bytes());
+    let publication = finalize_cockpit_v2(
+        &prepared,
+        CockpitPublicationId::new("cockpit-v2-g0-1").unwrap(),
+        CommitSeq::new(11),
+        None,
+        None,
+    )
+    .unwrap();
+    let head = CockpitV2HeadV1::from_publication(&publication).unwrap();
+    assert_eq!(
+        publication.publication_digest.as_str(),
+        "sha256:8c79941372588b2001608267ce562288488d3c0dd519595674cc6c0721af0f0f"
+    );
+    assert_eq!(
+        head.canonical_bytes().unwrap(),
+        V2_HEAD_FIXTURE.trim_end().as_bytes()
+    );
+    parse_cockpit_v2_publication(&publication.canonical_bytes().unwrap()).unwrap();
+    parse_cockpit_v2_head(V2_HEAD_FIXTURE.trim_end().as_bytes()).unwrap();
 }

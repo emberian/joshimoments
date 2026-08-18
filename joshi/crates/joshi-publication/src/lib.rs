@@ -43,6 +43,11 @@ pub const COCKPIT_V2_MANIFEST_CONTRACT: &str = "joshi.cockpit.v2.manifest";
 pub const COCKPIT_V2_PUBLICATION_CONTRACT: &str = "joshi.cockpit.v2.publication";
 pub const COCKPIT_V2_CHECKPOINT_CONTRACT: &str = "joshi.cockpit.v2.checkpoint";
 pub const COCKPIT_V2_QUERY_CONTRACT: &str = "joshi.cockpit.v2.query";
+/// Store-resolved public source-fact closure consumed to prepare one Cockpit V2 manifest.
+///
+/// This remains an input contract: it has no durable receipt or publication authority.
+pub const COCKPIT_V2_RESOLVED_SOURCE_FACTS_INPUT_CONTRACT: &str =
+    "joshi.store.cockpit.v2.resolved_source_facts_input";
 pub const COCKPIT_V2_SCHEMA_VERSION: u16 = 2;
 
 #[cfg(test)]

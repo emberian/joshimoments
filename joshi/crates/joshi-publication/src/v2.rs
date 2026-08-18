@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     COCKPIT_V2_CHECKPOINT_CONTRACT, COCKPIT_V2_MANIFEST_CONTRACT, COCKPIT_V2_PUBLICATION_CONTRACT,
-    COCKPIT_V2_QUERY_CONTRACT, COCKPIT_V2_SCHEMA_VERSION, CockpitPublicationId, PublicationError,
-    digest_json, digest_match, sha256_digest, stable, validate_sha256,
+    COCKPIT_V2_QUERY_CONTRACT, COCKPIT_V2_RESOLVED_SOURCE_FACTS_INPUT_CONTRACT,
+    COCKPIT_V2_SCHEMA_VERSION, CockpitPublicationId, PublicationError, digest_json, digest_match,
+    sha256_digest, stable, validate_sha256,
 };
 
 /// Exact valid/knowledge/commit cutoff used by every V2 query and manifest.
@@ -201,6 +202,98 @@ pub struct CockpitV2ManifestV1 {
 #[serde(rename_all = "snake_case")]
 pub enum CockpitV2Ceiling {
     UnverifiedSemantic,
+}
+
+/// Exact store-resolved public source-fact closure handed to the pure Cockpit V2 preparer.
+///
+/// The store adapter must resolve this closure at one explicit profile, observed-universe, and
+/// cutoff. This DTO intentionally has no receipt, store handle, or publication commit field. Its
+/// canonical bytes are the adapter/readback boundary; `into_manifest` derives the two manifest
+/// digest slots rather than accepting caller-selected values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CockpitV2ResolvedSourceFactsInputV1 {
+    pub contract: StableString,
+    pub schema_version: u16,
+    pub surface_profile: CockpitV2SurfaceProfileRefV1,
+    pub observed_universe: CockpitV2ObservedUniverseRefV1,
+    pub cutoff: CockpitV2CutoffV1,
+    pub source_facts: Vec<CockpitV2SourceFactRefV1>,
+    pub memberships: Vec<CockpitV2MembershipRefV1>,
+    pub coverage: Vec<CockpitV2CoverageRefV1>,
+    pub gaps: Vec<CockpitV2GapRefV1>,
+    pub rendered_subjects: Vec<StableString>,
+    pub omissions: Vec<CockpitV2OmissionV1>,
+    pub ordering_policy: StableString,
+    pub pagination_policy: StableString,
+    pub authority: ProjectionAuthority,
+    pub ceiling: CockpitV2Ceiling,
+}
+
+impl CockpitV2ResolvedSourceFactsInputV1 {
+    /// Produces the manifest whose semantic and container digests are derived from this closure.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid input contract or any profile/universe/fact/coverage/cutoff closure
+    /// defect that would make a manifest invalid.
+    pub fn into_manifest(self) -> Result<CockpitV2ManifestV1, PublicationError> {
+        if self.contract.as_str() != COCKPIT_V2_RESOLVED_SOURCE_FACTS_INPUT_CONTRACT
+            || self.schema_version != COCKPIT_V2_SCHEMA_VERSION
+            || self.authority != ProjectionAuthority::ReadOnlyNoExecution
+            || self.ceiling != CockpitV2Ceiling::UnverifiedSemantic
+        {
+            return Err(PublicationError::CockpitV2Contract);
+        }
+        let mut manifest = CockpitV2ManifestV1 {
+            contract: stable(COCKPIT_V2_MANIFEST_CONTRACT),
+            schema_version: COCKPIT_V2_SCHEMA_VERSION,
+            surface_profile: self.surface_profile,
+            observed_universe: self.observed_universe,
+            cutoff: self.cutoff,
+            source_facts: self.source_facts,
+            memberships: self.memberships,
+            coverage: self.coverage,
+            gaps: self.gaps,
+            rendered_subjects: self.rendered_subjects,
+            omissions: self.omissions,
+            ordering_policy: self.ordering_policy,
+            pagination_policy: self.pagination_policy,
+            authority: self.authority,
+            ceiling: self.ceiling,
+            semantic_digest: crate::zero_digest()?,
+            container_digest: crate::zero_digest()?,
+        };
+        manifest.semantic_digest = manifest.computed_semantic_digest()?;
+        manifest.container_digest = manifest.computed_container_digest()?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    /// Returns strict canonical store-adapter bytes after validating the full public closure.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid closure or JSON encoding failure.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, PublicationError> {
+        self.clone().into_manifest()?;
+        serde_json::to_vec(self).map_err(PublicationError::from)
+    }
+}
+
+/// Strict canonical readback for one store-resolved Cockpit source-fact closure.
+///
+/// # Errors
+///
+/// Refuses unknown fields, noncanonical bytes, or a closure that cannot prepare a valid manifest.
+pub fn parse_cockpit_v2_resolved_source_facts_input(
+    bytes: &[u8],
+) -> Result<CockpitV2ResolvedSourceFactsInputV1, PublicationError> {
+    let value: CockpitV2ResolvedSourceFactsInputV1 = serde_json::from_slice(bytes)?;
+    if value.canonical_bytes()? != bytes {
+        return Err(PublicationError::CockpitV2Digest);
+    }
+    Ok(value)
 }
 
 #[derive(Serialize)]
@@ -618,6 +711,20 @@ pub fn prepare_cockpit_v2(
         container_bytes,
         checkpoint,
     })
+}
+
+/// Validates one exact store-resolved public-fact closure and prepares canonical Cockpit V2 bytes.
+///
+/// This is the only intended conversion from store-resolved source-fact input to a V2 manifest;
+/// adapters must retain the input bytes separately from the derived semantic/container bytes.
+///
+/// # Errors
+///
+/// Refuses a non-public, out-of-cutoff, incomplete, or noncanonical source-fact closure.
+pub fn prepare_cockpit_v2_from_resolved_source_facts(
+    input: CockpitV2ResolvedSourceFactsInputV1,
+) -> Result<PreparedCockpitV2, PublicationError> {
+    prepare_cockpit_v2(input.into_manifest()?)
 }
 
 /// Strict canonical decoders used by publication adapters and readback checks.

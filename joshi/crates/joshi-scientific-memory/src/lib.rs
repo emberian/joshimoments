@@ -10,12 +10,14 @@
 
 mod kernel;
 mod model;
+mod port;
 
 pub use kernel::{
     MemoryError, MemoryKernel, ResearchAdmission, ResearchRefusal, Transition, TransitionOutcome,
     UnverifiedSemanticAct,
 };
 pub use model::*;
+pub use port::*;
 
 /// Stable wire contract for this semantic family.
 pub const MEMORY_CONTRACT: &str = "joshi.scientific_memory.v1";
@@ -25,6 +27,9 @@ pub const MEMORY_TIME_ENCODING: &str = "positive canonical decimal-string Logica
 
 /// Encoding and lineage for scene publication cuts.
 pub const CATALOG_COMMIT_ENCODING: &str = "positive canonical decimal-string CatalogCommitSeq from the immutable scene catalog; never a session tick";
+
+/// Store-owned receipt contract for a durably appended exact memory occurrence.
+pub const MEMORY_STORE_RECEIPT_CONTRACT: &str = "joshi.store.scientific_memory_receipt.v1";
 
 #[cfg(test)]
 mod tests;

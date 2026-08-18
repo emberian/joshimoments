@@ -1,4 +1,5 @@
 use super::*;
+use std::{collections::BTreeSet, fmt};
 
 fn id<T: FromId>(value: &str) -> T {
     T::make(value)
@@ -233,6 +234,47 @@ fn unverified_matching_scene_stays_unqualified_and_gap_repair_is_separate() {
     assert_eq!(verified.occurrences().count(), 2);
 }
 
+#[derive(Debug)]
+struct EchoStoreError;
+
+impl fmt::Display for EchoStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("echo store failure")
+    }
+}
+
+impl std::error::Error for EchoStoreError {}
+
+struct EchoStore;
+
+impl ScientificMemoryStorePort for EchoStore {
+    type Error = EchoStoreError;
+
+    fn append_memory_occurrence(
+        &mut self,
+        request: &MemoryStoreAppendRequestV1,
+    ) -> Result<(), Self::Error> {
+        assert!(parse_memory_occurrence_exact(request.occurrence_bytes()).is_ok());
+        Ok(())
+    }
+}
+
+#[test]
+fn a_caller_implemented_port_cannot_upgrade_unverified_memory() {
+    let occurrence = act("act-port-echo", presentation());
+    let request = MemoryStoreAppendRequestV1::from_occurrence(&occurrence).unwrap();
+    let mut store = EchoStore;
+    store.append_memory_occurrence(&request).unwrap();
+
+    let mut memory = MemoryKernel::new();
+    memory.append(occurrence).unwrap();
+    assert!(matches!(
+        memory.research_admission(&id("act-port-echo")),
+        ResearchAdmission::Refused { reasons }
+            if reasons == BTreeSet::from([ResearchRefusal::UnverifiedSemantic])
+    ));
+}
+
 #[test]
 fn corrections_and_ontology_are_append_only() {
     let mut memory = MemoryKernel::new();
@@ -416,6 +458,27 @@ fn two_pass_replay_and_knowledge_outcome_closure_are_distinct() {
         }))
         .unwrap();
     assert_eq!(memory.occurrences().count(), 6);
+}
+
+#[test]
+fn fixture_chain_is_exact_and_censored_without_outcome_upgrade() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/scientific-memory/adversarial.v1.json"
+    ))
+    .unwrap();
+    let mut memory = MemoryKernel::new();
+    for value in fixture["goldenChain"]["occurrences"].as_array().unwrap() {
+        let bytes = value.as_str().unwrap().as_bytes();
+        let occurrence = parse_memory_occurrence_exact(bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&occurrence).unwrap(), bytes);
+        memory.append(occurrence).unwrap();
+    }
+    assert_eq!(memory.occurrences().count(), 6);
+    assert!(matches!(
+        memory.research_admission(&id("act-episode")),
+        ResearchAdmission::Refused { reasons }
+            if reasons.contains(&ResearchRefusal::UnverifiedSemantic)
+    ));
 }
 
 #[test]
