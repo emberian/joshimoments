@@ -55,16 +55,16 @@ readiness command emits component booleans rather than an artifact-bearing root 
 | --- | --- | --- | --- |
 | Run + accounting | Store-readback registration consumed before attempt; reservation before I/O; exact settlement/retry/restart | **BLOCKED** | Existing registration/circulation and supervisor tests are not yet one occurrence. |
 | Origin + catalog | Fsynced immutable origin, exact store ingest receipt, run-bound catalog binding, ACK, reopen | **PASS only as isolated durable-offline component** | Existing C0 helper closes this component for one compiled public fixture, but its report omits the exact artifact identities and does not join accounting. It is not a G0 pass. |
-| Denominator + hot/control | Nonempty store-derived eligible identities/count/digest at one cutoff; independently derived hot and cold-control membership | **BLOCKED** | The private G0 resolver now derives a nonempty partition from C0 facts and recognized coverage rows, but no honest writer test or root evidence bundle establishes that population in the required occurrence. |
-| Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **BLOCKED** | A private adapter reopens retained C0 blobs and resolves recognized coverage/membership rows, while the exporter now reparses exact descriptor bytes. There is still no honest store-writer fixture/root witness connecting those paths. |
-| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only at intrinsic pure contract; BLOCKED durable** | Pure contract and private staged writers exist, but no honest writer test/root adapter or crash/reopen witness closes the store-resolved prepare/body/head chain. |
+| Denominator + hot/control | Nonempty store-derived eligible identities/count/digest at one cutoff; independently derived hot and cold-control membership | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | The exact selection is retained separately from the exact provider body, its subjects must equal the parsed fact denominator, and the private resolver/reopen derives one hot plus one cold-control subject. This is fixture membership, not product parity or a live acquisition-policy result. |
+| Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | `wave5-g0-source-publication` now walks the real writer: the source occurrence is derived from the run-bound C0 receipt and decoded provider bytes, then fully rederived after read-only reopen and exact retry. It is not yet joined to supervisor accounting or a nonfixture source. |
+| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component; BLOCKED fault/root/mounted** | The component command commits strict prepare → immutable body → append-only head, reopens all exact bytes/digests, and retries idempotently. It does not yet execute before/after crash scenarios, mount the immutable route, or prove a paired Glass open. |
 | Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable protocol; BLOCKED default/mounted G0** | Store restart counts are now derived by predecessor kind, and the exact SQLite exchange/scope/revoke/restart/next-ordinal plus expiry/reopen tests pass. The constructor remains crate-private, `Serve` never selects it, the production Glass shell advertises the route as unavailable, and no exact publication is opened. |
 | Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only at intrinsic request/non-promotion contract; BLOCKED durable** | The public port cannot mint a receipt or upgrade the kernel. The private transaction-ordered writer admits only acts/partial episodes, so it does not close the complete required chain. |
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS only as synthetic cross-runtime format; BLOCKED store/root** | The regenerated 24-relation V10 fixture passes exact Rust/Python readback against frozen 0010 and has ten nonempty G0 rows. The private wrapper overrides catalog identity/path/range from an exact backup and resolves CAS, closing the inspected foreign-catalog gap, but no test invokes it or the 24-table store commit branch. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **BLOCKED** | Existing adapter does not close every G0 component and an aggregate Boolean is not evidence. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS only as isolated durable backup/restore; BLOCKED fault/root** | A public-API test now backs up a forced-external object, retries exactly, hides the live roots, restores to distinct roots, restarts the authority store, reopens exact bytes and rejects postcommit tamper. It does not execute the harness crash matrix or a complete G0 occurrence. |
 | Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only as false-only contract scaffold; BLOCKED executable/root** | The isolated harness validates baseline plus all 18 before/after crash scenarios and cannot emit a pass without adapters. It supplies no adapters or root walk. |
-| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **BLOCKED** | Current readiness is `useful_partial` and explicitly has `fullOfflineFaultWalk:false`. |
+| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **BLOCKED** | The new component report carries exact run/selection/source/prepare/publication/head identities and explicitly has `fullOfflineFaultWalk:false`; it still omits the remaining conjuncts and is not the root bundle. |
 
 ## Red-team invariants for landing components
 
@@ -447,17 +447,19 @@ Boolean. The current self-hash therefore cannot promote the false-only scaffold.
 No remaining store/schema P0 was reproduced after the freeze. The exact ceilings remain narrower
 than that statement:
 
-- **Source/denominator: BLOCKED.** The resolver accepts only retained public C0 receipts and known
+- **Source/denominator: isolated durable offline-fixture PASS; root/live BLOCKED.** The resolver accepts only retained public C0 receipts and known
   decoded `provider_body` JSON, derives facts from exact blobs at the receipt commit, requires at
   least two subjects, exactly one recognized subject-scoped hot/census window per subject,
   nonempty hot and cold-control partitions, retained recognized gaps, and the exact
-  rendered/omission partition. Load rebuilds the descriptor from store rows and bytes. No honest
-  source-writer test or root occurrence executes this path.
-- **Publication: intrinsic contract pass; durable G0 BLOCKED.** Prepare stores exact resolved
+  rendered/omission partition. Load rebuilds the descriptor from store rows and bytes. The new
+  component witness executes and reopens this path with an exact, separately retained
+  `offline_fixture_only` selection. No supervisor-joined or nonfixture occurrence exists.
+- **Publication: isolated durable offline-fixture PASS; fault/root/mounted BLOCKED.** Prepare stores exact resolved
   input/semantic/container/checkpoint bytes together; body finalization allocates its own commit
   inside one transaction; the later head append is linear and unique, and V10 export admission
-  accepts a V2 publication only with its head at the cutoff. There is no honest store lifecycle or
-  crash/reopen test, mounted immutable route, or paired Glass open.
+  accepts a V2 publication only with its head at the cutoff. The component witness now executes
+  the honest store lifecycle, exact retry, and read-only reopen. It does not yet run each crash
+  boundary, mount the immutable route, or record a paired Glass open.
 - **Scientific memory: intrinsic non-promotion pass; complete durable chain BLOCKED.** Prefix
   reconstruction, idempotency, semantic append validation and queue-generation allocation occur
   beneath the `IMMEDIATE` transaction, and load revalidates the prefix plus exact headed scene.
@@ -479,6 +481,7 @@ than that statement:
 
 ## Current root decision
 
-**W5-G0: BLOCKED.** The isolated origin/catalog component is useful progress but cannot raise the
-root gate. No implementation reviewed at this point supplies one artifact-bearing occurrence
-across all required seams, and no Boolean readiness claim may say otherwise.
+**W5-G0: BLOCKED.** Origin/catalog plus source/denominator/publication now form one useful,
+artifact-bearing offline-fixture component, but they cannot raise the root gate. No implementation
+reviewed at this point supplies one occurrence across every required seam and crash boundary, and
+no Boolean readiness claim may say otherwise.

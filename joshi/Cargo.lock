@@ -1184,6 +1184,7 @@ dependencies = [
  "joshi-operational-status",
  "joshi-operator",
  "joshi-pairing",
+ "joshi-publication",
  "joshi-pump-adapter",
  "joshi-spool",
  "joshi-store",

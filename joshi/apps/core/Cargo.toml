@@ -17,6 +17,7 @@ joshi-operator = { path = "../../crates/joshi-operator" }
 joshi-pairing = { path = "../../crates/joshi-pairing" }
 joshi-operational-status = { path = "../../crates/joshi-operational-status" }
 joshi-pump-adapter = { path = "../../crates/joshi-pump-adapter" }
+joshi-publication = { path = "../../crates/joshi-publication" }
 joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
 serde.workspace = true

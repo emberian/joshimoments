@@ -2,9 +2,10 @@ use std::{path::Path, time::Duration};
 
 use joshi_domain::{StableString, UtcTimestamp, ValueDigest};
 use joshi_pump_adapter::{
-    PUMP_MEASUREMENT_RECEIPT_CONTRACT, PUMP_POLICY_CONTRACT, PUMP_RECEIPT_CONTRACT, PumpSourceKind,
-    close_receipt, close_receipt_bytes, prepare_companion, prepare_direct,
-    prepare_parity_measurement, prepare_promotion_measurement,
+    OFFLINE_FIXTURE_SELECTION_CONTRACT, PUMP_MEASUREMENT_RECEIPT_CONTRACT, PUMP_POLICY_CONTRACT,
+    PUMP_RECEIPT_CONTRACT, PumpSourceKind, close_receipt, close_receipt_bytes, prepare_companion,
+    prepare_direct, prepare_direct_with_offline_fixture_selection, prepare_parity_measurement,
+    prepare_promotion_measurement,
 };
 use joshi_pump_api::{AuthDisposition, ParityInputV2, ParitySource};
 use joshi_store::{SqliteStore, StoreConfig, StoreMode};
@@ -12,6 +13,8 @@ use joshi_store::{SqliteStore, StoreConfig, StoreMode};
 const DIRECT: &[u8] =
     include_bytes!("../../../fixtures/pump-api/direct-fetch-outcome.synthetic.json");
 const COMPANION: &[u8] = include_bytes!("../../../apps/core/fixtures/companion_ingress_v1.json");
+const OFFLINE_SELECTION: &[u8] =
+    include_bytes!("../../../fixtures/pump-api/offline-fixture-selection-v1.json");
 
 fn time(value: &str) -> UtcTimestamp {
     value.parse().unwrap()
@@ -86,6 +89,106 @@ fn direct_ingress_closes_source_batch_policy_spool_and_catalog_domains() {
             .unwrap()
             .replacen('{', "{\"contract\":\"duplicate\",", 1);
     assert!(close_receipt_bytes(&prepared, duplicate.as_bytes()).is_err());
+}
+
+#[test]
+fn offline_fixture_selection_is_exact_separate_evidence_and_not_ordinary_admission() {
+    let committed_at = time("2026-08-17T12:00:00.020000Z");
+    let ordinary = prepare_direct(DIRECT, "batch-pump-ordinary", committed_at, 300).unwrap();
+    assert_eq!(
+        ordinary.admission_batch().store.evidence.observations.len(),
+        2
+    );
+    assert_eq!(
+        ordinary
+            .admission_batch()
+            .store
+            .evidence
+            .coverage_windows
+            .len(),
+        1
+    );
+
+    let prepared = prepare_direct_with_offline_fixture_selection(
+        DIRECT,
+        OFFLINE_SELECTION,
+        "batch-pump-g0-selection",
+        committed_at,
+        300,
+    )
+    .unwrap();
+    let evidence = &prepared.admission_batch().store.evidence;
+    assert_eq!(evidence.observations.len(), 3);
+    assert_eq!(evidence.coverage_windows.len(), 3);
+    let selection = evidence
+        .observations
+        .iter()
+        .find(|value| {
+            value.observation.source_variant.discriminator.as_str() == "offline_fixture_selection"
+        })
+        .unwrap();
+    assert_eq!(selection.payload, OFFLINE_SELECTION);
+    assert_eq!(
+        selection
+            .observation
+            .observation_kind
+            .discriminator
+            .as_str(),
+        "fixture"
+    );
+    assert_eq!(
+        selection
+            .observation
+            .parse_disposition
+            .discriminator
+            .as_str(),
+        "decoded"
+    );
+    let exact: serde_json::Value = serde_json::from_slice(&selection.payload).unwrap();
+    assert_eq!(exact["contract"], OFFLINE_FIXTURE_SELECTION_CONTRACT);
+    assert!(evidence.coverage_windows.iter().any(|window| {
+        window
+            .scope
+            .subject
+            .as_ref()
+            .is_some_and(|value| value.as_str() == "MintA")
+            && window.scope.family.discriminator.as_str() == "hot_lane"
+    }));
+    assert!(evidence.coverage_windows.iter().any(|window| {
+        window
+            .scope
+            .subject
+            .as_ref()
+            .is_some_and(|value| value.as_str() == "MintB")
+            && window.scope.family.discriminator.as_str() == "market_census"
+    }));
+
+    let root = tempfile::tempdir().unwrap();
+    let public = prepared
+        .admission_batch()
+        .commit(&mut store(root.path()))
+        .unwrap();
+    assert_eq!(
+        close_receipt(&prepared, &public).unwrap().status,
+        public.status
+    );
+}
+
+#[test]
+fn offline_fixture_selection_refuses_subject_substitution() {
+    let changed = String::from_utf8(OFFLINE_SELECTION.to_vec())
+        .unwrap()
+        .replace("MintB", "MintC");
+    assert!(
+        prepare_direct_with_offline_fixture_selection(
+            DIRECT,
+            changed.as_bytes(),
+            "batch-pump-g0-substitution",
+            time("2026-08-17T12:00:00.020000Z"),
+            300,
+        )
+        .is_err()
+    );
 }
 
 #[test]

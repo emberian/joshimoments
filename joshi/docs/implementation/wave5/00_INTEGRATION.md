@@ -130,7 +130,11 @@ The final script output must continue to state `useful_partial`,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk may report
 `public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because source-fact,
-publication, export/import, status recovery and backup/restore crash boundaries remain open. A fixture may
+publication, export/import, status recovery and backup/restore crash boundaries remain open. The
+separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
+prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
+`fullOfflineFaultWalk:false`; supervisor accounting, crash matrix, pairing/Glass, memory,
+export/import, status and backup/restore remain outside that component. A fixture may
 exercise canonical Pump policy bytes without network I/O; the supervisor fake
 `joshi.store.policy.v1` is not a production physical-policy contract and cannot qualify spool
 circulation.

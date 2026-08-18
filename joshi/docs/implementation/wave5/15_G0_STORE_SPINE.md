@@ -19,6 +19,10 @@ or execution authority.
 - Cockpit and scientific-memory admission remains G0 fixture authority. It is not production
   semantic qualification. Scientific-memory receipts remain private and do not set a public
   kernel-wide verified flag.
+- The offline G0 source fixture retains its exact hot/cold selection as a separate decoded
+  `offline_fixture_selection` observation. Pump facts remain derived only from the exact
+  `provider_body` observation. Ordinary direct admission does not accept or synthesize this
+  selection, and the selection contract is permanently labeled `offline_fixture_only`.
 
 ## Frozen V10 relations
 
@@ -85,6 +89,10 @@ Source and publication:
 - `prepare_cockpit_v2_from_store_v1`, `commit_cockpit_v2_publication_v1`, and
   `append_cockpit_v2_head_v1` preserve separate crash-visible prepare/body/head stages.
 - Matching `load_*` methods reparse and recompute the entire retained closure.
+- `joshi-core wave5-g0-source-publication` exercises that exact fixture-only join through the
+  sole store, checks a two-subject one-hot/one-cold partition, commits prepare/body/head in strict
+  order, reopens every exact artifact read-only, and proves an identical second invocation is
+  idempotent. Its report keeps `fullOfflineFaultWalk`, product and live qualification false.
 
 Scientific memory:
 

@@ -13,19 +13,19 @@ use joshi_admission::{
     source_drafts, strict_json,
 };
 use joshi_domain::{
-    AcquisitionClocks, AcquisitionId, ObservationId, OpenVariant, RequestFingerprint, SourceId,
-    StableString, UtcTimestamp, ValueDigest, WireU64,
+    AcquisitionClocks, AcquisitionId, CoverageId, ObservationId, OpenVariant, RequestFingerprint,
+    SourceId, StableString, UtcTimestamp, ValueDigest, WireU64,
 };
 use joshi_evidence::{
-    AcquisitionRecord, EvidenceDraft, MonotonicReading, ObservationDraft, ObservationEventTime,
-    ObservationMetadata, ObservationTiming,
+    AcquisitionRecord, Boundary, CoverageScope, CoverageWindow, EvidenceDraft, MonotonicReading,
+    ObservationDraft, ObservationEventTime, ObservationMetadata, ObservationTiming,
 };
 use joshi_pump_api::{
     FetchOutcome, IdentityStore, ParityInputV2, ParityReportV2, PromotionReportV1, PromotionRunV1,
     compare_v2, evaluate_promotion,
 };
 use joshi_spool::EvidenceBatchEntry;
-use joshi_store::SourceRegistration;
+use joshi_store::{ObservationStorage, SourceRegistration};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -35,6 +35,62 @@ pub const PUMP_MEASUREMENT_RECEIPT_CONTRACT: &str = "joshi.pump_source.measureme
 pub const MAX_DIRECT_INGRESS_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_PUBLIC_RECEIPT_BYTES: usize = 128 * 1024;
 pub const PARITY_MEASUREMENT_SOURCE: &str = "pump.parity.measurement.v2";
+pub const OFFLINE_FIXTURE_SELECTION_CONTRACT: &str =
+    "joshi.pump_adapter.offline_fixture_selection.v1";
+const OFFLINE_FIXTURE_SELECTION_AUTHORITY: &str = "offline_fixture_only";
+const MAX_OFFLINE_FIXTURE_SELECTION_BYTES: usize = 128 * 1024;
+
+/// Explicit non-production membership used only by the deterministic offline G0 fixture.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfflineFixtureMembershipV1 {
+    Hot,
+    ColdControl,
+}
+
+/// One exact subject role in the deterministic offline selection plan.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OfflineFixtureSubjectSelectionV1 {
+    pub subject: StableString,
+    pub membership: OfflineFixtureMembershipV1,
+}
+
+/// Exact, caller-visible fixture plan. This carries no production or store authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OfflineFixtureSelectionV1 {
+    pub contract: StableString,
+    pub schema_version: u16,
+    pub selection_id: StableString,
+    pub selected_at: UtcTimestamp,
+    pub subjects: Vec<OfflineFixtureSubjectSelectionV1>,
+    pub authority: StableString,
+}
+
+impl OfflineFixtureSelectionV1 {
+    fn validate(&self) -> Result<(), PumpAdapterError> {
+        if self.contract.as_str() != OFFLINE_FIXTURE_SELECTION_CONTRACT
+            || self.schema_version != 1
+            || self.authority.as_str() != OFFLINE_FIXTURE_SELECTION_AUTHORITY
+            || self.subjects.len() < 2
+            || self.subjects.windows(2).any(|pair| pair[0] >= pair[1])
+            || !self
+                .subjects
+                .iter()
+                .any(|value| value.membership == OfflineFixtureMembershipV1::Hot)
+            || !self
+                .subjects
+                .iter()
+                .any(|value| value.membership == OfflineFixtureMembershipV1::ColdControl)
+        {
+            return Err(PumpAdapterError::Contract(
+                "offline fixture selection is not a sorted nonempty hot/control partition".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -231,6 +287,55 @@ pub fn prepare_direct(
         committed_monotonic_ns,
     )
     .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
+    prepared(SourceAdmission::Direct(admission), ingress, bytes)
+}
+
+/// Strictly prepare direct Pump fixture bytes plus an exact offline-only hot/control selection.
+///
+/// The selection is retained as a decoded fixture observation in the same immutable batch. It is
+/// never accepted by the ordinary direct path and grants no live, provider, product, or execution
+/// authority. Source facts remain derived from the separate exact provider-body observation.
+///
+/// # Errors
+///
+/// Refuses noncanonical selection bytes, a changed subject set, duplicate/unsorted membership,
+/// missing hot or cold-control roles, undecodable provider bytes, or invalid clocks/identities.
+pub fn prepare_direct_with_offline_fixture_selection(
+    bytes: &[u8],
+    selection_bytes: &[u8],
+    durable_batch_id: &str,
+    committed_at: UtcTimestamp,
+    committed_monotonic_ns: u64,
+) -> Result<PreparedPumpAdmission, PumpAdapterError> {
+    let selection: OfflineFixtureSelectionV1 =
+        strict_json::parse(selection_bytes, MAX_OFFLINE_FIXTURE_SELECTION_BYTES)
+            .map_err(|error| PumpAdapterError::Strict(error.to_string()))?;
+    let canonical_selection_bytes = selection_bytes
+        .strip_suffix(b"\n")
+        .unwrap_or(selection_bytes);
+    if serde_json::to_vec(&selection)? != canonical_selection_bytes {
+        return Err(PumpAdapterError::Contract(
+            "offline fixture selection bytes are not canonical".into(),
+        ));
+    }
+    selection.validate()?;
+    let outcome: FetchOutcome = strict_json::parse(bytes, MAX_DIRECT_INGRESS_BYTES)
+        .map_err(|error| PumpAdapterError::Strict(error.to_string()))?;
+    let ingress = PumpIngressClosureV1 {
+        source_kind: PumpSourceKind::DirectPumpApi,
+        ingress_contract: outcome.contract.clone(),
+        ingress_id: outcome.request_group_id.clone(),
+        exact_ingress: ByteClosureV1::of(bytes),
+        source_declared_digest: None,
+    };
+    let mut admission = admit_pump_outcome(
+        &outcome,
+        durable_batch_id,
+        committed_at,
+        committed_monotonic_ns,
+    )
+    .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
+    apply_offline_fixture_selection(&mut admission, &selection, selection_bytes, committed_at)?;
     prepared(SourceAdmission::Direct(admission), ingress, bytes)
 }
 
@@ -773,6 +878,225 @@ fn prepared(
         acquisition_ids,
         gap_ids,
     })
+}
+
+#[allow(clippy::too_many_lines)]
+fn apply_offline_fixture_selection(
+    admission: &mut PumpAdmission,
+    selection: &OfflineFixtureSelectionV1,
+    selection_bytes: &[u8],
+    committed_at: UtcTimestamp,
+) -> Result<(), PumpAdapterError> {
+    if selection.selected_at > committed_at {
+        return Err(PumpAdapterError::Contract(
+            "offline fixture selection is later than durable admission".into(),
+        ));
+    }
+    let provider_indices = admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| {
+            value.observation.source_variant.discriminator.as_str() == "provider_body"
+                && value.observation.source_variant.recognition
+                    == joshi_domain::VariantRecognition::Known
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if provider_indices.len() != 1 {
+        return Err(PumpAdapterError::Contract(
+            "offline fixture selection requires exactly one provider body".into(),
+        ));
+    }
+    let provider_index = provider_indices[0];
+    let provider = admission.batch.store.evidence.observations[provider_index].clone();
+    if provider.observation.timing.received_at > selection.selected_at {
+        return Err(PumpAdapterError::Contract(
+            "offline fixture selection predates the exact provider body".into(),
+        ));
+    }
+    let values: serde_json::Value = serde_json::from_slice(&provider.payload)?;
+    let items = values.as_array().ok_or_else(|| {
+        PumpAdapterError::Contract("offline fixture provider body is not an array".into())
+    })?;
+    let mut provider_subjects = BTreeSet::new();
+    for item in items {
+        let mint = item
+            .as_object()
+            .and_then(|object| object.get("mint"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                PumpAdapterError::Contract(
+                    "offline fixture provider row lacks an exact mint string".into(),
+                )
+            })?;
+        if !provider_subjects.insert(
+            StableString::new(mint)
+                .map_err(|error| PumpAdapterError::Contract(error.to_string()))?,
+        ) {
+            return Err(PumpAdapterError::Contract(
+                "offline fixture provider body contains a duplicate mint".into(),
+            ));
+        }
+    }
+    let selected_subjects = selection
+        .subjects
+        .iter()
+        .map(|value| value.subject.clone())
+        .collect::<BTreeSet<_>>();
+    if selected_subjects != provider_subjects {
+        return Err(PumpAdapterError::Contract(
+            "offline fixture selection does not exactly partition provider subjects".into(),
+        ));
+    }
+
+    let provider_id = provider.observation.observation_id.to_string();
+    let storage = admission
+        .batch
+        .store
+        .observation_storage
+        .get(&provider_id)
+        .cloned()
+        .ok_or_else(|| {
+            PumpAdapterError::Contract(
+                "offline fixture provider body lacks a storage policy".into(),
+            )
+        })?;
+    let mut selection_observation = provider.clone();
+    selection_observation.observation.observation_id = ObservationId::new(format!(
+        "obs:{}:offline-fixture-selection",
+        provider.acquisition.acquisition_id
+    ))
+    .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    let selection_observation_id = selection_observation.observation.observation_id.to_string();
+    let ordinal = admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .iter()
+        .map(|value| value.observation.acquisition_ordinal.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| PumpAdapterError::Contract("observation ordinal overflow".into()))?;
+    selection_observation.observation.acquisition_ordinal = WireU64::new(ordinal);
+    selection_observation.observation.observation_kind = OpenVariant::known("fixture")
+        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    selection_observation.observation.source_variant =
+        OpenVariant::known("offline_fixture_selection")
+            .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    selection_observation.observation.parse_disposition = OpenVariant::known("decoded")
+        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    selection_observation.observation.media_type =
+        StableString::new("application/vnd.joshi.offline-fixture-selection+json")
+            .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    selection_observation.observation.timing.received_at = selection.selected_at;
+    selection_observation.observation.timing.persisted_at = committed_at;
+    selection_observation.observation.timing.available_at = committed_at;
+    let monotonic = selection_observation
+        .observation
+        .timing
+        .received_monotonic
+        .nanoseconds
+        .get()
+        .checked_add(1)
+        .ok_or_else(|| PumpAdapterError::Contract("fixture monotonic clock overflow".into()))?;
+    selection_observation
+        .observation
+        .timing
+        .received_monotonic
+        .nanoseconds = WireU64::new(monotonic);
+    selection_observation.payload = selection_bytes.to_vec();
+    admission.batch.store.evidence.observations[provider_index]
+        .observation
+        .parse_disposition = OpenVariant::known("decoded")
+        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .push(selection_observation);
+    admission.batch.store.observation_storage.insert(
+        selection_observation_id,
+        ObservationStorage {
+            retention_class: storage.retention_class,
+            content_encoding: storage.content_encoding,
+            force_external: storage.force_external,
+        },
+    );
+
+    for value in &selection.subjects {
+        let role = match value.membership {
+            OfflineFixtureMembershipV1::Hot => "hot_lane",
+            OfflineFixtureMembershipV1::ColdControl => "market_census",
+        };
+        let identity = serde_json::to_vec(&(
+            OFFLINE_FIXTURE_SELECTION_CONTRACT,
+            selection.selection_id.as_str(),
+            value.subject.as_str(),
+            role,
+        ))?;
+        let digest = Sha256Digest::of_bytes(&identity);
+        admission
+            .batch
+            .store
+            .evidence
+            .coverage_windows
+            .push(CoverageWindow {
+                coverage_id: CoverageId::new(format!(
+                    "coverage:offline-fixture:{}",
+                    digest.as_str().trim_start_matches("sha256:")
+                ))
+                .map_err(|error| PumpAdapterError::Contract(error.to_string()))?,
+                scope: CoverageScope {
+                    source_id: provider.acquisition.source_id.clone(),
+                    family: OpenVariant::known(role)
+                        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?,
+                    subject: Some(value.subject.clone()),
+                },
+                lower: Boundary::Wall {
+                    value: selection.selected_at,
+                },
+                upper: Some(Boundary::Wall {
+                    value: committed_at,
+                }),
+                state: OpenVariant::known("partial")
+                    .map_err(|error| PumpAdapterError::Contract(error.to_string()))?,
+                available_at: committed_at,
+            });
+    }
+    admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .sort_by(|left, right| {
+            (
+                &left.acquisition.acquisition_id,
+                left.observation.acquisition_ordinal,
+                &left.observation.observation_id,
+            )
+                .cmp(&(
+                    &right.acquisition.acquisition_id,
+                    right.observation.acquisition_ordinal,
+                    &right.observation.observation_id,
+                ))
+        });
+    admission
+        .batch
+        .store
+        .evidence
+        .coverage_windows
+        .sort_by(|left, right| left.coverage_id.cmp(&right.coverage_id));
+    admission.batch.store.evidence.expected_digest =
+        joshi_store::SqliteStore::canonical_batch_digest(&admission.batch.store.evidence)
+            .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
+    Ok(())
 }
 
 fn exact_admission_material(

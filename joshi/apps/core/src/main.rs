@@ -40,6 +40,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Run the narrow offline G0 source-fact and immutable-publication component witness.
+    Wave5G0SourcePublication {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Serve bounded local admission and immutable query endpoints on loopback only.
     Serve {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -81,6 +86,10 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Wave5IgnitionReadiness { state }) => {
             let report = joshi_core::wave5_readiness::run_wave5_ignition_readiness(&state)?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0SourcePublication { state }) => {
+            let report = joshi_core::wave5_g0::run_wave5_g0_source_publication(&state)?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -180,6 +189,8 @@ enum CliError {
     Readiness(#[from] joshi_core::readiness::ReadinessError),
     #[error(transparent)]
     Wave5Readiness(#[from] joshi_core::wave5_readiness::Wave5ReadinessError),
+    #[error(transparent)]
+    Wave5G0SourcePublication(#[from] joshi_core::wave5_g0::Wave5G0SourcePublicationError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

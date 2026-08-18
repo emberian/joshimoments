@@ -1,0 +1,1 @@
+{"contract":"joshi.pump_adapter.offline_fixture_selection.v1","schemaVersion":1,"selectionId":"selection:wave5-g0-offline-0001","selectedAt":"2026-08-17T12:00:00.010000Z","subjects":[{"subject":"MintA","membership":"hot"},{"subject":"MintB","membership":"cold_control"}],"authority":"offline_fixture_only"}
