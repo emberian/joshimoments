@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use joshi_core::{
     EMBEDDED_FIXTURE, MAX_FIXTURE_DOCUMENT_BYTES,
+    g0_inspector_smoke::G0InspectorSmokeError,
     pairing::OrdinaryPairingError,
     query_json,
     readiness::{WALKING_MATERIAL, run_offline_readiness},
@@ -45,6 +46,11 @@ enum Command {
     },
     /// Run the narrow offline G0 source-fact and immutable-publication component witness.
     Wave5G0SourcePublication {
+        #[arg(long)]
+        state: PathBuf,
+    },
+    /// Run the one-shot paired Cockpit V2 fixture route and restart smoke witness.
+    Wave5G0InspectorSmoke {
         #[arg(long)]
         state: PathBuf,
     },
@@ -102,6 +108,10 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Wave5G0SourcePublication { state }) => {
             let report = joshi_core::wave5_g0::run_wave5_g0_source_publication(&state)?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0InspectorSmoke { state }) => {
+            let report = joshi_core::g0_inspector_smoke::run_g0_inspector_smoke(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -249,6 +259,8 @@ enum CliError {
     Wave5Readiness(#[from] joshi_core::wave5_readiness::Wave5ReadinessError),
     #[error(transparent)]
     Wave5G0SourcePublication(#[from] joshi_core::wave5_g0::Wave5G0SourcePublicationError),
+    #[error(transparent)]
+    G0InspectorSmoke(#[from] G0InspectorSmokeError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

@@ -50,6 +50,12 @@ mkdir -p "$JOSHI_W5_STATE/g0"
 cargo run --locked --offline -p joshi-core -- wave5-g0-source-publication \
   --state "$JOSHI_W5_STATE/g0" > "$JOSHI_W5_STATE/g0-source-publication.json"
 
+# Exercise the actual ordinary-pairing exchange and scoped Cockpit V2 HTTP route in process, then
+# restart the pairing authority, refuse the old capability, and reopen the same bytes under a fresh
+# session. This is API/readback evidence only: no browser presentation or product use is inferred.
+cargo run --locked --offline -p joshi-core -- wave5-g0-inspector-smoke \
+  --state "$JOSHI_W5_STATE/g0" > "$JOSHI_W5_STATE/g0-inspector-smoke.json"
+
 jq -e '
   .contract == "joshi.wave5.g0_source_publication_readiness"
   and .status == "useful_partial"
@@ -74,14 +80,29 @@ jq -e '
   and .liveQualified == false
 ' "$JOSHI_W5_STATE/g0-source-publication.json" > /dev/null
 
+jq -e '
+  .contract == "joshi.wave5.g0_inspector_smoke"
+  and .status == "useful_partial"
+  and .pairedRouteReadClosed == true
+  and .restartOldCapabilityRefused == true
+  and .freshPairingReopenClosed == true
+  and .routeResponseDigest == .reopenedResponseDigest
+  and (.pairingOccurrenceDigest | test("^sha256:[0-9a-f]{64}$"))
+  and .fullOfflineFaultWalk == false
+  and .browserPresented == false
+  and .productQualified == false
+  and .liveQualified == false
+' "$JOSHI_W5_STATE/g0-inspector-smoke.json" > /dev/null
+
 JOSHI_IGNITION_SHA=$(shasum -a 256 "$JOSHI_W5_STATE/ignition-readiness.json" | awk '{print $1}')
 JOSHI_G0_SHA=$(shasum -a 256 "$JOSHI_W5_STATE/g0-source-publication.json" | awk '{print $1}')
+JOSHI_G0_INSPECTOR_SHA=$(shasum -a 256 "$JOSHI_W5_STATE/g0-inspector-smoke.json" | awk '{print $1}')
 JOSHI_MIGRATION_SHA=$(shasum -a 256 schema/migrations/0009_wave5_living_instrument.sql | awk '{print $1}')
 JOSHI_G0_MIGRATION_SHA=$(shasum -a 256 schema/migrations/0010_wave5_g0_store_spine.sql | awk '{print $1}')
 JOSHI_G0_EVIDENCE_SHA=$(jq -er '.partialFaultResult.evidenceBundle.digest' "$JOSHI_W5_STATE/g0-source-publication.json")
 JOSHI_G0_SNAPSHOT_ID=$(jq -er '.v10ExportSnapshotId' "$JOSHI_W5_STATE/g0-source-publication.json")
 
-printf '%s\n' "{\"contract\":\"joshi.wave5.living_instrument_witness\",\"schemaVersion\":3,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"circulationWalkDigest\":\"sha256:$JOSHI_IGNITION_SHA\",\"g0ComponentDigest\":\"sha256:$JOSHI_G0_SHA\",\"g0EvidenceBundleDigest\":\"$JOSHI_G0_EVIDENCE_SHA\",\"g0SnapshotId\":\"$JOSHI_G0_SNAPSHOT_ID\",\"catalogMigrationDigest\":\"sha256:$JOSHI_MIGRATION_SHA\",\"g0CatalogMigrationDigest\":\"sha256:$JOSHI_G0_MIGRATION_SHA\",\"attainedCapabilities\":[\"run_registered\",\"public_c0_spool_catalog_closed\",\"component_restart_readback\",\"store_resolved_fixture_source\",\"headed_cockpit_v2_publication\",\"censored_scientific_memory\",\"nonempty_v10_export_import\",\"v10_export_recovered\",\"artifact_bearing_backup_restore\",\"g0_component_30_prefix_recovery\"],\"qualification\":{\"fullOfflineFaultWalk\":false,\"boundedNonfixture\":false,\"restartRecovered\":false,\"sustainedObserved\":false,\"liveReadOnly\":false,\"preliminaryEmberUse\":false,\"criticalSurfaceAccessibility\":false,\"broadParity\":false},\"claim\":\"offline_run_registration_public_c0_and_partial_g0_component_closure_only\"}" \
+printf '%s\n' "{\"contract\":\"joshi.wave5.living_instrument_witness\",\"schemaVersion\":4,\"authority\":\"read_only_no_execution\",\"status\":\"useful_partial\",\"circulationWalkDigest\":\"sha256:$JOSHI_IGNITION_SHA\",\"g0ComponentDigest\":\"sha256:$JOSHI_G0_SHA\",\"g0InspectorSmokeDigest\":\"sha256:$JOSHI_G0_INSPECTOR_SHA\",\"g0EvidenceBundleDigest\":\"$JOSHI_G0_EVIDENCE_SHA\",\"g0SnapshotId\":\"$JOSHI_G0_SNAPSHOT_ID\",\"catalogMigrationDigest\":\"sha256:$JOSHI_MIGRATION_SHA\",\"g0CatalogMigrationDigest\":\"sha256:$JOSHI_G0_MIGRATION_SHA\",\"attainedCapabilities\":[\"run_registered\",\"public_c0_spool_catalog_closed\",\"component_restart_readback\",\"store_resolved_fixture_source\",\"headed_cockpit_v2_publication\",\"paired_fixture_api_reopen\",\"censored_scientific_memory\",\"nonempty_v10_export_import\",\"v10_export_recovered\",\"artifact_bearing_backup_restore\",\"g0_component_30_prefix_recovery\"],\"qualification\":{\"fullOfflineFaultWalk\":false,\"boundedNonfixture\":false,\"restartRecovered\":false,\"sustainedObserved\":false,\"liveReadOnly\":false,\"preliminaryEmberUse\":false,\"criticalSurfaceAccessibility\":false,\"broadParity\":false},\"claim\":\"offline_run_registration_public_c0_and_partial_g0_component_closure_only\"}" \
   > "$JOSHI_W5_STATE/wave5-witness.json"
 
 cat "$JOSHI_W5_STATE/wave5-witness.json"
