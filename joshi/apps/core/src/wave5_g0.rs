@@ -1709,7 +1709,7 @@ fn baseline_digest(value: &str) -> Result<ValueDigest, Wave5G0SourcePublicationE
         .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid baseline digest"))
 }
 
-fn supervisor_config(state: &Path) -> SupervisorConfig {
+pub(crate) fn supervisor_config(state: &Path) -> SupervisorConfig {
     let root = state.join("supervisor");
     SupervisorConfig {
         spool: SpoolConfig {

@@ -173,9 +173,13 @@ proves positive recovery for the offline-fixture export component only, not root
 The component uses a 1 KiB inline threshold so the retained source body produces one genuine
 external immutable object, then executes the store-owned backup and restore writers into distinct
 roots. It requires a nonempty inventory, exact retry, restored catalog/artifact digest equality and
-read-only restart verification. The supervisor spool remains outside that store inventory and the
-original roots remain available, so this is partial backup/restore evidence rather than the final
-root recovery proof.
+read-only restart verification. After the paired route/restart smoke, the root-evidence command
+creates a later store backup containing that pairing lineage, separately copies and rehashes the
+complete supervisor journal/origin/ACK tree, restores both into distinct roots, temporarily makes
+the original catalog/blob/export/supervisor paths unavailable, and reopens the registered run,
+source, headed publication, memory terminal, import/export/status, pairing occurrence and exact
+origin from only the restored roots. This closes the baseline recovery set; crash-safe orchestration
+of that composite copy remains part of the unqualified 37-scenario fault walk.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a

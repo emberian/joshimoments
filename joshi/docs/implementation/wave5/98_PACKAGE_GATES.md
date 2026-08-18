@@ -73,11 +73,11 @@ Wave 5 witness (`wave5-witness.json`):
 schemaVersion=5
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0RootEvidenceDigest=sha256:d09a0c558ac177f0c84c80e2489b8d1ca4d7b0455c2dbf6cd9be4d4667347175
-g0ComponentDigest=sha256:778748255796f8e2ff8d60b9609bfcd3573b4c365fec7f49e098d091e9454b80
-g0InspectorSmokeDigest=sha256:98945af055c916334832a9d3d44f6fe000a78d5f5aecdc42c56f5f1f60a0633a
-g0EvidenceBundleDigest=sha256:63b6cd0244c354baff5eb0803758661bf2233916f5bde72188cb57504fd581f2
-g0SnapshotId=sha256:37b9e8c0b0fd5101c77cf93657f3703aa418a1d8c3ea30d7e208555309df2c46
+g0RootEvidenceDigest=sha256:6f4e44d3c1bec7b0b89143220a9f624a851bae3752119498b9b636714f246997
+g0ComponentDigest=sha256:0278bcb0c29788bfda9850249db8155c1495bb90d9981c4aefe676a202e75128
+g0InspectorSmokeDigest=sha256:046f6c33695a3bda6703bb4c38120d2faff7abac9a0f429bc793c6a7a5f376ce
+g0EvidenceBundleDigest=sha256:e3d6a5fb6589f072b8e8d91fa781dee23b456c899a63b8be62aebf88011ed30a
+g0SnapshotId=sha256:f9e9d36ee192269b3b16aceec4281e42af3ae62d4c760ecca487008c632e0327
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
 g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
@@ -85,7 +85,7 @@ attained=run_registered, public_c0_spool_catalog_closed, component_restart_readb
          paired_fixture_api_reopen, censored_scientific_memory,
          nonempty_v10_export_import, v10_export_recovered,
          artifact_bearing_backup_restore, g0_component_30_prefix_recovery,
-         partial_root_18_role_evidence
+         partial_root_18_role_evidence, final_distinct_root_store_origin_reopen
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
 criticalSurfaceAccessibility=false; broadParity=false
@@ -101,7 +101,9 @@ The ignition detail (`ignition-readiness.json`) independently reports
 The same root invocation executes `wave5-g0-root-evidence`, which runs the component and actual
 in-process pairing/open/restart smoke over the same catalog. It checks the component's
 eight-occurrence censored-memory closure and nonempty V10 snapshot, exact-matches the registered
-run/source/publication/head and route bytes, and emits one eighteen-role baseline evidence bundle.
+run/source/publication/head and route bytes, then reopens the store and supervisor origin from
+distinct restored roots while their original paths are unavailable. It emits one eighteen-role
+baseline evidence bundle whose final role binds that composite readback.
 It refuses to emit the witness if the paired route changes bytes, accepts the prior capability,
 substitutes the run or publication, raises a browser/product/live bit, or if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
