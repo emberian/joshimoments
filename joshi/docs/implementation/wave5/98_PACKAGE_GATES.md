@@ -73,11 +73,11 @@ Wave 5 witness (`wave5-witness.json`):
 schemaVersion=5
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0RootEvidenceDigest=sha256:27c8bb8592d59472d4fe9b20e0ad6877fb9e9adca7145bc9b6450dff372c302d
-g0ComponentDigest=sha256:62ac50fe861be81d5d4b56970866cf35211a8c8b0861c40b54d01303868dd1f4
-g0InspectorSmokeDigest=sha256:cd0b0dc11b8d1c32f17fe7534b4a522c59d2c072d841a7f67bfeef40393c231e
-g0EvidenceBundleDigest=sha256:5fbd7c95238ddd7eff35dfb00c34751fc6f137829d517b5372dabc6dee4b10c3
-g0SnapshotId=sha256:45130f5ec35a1b12776d823f33daace3f850d4ce4a150e8b4d4a53af4975f76e
+g0RootEvidenceDigest=sha256:62cfba5c9e417827fbf23c24a036bc7b8de76b78067b4be5d07287b2ebd13cb1
+g0ComponentDigest=sha256:6466fd2172e2f233b150b7e3110813271bdc068d46b1e3059917b095a0539f57
+g0InspectorSmokeDigest=sha256:b204232448be2db4a5bb3af6a16e77d475d7c17d0e7d46e3d1a457dbda88b8fa
+g0EvidenceBundleDigest=sha256:126684d93a4020411ab262e4871edda5ed13e48842f6532a9029f5d2ef305aeb
+g0SnapshotId=sha256:b87e03fb4cf3b35fde11ef500df2e323a8b19a0496dd4bd960f123aaf251689b
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
 g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
@@ -85,8 +85,9 @@ attained=run_registered, public_c0_spool_catalog_closed, component_restart_readb
          paired_fixture_api_reopen, censored_scientific_memory,
          nonempty_v10_export_import, v10_export_recovered,
          artifact_bearing_backup_restore, g0_catalog_6_prefix_recovery,
-         g0_component_30_prefix_recovery,
+         g0_component_32_prefix_recovery,
          g0_final_recovery_6_prefix_recovery,
+         g0_schedule_36_adapter_map,
          partial_root_18_role_evidence, final_distinct_root_store_origin_reopen
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
