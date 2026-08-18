@@ -1502,7 +1502,7 @@ mod tests {
         let report = crate::wave5_g0::run_wave5_g0_source_publication(root.path()).unwrap();
         let publication_id =
             joshi_publication::CockpitPublicationId::new(report.publication_id).unwrap();
-        let config = crate::wave5_g0::store_config(root.path()).unwrap();
+        let config = crate::wave5_g0::offline_fixture_store_config(root.path()).unwrap();
         let store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
         let publication = store
             .load_cockpit_v2_publication_v1(&publication_id)
@@ -1597,6 +1597,59 @@ mod tests {
                 .unwrap();
         let capability = exchange["capability"].as_str().unwrap().to_owned();
         let session_id = exchange["sessionId"].as_str().unwrap().to_owned();
+        let mut wrong_origin_request = authorized_request(
+            "GET",
+            "/api/v1/cockpit-v2/publications",
+            &capability,
+            Body::empty(),
+        );
+        wrong_origin_request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8787"),
+        );
+        let wrong_origin = app.clone().oneshot(wrong_origin_request).await.unwrap();
+        assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
+        let index = app
+            .clone()
+            .oneshot(authorized_request(
+                "GET",
+                "/api/v1/cockpit-v2/publications",
+                &capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(index.status(), StatusCode::OK);
+        assert_eq!(
+            index.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let index: serde_json::Value =
+            serde_json::from_slice(&index.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(index["contract"], "joshi.core.cockpit_v2_index");
+        assert_eq!(index["authority"], "read_only_no_execution");
+        assert_eq!(index["items"].as_array().unwrap().len(), 1);
+        assert_eq!(index["items"][0]["publicationId"], publication_id.as_str());
+        assert_eq!(
+            index["items"][0]["publicationDigest"],
+            publication.publication.publication_digest.as_str()
+        );
+        assert_eq!(
+            index["items"][0]["publicationBytesDigest"],
+            publication.publication_bytes_digest.as_str()
+        );
+        assert_eq!(
+            index["items"][0]["headDigest"],
+            head.head.head_digest.as_str()
+        );
+        assert_eq!(
+            index["items"][0]["headBytesDigest"],
+            head.head_digest.as_str()
+        );
+        assert_eq!(index["items"][0]["eligibleCount"], "2");
+        assert_eq!(index["items"][0]["factCount"], "2");
+        assert_eq!(index["items"][0]["gapCount"], "0");
+        assert_eq!(index["items"][0]["ceiling"], "unverified_semantic");
         let opened = app
             .clone()
             .oneshot(authorized_request(
@@ -1796,13 +1849,14 @@ mod tests {
             .method(method)
             .uri(uri)
             .header("host", "127.0.0.1:8787")
-            .header("origin", "http://127.0.0.1:8787")
             .header("sec-fetch-site", "same-origin")
             .header("sec-fetch-mode", "cors")
             .header("sec-fetch-dest", "empty")
             .header("x-joshi-pairing-token", capability);
         if method == "POST" {
-            builder = builder.header("content-type", "application/json");
+            builder = builder
+                .header("origin", "http://127.0.0.1:8787")
+                .header("content-type", "application/json");
         }
         builder.body(body).unwrap()
     }

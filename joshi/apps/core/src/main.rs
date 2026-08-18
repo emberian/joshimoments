@@ -1,12 +1,15 @@
 use clap::{Args, Parser, Subcommand};
 use joshi_core::{
-    EMBEDDED_FIXTURE, MAX_FIXTURE_DOCUMENT_BYTES, query_json,
+    EMBEDDED_FIXTURE, MAX_FIXTURE_DOCUMENT_BYTES,
+    pairing::OrdinaryPairingError,
+    query_json,
     readiness::{WALKING_MATERIAL, run_offline_readiness},
     run_fixture,
     service::{CoreService, PairingCapability},
 };
 use joshi_domain::{StableString, UtcTimestamp};
 use joshi_evidence::IngestLimits;
+use joshi_pairing::{PairingConfig, PairingError, PairingOrigin, PairingScope};
 use joshi_store::{SqliteStore, StoreConfig, StoreMode};
 use std::{
     fs,
@@ -53,6 +56,17 @@ enum Command {
         state: PathBuf,
         #[arg(long)]
         companion_installation_id: String,
+        #[arg(long)]
+        pairing_token_file: PathBuf,
+    },
+    /// Serve the exact offline G0 fixture through durable ordinary pairing for local inspection.
+    Wave5G0Inspect {
+        #[arg(long, default_value = "127.0.0.1:43119")]
+        listen: SocketAddr,
+        #[arg(long, default_value = "http://127.0.0.1:4173")]
+        glass_origin: String,
+        #[arg(long)]
+        state: PathBuf,
         #[arg(long)]
         pairing_token_file: PathBuf,
     },
@@ -108,6 +122,54 @@ async fn main() -> Result<(), CliError> {
             CoreService::new(store, Some(companion_installation_id), pairing)
                 .serve(listen)
                 .await?;
+        }
+        Some(Command::Wave5G0Inspect {
+            listen,
+            glass_origin,
+            state,
+            pairing_token_file,
+        }) => {
+            if !listen.ip().is_loopback() {
+                return Err(CliError::NonLoopback(listen));
+            }
+            let report = joshi_core::wave5_g0::run_wave5_g0_source_publication(&state)?;
+            if report.status != "useful_partial"
+                || report.catalog_schema != "joshi.sqlite.v10"
+                || !report.source_semantics_closed
+                || !report.publication_prepare_body_head_closed
+                || !report.partial_memory_chain_closed
+                || !report.nonempty_v10_export_closed
+                || !report.v10_export_recovery_closed
+                || !report.partial_backup_restore_closed
+                || !report.restart_reverified
+                || report.full_offline_fault_walk
+                || report.provider_io
+                || report.product_qualified
+                || report.live_qualified
+            {
+                return Err(CliError::FixtureInspectorQualification);
+            }
+            let store = SqliteStore::open(
+                joshi_core::wave5_g0::offline_fixture_store_config(&state)?,
+                StoreMode::SingleWriter,
+            )?;
+            let pairing_token = read_pairing_token(&pairing_token_file)?;
+            let pairing = PairingCapability::from_hex(&pairing_token)?;
+            let origin = PairingOrigin::new(glass_origin)?;
+            let (core, launcher) = CoreService::with_sqlite_pairing(
+                store,
+                None,
+                pairing,
+                origin,
+                PairingConfig::default(),
+            )?;
+            let listener = tokio::net::TcpListener::bind(listen).await?;
+            let issued = launcher.issue_code(vec![PairingScope::CockpitRead])?;
+            eprintln!(
+                "offline-fixture one-time pairing code (Cockpit read only): {}",
+                issued.code.as_str()
+            );
+            axum::serve(listener, core.router()).await?;
         }
         Some(Command::Fixture(fixture)) => run_fixture_command(fixture).await?,
         None => run_fixture_command(arguments.fixture).await?,
@@ -198,11 +260,19 @@ enum CliError {
     #[error(transparent)]
     Pairing(#[from] joshi_core::service::PairingCapabilityError),
     #[error(transparent)]
+    OrdinaryPairing(#[from] OrdinaryPairingError),
+    #[error(transparent)]
+    PairingProtocol(#[from] PairingError),
+    #[error(transparent)]
     Wire(#[from] joshi_domain::WireStringError),
     #[error("system clock is unavailable")]
     Clock,
     #[error("pairing token file must be a regular, non-symlink, owner-only file of bounded size")]
     UnsafePairingFile,
+    #[error("fixture inspector must bind an explicit loopback address, got {0}")]
+    NonLoopback(SocketAddr),
+    #[error("offline fixture inspector encountered an impossible positive qualification bit")]
+    FixtureInspectorQualification,
     #[error("fixture exceeds {MAX_FIXTURE_DOCUMENT_BYTES} bytes: {0}")]
     FixtureTooLarge(usize),
 }

@@ -173,8 +173,11 @@ root recovery proof.
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
 wrong-scope capability, revoked session, and pre-restart capability are refused. The default
-`Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
-recorded as Glass use or as a completed root occurrence.
+`Serve` path still mounts neither exchange nor headed-publication route. The explicit
+`wave5-g0-inspect` command now mounts a bounded store-rederived index and exact open route only for
+the offline component fixture with a read-only one-time code. Glass does not yet consume that V2
+inspection contract, so this local join is not recorded as Glass use or as a completed root
+occurrence.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,

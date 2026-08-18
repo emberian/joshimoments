@@ -203,7 +203,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
     let (registration, bundle, _) = fixture_registration_bundles()?;
     seed_baseline_catalog(state)?;
-    let mut store = SqliteStore::open(store_config(state)?, StoreMode::SingleWriter)?;
+    let mut store = SqliteStore::open(
+        offline_fixture_store_config(state)?,
+        StoreMode::SingleWriter,
+    )?;
     let run_id = StableString::new(registration.run_id.clone())?;
     let schema = store.catalog_schema()?;
     if schema.as_str() != "joshi.sqlite.v10" {
@@ -779,7 +782,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
     }
     drop(store);
 
-    let reopened = SqliteStore::open(store_config(state)?, StoreMode::ReadOnly)?;
+    let reopened = SqliteStore::open(offline_fixture_store_config(state)?, StoreMode::ReadOnly)?;
     let reopened_registration = reopened.load_wave5_run_registration_v1(&run_id)?.ok_or(
         Wave5G0SourcePublicationError::Invariant("run registration was absent after restart"),
     )?;
@@ -1640,7 +1643,15 @@ fn supervisor_config(state: &Path) -> SupervisorConfig {
     }
 }
 
-pub(crate) fn store_config(
+/// Returns the exact store configuration used by the offline-only G0 component fixture.
+///
+/// This does not create, migrate, or qualify a catalog. It exists so the explicit paired fixture
+/// inspector can reopen the component output without pretending it is the default product store.
+///
+/// # Errors
+///
+/// Returns an error if the fixture paths or fixed catalog identity cannot be represented.
+pub fn offline_fixture_store_config(
     state: &Path,
 ) -> Result<joshi_store::StoreConfig, Wave5G0SourcePublicationError> {
     let mut value = config(state)?;

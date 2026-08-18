@@ -56,6 +56,7 @@ const SOURCE_FIELD_ID: &str = "mint";
 const MEMORY_QUALIFICATION: &str = "fixture_authority_unverified_semantic";
 const PAIRING_AUTHORITY: &str = "read_only_pairing_exchange";
 const MAX_CONTROL_BYTES: usize = 4 * 1024 * 1024;
+const MAX_HEADED_COCKPIT_V2_PUBLICATIONS: usize = 256;
 
 /// Store-derived source and coverage occurrence. It is intentionally narrower than raw source
 /// bytes and remains fixture authority for G0.
@@ -1195,6 +1196,59 @@ impl SqliteStore {
             head_digest: exact,
             commit_seq: CommitSeq::new(as_u64(seq, "Cockpit head commit")?),
         }))
+    }
+
+    /// Lists the bounded exact set of headed Cockpit V2 publications in durable head order.
+    ///
+    /// Every returned body and head is reparsed and cross-validated through the same exact
+    /// readback path as an individual lookup. The method refuses an oversized catalog rather than
+    /// truncating an eligible publication set into a misleading index.
+    pub fn list_headed_cockpit_v2_publications_v1(
+        &self,
+    ) -> Result<Vec<(StoredCockpitV2Publication, StoredCockpitV2Head)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT publication_id FROM cockpit_v2_head_v1
+             ORDER BY created_commit_seq ASC, publication_id ASC
+             LIMIT ?1",
+        )?;
+        let limit = i64::try_from(MAX_HEADED_COCKPIT_V2_PUBLICATIONS + 1).map_err(|_| {
+            StoreError::InvalidBatch("Cockpit V2 index bound does not fit SQLite".into())
+        })?;
+        let rows = statement.query_map([limit], |row| row.get::<_, String>(0))?;
+        let identifiers = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        if identifiers.len() > MAX_HEADED_COCKPIT_V2_PUBLICATIONS {
+            return Err(StoreError::InvalidBatch(
+                "headed Cockpit V2 publication index exceeds its exact bound".into(),
+            ));
+        }
+        identifiers
+            .into_iter()
+            .map(|raw| {
+                let publication_id = CockpitPublicationId::new(raw)
+                    .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+                let publication = self
+                    .load_cockpit_v2_publication_v1(&publication_id)?
+                    .ok_or_else(|| StoreError::MissingIdentity {
+                        kind: "Cockpit V2 publication",
+                        identity: publication_id.to_string(),
+                    })?;
+                let head = self
+                    .load_cockpit_v2_head_v1(&publication_id)?
+                    .ok_or_else(|| StoreError::MissingIdentity {
+                        kind: "Cockpit V2 head",
+                        identity: publication_id.to_string(),
+                    })?;
+                if publication.source_occurrence_id != head.source_occurrence_id
+                    || publication.commit_seq >= head.commit_seq
+                {
+                    return Err(StoreError::InvalidBatch(
+                        "headed Cockpit V2 index lineage differs".into(),
+                    ));
+                }
+                Ok((publication, head))
+            })
+            .collect()
     }
 
     /// Privately admits one exact canonical scientific-memory act or episode.

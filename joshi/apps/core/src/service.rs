@@ -14,7 +14,7 @@ use joshi_admission::{
     },
     parse_companion, strict_json,
 };
-use joshi_domain::{SceneId, StableString, UtcTimestamp};
+use joshi_domain::{SceneId, StableString, UtcTimestamp, WireU64};
 use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
 use joshi_publication::CockpitPublicationId;
 use joshi_store::{
@@ -172,8 +172,7 @@ impl CoreService {
     /// # Errors
     ///
     /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
-    #[allow(dead_code)] // The default product router stays unmounted until the G0 harness opts in.
-    pub(crate) fn with_sqlite_pairing(
+    pub fn with_sqlite_pairing(
         store: SqliteStore,
         companion_installation_id: Option<String>,
         pairing: PairingCapability,
@@ -215,10 +214,15 @@ impl CoreService {
             )
             .route("/api/v1/operator/abstentions", post(explicit_abstention));
         if ordinary_product_routes_mounted {
-            router = router.route(
-                "/api/v1/cockpit-v2/publications/{publication_id}",
-                get(cockpit_v2_publication),
-            );
+            router = router
+                .route(
+                    "/api/v1/cockpit-v2/publications",
+                    get(cockpit_v2_publication_index),
+                )
+                .route(
+                    "/api/v1/cockpit-v2/publications/{publication_id}",
+                    get(cockpit_v2_publication),
+                );
         }
         let router = router
             // No stream route exists in V1: reconnect ordering/digest binding is not frozen.
@@ -245,6 +249,113 @@ impl CoreService {
             .await
             .map_err(ServiceError::Io)
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CockpitV2IndexEntry {
+    publication_id: String,
+    publication_digest: String,
+    publication_bytes_digest: String,
+    publication_commit_seq: WireU64,
+    head_digest: String,
+    head_bytes_digest: String,
+    head_commit_seq: WireU64,
+    source_occurrence_id: String,
+    supersedes_publication_id: Option<String>,
+    eligible_count: WireU64,
+    fact_count: WireU64,
+    gap_count: WireU64,
+    ceiling: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CockpitV2Index {
+    contract: &'static str,
+    schema_version: u16,
+    authority: &'static str,
+    items: Vec<CockpitV2IndexEntry>,
+}
+
+async fn cockpit_v2_publication_index(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+) -> Response {
+    match authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead) {
+        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::Rejected(response) => return response,
+        OrdinaryAuthorization::NotConfigured => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "route_not_mounted",
+                "ordinary Cockpit V2 publication access is not mounted",
+            );
+        }
+    }
+    let Ok(store) = service.inner.store.lock() else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reader_unavailable",
+            "catalog lock is unavailable",
+        );
+    };
+    let Ok(publications) = store.list_headed_cockpit_v2_publications_v1() else {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "publication_index_readback_failed",
+            "exact headed Cockpit V2 publication index failed durable readback",
+        );
+    };
+    let mut items = Vec::with_capacity(publications.len());
+    for (publication, head) in publications {
+        let Ok(fact_count) = u64::try_from(publication.publication.manifest.source_facts.len())
+        else {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "publication_index_too_large",
+                "Cockpit V2 fact count exceeds its wire representation",
+            );
+        };
+        let Ok(gap_count) = u64::try_from(publication.publication.manifest.gaps.len()) else {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "publication_index_too_large",
+                "Cockpit V2 gap count exceeds its wire representation",
+            );
+        };
+        items.push(CockpitV2IndexEntry {
+            publication_id: publication.publication.publication_id.to_string(),
+            publication_digest: publication.publication.publication_digest.to_string(),
+            publication_bytes_digest: publication.publication_bytes_digest.to_string(),
+            publication_commit_seq: WireU64::new(publication.commit_seq.get()),
+            head_digest: head.head.head_digest.to_string(),
+            head_bytes_digest: head.head_digest.to_string(),
+            head_commit_seq: WireU64::new(head.commit_seq.get()),
+            source_occurrence_id: publication.source_occurrence_id.to_string(),
+            supersedes_publication_id: publication
+                .publication
+                .supersedes_publication_id
+                .map(|value| value.to_string()),
+            eligible_count: publication
+                .publication
+                .manifest
+                .observed_universe
+                .eligible_count,
+            fact_count: WireU64::new(fact_count),
+            gap_count: WireU64::new(gap_count),
+            ceiling: "unverified_semantic",
+        });
+    }
+    json_response(
+        StatusCode::OK,
+        &CockpitV2Index {
+            contract: "joshi.core.cockpit_v2_index",
+            schema_version: 1,
+            authority: "read_only_no_execution",
+            items,
+        },
+    )
 }
 
 async fn cockpit_v2_publication(
@@ -528,18 +639,18 @@ fn authorize_ordinary_if_configured(
     let Some(authorizer) = &service.inner.ordinary_pairing else {
         return OrdinaryAuthorization::NotConfigured;
     };
+    let configured_origin = authorizer.configured_origin().as_str();
     let origin = single_header_text(headers, header::ORIGIN.as_str());
     let host = single_header_text(headers, header::HOST.as_str());
-    if origin.as_deref() != Some(authorizer.configured_origin().as_str())
-        || origin
+    if (headers.contains_key(header::ORIGIN) && origin.as_deref() != Some(configured_origin))
+        || host
             .as_deref()
-            .zip(host.as_deref())
-            .is_none_or(|(origin, host)| !exact_loopback_same_origin(origin, host))
+            .is_none_or(|host| !exact_loopback_same_origin(configured_origin, host))
     {
         return OrdinaryAuthorization::Rejected(problem(
             StatusCode::FORBIDDEN,
             "origin_rejected",
-            "ordinary session requires the configured exact loopback Host and Origin",
+            "ordinary session requires the configured exact loopback Host and any supplied Origin",
         ));
     }
     if single_header_text(headers, SEC_FETCH_SITE_HEADER).as_deref() != Some("same-origin")
@@ -559,11 +670,7 @@ fn authorize_ordinary_if_configured(
             "ordinary local pairing capability is required",
         ));
     };
-    match authorizer.authorize(
-        &capability,
-        origin.as_deref().expect("checked origin"),
-        scope,
-    ) {
+    match authorizer.authorize(&capability, configured_origin, scope) {
         Ok(()) => OrdinaryAuthorization::Authorized,
         Err(OrdinaryPairingError::Journal(_) | OrdinaryPairingError::Unavailable) => {
             OrdinaryAuthorization::Rejected(problem(

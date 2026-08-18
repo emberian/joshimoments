@@ -436,6 +436,7 @@ async fn one_time_pairing_exchange_is_not_mounted_without_a_session_registry() {
     let root = tempfile::tempdir().expect("tempdir");
     let app = CoreService::new(store(root.path(), true), None, pairing()).router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -454,4 +455,15 @@ async fn one_time_pairing_exchange_is_not_mounted_without_a_session_registry() {
         .await
         .expect("pairing exchange response");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let index = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cockpit-v2/publications")
+                .body(Body::empty())
+                .expect("Cockpit V2 index request"),
+        )
+        .await
+        .expect("Cockpit V2 index response");
+    assert_eq!(index.status(), StatusCode::NOT_FOUND);
 }

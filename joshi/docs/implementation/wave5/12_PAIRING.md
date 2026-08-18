@@ -26,14 +26,23 @@ readback. No secret code or `jpc1_` capability is serialized into the journal.
 The opt-in Core constructor mounts the human-checkable `JOSHI-…` one-time-code exchange and issues
 an origin-, epoch-, expiry-, and scope-bound `jpc1_` capability. Cockpit and operator handlers use
 that ordinary capability when the adapter is present and never fall back to the legacy raw-hex
-capability in that mode. The headed Cockpit V2 read route is mounted only by this constructor; its
-response embeds the exact store-revalidated publication and head bytes, commit sequences, and byte
-digests. Tests cover wrong scope, revoke, expiry, and restart refusal.
+capability in that mode. The headed Cockpit V2 index/open routes are mounted only by this
+constructor. The bounded index reparses every body/head through the store and refuses to truncate
+more than 256 eligible heads; the open response embeds the exact store-revalidated publication and
+head bytes, commit sequences, and byte digests. Tests cover wrong scope, revoke, expiry, restart
+refusal, exact index identity, and default route absence. Browser GETs may omit `Origin` under the
+Fetch standard, so authorization instead requires the configured loopback authority to equal
+`Host`, requires exact same-origin Fetch Metadata, and rejects any supplied nonmatching or
+ambiguous `Origin`; exchange and write POSTs still carry and validate the exact origin.
 
-`Serve` continues to construct `CoreService::new`, so the exchange and Cockpit V2 route are absent
-from the default server and the production Glass shell remains unavailable. The opt-in integration
-test is an isolated durable protocol/publication pass, not a product mount, daily-use witness, or
-root G0 pass.
+`Serve` continues to construct `CoreService::new`, so the exchange and Cockpit V2 routes are absent
+from the default server and the production Glass shell remains unavailable. The explicit
+`wave5-g0-inspect` developer command is the only CLI path that selects the sealed adapter: it first
+exact-retries the offline G0 component, refuses impossible positive qualification bits, reopens its
+fixture catalog, binds a caller-declared loopback Glass origin, and prints one OS-random
+`CockpitRead` code only after the listener is bound. It does not enable write scopes or change the
+default server. This is an isolated durable protocol/publication inspection seam, not a product
+mount, daily-use witness, or root G0 pass.
 
 Production adapters provide an OS-backed `Entropy` implementation and a monotonic `MonotonicClock`;
 the crate performs no wall-clock or device I/O. Public transitions use the monotonic-clock
