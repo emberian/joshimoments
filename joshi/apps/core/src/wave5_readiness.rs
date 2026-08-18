@@ -1,6 +1,6 @@
 //! Deterministic, provider-disabled Wave 5 authority/restart witness.
 
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use joshi_admission::{
     Sha256Digest,
@@ -11,11 +11,16 @@ use joshi_admission::{
         OwnedWave5RunRegistrationBundleV1, OwnedWave5RunRegistrationDocumentsV1,
         PermittedProtectionClassV1, PrivacyPolicyV1, ProviderExecutionModeV1, RunBudgetLimitsV1,
         SourceTreeHeadV1, SourceTreeManifestV1, WAVE5_RUN_REGISTRATION_CONTRACT,
-        WalletMaterialRuleV1, Wave5RunRegistrationV1,
+        WalletMaterialRuleV1, Wave5RunReferenceV1, Wave5RunRegistrationV1,
     },
 };
 use joshi_domain::StableString;
 use joshi_pump_adapter::prepare_direct;
+use joshi_sources::{
+    CanaryProfilePort, PROVIDER_RUN_PLAN_PORT_VERSION, ProviderOperation, ProviderOperationPlan,
+    ProviderRunPlanTemplate, ProviderScopePort, RegisteredRunPort, RuntimeAttemptCostPort,
+    RuntimeBudgetPort, ValidatedProviderRunPlan, validate_provider_run_plan,
+};
 use joshi_spool::{LocalSpool, SpoolConfig};
 use joshi_store::{
     IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, Wave5RunRegistrationByteBundle,
@@ -239,11 +244,15 @@ fn fixture_documents()
         authority: AUTHORITY.into(),
     };
     let build_bytes = serde_json::to_vec(&build)?;
+    let plan_template = fixture_provider_plan_template();
+    let plan_template_digest = plan_template
+        .plan_template_digest()
+        .map_err(|_| Wave5ReadinessError::Invariant("invalid static C0 plan template"))?;
     let configuration = CollectorRuntimeConfigV1 {
         contract: "joshi.collector.runtime_config.v1".into(),
         schema_version: 1,
         plan_id: "wave5-sealed-c0".into(),
-        plan_template_digest: digest(b"joshi.provider_plan_template.v1:sealed-c0").to_string(),
+        plan_template_digest,
         status_endpoint: LocalStatusEndpointV1 {
             address: "127.0.0.1"
                 .parse()
@@ -266,7 +275,7 @@ fn fixture_documents()
             maximum_ingress_bytes_per_second: None,
             maximum_elapsed_ms: 60_000,
             maximum_in_flight_attempts: 1,
-            maximum_in_flight_elapsed_overshoot_ms: 1_000,
+            maximum_in_flight_elapsed_overshoot_ms: 60_000,
         },
         authority: AUTHORITY.into(),
     };
@@ -297,6 +306,55 @@ fn fixture_documents()
         },
         privacy,
     ))
+}
+
+fn fixture_provider_plan_template() -> ProviderRunPlanTemplate {
+    let hard_cap = RuntimeBudgetPort {
+        requests: 1,
+        pages: 1,
+        ingress_bytes: 1_048_576,
+        durable_bytes: 1_048_576,
+        provider_credits: 0,
+        wall_millis: 60_000,
+        provider_currency_minor: BTreeMap::new(),
+        chain_native_atoms: BTreeMap::new(),
+    };
+    ProviderRunPlanTemplate {
+        port_version: PROVIDER_RUN_PLAN_PORT_VERSION.into(),
+        plan_id: "wave5-sealed-c0".into(),
+        profile: CanaryProfilePort::C0,
+        hard_cap: hard_cap.clone(),
+        max_elapsed_ms: 60_000,
+        max_ingress_bytes_per_second: None,
+        max_in_flight_attempts: 1,
+        operations: vec![ProviderOperationPlan {
+            source_key: "synthetic.local".into(),
+            method_key: "emit".into(),
+            operation: ProviderOperation::SyntheticEmit,
+            generation: 1,
+            max_attempts: 1,
+            scope: ProviderScopePort::SyntheticScenario {
+                scenario_id: format!("wave5-c0-{}", digest(DIRECT_C0_FILE).as_str()),
+            },
+            attempt_cost: RuntimeAttemptCostPort {
+                worst_case: hard_cap,
+                max_overshoot: RuntimeBudgetPort::default(),
+            },
+        }],
+    }
+}
+
+pub(crate) fn fixture_provider_plan(
+    registration: &Wave5RunRegistrationV1,
+) -> Result<ValidatedProviderRunPlan, Wave5ReadinessError> {
+    let registration_bytes = registration.canonical_bytes()?;
+    let run = Wave5RunReferenceV1::from_registration(registration, &registration_bytes)?;
+    Ok(validate_provider_run_plan(
+        fixture_provider_plan_template().bind_run(RegisteredRunPort {
+            run_id: run.run_id,
+            registration_digest: run.exact_registration.digest.as_str().to_owned(),
+        }),
+    )?)
 }
 
 pub(crate) fn fixture_registration_bundles() -> Result<
@@ -411,6 +469,8 @@ pub enum Wave5ReadinessError {
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]
     Pump(#[from] joshi_pump_adapter::PumpAdapterError),
+    #[error(transparent)]
+    ProviderPlan(#[from] joshi_sources::ProviderPlanError),
     #[error(transparent)]
     Spool(#[from] joshi_spool::SpoolError),
     #[error(transparent)]

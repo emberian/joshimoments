@@ -20,8 +20,10 @@ joshi-operational-status = { path = "../../crates/joshi-operational-status" }
 joshi-pump-adapter = { path = "../../crates/joshi-pump-adapter" }
 joshi-publication = { path = "../../crates/joshi-publication" }
 joshi-scientific-memory = { path = "../../crates/joshi-scientific-memory" }
+joshi-sources = { path = "../../crates/joshi-sources" }
 joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
+joshi-supervisor = { path = "../../crates/joshi-supervisor" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

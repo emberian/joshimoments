@@ -44,6 +44,153 @@ impl Supervisor {
         Self::open_with(config, BTreeMap::new(), Arc::new(NoFaults))
     }
 
+    /// Return the exact fsync-complete reservation documents for one registered run.
+    ///
+    /// The append-only journal remains the authority; this readback neither reserves a new
+    /// attempt nor authorizes I/O.
+    ///
+    /// # Errors
+    ///
+    /// Refuses duplicate reservation identities or a journal reservation whose embedded run
+    /// reference does not validate.
+    pub fn reservations_for_run(&self, run_id: &str) -> Result<Vec<AttemptReservation>> {
+        let mut identities = BTreeSet::new();
+        let mut values = Vec::new();
+        for record in self.journal.records() {
+            let JournalEvent::AttemptReserved(reservation) = &record.event else {
+                continue;
+            };
+            let Some(run) = &reservation.run else {
+                continue;
+            };
+            run.validate()?;
+            if run.run_id != run_id {
+                continue;
+            }
+            if !identities.insert(reservation.reservation_id.clone()) {
+                return Err(SupervisorError::InvalidState(
+                    "durable journal repeats one reservation identity".into(),
+                ));
+            }
+            values.push(reservation.clone());
+        }
+        Ok(values)
+    }
+
+    /// Return reservations whose exact journal lifecycle proves one observed, gap-free finite
+    /// capture and shutdown.
+    ///
+    /// This is stricter than [`Self::reservations_for_run`]: a reservation recovered before I/O,
+    /// abandoned after I/O, settled with a violation, stopped with a gap, or followed by a
+    /// degraded shutdown refuses rather than being represented as completed.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an incomplete, duplicated, reordered, recovered, abandoned, gap-bearing, or
+    /// degraded lifecycle for any reservation in the selected run.
+    pub fn completed_no_gap_reservations_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<AttemptReservation>> {
+        let reservations = self.reservations_for_run(run_id)?;
+        for reservation in &reservations {
+            let mut phase = 0_u8;
+            let mut shutdown_closed = false;
+            for record in self.journal.records() {
+                match &record.event {
+                    JournalEvent::RuntimeIoStarted { reservation_id }
+                        if reservation_id == &reservation.reservation_id =>
+                    {
+                        if phase != 0 {
+                            return Err(SupervisorError::InvalidState(
+                                "completed reservation has a reordered or duplicate I/O start"
+                                    .into(),
+                            ));
+                        }
+                        phase = 1;
+                    }
+                    JournalEvent::LocalDurabilityRecorded { reservation_id, .. }
+                        if reservation_id == &reservation.reservation_id =>
+                    {
+                        if phase != 1 {
+                            return Err(SupervisorError::InvalidState(
+                                "completed reservation has reordered or duplicate durability"
+                                    .into(),
+                            ));
+                        }
+                        phase = 2;
+                    }
+                    JournalEvent::RuntimeBudgetSettled {
+                        reservation_id,
+                        disposition,
+                        violation,
+                        ..
+                    } if reservation_id == &reservation.reservation_id => {
+                        if phase != 2
+                            || *disposition != crate::RuntimeSettlementDisposition::Observed
+                            || violation.is_some()
+                        {
+                            return Err(SupervisorError::InvalidState(
+                                "completed reservation lacks an observed nonviolating settlement"
+                                    .into(),
+                            ));
+                        }
+                        phase = 3;
+                    }
+                    JournalEvent::AttemptCancelledBeforeIo { reservation_id }
+                    | JournalEvent::AttemptAbandoned { reservation_id, .. }
+                        if reservation_id == &reservation.reservation_id =>
+                    {
+                        return Err(SupervisorError::InvalidState(
+                            "recovered or abandoned reservation is not a completed capture".into(),
+                        ));
+                    }
+                    JournalEvent::GenerationStopped {
+                        source_key,
+                        operation_key,
+                        generation,
+                        gap_segment,
+                        ..
+                    } if source_key == &reservation.source_key
+                        && operation_key == &reservation.operation_key
+                        && generation == &reservation.generation =>
+                    {
+                        if phase != 3 || gap_segment.is_some() {
+                            return Err(SupervisorError::InvalidState(
+                                "completed reservation has a reordered or gap-bearing stop".into(),
+                            ));
+                        }
+                        phase = 4;
+                    }
+                    JournalEvent::ShutdownCompleted {
+                        abandoned_attempts,
+                        downtime_gaps,
+                        deadline_exceeded,
+                        ..
+                    } if phase == 4 => {
+                        if *abandoned_attempts != 0
+                            || *downtime_gaps != 0
+                            || *deadline_exceeded
+                            || shutdown_closed
+                        {
+                            return Err(SupervisorError::InvalidState(
+                                "completed reservation has a degraded or duplicate shutdown".into(),
+                            ));
+                        }
+                        shutdown_closed = true;
+                    }
+                    _ => {}
+                }
+            }
+            if phase != 4 || !shutdown_closed {
+                return Err(SupervisorError::InvalidState(
+                    "reservation does not have one complete gap-free journal lifecycle".into(),
+                ));
+            }
+        }
+        Ok(reservations)
+    }
+
     /// Open with caller-owned private-domain protectors. Keys are never serialized into config,
     /// health, journal, or spool metadata.
     ///

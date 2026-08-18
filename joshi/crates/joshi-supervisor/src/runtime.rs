@@ -1777,6 +1777,33 @@ mod tests {
         assert_eq!(report.steps.len(), 1);
         assert_eq!(report.steps[0].usage.requests, 1);
         assert_eq!(report.shutdown.downtime_gaps, 0);
+        assert_eq!(
+            runtime
+                .supervisor()
+                .completed_no_gap_reservations_for_run(&report.run_id)
+                .expect("completed reservation readback"),
+            runtime
+                .supervisor()
+                .reservations_for_run(&report.run_id)
+                .expect("reservation readback")
+        );
+        assert_eq!(
+            runtime
+                .supervisor()
+                .reservations_for_run(&report.run_id)
+                .expect("reservation readback"),
+            vec![
+                runtime
+                    .supervisor()
+                    .journal_records()
+                    .iter()
+                    .find_map(|record| match &record.event {
+                        JournalEvent::AttemptReserved(value) => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("journal reservation")
+            ]
+        );
         let records = runtime.supervisor.journal_records();
         let reserved = records
             .iter()
@@ -1903,6 +1930,14 @@ mod tests {
             JournalEvent::AttemptAbandoned { reservation_id, .. }
                 if reservation_id == &reservation.reservation_id
         )));
+        assert!(
+            reopened
+                .supervisor()
+                .completed_no_gap_reservations_for_run(
+                    reservation.run.as_ref().expect("run").run_id.as_str()
+                )
+                .is_err()
+        );
         drop(reopened);
         let second = open_runtime(root.path(), &docs, &plan);
         assert!(second.terminal);
@@ -1943,6 +1978,14 @@ mod tests {
             ))
             .expect("worst-case settlement");
         assert!(gap < settled);
+        assert!(
+            reopened
+                .supervisor()
+                .completed_no_gap_reservations_for_run(
+                    reservation.run.as_ref().expect("run").run_id.as_str()
+                )
+                .is_err()
+        );
         drop(reopened);
         let second = open_runtime(root.path(), &docs, &plan);
         assert!(second.terminal);

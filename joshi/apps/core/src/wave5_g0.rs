@@ -3,7 +3,7 @@
 //! This remains an offline fixture-only partial. It deliberately cannot claim the complete G0
 //! fault walk, product use, live source coverage, or execution authority.
 
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use joshi_admission::{Sha256Digest, operational::AUTHORITY};
 use joshi_domain::{StableString, WireStringError};
@@ -20,14 +20,21 @@ use joshi_scientific_memory::{
     LotAssociation, MemoryOccurrence, OperatorAct, PresentationBinding, PresentationGap,
     PresentationGapReason, SceneBinding, SceneId, SceneRef, SegmentId, SessionId,
 };
-use joshi_spool::LocalSpool;
+use joshi_spool::{LocalSpool, SpoolConfig};
 use joshi_store::{IdempotencyStatus, SqliteStore, StoreMode};
+use joshi_supervisor::{
+    CollectorRuntime, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
+    SyntheticRuntimeOutcomeAdapter, synthetic_c0_json_runner,
+};
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
     wave5_circulation::{RegisteredWave5Run, circulate_public_c0},
-    wave5_readiness::{config, fixture_registration_bundles, now, spool_config, store_bundle},
+    wave5_readiness::{
+        config, fixture_provider_plan, fixture_registration_bundles, now, spool_config,
+        store_bundle,
+    },
 };
 
 const DIRECT_C0_FILE: &[u8] =
@@ -65,6 +72,9 @@ pub struct Wave5G0SourcePublicationReport {
     pub run_registration_id: String,
     pub run_registration_digest: String,
     pub catalog_admission_id: String,
+    pub reservation_id: String,
+    pub reservation_digest: String,
+    pub supervisor_plan_digest: String,
     pub selection_digest: String,
     pub source_occurrence_id: String,
     pub source_descriptor_digest: String,
@@ -84,6 +94,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub memory_queue_through: u64,
     pub partial_fault_result: G0Result,
     pub source_semantics_closed: bool,
+    pub supervisor_reservation_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
     pub restart_reverified: bool,
@@ -144,6 +155,79 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let committed_at = "2026-08-17T12:00:00.020000Z"
         .parse()
         .map_err(|_| Wave5G0SourcePublicationError::Invariant("invalid static fixture clock"))?;
+    let plan = fixture_provider_plan(&registration)?;
+    let supervisor = Supervisor::open(supervisor_config(state))?;
+    let existing = supervisor.reservations_for_run(run_id.as_str())?;
+    if existing.len() > 1 {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor retained more than one C0 reservation for the run",
+        ));
+    }
+    let mut runtime = CollectorRuntime::open(
+        RuntimeDocumentSet {
+            exact_registration: &bundle.registration,
+            exact_build: &bundle.documents.build,
+            exact_source_tree: &bundle.documents.source_tree,
+            exact_configuration: &bundle.documents.configuration,
+            exact_budget: &bundle.documents.budget,
+            exact_privacy: &bundle.documents.privacy,
+            exact_daily_use_surface_profile: &bundle.documents.daily_use_surface_profile,
+        },
+        supervisor,
+        &plan,
+        committed_at,
+        0,
+    )?;
+    if existing.is_empty() {
+        let mut runner =
+            synthetic_c0_json_runner(plan.clone(), DIRECT_C0_FILE.to_vec(), committed_at)?;
+        let mut adapter = SyntheticRuntimeOutcomeAdapter::new();
+        let runtime_report =
+            runtime.run_to_completion(&mut runner, &mut adapter, committed_at, 0)?;
+        if runtime_report.steps.len() != 1
+            || runtime_report.run_id != run_id.as_str()
+            || runtime_report.steps[0].run_id != run_id.as_str()
+            || runtime_report.steps[0].usage.requests != 1
+            || runtime_report.steps[0].usage.pages != 1
+            || runtime_report.shutdown.downtime_gaps != 0
+        {
+            return Err(Wave5G0SourcePublicationError::Invariant(
+                "sealed C0 supervisor report did not close one no-gap reservation",
+            ));
+        }
+    }
+    let reservations = runtime
+        .supervisor()
+        .completed_no_gap_reservations_for_run(run_id.as_str())?;
+    let [reservation] = reservations.as_slice() else {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor did not read back exactly one C0 reservation",
+        ));
+    };
+    let Some(reservation_run) = &reservation.run else {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor reservation lost its run binding",
+        ));
+    };
+    let Some(reservation_plan) = &reservation.provider_plan else {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor reservation lost its plan binding",
+        ));
+    };
+    if reservation_run.run_id != run_id.as_str()
+        || reservation_run.exact_registration.digest.as_str()
+            != registration_receipt.exact_document_digest.as_str()
+        || reservation_plan.plan_id != plan.plan().plan_id
+        || reservation_plan.plan_template_digest != plan.plan_template_digest()
+        || reservation_plan.plan_digest != plan.plan_digest()
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "supervisor reservation differs from exact run/provider plan",
+        ));
+    }
+    let reservation_bytes = serde_json::to_vec(reservation)?;
+    let reservation_digest = Sha256Digest::of_bytes(&reservation_bytes);
+
     let prepared = prepare_direct_with_offline_fixture_selection(
         DIRECT_C0_FILE,
         OFFLINE_SELECTION_FILE,
@@ -370,6 +454,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         &run_id,
         &reopened_registration.build_bytes,
         prepared.exact_batch_bytes(),
+        reservation,
+        &reservation_digest,
         &circulation,
         &source,
         &preparation,
@@ -390,6 +476,9 @@ pub fn run_wave5_g0_source_publication_with_fault(
         run_registration_id: run_id.to_string(),
         run_registration_digest: registration_receipt.exact_document_digest.to_string(),
         catalog_admission_id: catalog_admission_id.into(),
+        reservation_id: reservation.reservation_id.to_string(),
+        reservation_digest: reservation_digest.to_string(),
+        supervisor_plan_digest: plan.plan_digest().to_owned(),
         selection_digest: Sha256Digest::of_bytes(OFFLINE_SELECTION_FILE).to_string(),
         source_occurrence_id: source_receipt.occurrence_id.to_string(),
         source_descriptor_digest: source.descriptor_digest.to_string(),
@@ -409,6 +498,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_queue_through: episode_receipt.queue_generation(),
         partial_fault_result,
         source_semantics_closed: true,
+        supervisor_reservation_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
         restart_reverified: true,
@@ -424,6 +514,8 @@ fn partial_fault_result(
     run_id: &StableString,
     build_bytes: &[u8],
     fixture_bytes: &[u8],
+    reservation: &joshi_supervisor::AttemptReservation,
+    reservation_digest: &Sha256Digest,
     circulation: &crate::wave5_circulation::Wave5CirculationClosure,
     source: &joshi_store::StoredWave5SourceOccurrence,
     preparation: &joshi_store::StoredCockpitV2Preparation,
@@ -452,6 +544,11 @@ fn partial_fault_result(
     let mut evidence = EvidenceBundle {
         contract: EVIDENCE_CONTRACT.into(),
         items: vec![
+            EvidenceItem {
+                role: EvidenceRole::Reservation,
+                evidence_id: reservation.reservation_id.to_string(),
+                content_digest: reservation_digest.to_string(),
+            },
             EvidenceItem {
                 role: EvidenceRole::OriginSegment,
                 evidence_id: circulation.segment.segment_id.to_string(),
@@ -507,6 +604,25 @@ fn partial_fault_result(
     };
     evidence.digest = evidence.recompute_digest()?;
     Ok(run_partial_schedule(&manifest, &schedule, evidence)?)
+}
+
+fn supervisor_config(state: &Path) -> SupervisorConfig {
+    let root = state.join("supervisor");
+    SupervisorConfig {
+        spool: SpoolConfig {
+            root: root.join("spool"),
+            max_segment_bytes: 4 * 1024 * 1024,
+            max_entries_per_segment: 16,
+            max_total_bytes: 8 * 1024 * 1024,
+            control_reserve_bytes: 512 * 1024,
+            max_transfer_chunk_bytes: 64 * 1024,
+        },
+        root,
+        queue: QueueLimits::default(),
+        retry: RetryPolicy::default(),
+        shutdown_deadline: Duration::from_secs(30),
+        maximum_spool_bytes_per_utc_day: 4 * 1024 * 1024,
+    }
 }
 
 fn memory_fixture(
@@ -605,6 +721,8 @@ pub enum Wave5G0SourcePublicationError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     FaultHarness(#[from] joshi_g0_harness::HarnessError),
+    #[error(transparent)]
+    Supervisor(#[from] joshi_supervisor::SupervisorError),
     #[error("injected Wave 5 G0 source/publication interruption at {0:?}")]
     Injected(Wave5G0SourcePublicationFaultPoint),
     #[error("Wave 5 G0 source/publication invariant failed: {0}")]
@@ -627,7 +745,8 @@ mod tests {
         assert!(report.publication_prepare_body_head_closed);
         assert!(report.partial_memory_chain_closed);
         assert_eq!(report.memory_queue_through, 2);
-        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 9);
+        assert!(report.supervisor_reservation_closed);
+        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 10);
         assert_eq!(
             report
                 .partial_fault_result
@@ -637,7 +756,7 @@ mod tests {
                     value.disposition == joshi_g0_harness::StepDisposition::ObservedPartial
                 })
                 .count(),
-            9
+            10
         );
         assert!(
             !report

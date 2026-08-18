@@ -104,11 +104,12 @@ catalog ACK, source/fact artifact, publication prepare/head, pairing and Glass
 read, memory act/episode, export/import, status, backup, restore, and reopen.
 It must bind the corresponding physical bytes or store readback—not booleans.
 The adapter-free result legitimately emits an empty, correctly digested bundle.
-The current Core component result carries nine exact roles: origin segment,
-store receipt, catalog binding, catalog ACK, semantic fact, publication prepare,
-publication head, memory act, and memory episode. Their identities may contain
-the colon separators used by actual store/spool contracts. Reservation,
-pairing/Glass fault evidence, export/import, status, backup, restore, and final
+The current Core component result carries ten exact roles: supervisor reservation,
+origin segment, store receipt, catalog binding, catalog ACK, semantic fact,
+publication prepare, publication head, memory act, and memory episode. Their identities may contain
+the colon separators used by actual store/spool contracts. The reservation and later origin are
+bound to the same run/fixture/plan but remain separate durable adapters. Pairing/Glass fault
+evidence, export/import, status, backup, restore, and final
 root reopen remain absent and therefore cannot appear `observed_partial`.
 
 ## Backup, restore, and reopen requirements

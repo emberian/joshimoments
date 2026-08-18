@@ -133,8 +133,10 @@ occurrences prove those states. The C0 component walk may report
 publication, export/import, status recovery and backup/restore crash boundaries remain open. The
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
-`fullOfflineFaultWalk:false`; supervisor accounting, the full crash matrix, default product mount,
-complete memory closure, export/import, status and backup/restore remain outside that component.
+`fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
+reservation/accounting prefix before the Pump adapter, but those two durable segments are not an
+atomic handoff. The full crash matrix, default product mount, complete memory closure,
+export/import, status and backup/restore remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
 interview memory closure remains outside it. A fixture may
@@ -148,10 +150,12 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 `Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
 recorded as Glass use or as a completed root occurrence.
 
-The component report now embeds a strict G0 V1 partial fault result. Nine baseline artifacts are
-bound by exact producer/store digests (origin, receipt, binding, ACK, fact, prepare, head, act, and
-episode), and each maps one-to-one to `observed_partial`. The remaining required roles are absent,
-the full 37-scenario crash matrix is not claimed, and both the embedded and outer
+The component report now embeds a strict G0 V1 partial fault result. Ten baseline artifacts are
+bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
+prepare, head, act, and episode), and each maps one-to-one to `observed_partial`. The provider plan
+binds the same registered run and exact fixture digest before its no-network attempt. The runtime
+and Pump/catalog adapters still create separate durable segments rather than one atomic handoff;
+the remaining roles and full 37-scenario matrix are absent, and both the embedded and outer
 `fullOfflineFaultWalk` fields remain false.
 
 ## Explicit nonclaims
