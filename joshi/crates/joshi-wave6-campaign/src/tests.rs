@@ -6,11 +6,15 @@ use joshi_wave6_registry::{
 };
 
 use crate::{
-    ALL_CENSORING_DISPOSITIONS, AssignmentMechanismV1, CAMPAIGN_REGISTRATION_CONTRACT,
-    CampaignArmV1, CampaignBudgetsV1, CampaignError, CampaignEstimandV1, CampaignMetricV1,
-    CampaignRegistrationV1, CampaignStopRulesV1, CampaignUniverseV1, EnrollmentDispositionV1,
-    FROZEN_ENROLLMENT_CONTRACT, FrozenEnrollmentV1, canonical_bytes, digest_bytes,
-    parse_campaign_registration_exact, parse_frozen_enrollment_exact,
+    ALL_CENSORING_DISPOSITIONS, AssignmentMechanismV1, CAMPAIGN_ADJUDICATION_CONTRACT,
+    CAMPAIGN_ASSIGNMENT_CONTRACT, CAMPAIGN_REGISTRATION_CONTRACT, CAMPAIGN_SEAL_CONTRACT,
+    CampaignAdjudicationV1, CampaignArmV1, CampaignAssignmentRowV1, CampaignAssignmentV1,
+    CampaignBudgetsV1, CampaignError, CampaignEstimandV1, CampaignEvidenceRefV1, CampaignMetricV1,
+    CampaignOutcomeV1, CampaignRegistrationV1, CampaignSealV1, CampaignStopRulesV1,
+    CampaignUniverseV1, CensoringDispositionV1, EnrollmentDispositionV1,
+    FROZEN_ENROLLMENT_CONTRACT, FixtureAdjudicationClaimV1, FrozenEnrollmentV1, canonical_bytes,
+    digest_bytes, parse_campaign_adjudication_exact, parse_campaign_assignment_exact,
+    parse_campaign_registration_exact, parse_campaign_seal_exact, parse_frozen_enrollment_exact,
 };
 
 const PROGRAM_FIXTURE: &[u8] =
@@ -73,6 +77,7 @@ fn registration() -> CampaignRegistrationV1 {
             denominator: stable("frozen_included_subject_count"),
             outcome: stable("exact_signed_flow_atoms"),
             unit: stable("native_atoms_per_subject"),
+            value_contract: stable("canonical_signed_i128_decimal"),
         },
         universe: universe(),
         assignment_mechanism: AssignmentMechanismV1::DeterministicFixtureOnly,
@@ -192,6 +197,205 @@ fn reclose_enrollment(enrollment: &mut FrozenEnrollmentV1) {
     enrollment.enrollment_digest =
         digest_bytes(&canonical_bytes(&enrollment.digest_material()).expect("enrollment material"))
             .expect("enrollment digest");
+}
+
+fn parsed_enrollment() -> (
+    crate::UnverifiedSemantic<CampaignRegistrationV1>,
+    crate::UnverifiedSemantic<FrozenEnrollmentV1>,
+) {
+    let registration = parsed_registration();
+    let enrollment = enrollment(registration.value());
+    let parsed_enrollment = parse_frozen_enrollment_exact(
+        &canonical_bytes(&enrollment).expect("enrollment bytes"),
+        &registration,
+    )
+    .expect("valid enrollment");
+    (registration, parsed_enrollment)
+}
+
+fn assignment(
+    registration: &CampaignRegistrationV1,
+    enrollment: &FrozenEnrollmentV1,
+) -> CampaignAssignmentV1 {
+    let mut assignment = CampaignAssignmentV1 {
+        contract: stable(CAMPAIGN_ASSIGNMENT_CONTRACT),
+        campaign_id: registration.campaign_id.clone(),
+        campaign_registration_digest: registration.campaign_registration_digest.clone(),
+        enrollment_id: enrollment.enrollment_id.clone(),
+        enrollment_digest: enrollment.enrollment_digest.clone(),
+        assignment_id: stable("assignment-fixture-001"),
+        assignment_basis_digest: digest("deterministic fixture assignment basis"),
+        assignments: vec![
+            CampaignAssignmentRowV1 {
+                subject_id: stable("mint:a"),
+                arm_id: stable("arm:control"),
+                probability_ppm: WireU64::new(500_000),
+            },
+            CampaignAssignmentRowV1 {
+                subject_id: stable("mint:c"),
+                arm_id: stable("arm:probe"),
+                probability_ppm: WireU64::new(500_000),
+            },
+        ],
+        assigned_at: timestamp("2026-08-18T01:01:30.000000Z"),
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+        assignment_digest: digest("placeholder assignment digest"),
+    };
+    reclose_assignment(&mut assignment);
+    assignment
+}
+
+fn reclose_assignment(assignment: &mut CampaignAssignmentV1) {
+    assignment.assignment_digest =
+        digest_bytes(&canonical_bytes(&assignment.digest_material()).expect("assignment material"))
+            .expect("assignment digest");
+}
+
+fn parsed_assignment(
+    registration: &crate::UnverifiedSemantic<CampaignRegistrationV1>,
+    enrollment: &crate::UnverifiedSemantic<FrozenEnrollmentV1>,
+) -> crate::UnverifiedSemantic<CampaignAssignmentV1> {
+    let assignment = assignment(registration.value(), enrollment.value());
+    parse_campaign_assignment_exact(
+        &canonical_bytes(&assignment).expect("assignment bytes"),
+        registration,
+        enrollment,
+    )
+    .expect("valid assignment")
+}
+
+fn evidence(
+    artifact_id: &str,
+    content: &str,
+    available_at: &str,
+    alleged_commit_seq: u64,
+) -> CampaignEvidenceRefV1 {
+    CampaignEvidenceRefV1 {
+        artifact_id: stable(artifact_id),
+        artifact_contract: stable("joshi.wave6.fixture-evidence.v1"),
+        content_digest: digest(content),
+        available_at: timestamp(available_at),
+        alleged_commit_seq: WireU64::new(alleged_commit_seq),
+    }
+}
+
+fn seal(
+    registration: &CampaignRegistrationV1,
+    enrollment: &FrozenEnrollmentV1,
+    assignment: &CampaignAssignmentV1,
+) -> CampaignSealV1 {
+    let mut seal = CampaignSealV1 {
+        contract: stable(CAMPAIGN_SEAL_CONTRACT),
+        campaign_id: registration.campaign_id.clone(),
+        campaign_registration_digest: registration.campaign_registration_digest.clone(),
+        enrollment_id: enrollment.enrollment_id.clone(),
+        enrollment_digest: enrollment.enrollment_digest.clone(),
+        assignment_id: assignment.assignment_id.clone(),
+        assignment_digest: assignment.assignment_digest.clone(),
+        seal_id: stable("seal-fixture-001"),
+        input_knowledge_cutoff: registration.input_knowledge_cutoff,
+        as_of_commit_seq: WireU64::new(11),
+        evidence: vec![
+            evidence(
+                "evidence:input-a",
+                "input evidence A",
+                "2026-08-18T01:01:40.000000Z",
+                10,
+            ),
+            evidence(
+                "evidence:input-b",
+                "input evidence B",
+                "2026-08-18T01:01:50.000000Z",
+                11,
+            ),
+        ],
+        sealed_at: timestamp("2026-08-18T01:02:30.000000Z"),
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+        seal_digest: digest("placeholder seal digest"),
+    };
+    reclose_seal(&mut seal);
+    seal
+}
+
+fn reclose_seal(seal: &mut CampaignSealV1) {
+    seal.seal_digest =
+        digest_bytes(&canonical_bytes(&seal.digest_material()).expect("seal material"))
+            .expect("seal digest");
+}
+
+fn parsed_seal(
+    registration: &crate::UnverifiedSemantic<CampaignRegistrationV1>,
+    enrollment: &crate::UnverifiedSemantic<FrozenEnrollmentV1>,
+    assignment: &crate::UnverifiedSemantic<CampaignAssignmentV1>,
+) -> crate::UnverifiedSemantic<CampaignSealV1> {
+    let seal = seal(registration.value(), enrollment.value(), assignment.value());
+    parse_campaign_seal_exact(
+        &canonical_bytes(&seal).expect("seal bytes"),
+        registration,
+        enrollment,
+        assignment,
+    )
+    .expect("valid seal")
+}
+
+fn adjudication(
+    registration: &CampaignRegistrationV1,
+    enrollment: &FrozenEnrollmentV1,
+    seal: &CampaignSealV1,
+) -> CampaignAdjudicationV1 {
+    let mut adjudication = CampaignAdjudicationV1 {
+        contract: stable(CAMPAIGN_ADJUDICATION_CONTRACT),
+        campaign_id: registration.campaign_id.clone(),
+        campaign_registration_digest: registration.campaign_registration_digest.clone(),
+        enrollment_id: enrollment.enrollment_id.clone(),
+        enrollment_digest: enrollment.enrollment_digest.clone(),
+        seal_id: seal.seal_id.clone(),
+        seal_digest: seal.seal_digest.clone(),
+        adjudication_id: stable("adjudication-fixture-001"),
+        outcome_knowledge_cutoff: registration.outcome_knowledge_cutoff,
+        as_of_commit_seq: WireU64::new(21),
+        outcomes: vec![
+            CampaignOutcomeV1 {
+                subject_id: stable("mint:a"),
+                disposition: CensoringDispositionV1::ResolvedObserved,
+                observed_value: Some(stable("-25")),
+                observed_unit: Some(registration.estimand.unit.clone()),
+                evidence: vec![evidence(
+                    "evidence:outcome-a",
+                    "outcome evidence A",
+                    "2026-08-18T01:04:20.000000Z",
+                    20,
+                )],
+                gap_ids: vec![],
+                known_at: timestamp("2026-08-18T01:04:30.000000Z"),
+            },
+            CampaignOutcomeV1 {
+                subject_id: stable("mint:c"),
+                disposition: CensoringDispositionV1::SourceLossCensored,
+                observed_value: None,
+                observed_unit: None,
+                evidence: vec![],
+                gap_ids: vec![stable("gap:source-loss-c")],
+                known_at: timestamp("2026-08-18T01:05:00.000000Z"),
+            },
+        ],
+        claim: FixtureAdjudicationClaimV1::DescriptiveFixtureDispositionOnly,
+        adjudicated_at: timestamp("2026-08-18T01:05:30.000000Z"),
+        authority: ProgramAuthorityV1::ReadRecordReplayProposeShadowOnly,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+        adjudication_digest: digest("placeholder adjudication digest"),
+    };
+    reclose_adjudication(&mut adjudication);
+    adjudication
+}
+
+fn reclose_adjudication(adjudication: &mut CampaignAdjudicationV1) {
+    adjudication.adjudication_digest = digest_bytes(
+        &canonical_bytes(&adjudication.digest_material()).expect("adjudication material"),
+    )
+    .expect("adjudication digest");
 }
 
 #[test]
@@ -396,5 +600,270 @@ fn exact_parsers_reject_unknown_noncanonical_and_stale_digest_bytes() {
     assert!(matches!(
         parse_campaign_registration_exact(&pretty, &program),
         Err(CampaignError::NonCanonical)
+    ));
+}
+
+#[test]
+fn exact_assignment_seal_and_adjudication_chain_stays_fixture_only() {
+    let (registration, enrollment) = parsed_enrollment();
+    let assignment = parsed_assignment(&registration, &enrollment);
+    let seal = parsed_seal(&registration, &enrollment, &assignment);
+    let adjudication = adjudication(registration.value(), enrollment.value(), seal.value());
+    let parsed = parse_campaign_adjudication_exact(
+        &canonical_bytes(&adjudication).expect("adjudication bytes"),
+        &registration,
+        &enrollment,
+        &seal,
+    )
+    .expect("valid adjudication");
+    assert_eq!(
+        assignment.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+    assert_eq!(
+        seal.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+    assert_eq!(
+        parsed.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+    assert_eq!(parsed.value().outcomes.len(), 2);
+    assert_eq!(
+        parsed.value().outcomes[1].disposition,
+        CensoringDispositionV1::SourceLossCensored
+    );
+}
+
+#[test]
+fn assignment_closes_exact_included_subject_arm_probability_and_clock() {
+    let (registration, enrollment) = parsed_enrollment();
+
+    let mut missing = assignment(registration.value(), enrollment.value());
+    missing.assignments.pop();
+    reclose_assignment(&mut missing);
+    assert!(matches!(
+        parse_campaign_assignment_exact(
+            &canonical_bytes(&missing).expect("bytes"),
+            &registration,
+            &enrollment
+        ),
+        Err(CampaignError::Assignment("subject closure"))
+    ));
+
+    let mut simultaneous = assignment(registration.value(), enrollment.value());
+    simultaneous.assigned_at = enrollment.value().frozen_at;
+    reclose_assignment(&mut simultaneous);
+    assert!(matches!(
+        parse_campaign_assignment_exact(
+            &canonical_bytes(&simultaneous).expect("bytes"),
+            &registration,
+            &enrollment
+        ),
+        Err(CampaignError::Assignment("chain binding"))
+    ));
+
+    let mut unknown_arm = assignment(registration.value(), enrollment.value());
+    unknown_arm.assignments[0].arm_id = stable("arm:invented");
+    reclose_assignment(&mut unknown_arm);
+    assert!(matches!(
+        parse_campaign_assignment_exact(
+            &canonical_bytes(&unknown_arm).expect("bytes"),
+            &registration,
+            &enrollment
+        ),
+        Err(CampaignError::Assignment("unknown arm"))
+    ));
+
+    let mut wrong_probability = assignment(registration.value(), enrollment.value());
+    wrong_probability.assignments[0].probability_ppm = WireU64::new(499_999);
+    reclose_assignment(&mut wrong_probability);
+    assert!(matches!(
+        parse_campaign_assignment_exact(
+            &canonical_bytes(&wrong_probability).expect("bytes"),
+            &registration,
+            &enrollment
+        ),
+        Err(CampaignError::Assignment("subject or probability"))
+    ));
+
+    let mut late = assignment(registration.value(), enrollment.value());
+    late.assigned_at = timestamp("2026-08-18T01:02:00.000001Z");
+    reclose_assignment(&mut late);
+    assert!(matches!(
+        parse_campaign_assignment_exact(
+            &canonical_bytes(&late).expect("bytes"),
+            &registration,
+            &enrollment
+        ),
+        Err(CampaignError::Assignment("chain binding"))
+    ));
+}
+
+#[test]
+fn seal_refuses_future_duplicate_uncommitted_or_rebound_evidence() {
+    let (registration, enrollment) = parsed_enrollment();
+    let assignment = parsed_assignment(&registration, &enrollment);
+
+    let mut future = seal(registration.value(), enrollment.value(), assignment.value());
+    future.evidence[1].available_at = timestamp("2026-08-18T01:02:00.000001Z");
+    reclose_seal(&mut future);
+    assert!(matches!(
+        parse_campaign_seal_exact(
+            &canonical_bytes(&future).expect("bytes"),
+            &registration,
+            &enrollment,
+            &assignment
+        ),
+        Err(CampaignError::Seal("evidence cutoff"))
+    ));
+
+    let mut duplicate = seal(registration.value(), enrollment.value(), assignment.value());
+    duplicate.evidence[1].artifact_id = duplicate.evidence[0].artifact_id.clone();
+    reclose_seal(&mut duplicate);
+    assert!(matches!(
+        parse_campaign_seal_exact(
+            &canonical_bytes(&duplicate).expect("bytes"),
+            &registration,
+            &enrollment,
+            &assignment
+        ),
+        Err(CampaignError::Seal(
+            "chain, chronology, or evidence closure"
+        ))
+    ));
+
+    let mut uncommitted = seal(registration.value(), enrollment.value(), assignment.value());
+    uncommitted.evidence[1].alleged_commit_seq = WireU64::new(12);
+    reclose_seal(&mut uncommitted);
+    assert!(matches!(
+        parse_campaign_seal_exact(
+            &canonical_bytes(&uncommitted).expect("bytes"),
+            &registration,
+            &enrollment,
+            &assignment
+        ),
+        Err(CampaignError::Seal("evidence cutoff"))
+    ));
+
+    let mut rebound = seal(registration.value(), enrollment.value(), assignment.value());
+    rebound.assignment_digest = digest("foreign assignment");
+    reclose_seal(&mut rebound);
+    assert!(matches!(
+        parse_campaign_seal_exact(
+            &canonical_bytes(&rebound).expect("bytes"),
+            &registration,
+            &enrollment,
+            &assignment
+        ),
+        Err(CampaignError::Seal(
+            "chain, chronology, or evidence closure"
+        ))
+    ));
+}
+
+#[test]
+fn adjudication_requires_exact_subjects_maturity_units_and_typed_gaps() {
+    let (registration, enrollment) = parsed_enrollment();
+    let assignment = parsed_assignment(&registration, &enrollment);
+    let seal = parsed_seal(&registration, &enrollment, &assignment);
+
+    let mut missing = adjudication(registration.value(), enrollment.value(), seal.value());
+    missing.outcomes.pop();
+    reclose_adjudication(&mut missing);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&missing).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("subject closure"))
+    ));
+
+    let mut malformed_value = adjudication(registration.value(), enrollment.value(), seal.value());
+    malformed_value.outcomes[0].observed_value = Some(stable("-025"));
+    reclose_adjudication(&mut malformed_value);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&malformed_value).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("outcome value/unit"))
+    ));
+
+    let mut early = adjudication(registration.value(), enrollment.value(), seal.value());
+    early.outcomes[0].known_at = timestamp("2026-08-18T01:03:59.999999Z");
+    reclose_adjudication(&mut early);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&early).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("outcome cutoff or ordering"))
+    ));
+
+    let mut wrong_unit = adjudication(registration.value(), enrollment.value(), seal.value());
+    wrong_unit.outcomes[0].observed_unit = Some(stable("ui_float"));
+    reclose_adjudication(&mut wrong_unit);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&wrong_unit).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("outcome value/unit"))
+    ));
+
+    let mut missing_gap = adjudication(registration.value(), enrollment.value(), seal.value());
+    missing_gap.outcomes[1].gap_ids.clear();
+    reclose_adjudication(&mut missing_gap);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&missing_gap).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("disposition evidence shape"))
+    ));
+
+    let mut future_evidence = adjudication(registration.value(), enrollment.value(), seal.value());
+    future_evidence.outcomes[0].evidence[0].available_at = timestamp("2026-08-18T01:04:30.000001Z");
+    reclose_adjudication(&mut future_evidence);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&future_evidence).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("outcome evidence cutoff"))
+    ));
+}
+
+#[test]
+fn conflicting_outcome_needs_two_exact_evidence_items() {
+    let (registration, enrollment) = parsed_enrollment();
+    let assignment = parsed_assignment(&registration, &enrollment);
+    let seal = parsed_seal(&registration, &enrollment, &assignment);
+    let mut adjudication = adjudication(registration.value(), enrollment.value(), seal.value());
+    adjudication.outcomes[0].disposition = CensoringDispositionV1::Conflicting;
+    adjudication.outcomes[0].observed_value = None;
+    adjudication.outcomes[0].observed_unit = None;
+    reclose_adjudication(&mut adjudication);
+    assert!(matches!(
+        parse_campaign_adjudication_exact(
+            &canonical_bytes(&adjudication).expect("bytes"),
+            &registration,
+            &enrollment,
+            &seal
+        ),
+        Err(CampaignError::Adjudication("disposition evidence shape"))
     ));
 }

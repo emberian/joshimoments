@@ -9,6 +9,17 @@
 
 use std::collections::BTreeSet;
 
+mod prospective;
+
+pub use prospective::{
+    CAMPAIGN_ADJUDICATION_CONTRACT, CAMPAIGN_ASSIGNMENT_CONTRACT, CAMPAIGN_SEAL_CONTRACT,
+    CampaignAdjudicationDigestMaterialV1, CampaignAdjudicationV1,
+    CampaignAssignmentDigestMaterialV1, CampaignAssignmentRowV1, CampaignAssignmentV1,
+    CampaignEvidenceRefV1, CampaignOutcomeV1, CampaignSealDigestMaterialV1, CampaignSealV1,
+    FixtureAdjudicationClaimV1, parse_campaign_adjudication_exact, parse_campaign_assignment_exact,
+    parse_campaign_seal_exact,
+};
+
 use joshi_domain::{StableString, UtcTimestamp, ValueDigest, WireU64};
 use joshi_wave6_registry::{
     ClaimRungV1, FixtureMaturityV1, ProgramAuthorityV1, SemanticCeilingV1,
@@ -55,6 +66,15 @@ pub enum CampaignError {
     /// Frozen enrollment was incomplete, branched, late, or inconsistent.
     #[error("campaign enrollment failure: {0}")]
     Enrollment(&'static str),
+    /// Assignment was incomplete, inconsistent with the frozen registration/enrollment, or late.
+    #[error("campaign assignment failure: {0}")]
+    Assignment(&'static str),
+    /// Seal evidence or chronology was incomplete or inconsistent.
+    #[error("campaign seal failure: {0}")]
+    Seal(&'static str),
+    /// Adjudication coverage, disposition, evidence, or chronology was invalid.
+    #[error("campaign adjudication failure: {0}")]
+    Adjudication(&'static str),
 }
 
 /// Fixed assignment mechanism available to this fixture contract.
@@ -118,6 +138,8 @@ pub struct CampaignEstimandV1 {
     pub outcome: StableString,
     /// Exact unit.
     pub unit: StableString,
+    /// Exact observed-value encoding.
+    pub value_contract: StableString,
 }
 
 /// Frozen eligible universe and its self-digest.
@@ -415,7 +437,7 @@ fn decode_canonical<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> 
     Ok(value)
 }
 
-fn validate_sha256(value: &ValueDigest, field: &'static str) -> Result<()> {
+pub(crate) fn validate_sha256(value: &ValueDigest, field: &'static str) -> Result<()> {
     let Some(hex) = value.as_str().strip_prefix("sha256:") else {
         return Err(CampaignError::Digest(field));
     };
@@ -429,7 +451,7 @@ fn validate_sha256(value: &ValueDigest, field: &'static str) -> Result<()> {
     Ok(())
 }
 
-fn sorted_unique<T: Ord>(values: &[T]) -> bool {
+pub(crate) fn sorted_unique<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
@@ -559,6 +581,7 @@ impl CampaignRegistrationV1 {
         let max_subjects = usize::try_from(self.budgets.max_subjects.get())
             .map_err(|_| CampaignError::Registration("max subjects overflow"))?;
         if self.inference_method.as_str() != "descriptive_fixture_exact_only"
+            || self.estimand.value_contract.as_str() != "canonical_signed_i128_decimal"
             || self.censoring_dispositions != ALL_CENSORING_DISPOSITIONS
             || self.budgets.provider_units.get() != 0
             || self.budgets.external_mutation_units.get() != 0
@@ -566,12 +589,12 @@ impl CampaignRegistrationV1 {
         {
             return Err(CampaignError::Registration("authority or budget boundary"));
         }
-        if !(self.registered_at <= self.enrollment_cutoff
-            && self.enrollment_cutoff <= self.input_knowledge_cutoff
+        if !(self.registered_at < self.enrollment_cutoff
+            && self.enrollment_cutoff < self.input_knowledge_cutoff
             && self.input_knowledge_cutoff < self.seal_deadline
-            && self.seal_deadline <= self.maturity_deadline
-            && self.maturity_deadline <= self.outcome_knowledge_cutoff
-            && self.outcome_knowledge_cutoff <= self.adjudication_deadline)
+            && self.seal_deadline < self.maturity_deadline
+            && self.maturity_deadline < self.outcome_knowledge_cutoff
+            && self.outcome_knowledge_cutoff < self.adjudication_deadline)
         {
             return Err(CampaignError::Registration("deadline chronology"));
         }
