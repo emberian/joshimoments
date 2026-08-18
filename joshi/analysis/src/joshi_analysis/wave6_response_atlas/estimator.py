@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from statistics import fmean
+from math import gcd
 from typing import Any
 
 import pyarrow as pa
@@ -19,23 +19,27 @@ from .contracts import (
     ATLAS_CLAIM_SCOPE,
     COMPETING_EVENT_KINDS,
     COMPETING_RISK_SURFACE_SCHEMA,
+    COMPETING_RISK_SURFACE_SCHEMA_ID,
     CONTEXT_LEVELS,
     RESPONSE_COMPONENT_OBSERVATION_SCHEMA,
     RESPONSE_COMPONENTS,
     RESPONSE_SURFACE_SCHEMA,
+    RESPONSE_SURFACE_SCHEMA_ID,
     RISK_CLAIM_SCOPE,
     RISK_OUTCOME_SCHEMA,
+    RISK_REFUSAL_SCHEMA,
+    RISK_REFUSAL_SCHEMA_ID,
 )
 
 ESTIMATOR_ID = "wave6_point_in_time_signed_flow_response_atlas"
-ESTIMATOR_VERSION = "1"
+ESTIMATOR_VERSION = "2"
 CONFIGURATION = {
-    "aggregation": "arithmetic_mean_over_complete_anchor_decompositions",
+    "aggregation": "reduced_exact_rational_mean_over_complete_anchor_decompositions",
     "components": list(RESPONSE_COMPONENTS),
     "contexts": list(CONTEXT_LEVELS),
     "competing_event_kinds": list(COMPETING_EVENT_KINDS),
     "missingness": "declared_gap_no_zero_or_partial_total_imputation",
-    "risk_summary": "observed_cause_fraction_with_typed_right_censoring",
+    "risk_summary": "issued_anchor_denominator_with_pending_and_typed_terminal_states",
     "topology": "separate_exact_epoch_and_version_cells",
 }
 CONFIGURATION_DIGEST = qualified_sha256_bytes(canonical_json_bytes(CONFIGURATION))
@@ -88,20 +92,45 @@ _EVENT_INVARIANTS = tuple(
 class ResponseAtlas:
     response_surfaces: pa.Table
     competing_risks: pa.Table
+    risk_refusals: pa.Table
 
 
 def response_atlas_input_identity(
-    observations: pa.Table, risk_outcomes: pa.Table
+    observations: pa.Table, risk_outcomes: pa.Table | None = None
 ) -> tuple[str, str]:
+    """Identify the response-feature closure without outcome-label coupling.
+
+    ``risk_outcomes`` remains accepted for compatibility but is intentionally ignored. Risk output
+    uses a separate private identity that includes only terminal rows known by the fit cutoff.
+    """
+
     components = {
         "observations": logical_table_sha256(observations, ["component_observation_id"]),
-        "risk_outcomes": logical_table_sha256(risk_outcomes, ["risk_outcome_id"]),
     }
     logical_digest = qualified_sha256_bytes(canonical_json_bytes(components))
     snapshot_id = qualified_sha256_bytes(
         canonical_json_bytes(
             {
-                "input_contract": "joshi.analysis.wave6-response-atlas-input/v1",
+                "input_contract": "joshi.analysis.wave6-response-surface-input/v2",
+                "logical_digest": logical_digest,
+            }
+        )
+    )
+    return snapshot_id, logical_digest
+
+
+def _risk_surface_input_identity(
+    observations: pa.Table, risk_outcomes: pa.Table
+) -> tuple[str, str]:
+    components = {
+        "risk_subjects": logical_table_sha256(observations, ["component_observation_id"]),
+        "known_terminal_outcomes": logical_table_sha256(risk_outcomes, ["risk_outcome_id"]),
+    }
+    logical_digest = qualified_sha256_bytes(canonical_json_bytes(components))
+    snapshot_id = qualified_sha256_bytes(
+        canonical_json_bytes(
+            {
+                "input_contract": "joshi.analysis.wave6-response-risk-surface-input/v2",
                 "logical_digest": logical_digest,
             }
         )
@@ -282,21 +311,35 @@ def _validate_inputs(
     dict[tuple[str, int], dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
+    dict[str, Any] | None,
 ]:
     if fit_cutoff.tzinfo is None:
         raise ManifestError("fit cutoff must be timezone-aware")
     if not observations.schema.equals(RESPONSE_COMPONENT_OBSERVATION_SCHEMA, check_metadata=True):
         raise ManifestError("response component observations violate their exact Arrow schema")
-    if not risk_outcomes.schema.equals(RISK_OUTCOME_SCHEMA, check_metadata=True):
-        raise ManifestError("risk outcomes violate their exact Arrow schema")
 
     rows = observations.to_pylist()
-    observation_ids = [row["component_observation_id"] for row in rows]
+    available_by_anchor: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row["response_available_at"] <= fit_cutoff:
+            available_by_anchor[(row["event_id"], row["horizon_us"])].append(row)
+
+    required_components = set(RESPONSE_COMPONENTS)
+    candidate_rows: list[dict[str, Any]] = []
+    for available_rows in available_by_anchor.values():
+        available_components = {row["component_kind"] for row in available_rows}
+        if available_components != required_components:
+            raise CoverageError(
+                "response anchor has incomplete component closure; use an explicit gap row"
+            )
+        candidate_rows.extend(available_rows)
+
+    observation_ids = [row["component_observation_id"] for row in candidate_rows]
     if len(observation_ids) != len(set(observation_ids)):
         raise ManifestError("response components duplicate occurrence identity")
     anchors: dict[tuple[str, int], dict[str, Any]] = {}
     event_invariants: dict[str, tuple[Any, ...]] = {}
-    for row in rows:
+    for row in candidate_rows:
         _validate_observation(row)
         event_material = tuple(row[field] for field in _EVENT_INVARIANTS)
         previous_event = event_invariants.setdefault(row["event_id"], event_material)
@@ -318,48 +361,76 @@ def _validate_inputs(
         anchor["rows"].append(row)
     if not anchors:
         raise ManifestError("response atlas requires at least one response anchor")
-    required_components = set(RESPONSE_COMPONENTS)
     for anchor in anchors.values():
         if set(anchor["components"]) != required_components:
             raise CoverageError(
                 "response anchor has incomplete component closure; use an explicit gap row"
             )
 
-    risk_rows = risk_outcomes.to_pylist()
-    risk_ids = [row["risk_outcome_id"] for row in risk_rows]
-    if len(risk_ids) != len(set(risk_ids)):
-        raise ManifestError("risk outcomes duplicate occurrence identity")
-    risks_by_anchor: dict[tuple[str, int], dict[str, Any]] = {}
-    for row in risk_rows:
-        anchor_key = (row["event_id"], row["horizon_us"])
-        anchor = anchors.get(anchor_key)
-        if anchor is None:
-            raise ManifestError("risk outcome cites an unknown response anchor")
-        if anchor_key in risks_by_anchor:
-            raise ManifestError("response anchor duplicates its competing-risk outcome")
-        _validate_risk(row, anchor["representative"])
-        risks_by_anchor[anchor_key] = row
-    if set(risks_by_anchor) != set(anchors):
-        raise CoverageError("every response anchor requires an explicit event or censoring outcome")
-
-    eligible_anchors = {
-        key: anchor
-        for key, anchor in anchors.items()
-        if max(row["response_available_at"] for row in anchor["rows"]) <= fit_cutoff
-    }
-    if not eligible_anchors:
-        raise ManifestError("fit cutoff leaves no complete point-in-time response anchors")
     eligible_observations = [
         row
-        for key in sorted(eligible_anchors)
-        for row in eligible_anchors[key]["rows"]
+        for key in sorted(anchors)
+        for row in anchors[key]["rows"]
     ]
-    eligible_risks = [
-        row
-        for key, row in sorted(risks_by_anchor.items())
-        if key in eligible_anchors and row["outcome_known_at"] <= fit_cutoff
-    ]
-    return eligible_anchors, eligible_observations, eligible_risks
+    admitted_known_risk_table: pa.Table | None = None
+    try:
+        if not risk_outcomes.schema.equals(RISK_OUTCOME_SCHEMA, check_metadata=True):
+            raise ManifestError("risk outcomes violate their exact Arrow schema")
+        risk_rows = risk_outcomes.to_pylist()
+        member_risk_rows = [
+            row
+            for row in risk_rows
+            if (row["event_id"], row["horizon_us"]) in anchors
+        ]
+        known_risk_rows = [
+            row
+            for row in member_risk_rows
+            if row["outcome_known_at"] <= fit_cutoff
+        ]
+        admitted_known_risk_table = pa.Table.from_pylist(
+            known_risk_rows, schema=RISK_OUTCOME_SCHEMA
+        )
+        risk_ids = [row["risk_outcome_id"] for row in known_risk_rows]
+        if len(risk_ids) != len(set(risk_ids)):
+            raise ManifestError("risk outcomes duplicate occurrence identity")
+        risks_by_anchor: dict[tuple[str, int], dict[str, Any]] = {}
+        for row in known_risk_rows:
+            anchor_key = (row["event_id"], row["horizon_us"])
+            if anchor_key in risks_by_anchor:
+                raise ManifestError("response anchor duplicates its competing-risk outcome")
+            _validate_risk(row, anchors[anchor_key]["representative"])
+            risks_by_anchor[anchor_key] = row
+    except ManifestError as error:
+        reason_code = (
+            "unregistered_competing_event_kind"
+            if "unregistered competing event kind" in str(error)
+            else "risk_coverage_contract_invalid"
+            if isinstance(error, CoverageError)
+            else "risk_temporal_contract_invalid"
+            if isinstance(error, TemporalLeakageError)
+            else "risk_manifest_contract_invalid"
+        )
+        return (
+            anchors,
+            eligible_observations,
+            [],
+            {
+                "reason_code": reason_code,
+                "reason_detail": str(error),
+                "admitted_risk_row_count": (
+                    admitted_known_risk_table.num_rows
+                    if admitted_known_risk_table is not None
+                    else 0
+                ),
+                "refused_risk_input_logical_digest": (
+                    logical_table_sha256(admitted_known_risk_table, ["risk_outcome_id"])
+                    if admitted_known_risk_table is not None
+                    else None
+                ),
+            },
+        )
+    eligible_risks = [row for _, row in sorted(risks_by_anchor.items())]
+    return anchors, eligible_observations, eligible_risks, None
 
 
 def _context(row: dict[str, Any], level: str) -> tuple[str, str]:
@@ -414,27 +485,36 @@ def _key_fields(key: tuple[Any, ...]) -> dict[str, Any]:
     return dict(zip(names, key, strict=True))
 
 
+def _exact_mean(values: list[int]) -> tuple[str | None, str | None, int | None]:
+    if not values:
+        return None, None, None
+    total = sum(values)
+    divisor = len(values)
+    common_divisor = gcd(abs(total), divisor)
+    return str(total), str(total // common_divisor), divisor // common_divisor
+
+
 def build_response_atlas(
     observations: pa.Table,
     risk_outcomes: pa.Table,
     fit_cutoff: datetime,
 ) -> ResponseAtlas:
-    eligible_anchors, eligible_observations, eligible_risks = _validate_inputs(
+    eligible_anchors, eligible_observations, eligible_risks, risk_refusal = _validate_inputs(
         observations, risk_outcomes, fit_cutoff
     )
     observation_table = pa.Table.from_pylist(
         eligible_observations, schema=RESPONSE_COMPONENT_OBSERVATION_SCHEMA
     )
     risk_table = pa.Table.from_pylist(eligible_risks, schema=RISK_OUTCOME_SCHEMA)
-    input_snapshot_id, input_logical_digest = response_atlas_input_identity(
-        observation_table, risk_table
+    response_snapshot_id, response_logical_digest = response_atlas_input_identity(
+        observation_table
     )
-    availability = [row["response_available_at"] for row in eligible_observations]
-    availability.extend(row["outcome_known_at"] for row in eligible_risks)
-    maximum_available_at = max(availability)
-    commits = [row["available_commit_seq"] for row in eligible_observations]
-    commits.extend(row["available_commit_seq"] for row in eligible_risks)
-    as_of_commit_seq = max(commits)
+    response_maximum_available_at = max(
+        row["response_available_at"] for row in eligible_observations
+    )
+    response_as_of_commit_seq = max(
+        row["available_commit_seq"] for row in eligible_observations
+    )
 
     surface_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     for anchor in eligible_anchors.values():
@@ -500,18 +580,21 @@ def build_response_atlas(
                 if len(complete) == len(anchors)
                 else "complete_support_with_declared_gaps"
             )
+            response_sum, response_numerator, response_denominator = _exact_mean(values)
             row = {
                 "estimator_id": ESTIMATOR_ID,
                 "estimator_version": ESTIMATOR_VERSION,
                 "estimator_configuration_digest": CONFIGURATION_DIGEST,
-                "input_snapshot_id": input_snapshot_id,
-                "input_logical_digest": input_logical_digest,
+                "input_snapshot_id": response_snapshot_id,
+                "input_logical_digest": response_logical_digest,
                 "fit_cutoff": fit_cutoff,
-                "maximum_input_available_at": maximum_available_at,
-                "as_of_commit_seq": as_of_commit_seq,
+                "maximum_input_available_at": response_maximum_available_at,
+                "as_of_commit_seq": response_as_of_commit_seq,
                 **dimensions,
                 "component_kind": component,
-                "response_estimate": fmean(values) if values else None,
+                "response_sum_atoms": response_sum,
+                "response_mean_numerator_atoms": response_numerator,
+                "response_mean_denominator": response_denominator,
                 "response_unit": "base_asset_atoms",
                 "support_anchor_count": len(anchors),
                 "complete_anchor_count": len(complete),
@@ -526,8 +609,8 @@ def build_response_atlas(
             row["surface_cell_id"] = _stable_id(
                 "response-surface",
                 {
-                    "schema": "joshi.analysis.wave6-response-surface-cell/v1",
-                    "input_logical_digest": input_logical_digest,
+                    "schema": RESPONSE_SURFACE_SCHEMA_ID,
+                    "input_logical_digest": response_logical_digest,
                     "fit_cutoff": fit_cutoff,
                     "dimensions": dimensions,
                     "component_kind": component,
@@ -538,65 +621,139 @@ def build_response_atlas(
             )
             surface_rows.append(row)
 
-    anchor_by_key = eligible_anchors
+    surface_rows.sort(key=lambda row: row["surface_cell_id"])
+    response_surface_table = pa.Table.from_pylist(surface_rows, schema=RESPONSE_SURFACE_SCHEMA)
+    if risk_refusal is not None:
+        refusal_row = {
+            "estimator_id": ESTIMATOR_ID,
+            "estimator_version": ESTIMATOR_VERSION,
+            "estimator_configuration_digest": CONFIGURATION_DIGEST,
+            "response_input_snapshot_id": response_snapshot_id,
+            "response_input_logical_digest": response_logical_digest,
+            "fit_cutoff": fit_cutoff,
+            "refusal_kind": "risk_artifact_refused_response_artifact_preserved",
+            "reason_code": risk_refusal["reason_code"],
+            "reason_detail": risk_refusal["reason_detail"],
+            "admitted_risk_row_count": risk_refusal["admitted_risk_row_count"],
+            "refused_risk_input_logical_digest": risk_refusal[
+                "refused_risk_input_logical_digest"
+            ],
+            "claim_scope": RISK_CLAIM_SCOPE,
+        }
+        refusal_row["risk_refusal_id"] = _stable_id(
+            "response-risk-refusal",
+            {
+                "schema": RISK_REFUSAL_SCHEMA_ID,
+                "response_input_logical_digest": response_logical_digest,
+                "fit_cutoff": fit_cutoff,
+                "reason_code": risk_refusal["reason_code"],
+                "reason_detail": risk_refusal["reason_detail"],
+                "admitted_risk_row_count": risk_refusal["admitted_risk_row_count"],
+                "refused_risk_input_logical_digest": risk_refusal[
+                    "refused_risk_input_logical_digest"
+                ],
+            },
+        )
+        refusal_row["risk_refusal_digest"] = _record_digest(
+            refusal_row, "risk_refusal_id", "risk_refusal_digest"
+        )
+        return ResponseAtlas(
+            response_surfaces=response_surface_table,
+            competing_risks=pa.Table.from_pylist([], schema=COMPETING_RISK_SURFACE_SCHEMA),
+            risk_refusals=pa.Table.from_pylist([refusal_row], schema=RISK_REFUSAL_SCHEMA),
+        )
+
+    risk_snapshot_id, risk_logical_digest = _risk_surface_input_identity(
+        observation_table, risk_table
+    )
+    risk_availability = [row["response_available_at"] for row in eligible_observations]
+    risk_availability.extend(row["outcome_known_at"] for row in eligible_risks)
+    risk_maximum_available_at = max(risk_availability)
+    risk_commits = [row["available_commit_seq"] for row in eligible_observations]
+    risk_commits.extend(row["available_commit_seq"] for row in eligible_risks)
+    risk_as_of_commit_seq = max(risk_commits)
+
+    known_risks = {
+        (risk["event_id"], risk["horizon_us"]): risk for risk in eligible_risks
+    }
     risk_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-    for risk in eligible_risks:
-        anchor = anchor_by_key[(risk["event_id"], risk["horizon_us"])]
+    for anchor_key, anchor in eligible_anchors.items():
         representative = anchor["representative"]
+        subject = {
+            "subject_id": f"{anchor_key[0]}:{anchor_key[1]}",
+            "outcome": known_risks.get(anchor_key),
+        }
         for level in CONTEXT_LEVELS:
-            risk_groups[_cell_key(representative, level)].append(risk)
+            risk_groups[_cell_key(representative, level)].append(subject)
 
     risk_surface_rows: list[dict[str, Any]] = []
-    for key, risks in sorted(risk_groups.items(), key=lambda item: item[0]):
+    for key, subjects in sorted(risk_groups.items(), key=lambda item: item[0]):
         dimensions = _key_fields(key)
+        known_outcomes = [
+            subject["outcome"] for subject in subjects if subject["outcome"] is not None
+        ]
+        pending_subject_ids = sorted(
+            subject["subject_id"] for subject in subjects if subject["outcome"] is None
+        )
+        risk_subject_ids = sorted(subject["subject_id"] for subject in subjects)
         right_censored_count = sum(
-            row["censoring_kind"] != "exact_event" for row in risks
+            row["censoring_kind"] != "exact_event" for row in known_outcomes
         )
         administrative_count = sum(
-            row["censoring_kind"] == "right_administrative" for row in risks
+            row["censoring_kind"] == "right_administrative" for row in known_outcomes
         )
-        source_gap_count = sum(row["censoring_kind"] == "right_source_gap" for row in risks)
-        coverage_windows = sorted({row["coverage_window_id"] for row in risks})
+        source_gap_count = sum(
+            row["censoring_kind"] == "right_source_gap" for row in known_outcomes
+        )
+        coverage_windows = sorted({row["coverage_window_id"] for row in known_outcomes})
         coverage_gaps = sorted(
-            row["coverage_gap_id"] for row in risks if row["coverage_gap_id"] is not None
+            row["coverage_gap_id"]
+            for row in known_outcomes
+            if row["coverage_gap_id"] is not None
         )
         for event_kind in COMPETING_EVENT_KINDS:
             event_count = sum(
                 row["censoring_kind"] == "exact_event" and row["event_kind"] == event_kind
-                for row in risks
+                for row in known_outcomes
             )
             other_event_count = sum(
                 row["censoring_kind"] == "exact_event" and row["event_kind"] != event_kind
-                for row in risks
+                for row in known_outcomes
             )
             row = {
                 "estimator_id": ESTIMATOR_ID,
                 "estimator_version": ESTIMATOR_VERSION,
                 "estimator_configuration_digest": CONFIGURATION_DIGEST,
-                "input_snapshot_id": input_snapshot_id,
-                "input_logical_digest": input_logical_digest,
+                "input_snapshot_id": risk_snapshot_id,
+                "input_logical_digest": risk_logical_digest,
                 "fit_cutoff": fit_cutoff,
-                "maximum_input_available_at": maximum_available_at,
-                "as_of_commit_seq": as_of_commit_seq,
+                "maximum_input_available_at": risk_maximum_available_at,
+                "as_of_commit_seq": risk_as_of_commit_seq,
                 **dimensions,
                 "event_kind": event_kind,
-                "risk_cohort_count": len(risks),
+                "risk_cohort_count": len(subjects),
+                "terminal_known_count": len(known_outcomes),
+                "pending_count": len(pending_subject_ids),
                 "event_count": event_count,
                 "other_competing_event_count": other_event_count,
                 "right_censored_count": right_censored_count,
                 "administrative_censored_count": administrative_count,
                 "source_gap_censored_count": source_gap_count,
-                "observed_cause_fraction_ppm": event_count * 1_000_000 // len(risks),
-                "coverage_ratio_ppm": (len(risks) - source_gap_count) * 1_000_000 // len(risks),
+                "observed_cause_fraction_ppm": event_count * 1_000_000 // len(subjects),
+                "coverage_ratio_ppm": (
+                    (len(known_outcomes) - source_gap_count) * 1_000_000 // len(subjects)
+                ),
                 "coverage_window_ids": coverage_windows,
                 "coverage_gap_ids": coverage_gaps,
+                "risk_subject_ids": risk_subject_ids,
+                "pending_subject_ids": pending_subject_ids,
                 "claim_scope": RISK_CLAIM_SCOPE,
             }
             row["risk_cell_id"] = _stable_id(
                 "competing-risk-surface",
                 {
-                    "schema": "joshi.analysis.wave6-competing-risk-surface-cell/v1",
-                    "input_logical_digest": input_logical_digest,
+                    "schema": COMPETING_RISK_SURFACE_SCHEMA_ID,
+                    "input_logical_digest": risk_logical_digest,
                     "fit_cutoff": fit_cutoff,
                     "dimensions": dimensions,
                     "event_kind": event_kind,
@@ -607,11 +764,11 @@ def build_response_atlas(
             )
             risk_surface_rows.append(row)
 
-    surface_rows.sort(key=lambda row: row["surface_cell_id"])
     risk_surface_rows.sort(key=lambda row: row["risk_cell_id"])
     return ResponseAtlas(
-        response_surfaces=pa.Table.from_pylist(surface_rows, schema=RESPONSE_SURFACE_SCHEMA),
+        response_surfaces=response_surface_table,
         competing_risks=pa.Table.from_pylist(
             risk_surface_rows, schema=COMPETING_RISK_SURFACE_SCHEMA
         ),
+        risk_refusals=pa.Table.from_pylist([], schema=RISK_REFUSAL_SCHEMA),
     )

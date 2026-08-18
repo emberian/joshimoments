@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from fractions import Fraction
 
 import pyarrow as pa
 import pytest
@@ -11,6 +12,7 @@ from joshi_analysis.wave6_response_atlas.contracts import (
     RESPONSE_COMPONENT_OBSERVATION_SCHEMA,
     RESPONSE_SURFACE_SCHEMA,
     RISK_OUTCOME_SCHEMA,
+    RISK_REFUSAL_SCHEMA,
 )
 from joshi_analysis.wave6_response_atlas.estimator import build_response_atlas
 from joshi_analysis.wave6_response_atlas.synthetic import synthetic_response_atlas_inputs
@@ -35,19 +37,32 @@ def _wallet_a_short(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     ]
 
 
+def _exact_mean(row: dict[str, object]) -> Fraction | None:
+    numerator = row["response_mean_numerator_atoms"]
+    denominator = row["response_mean_denominator"]
+    if numerator is None:
+        assert denominator is None
+        return None
+    assert isinstance(numerator, str)
+    assert isinstance(denominator, int)
+    return Fraction(int(numerator), denominator)
+
+
 def test_response_surface_is_conditioned_and_exactly_component_decomposed() -> None:
     observations, risks, cutoff = synthetic_response_atlas_inputs()
     atlas = build_response_atlas(observations, risks, cutoff)
     assert atlas.response_surfaces.schema.equals(RESPONSE_SURFACE_SCHEMA, check_metadata=True)
     assert atlas.competing_risks.schema.equals(COMPETING_RISK_SURFACE_SCHEMA, check_metadata=True)
+    assert atlas.risk_refusals.schema.equals(RISK_REFUSAL_SCHEMA, check_metadata=True)
+    assert atlas.risk_refusals.num_rows == 0
 
     rows = _wallet_a_short(atlas.response_surfaces.to_pylist())
-    estimates = {row["component_kind"]: row["response_estimate"] for row in rows}
+    estimates = {row["component_kind"]: _exact_mean(row) for row in rows}
     assert estimates == {
-        "same_wallet": 11.5,
-        "same_cluster_other_wallet": 21.5,
-        "external": 31.5,
-        "total": 64.5,
+        "same_wallet": Fraction(23, 2),
+        "same_cluster_other_wallet": Fraction(43, 2),
+        "external": Fraction(63, 2),
+        "total": Fraction(129, 2),
     }
     assert estimates["total"] == sum(
         estimates[component]
@@ -109,6 +124,8 @@ def test_future_responses_and_outcomes_are_excluded_from_as_known_fit() -> None:
     for row in observation_rows:
         if row["event_id"] == "atlas-event-002" and row["horizon_us"] == 60_000_000:
             row["response_available_at"] = cutoff + timedelta(seconds=1)
+            if row["component_kind"] == "same_wallet":
+                row["response_unit"] = "future-invalid-unit"
     changed = build_response_atlas(_table(observation_rows), risks, cutoff)
     physically_absent_observations = [
         row
@@ -136,7 +153,7 @@ def test_future_responses_and_outcomes_are_excluded_from_as_known_fit() -> None:
         if row["component_kind"] == "total"
     )
     assert total["support_anchor_count"] == 1
-    assert total["response_estimate"] == 63.0
+    assert _exact_mean(total) == 63
 
     risk_rows = risks.to_pylist()
     for row in risk_rows:
@@ -148,8 +165,203 @@ def test_future_responses_and_outcomes_are_excluded_from_as_known_fit() -> None:
         for row in _wallet_a_short(changed_risks.competing_risks.to_pylist())
         if row["event_kind"] == "migration"
     )
-    assert risk_cell["risk_cohort_count"] == 1
+    assert risk_cell["risk_cohort_count"] == 2
+    assert risk_cell["terminal_known_count"] == 1
+    assert risk_cell["pending_count"] == 1
     assert risk_cell["event_count"] == 0
+
+
+def test_future_invalid_terminal_bytes_are_pending_and_do_not_poison_the_cut() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    risk_rows = risks.to_pylist()
+    for row in risk_rows:
+        if row["event_id"] == "atlas-event-001" and row["horizon_us"] == 60_000_000:
+            row["outcome_known_at"] = cutoff + timedelta(seconds=1)
+            row["event_kind"] = "future-invalid-event-kind"
+    with_future = build_response_atlas(observations, _risk_table(risk_rows), cutoff)
+    without_future = build_response_atlas(
+        observations,
+        _risk_table(
+            [
+                row
+                for row in risks.to_pylist()
+                if not (
+                    row["event_id"] == "atlas-event-001"
+                    and row["horizon_us"] == 60_000_000
+                )
+            ]
+        ),
+        cutoff,
+    )
+    assert with_future.response_surfaces.to_pylist() == without_future.response_surfaces.to_pylist()
+    assert with_future.competing_risks.to_pylist() == without_future.competing_risks.to_pylist()
+
+
+def test_future_only_anchor_cannot_change_risk_membership_or_refusal_until_admitted() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    future_event_id = "atlas-event-future-only"
+    future_rows = []
+    for row in observations.to_pylist():
+        if row["event_id"] == "atlas-event-001" and row["horizon_us"] == 60_000_000:
+            future = dict(row)
+            future["event_id"] = future_event_id
+            future["component_observation_id"] = (
+                f"atlas-component:{future_event_id}:60000000:{row['component_kind']}"
+            )
+            future["coverage_window_id"] = f"coverage:{future_event_id}:60000000"
+            future["response_available_at"] = cutoff + timedelta(minutes=1)
+            future_rows.append(future)
+
+    risk_rows = risks.to_pylist()
+    future_risk = next(
+        dict(row)
+        for row in risk_rows
+        if row["event_id"] == "atlas-event-001" and row["horizon_us"] == 60_000_000
+    )
+    future_risk["risk_outcome_id"] = f"atlas-risk:{future_event_id}:60000000"
+    future_risk["event_id"] = future_event_id
+    future_risk["event_kind"] = "invalid-until-response-anchor-is-admitted"
+    risk_rows.append(future_risk)
+
+    same_risks = _risk_table(risk_rows)
+    physically_absent = build_response_atlas(observations, same_risks, cutoff)
+    future_present = build_response_atlas(
+        _table([*observations.to_pylist(), *future_rows]), same_risks, cutoff
+    )
+    assert (
+        future_present.response_surfaces.to_pylist()
+        == physically_absent.response_surfaces.to_pylist()
+    )
+    assert (
+        future_present.competing_risks.to_pylist()
+        == physically_absent.competing_risks.to_pylist()
+    )
+    assert future_present.risk_refusals.to_pylist() == physically_absent.risk_refusals.to_pylist()
+    assert future_present.risk_refusals.num_rows == 0
+
+    refusing_rows = [dict(row) for row in risk_rows]
+    admitted_invalid = next(
+        row
+        for row in refusing_rows
+        if row["event_id"] == "atlas-event-002" and row["horizon_us"] == 60_000_000
+    )
+    admitted_invalid["censoring_kind"] = "invalid-known-censoring-kind"
+    refusing_risks = _risk_table(refusing_rows)
+    absent_refused = build_response_atlas(observations, refusing_risks, cutoff)
+    present_refused = build_response_atlas(
+        _table([*observations.to_pylist(), *future_rows]), refusing_risks, cutoff
+    )
+    assert (
+        present_refused.response_surfaces.to_pylist()
+        == absent_refused.response_surfaces.to_pylist()
+    )
+    assert present_refused.competing_risks.to_pylist() == absent_refused.competing_risks.to_pylist()
+    assert present_refused.risk_refusals.to_pylist() == absent_refused.risk_refusals.to_pylist()
+    assert present_refused.risk_refusals.num_rows == 1
+
+    later = build_response_atlas(
+        _table([*observations.to_pylist(), *future_rows]),
+        same_risks,
+        cutoff + timedelta(minutes=2),
+    )
+    later_total = next(
+        row
+        for row in _wallet_a_short(later.response_surfaces.to_pylist())
+        if row["component_kind"] == "total"
+    )
+    assert later_total["support_anchor_count"] == 3
+    assert later.competing_risks.num_rows == 0
+    assert later.risk_refusals.num_rows == 1
+    assert later.risk_refusals.to_pylist()[0]["reason_code"] == (
+        "unregistered_competing_event_kind"
+    )
+
+
+def test_outcome_label_changes_cannot_change_response_artifact_identity() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    baseline = build_response_atlas(observations, risks, cutoff)
+    changed_rows = risks.to_pylist()
+    target = next(
+        row
+        for row in changed_rows
+        if row["event_id"] == "atlas-event-001" and row["horizon_us"] == 60_000_000
+    )
+    target["event_kind"] = "venue_exit"
+    changed = build_response_atlas(observations, _risk_table(changed_rows), cutoff)
+    assert baseline.response_surfaces.to_pylist() == changed.response_surfaces.to_pylist()
+    assert baseline.competing_risks.to_pylist() != changed.competing_risks.to_pylist()
+
+
+def test_invalid_known_risk_refuses_only_risk_artifact_and_preserves_response() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    baseline = build_response_atlas(observations, risks, cutoff)
+    invalid_rows = risks.to_pylist()
+    target = next(
+        row
+        for row in invalid_rows
+        if row["event_id"] == "atlas-event-001" and row["horizon_us"] == 60_000_000
+    )
+    target["event_kind"] = "invalid-known-event-kind"
+    refused = build_response_atlas(observations, _risk_table(invalid_rows), cutoff)
+    assert refused.response_surfaces.to_pylist() == baseline.response_surfaces.to_pylist()
+    assert refused.competing_risks.num_rows == 0
+    assert refused.risk_refusals.num_rows == 1
+    refusal = refused.risk_refusals.to_pylist()[0]
+    assert refusal["refusal_kind"] == "risk_artifact_refused_response_artifact_preserved"
+    assert refusal["reason_code"] == "unregistered_competing_event_kind"
+    assert refusal["admitted_risk_row_count"] == risks.num_rows
+    assert refusal["refused_risk_input_logical_digest"].startswith("sha256:")
+    assert refusal["response_input_logical_digest"] == baseline.response_surfaces.to_pylist()[0][
+        "input_logical_digest"
+    ]
+
+
+def test_all_pending_subjects_remain_in_risk_denominator_and_cells() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    risk_rows = risks.to_pylist()
+    for row in risk_rows:
+        if row["event_id"] in {"atlas-event-001", "atlas-event-002"}:
+            row["outcome_known_at"] = cutoff + timedelta(seconds=1)
+    atlas = build_response_atlas(observations, _risk_table(risk_rows), cutoff)
+    response_total = next(
+        row
+        for row in _wallet_a_short(atlas.response_surfaces.to_pylist())
+        if row["component_kind"] == "total"
+    )
+    risk_cells = _wallet_a_short(atlas.competing_risks.to_pylist())
+    assert response_total["support_anchor_count"] == 2
+    assert len(risk_cells) == 3
+    assert all(row["risk_cohort_count"] == 2 for row in risk_cells)
+    assert all(row["terminal_known_count"] == 0 for row in risk_cells)
+    assert all(row["pending_count"] == 2 for row in risk_cells)
+    assert all(row["event_count"] == 0 for row in risk_cells)
+    assert all(row["coverage_ratio_ppm"] == 0 for row in risk_cells)
+
+
+def test_exact_atom_means_above_binary_float_integer_range_remain_rational() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    rows = observations.to_pylist()
+    exact_values = {
+        "atlas-event-001": 2**53,
+        "atlas-event-002": 2**53 + 1,
+    }
+    for row in rows:
+        if (
+            row["event_id"] in exact_values
+            and row["horizon_us"] == 60_000_000
+            and row["component_kind"] == "same_wallet"
+        ):
+            row["response_signed_flow_atoms"] = exact_values[row["event_id"]]
+    atlas = build_response_atlas(_table(rows), risks, cutoff)
+    exact = next(
+        row
+        for row in _wallet_a_short(atlas.response_surfaces.to_pylist())
+        if row["component_kind"] == "same_wallet"
+    )
+    assert exact["response_sum_atoms"] == str(2**54 + 1)
+    assert exact["response_mean_numerator_atoms"] == str(2**54 + 1)
+    assert exact["response_mean_denominator"] == 2
+    assert _exact_mean(exact) == Fraction(2**54 + 1, 2)
 
 
 def test_future_context_version_fails_closed() -> None:
@@ -160,12 +372,48 @@ def test_future_context_version_fails_closed() -> None:
         build_response_atlas(_table(rows), risks, cutoff)
 
 
-def test_incomplete_component_and_risk_coverage_fail_closed() -> None:
+def test_incomplete_components_fail_but_missing_terminal_outcome_stays_pending() -> None:
     observations, risks, cutoff = synthetic_response_atlas_inputs()
     with pytest.raises(CoverageError, match="incomplete component closure"):
         build_response_atlas(observations.slice(1), risks, cutoff)
-    with pytest.raises(CoverageError, match="every response anchor"):
-        build_response_atlas(observations, risks.slice(1), cutoff)
+    atlas = build_response_atlas(observations, risks.slice(1), cutoff)
+    pending = next(
+        row
+        for row in _wallet_a_short(atlas.competing_risks.to_pylist())
+        if row["event_kind"] == "migration"
+    )
+    assert pending["risk_cohort_count"] == 2
+    assert pending["terminal_known_count"] == 1
+    assert pending["pending_count"] == 1
+    assert pending["pending_subject_ids"] == ["atlas-event-001:60000000"]
+
+
+def test_future_row_presence_cannot_turn_incomplete_current_anchor_into_exclusion() -> None:
+    observations, risks, cutoff = synthetic_response_atlas_inputs()
+    original_rows = observations.to_pylist()
+    incomplete_rows = [
+        row
+        for row in original_rows
+        if not (
+            row["event_id"] == "atlas-event-001"
+            and row["horizon_us"] == 60_000_000
+            and row["component_kind"] == "external"
+        )
+    ]
+    with pytest.raises(CoverageError, match="incomplete component closure"):
+        build_response_atlas(_table(incomplete_rows), risks, cutoff)
+
+    later_row = next(
+        dict(row)
+        for row in original_rows
+        if row["event_id"] == "atlas-event-001"
+        and row["horizon_us"] == 60_000_000
+        and row["component_kind"] == "external"
+    )
+    later_row["response_available_at"] = cutoff + timedelta(seconds=1)
+    later_row["response_unit"] = "future-invalid-unit"
+    with pytest.raises(CoverageError, match="incomplete component closure"):
+        build_response_atlas(_table([*incomplete_rows, later_row]), risks, cutoff)
 
 
 @pytest.mark.parametrize(

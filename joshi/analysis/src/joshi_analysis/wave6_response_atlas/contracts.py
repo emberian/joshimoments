@@ -87,7 +87,7 @@ RISK_OUTCOME_SCHEMA = pa.schema(
     ]
 )
 
-RESPONSE_SURFACE_SCHEMA_ID = "joshi.analysis.wave6-response-surface-cell/v1"
+RESPONSE_SURFACE_SCHEMA_ID = "joshi.analysis.wave6-response-surface-cell/v2"
 RESPONSE_SURFACE_SCHEMA = pa.schema(
     [
         pa.field("surface_cell_id", pa.string(), nullable=False),
@@ -116,7 +116,9 @@ RESPONSE_SURFACE_SCHEMA = pa.schema(
         pa.field("topology_version_id", pa.string(), nullable=False),
         pa.field("horizon_us", pa.int64(), nullable=False),
         pa.field("component_kind", pa.string(), nullable=False),
-        pa.field("response_estimate", pa.float64(), nullable=True),
+        pa.field("response_sum_atoms", pa.string(), nullable=True),
+        pa.field("response_mean_numerator_atoms", pa.string(), nullable=True),
+        pa.field("response_mean_denominator", pa.int64(), nullable=True),
         pa.field("response_unit", pa.string(), nullable=False),
         pa.field("support_anchor_count", pa.int64(), nullable=False),
         pa.field("complete_anchor_count", pa.int64(), nullable=False),
@@ -130,7 +132,7 @@ RESPONSE_SURFACE_SCHEMA = pa.schema(
     ]
 )
 
-COMPETING_RISK_SURFACE_SCHEMA_ID = "joshi.analysis.wave6-competing-risk-surface-cell/v1"
+COMPETING_RISK_SURFACE_SCHEMA_ID = "joshi.analysis.wave6-competing-risk-surface-cell/v2"
 COMPETING_RISK_SURFACE_SCHEMA = pa.schema(
     [
         pa.field("risk_cell_id", pa.string(), nullable=False),
@@ -160,6 +162,8 @@ COMPETING_RISK_SURFACE_SCHEMA = pa.schema(
         pa.field("horizon_us", pa.int64(), nullable=False),
         pa.field("event_kind", pa.string(), nullable=False),
         pa.field("risk_cohort_count", pa.int64(), nullable=False),
+        pa.field("terminal_known_count", pa.int64(), nullable=False),
+        pa.field("pending_count", pa.int64(), nullable=False),
         pa.field("event_count", pa.int64(), nullable=False),
         pa.field("other_competing_event_count", pa.int64(), nullable=False),
         pa.field("right_censored_count", pa.int64(), nullable=False),
@@ -169,6 +173,28 @@ COMPETING_RISK_SURFACE_SCHEMA = pa.schema(
         pa.field("coverage_ratio_ppm", pa.int64(), nullable=False),
         pa.field("coverage_window_ids", pa.list_(pa.string()), nullable=False),
         pa.field("coverage_gap_ids", pa.list_(pa.string()), nullable=False),
+        pa.field("risk_subject_ids", pa.list_(pa.string()), nullable=False),
+        pa.field("pending_subject_ids", pa.list_(pa.string()), nullable=False),
+        pa.field("claim_scope", pa.string(), nullable=False),
+    ]
+)
+
+RISK_REFUSAL_SCHEMA_ID = "joshi.analysis.wave6-response-risk-refusal/v1"
+RISK_REFUSAL_SCHEMA = pa.schema(
+    [
+        pa.field("risk_refusal_id", pa.string(), nullable=False),
+        pa.field("risk_refusal_digest", pa.string(), nullable=False),
+        pa.field("estimator_id", pa.string(), nullable=False),
+        pa.field("estimator_version", pa.string(), nullable=False),
+        pa.field("estimator_configuration_digest", pa.string(), nullable=False),
+        pa.field("response_input_snapshot_id", pa.string(), nullable=False),
+        pa.field("response_input_logical_digest", pa.string(), nullable=False),
+        pa.field("fit_cutoff", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("refusal_kind", pa.string(), nullable=False),
+        pa.field("reason_code", pa.string(), nullable=False),
+        pa.field("reason_detail", pa.string(), nullable=False),
+        pa.field("admitted_risk_row_count", pa.int64(), nullable=False),
+        pa.field("refused_risk_input_logical_digest", pa.string(), nullable=True),
         pa.field("claim_scope", pa.string(), nullable=False),
     ]
 )
