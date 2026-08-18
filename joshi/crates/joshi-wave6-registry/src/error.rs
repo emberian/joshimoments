@@ -53,4 +53,7 @@ pub enum RegistryError {
     /// A campaign lifecycle skipped, branched, backdated, or mutated frozen commitment.
     #[error("fixture campaign lifecycle failure: {0}")]
     Campaign(&'static str),
+    /// A checked evaluation artifact violated its registered exact wire contract.
+    #[error("fixture evaluation artifact failure: {0}")]
+    Evaluation(&'static str),
 }

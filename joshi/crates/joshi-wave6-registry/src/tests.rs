@@ -8,7 +8,7 @@ use crate::{
     FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, ProgramAuthorityV1, RegistryError,
     SemanticCeilingV1, Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes,
     parse_artifact_dag_exact, parse_campaign_lifecycle_exact, parse_decision_ledger_exact,
-    parse_program_registration_exact, validate_claim_language,
+    parse_evaluation_artifact_exact, parse_program_registration_exact, validate_claim_language,
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
@@ -24,6 +24,12 @@ const RESEARCH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json");
 const STRUCTURAL_TRUTH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json");
+const KNOWN_TRUTH_EVALUATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/known_truth_evaluation_v1.json");
+const PROTOCOL_TRUTH_EVALUATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json");
+const STRUCTURAL_TRUTH_EVALUATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json");
 
 fn fixture() -> Wave6ProgramRegistrationV1 {
     serde_json::from_slice(FIXTURE).expect("checked-in registration fixture")
@@ -487,5 +493,99 @@ fn campaign_skip_branch_and_commitment_mutation_refuse() {
     assert!(matches!(
         parse_campaign_lifecycle_exact(&canonical_bytes(&changed).expect("bytes"), &registration),
         Err(RegistryError::Campaign("frozen commitment mutation"))
+    ));
+}
+
+#[test]
+fn exact_python_evaluation_artifacts_cross_parse_without_promotion() {
+    let cases = [
+        (
+            "known_truth_evaluation_fixture",
+            "joshi.analysis.wave6-known-truth/v1",
+            KNOWN_TRUTH_EVALUATION,
+            8,
+            "sha256:57c0d7ff101b9b14e8be2976223a194bf851f1e6e064ae7f7fe7674e8ca0e021",
+        ),
+        (
+            "protocol_known_truth_evaluation_fixture",
+            "joshi.analysis.wave6-protocol-known-truth/v1",
+            PROTOCOL_TRUTH_EVALUATION,
+            7,
+            "sha256:94b44aea3ab6cfddce2ee3b1b15e570fd0e26f6e56e4ee2ef129aea9f4552fb4",
+        ),
+        (
+            "structural_known_truth_evaluation_fixture",
+            "joshi.analysis.wave6-structural-known-truth/v1",
+            STRUCTURAL_TRUTH_EVALUATION,
+            3,
+            "sha256:f5c5f9d41a8dd686425a145b77c7b90f27a9154f07a607d562fa1596f3e71705",
+        ),
+    ];
+    for (kind, schema, bytes, count, semantic_digest) in cases {
+        let parsed = parse_evaluation_artifact_exact(&stable(kind), &stable(schema), bytes)
+            .unwrap_or_else(|error| panic!("parse {kind}: {error}"));
+        assert_eq!(parsed.exact_bytes(), bytes);
+        assert_eq!(
+            parsed.content_digest(),
+            &digest_bytes(bytes).expect("content digest")
+        );
+        assert_eq!(parsed.value().result_count(), count);
+        assert_eq!(parsed.evaluation_digest().as_str(), semantic_digest);
+        assert_eq!(
+            parsed.semantic_ceiling(),
+            SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        );
+    }
+}
+
+#[test]
+fn evaluation_mapping_canonicality_denominator_and_self_digest_substitution_refuse() {
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable("known_truth_evaluation_fixture"),
+            &stable("joshi.analysis.wave6-protocol-known-truth/v1"),
+            KNOWN_TRUTH_EVALUATION,
+        ),
+        Err(RegistryError::Evaluation(
+            "unsupported registered evaluation kind/schema mapping"
+        ))
+    ));
+
+    let mut noncanonical = KNOWN_TRUTH_EVALUATION.to_vec();
+    noncanonical.insert(1, b' ');
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable("known_truth_evaluation_fixture"),
+            &stable("joshi.analysis.wave6-known-truth/v1"),
+            &noncanonical,
+        ),
+        Err(RegistryError::NonCanonical)
+    ));
+
+    let mut changed: serde_json::Value =
+        serde_json::from_slice(KNOWN_TRUTH_EVALUATION).expect("evaluation JSON");
+    changed["evaluation_digest"] = serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
+    let mut changed_bytes = serde_json::to_vec(&changed).expect("changed evaluation");
+    changed_bytes.push(b'\n');
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable("known_truth_evaluation_fixture"),
+            &stable("joshi.analysis.wave6-known-truth/v1"),
+            &changed_bytes,
+        ),
+        Err(RegistryError::Evaluation("semantic self-digest"))
+    ));
+
+    changed["passed_case_ids"] = serde_json::Value::Array(vec![]);
+    changed["result_digests"] = serde_json::Value::Array(vec![]);
+    let mut empty_bytes = serde_json::to_vec(&changed).expect("empty evaluation");
+    empty_bytes.push(b'\n');
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable("known_truth_evaluation_fixture"),
+            &stable("joshi.analysis.wave6-known-truth/v1"),
+            &empty_bytes,
+        ),
+        Err(RegistryError::Evaluation("exact result denominator"))
     ));
 }

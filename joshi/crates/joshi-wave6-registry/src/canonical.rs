@@ -90,7 +90,7 @@ pub fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn decode_canonical<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
+pub(crate) fn decode_canonical<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
     let value = serde_json::from_slice(bytes)?;
     if canonical_bytes(&value)? != bytes {
         return Err(RegistryError::NonCanonical);

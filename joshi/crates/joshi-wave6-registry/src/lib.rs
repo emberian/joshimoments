@@ -15,6 +15,7 @@ mod claim;
 mod dag;
 mod decision;
 mod error;
+mod evaluation;
 mod model;
 mod validate;
 
@@ -36,6 +37,12 @@ pub use decision::{
     FixtureDecisionLedgerV1,
 };
 pub use error::{RegistryError, Result};
+pub use evaluation::{
+    FixtureEvaluationArtifactV1, KNOWN_TRUTH_EVALUATION_KIND, KNOWN_TRUTH_EVALUATION_SCHEMA,
+    KnownTruthEvaluationV1, PROTOCOL_EVALUATION_KIND, PROTOCOL_EVALUATION_SCHEMA,
+    ProtocolEvaluationV1, STRUCTURAL_EVALUATION_KIND, STRUCTURAL_EVALUATION_SCHEMA,
+    StructuralEvaluationV1, ValidatedEvaluationArtifact, parse_evaluation_artifact_exact,
+};
 pub use model::{
     ArtifactKindRegistrationV1, ClaimRungV1, DataPolicyV1, DeskOperationV1, FixtureMaturityV1,
     LocalSymbolV1, ProgramAuthorityV1, ProgramBudgetsV1, ProgramRegistrationDigestMaterialV1,
