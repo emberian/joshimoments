@@ -31,6 +31,8 @@ const PROTOCOL_TRUTH_EVALUATION: &[u8] =
 const STRUCTURAL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json");
 const EVALUATION_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
+const EVALUATION_DECISIONS: &[u8] =
+    include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
 
 fn fixture() -> Wave6ProgramRegistrationV1 {
     serde_json::from_slice(FIXTURE).expect("checked-in registration fixture")
@@ -553,6 +555,39 @@ fn checked_evaluation_dag_parses_at_fixture_only_ceiling() {
     );
     assert_eq!(
         dag.semantic_ceiling(),
+        SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    );
+}
+
+#[test]
+fn checked_evaluation_decisions_bind_every_exact_dag_member() {
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let dag = parse_artifact_dag_exact(EVALUATION_DAG, &registration).expect("evaluation DAG");
+    let ledger = parse_decision_ledger_exact(EVALUATION_DECISIONS, &registration, &dag)
+        .expect("evaluation decision ledger");
+    assert_eq!(ledger.value().decisions.len(), dag.value().artifacts.len());
+    assert_eq!(
+        ledger.value().ledger_digest.as_str(),
+        "sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09"
+    );
+    assert_eq!(
+        ledger.document_digest().as_str(),
+        "sha256:d11988aeac754fdb2417147e9edbc06a775055f0cf07b389bd616b82587fd432"
+    );
+    assert!(
+        ledger
+            .value()
+            .decisions
+            .iter()
+            .zip(&dag.value().artifacts)
+            .all(
+                |(decision, artifact)| decision.artifact.artifact_id == artifact.artifact_id
+                    && decision.artifact.content_digest == artifact.content_digest
+                    && decision.decided_at >= artifact.produced_at
+            )
+    );
+    assert_eq!(
+        ledger.semantic_ceiling(),
         SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     );
 }
