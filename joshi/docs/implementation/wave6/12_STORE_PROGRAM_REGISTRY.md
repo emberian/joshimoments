@@ -51,11 +51,12 @@ cargo run --locked --offline -p joshi-core -- \
 
 It creates or reopens one latest V16 catalog, commits the checked fixture, all six registered
 schema documents, three exact evaluation outputs, their exact fixture DAG and three fixture
-dispositions, makes exact idempotent retries, drops the writer, and independently loads the full
-chain through a read-only store. Its V5 JSON report fixes
+dispositions, plus the atomic five-document campaign bundle. It makes exact idempotent retries,
+drops the writer, and independently loads the full chain through a read-only store. Its V6 JSON
+report fixes
 `status=fixture_only`, the unverified ceiling, zero consumed gates/provider units/external mutation
-units, and false operational/empirical/product/live fields. A repeated invocation returns the same
-original commit identities.
+units, a false prospective-campaign-journal field, and false operational/empirical/product/live
+fields. A repeated invocation returns the same original commit identities.
 
 ## Refusals and ceiling
 

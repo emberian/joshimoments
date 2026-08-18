@@ -33,7 +33,7 @@ does not make the fixture candidate a market observation, estimator result, econ
 product capability or live release. The public ceiling remains
 `unverified_semantic_fixture_only`.
 
-Core's V5 registration report commits, exactly retries and read-only reopens all three artifacts
+Core's V6 registration report commits, exactly retries and read-only reopens all three artifacts
 after the six schemas, then separately commits their exact V14 fixture DAG. The foundation witness
 therefore distinguishes a true `fixtureArtifactDagOccurrence` from the still-false
 `empiricalArtifactOccurrence` qualification.

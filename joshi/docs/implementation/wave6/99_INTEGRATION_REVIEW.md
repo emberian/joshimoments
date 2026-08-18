@@ -6,20 +6,22 @@ probes. It does not qualify a nonfixture response atlas, a prospectively frozen 
 a coherent route atlas, an isolated ghost result, a household portfolio result, calibration,
 causality, profit, strategy value, or any live/product/economic authority.
 
-N00 store-persistence re-audit on 2026-08-18: migrations V11-V15 and the sole-store adapter now
+N00 store-persistence re-audit on 2026-08-18: migrations V11-V16 and the sole-store adapter now
 retain, reparse and exact-reopen the canonical zero-provider/zero-mutation fixture registration
 all six schema documents named by its artifact-kind registry, and the three exact generic,
 protocol and structural evaluation-content byte strings, then bind them in one exact topological
-fixture DAG, then retain one exact three-disposition ledger over that DAG. Exact retries are
-idempotent; identity, bytes, kind, schema, denominator, self-digest, member, cutoff, target,
-evidence and predecessor substitution refuse. This raises only fixture-contract
+fixture DAG, retain one exact three-disposition ledger over that DAG, and atomically retain the
+five exact campaign documents. Exact retries are idempotent; identity, bytes, kind, schema,
+denominator, self-digest, member, cutoff, target, evidence and predecessor substitution refuse.
+This raises only fixture-contract
 durability: `consumedWave5Gates` remains empty, and every receipt remains
-`unverified_semantic_fixture_only`. The bounded Core V5 command exercises fresh program plus six
-schema, three content, one DAG and one decision-ledger commit, exact retries and read-only restart
-while emitting explicit true fixture-DAG/disposition occurrences and false gate-resolution,
-operational, empirical-artifact, human-approval, empirical-claim, product and live fields. The
-DAG's clocks, contents and dispositions remain checked fixtures, so no operational release or
-empirical authority follows.
+`unverified_semantic_fixture_only`. The bounded Core V6 command exercises fresh program plus six
+schema, three content, one DAG, one decision-ledger and one atomic campaign-bundle commit, exact
+retries and read-only restart while emitting explicit true fixture-DAG/disposition/bundle
+occurrences, a false prospective-journal field, and false gate-resolution, operational,
+empirical-artifact, human-approval, empirical-claim, product and live fields. The DAG and campaign
+clocks, contents, assignments and dispositions remain checked fixtures, so no operational release
+or empirical authority follows.
 
 The root `wave6-foundation-readiness` runner independently repeats the migration, registry, store
 and Core gates and emits only the five named fixture-restart capabilities. Its qualification object
@@ -68,7 +70,7 @@ not a receipt or evidence occurrence.
 | Surface | What passes | Exact ceiling | What is blocked |
 | --- | --- | --- | --- |
 | Master plan and research notes | The authority ladder, gate split, causal language, censoring rules, one-household rule, prospective campaign grammar and read-only limit are unusually explicit. | **design_only** | The planning document predates implementation and grants no capability by itself. No external `W5-G*` gate, store receipt, known-truth release, or operational Wave 6 occurrence is inherited from it. |
-| `joshi-wave6-registry` + V11-V15 store adapter / `N00` | Exact canonical fixture program registration, bounded zero-provider/zero-mutation budget, mandatory prohibitions, six exact artifact schemas and local symbols, self-digest closure, topological artifact DAG contract, typed H0–H5 claim grammar, append-only fixture dispositions, and the exact generic campaign lifecycle with immutable enrollment commitment. The registration, all schemas, three exact N01 evaluation contents, their exact fixture DAG and three exact fixture dispositions survive idempotent restart-safe readback. | **durable fixture contract/schema/content/DAG/disposition catalog** at `unverified_semantic_fixture_only`; `N00` is implemented only at its allowed pre-gate ceiling | The checked-in program consumes no Wave 5 gates, and the store adapter refuses rather than resolves any such reference. DAG and decision clocks are fixture declarations, not observed availability, production receipts or human approvals. Lifecycle state names are caller declarations, not durable enrollment/seal/maturity/adjudication. Operational release and every empirical/nonfixture/product/economic conclusion remain absent. |
+| `joshi-wave6-registry` + V11-V16 store adapter / `N00` | Exact canonical fixture program registration, bounded zero-provider/zero-mutation budget, mandatory prohibitions, six exact artifact schemas and local symbols, self-digest closure, topological artifact DAG contract, typed H0–H5 claim grammar, append-only fixture dispositions, and the exact generic campaign lifecycle with immutable enrollment commitment. The registration, all schemas, three exact N01 evaluation contents, their exact fixture DAG, three exact fixture dispositions and one atomic five-document campaign bundle survive idempotent restart-safe readback. | **durable fixture contract/schema/content/DAG/disposition/atomic-campaign-bundle catalog** at `unverified_semantic_fixture_only`; `N00` is implemented only at its allowed pre-gate ceiling | The checked-in program consumes no Wave 5 gates, and the store adapter refuses rather than resolves any such reference. DAG, decision and campaign clocks are fixture declarations, not observed availability, production receipts or human approvals. The atomic bundle is not a phase-by-phase prospective journal and grants no randomization, blindness, evidence or outcome authority. Operational release and every empirical/nonfixture/product/economic conclusion remain absent. |
 | `wave6_known_truth` / `N01` foundation | Exact batteries cover eight generic inference traps, seven Pump/PumpSwap/DLMM arithmetic cases, and three structural cases: within-gauge migration splice, transaction-index versus lexical same-slot order with an unindexed compatible set, and as-known identity revision with future-payload isolation. Typed output, candidate, fixture, authority, and digest substitutions refuse. | **intrinsic_contract / fixture_recovered** for the three named candidate families only | This is not the full `N01` domain battery. Broader venue profiles, burst, same-chart/different-mechanism, operator, runner, self-flow, and exit/re-entry generators remain absent. Inputs, identity symbols, and candidate outputs remain caller-fed fixtures with no store, identity, quote, route, market, or economic authority. |
 | `wave6_research_desk` / `N02` fixture packet | Python independently reparses the exact Rust N00 registration and all six schema documents, reruns all 18 generic/protocol/structural N01 cases, binds three evaluations as separate design descriptors, and produces one deterministic zero-query protocol draft over that exact denominator. Packet/proposal identities are recomputed; provider/external budgets and query/executable fields remain zero/false. | **fixture_inspector / protocol_draft** at `fixture_inspection_proposal_only_no_query_no_action_no_claim_promotion` | Registration, descriptors, case truth, packet and review remain fixture/caller authority. No store-resolved release, query, execution, human approval, claim promotion, prospective protocol, market conclusion, or Glass effect exists. |
 | `wave6_response_atlas` | Strict Arrow inputs, explicit component gaps, exact-vs-censored input states, version fields, deterministic full-hash output IDs, permutation stability, separate response/risk identities and failure isolation, admitted-anchor risk semijoin, explicit pending denominators, exact rational response values and causal/strategy non-claim literals. All reproduced response adversaries pass. | **intrinsic_contract / fixture_recovered**; at most a local `fixture_response` probe | No `observed_atlas`, forecast, prospective field/response result or `ResponseAtlasReleaseV1`. IDs, clocks, versions, completeness, cutoff and the supplied relations remain caller-authored rather than store-resolved. |

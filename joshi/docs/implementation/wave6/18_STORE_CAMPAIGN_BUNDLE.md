@@ -30,6 +30,14 @@ was randomized or blinded; evidence and outcome truth are not store-resolved; an
 and alleged commit numbers remain caller-fed fixture content. The fixed ceiling is
 `unverified_semantic_fixture_only`.
 
+Frozen identifiers:
+
+```text
+bundleId       wave6-campaign:802a4946da63cf548389e0b20f10210369d11988507fc5e78fdf0a76a09a3df0
+bundleDigest   sha256:e61f247eae51a1c644960ec3624dc251f6544b90644753c4c8a4917bb0f29461
+V16 migration  sha256:537dceffc27402e24cdff8fcb1eb9afcb3b8d9b5ec184260bb021f2a01673a0b
+```
+
 Verification:
 
 ```bash

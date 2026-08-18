@@ -3,7 +3,9 @@
 use std::{fs, path::Path, time::Duration};
 
 use joshi_domain::StableString;
-use joshi_store::{IdempotencyStatus, SqliteStore, StoreConfig, StoreMode};
+use joshi_store::{
+    IdempotencyStatus, SqliteStore, StoreConfig, StoreMode, Wave6FixtureCampaignBundleBytes,
+};
 use joshi_wave6_registry::SemanticCeilingV1;
 use serde::Serialize;
 use thiserror::Error;
@@ -11,6 +13,15 @@ use thiserror::Error;
 const REGISTRATION: &[u8] = include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
 const ARTIFACT_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
 const DECISION_LEDGER: &[u8] = include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
+const CAMPAIGN_REGISTRATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/registration_v1.json");
+const CAMPAIGN_ENROLLMENT: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/enrollment_v1.json");
+const CAMPAIGN_ASSIGNMENT: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/assignment_v1.json");
+const CAMPAIGN_SEAL: &[u8] = include_bytes!("../../../fixtures/wave6/campaign/seal_v1.json");
+const CAMPAIGN_ADJUDICATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/campaign/adjudication_v1.json");
 const PROGRAM_ID: &str = "w6-program-fixture-001";
 const BATCH_ID: &str = "wave6:program-registration:fixture-001";
 const AUTHORITY: &str = "read_record_replay_propose_shadow_only";
@@ -73,6 +84,26 @@ pub struct Wave6FixtureDecisionLedgerReport {
     pub commit_seq: String,
 }
 
+/// One exact atomic fixture-campaign bundle retained after its prior program and schema.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6FixtureCampaignBundleReport {
+    pub bundle_id: String,
+    pub campaign_id: String,
+    pub registration_digest: String,
+    pub enrollment_digest: String,
+    pub assignment_digest: String,
+    pub seal_digest: String,
+    pub adjudication_digest: String,
+    pub bundle_digest: String,
+    pub eligible_subject_count: String,
+    pub included_subject_count: String,
+    pub assignment_count: String,
+    pub outcome_count: String,
+    pub maximum_fixture_alleged_commit_seq: String,
+    pub commit_seq: String,
+}
+
 /// Machine-readable, non-promoting result of the N00 durable fixture walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +137,10 @@ pub struct Wave6ProgramRegistrationReport {
     pub fixture_decision_ledger: Wave6FixtureDecisionLedgerReport,
     pub fixture_decision_ledger_persisted: bool,
     pub fixture_decision_ledger_restart_reverified: bool,
+    pub fixture_campaign_bundle: Wave6FixtureCampaignBundleReport,
+    pub fixture_campaign_bundle_persisted: bool,
+    pub fixture_campaign_bundle_restart_reverified: bool,
+    pub prospective_campaign_journal: bool,
     pub consumed_wave5_gate_count: &'static str,
     pub provider_units: &'static str,
     pub external_mutation_units: &'static str,
@@ -171,6 +206,7 @@ pub fn run_wave6_program_registration(
     let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
     let dag_report = commit_artifact_dag(&mut store, &accepted.program_id, &writer_build)?;
     let decision_report = commit_decision_ledger(&mut store, &dag_report, &writer_build)?;
+    let campaign_report = commit_campaign_bundle(&mut store, &accepted.program_id, &writer_build)?;
     drop(store);
 
     let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly)?;
@@ -196,10 +232,11 @@ pub fn run_wave6_program_registration(
     verify_artifacts(&reopened, &artifact_reports)?;
     verify_artifact_dag(&reopened, &dag_report)?;
     verify_decision_ledger(&reopened, &decision_report)?;
+    verify_campaign_bundle(&reopened, &campaign_report)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v5",
-        schema_version: 5,
+        contract: "joshi.core.wave6_program_registration_report.v6",
+        schema_version: 6,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -226,6 +263,10 @@ pub fn run_wave6_program_registration(
         fixture_decision_ledger: decision_report,
         fixture_decision_ledger_persisted: true,
         fixture_decision_ledger_restart_reverified: true,
+        fixture_campaign_bundle: campaign_report,
+        fixture_campaign_bundle_persisted: true,
+        fixture_campaign_bundle_restart_reverified: true,
+        prospective_campaign_journal: false,
         consumed_wave5_gate_count: "0",
         provider_units: "0",
         external_mutation_units: "0",
@@ -234,6 +275,82 @@ pub fn run_wave6_program_registration(
         empirical_claim: false,
         product_qualified: false,
         live_qualified: false,
+    })
+}
+
+fn campaign_bundle_bytes() -> Wave6FixtureCampaignBundleBytes<'static> {
+    Wave6FixtureCampaignBundleBytes {
+        registration: CAMPAIGN_REGISTRATION,
+        enrollment: CAMPAIGN_ENROLLMENT,
+        assignment: CAMPAIGN_ASSIGNMENT,
+        seal: CAMPAIGN_SEAL,
+        adjudication: CAMPAIGN_ADJUDICATION,
+    }
+}
+
+fn commit_campaign_bundle(
+    store: &mut SqliteStore,
+    program_id: &StableString,
+    writer_build: &StableString,
+) -> Result<Wave6FixtureCampaignBundleReport, Wave6RegistrationError> {
+    let batch_id = StableString::new("wave6:campaign-bundle:fixture-001")?;
+    let accepted = store.commit_wave6_fixture_campaign_bundle_v1(
+        program_id,
+        campaign_bundle_bytes(),
+        batch_id.clone(),
+        writer_build.clone(),
+    )?;
+    if !matches!(
+        accepted.status,
+        IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+    ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture campaign bundle returned an impossible first receipt",
+        ));
+    }
+    let retry = store.commit_wave6_fixture_campaign_bundle_v1(
+        program_id,
+        campaign_bundle_bytes(),
+        batch_id,
+        writer_build.clone(),
+    )?;
+    if retry.status != IdempotencyStatus::Idempotent
+        || retry.bundle_id != accepted.bundle_id
+        || retry.campaign_id != accepted.campaign_id
+        || retry.registration_digest != accepted.registration_digest
+        || retry.enrollment_digest != accepted.enrollment_digest
+        || retry.assignment_digest != accepted.assignment_digest
+        || retry.seal_digest != accepted.seal_digest
+        || retry.adjudication_digest != accepted.adjudication_digest
+        || retry.bundle_digest != accepted.bundle_digest
+        || retry.eligible_subject_count != accepted.eligible_subject_count
+        || retry.included_subject_count != accepted.included_subject_count
+        || retry.assignment_count != accepted.assignment_count
+        || retry.outcome_count != accepted.outcome_count
+        || retry.maximum_fixture_alleged_commit_seq != accepted.maximum_fixture_alleged_commit_seq
+        || retry.commit_seq != accepted.commit_seq
+        || retry.commit_digest != accepted.commit_digest
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "exact Wave 6 campaign bundle retry changed durable identity",
+        ));
+    }
+    Ok(Wave6FixtureCampaignBundleReport {
+        bundle_id: accepted.bundle_id.to_string(),
+        campaign_id: accepted.campaign_id.to_string(),
+        registration_digest: accepted.registration_digest.to_string(),
+        enrollment_digest: accepted.enrollment_digest.to_string(),
+        assignment_digest: accepted.assignment_digest.to_string(),
+        seal_digest: accepted.seal_digest.to_string(),
+        adjudication_digest: accepted.adjudication_digest.to_string(),
+        bundle_digest: accepted.bundle_digest.to_string(),
+        eligible_subject_count: accepted.eligible_subject_count.to_string(),
+        included_subject_count: accepted.included_subject_count.to_string(),
+        assignment_count: accepted.assignment_count.to_string(),
+        outcome_count: accepted.outcome_count.to_string(),
+        maximum_fixture_alleged_commit_seq: accepted.maximum_fixture_alleged_commit_seq.to_string(),
+        commit_seq: accepted.commit_seq.get().to_string(),
     })
 }
 
@@ -576,6 +693,44 @@ fn verify_decision_ledger(
     Ok(())
 }
 
+fn verify_campaign_bundle(
+    store: &SqliteStore,
+    report: &Wave6FixtureCampaignBundleReport,
+) -> Result<(), Wave6RegistrationError> {
+    let bundle_id = StableString::new(report.bundle_id.clone())?;
+    let stored = store
+        .load_wave6_fixture_campaign_bundle_v1(&bundle_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture campaign bundle was absent after restart",
+        ))?;
+    if stored.registration_bytes != CAMPAIGN_REGISTRATION
+        || stored.enrollment_bytes != CAMPAIGN_ENROLLMENT
+        || stored.assignment_bytes != CAMPAIGN_ASSIGNMENT
+        || stored.seal_bytes != CAMPAIGN_SEAL
+        || stored.adjudication_bytes != CAMPAIGN_ADJUDICATION
+        || stored.campaign_id.as_str() != report.campaign_id
+        || stored.registration_digest.as_str() != report.registration_digest
+        || stored.enrollment_digest.as_str() != report.enrollment_digest
+        || stored.assignment_digest.as_str() != report.assignment_digest
+        || stored.seal_digest.as_str() != report.seal_digest
+        || stored.adjudication_digest.as_str() != report.adjudication_digest
+        || stored.bundle_digest.as_str() != report.bundle_digest
+        || stored.eligible_subject_count.to_string() != report.eligible_subject_count
+        || stored.included_subject_count.to_string() != report.included_subject_count
+        || stored.assignment_count.to_string() != report.assignment_count
+        || stored.outcome_count.to_string() != report.outcome_count
+        || stored.maximum_fixture_alleged_commit_seq.to_string()
+            != report.maximum_fixture_alleged_commit_seq
+        || stored.commit_seq.get().to_string() != report.commit_seq
+        || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 fixture campaign bundle changed across read-only reopen",
+        ));
+    }
+    Ok(())
+}
+
 fn schemas() -> [SchemaFixture; 6] {
     [
         SchemaFixture {
@@ -699,6 +854,19 @@ mod tests {
         assert_eq!(first.fixture_decision_ledger.decision_count, "3");
         assert!(first.fixture_decision_ledger_persisted);
         assert!(first.fixture_decision_ledger_restart_reverified);
+        assert_eq!(first.fixture_campaign_bundle.eligible_subject_count, "3");
+        assert_eq!(first.fixture_campaign_bundle.included_subject_count, "2");
+        assert_eq!(first.fixture_campaign_bundle.assignment_count, "2");
+        assert_eq!(first.fixture_campaign_bundle.outcome_count, "2");
+        assert_eq!(
+            first
+                .fixture_campaign_bundle
+                .maximum_fixture_alleged_commit_seq,
+            "21"
+        );
+        assert!(first.fixture_campaign_bundle_persisted);
+        assert!(first.fixture_campaign_bundle_restart_reverified);
+        assert!(!first.prospective_campaign_journal);
         assert_eq!(first.consumed_wave5_gate_count, "0");
         assert!(!first.wave5_gates_resolved);
         assert!(!first.operational_release);
@@ -719,6 +887,10 @@ mod tests {
         assert_eq!(
             repeated.fixture_decision_ledger,
             first.fixture_decision_ledger
+        );
+        assert_eq!(
+            repeated.fixture_campaign_bundle,
+            first.fixture_campaign_bundle
         );
     }
 }
