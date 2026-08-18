@@ -130,6 +130,9 @@ Pairing:
 
 Export/import/status and backup:
 
+- `commit_wave5_baseline_export_snapshot_v2` accepts only an independently validated legacy
+  fourteen-table Snapshot V2 while the same catalog is exactly V9. It reuses the production store
+  commit/readback path and refuses once migration 10 has applied.
 - `load_wave5_g0_status_occurrence_v1`, `load_wave5_g0_export_occurrence_v1`, and
   `load_wave5_g0_import_occurrence_v1` expose neutral identities only after V9 canonical/CAS
   readback. `load_wave5_g0_occurrence_ports_v1` requires explicit sorted IDs and refuses a

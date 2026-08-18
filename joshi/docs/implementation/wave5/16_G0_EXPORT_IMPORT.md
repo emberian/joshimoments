@@ -72,6 +72,8 @@ single forward-only bootstrap: migrate the new catalog through V9, commit and in
 one real Snapshot V2 plus restricted descriptive artifact, then apply migration 10. V10 export can
 only consume that retained history through the private store wrapper. Targeting V9 after V10 is a
 migration conflict, and direct SQL seeding does not satisfy this path.
+The baseline snapshot commit waist accepts only the legacy fourteen-table profile and delegates to
+the same production snapshot commit/readback implementation; it is not a second export authority.
 
 ## Durable snapshot validation
 

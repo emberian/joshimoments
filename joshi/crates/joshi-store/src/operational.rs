@@ -649,6 +649,38 @@ impl CockpitPublicationCapability {
 }
 
 impl SqliteStore {
+    /// Commits one independently validated legacy Snapshot V2 while the catalog is at the V9
+    /// bootstrap boundary.
+    ///
+    /// The snapshot remains bound to its exact V8/V9 source catalog and fourteen-table profile;
+    /// this method only supplies the durable occurrence needed before the same store advances to
+    /// V10. It cannot commit or retry after that migration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error outside V9, for a non-legacy snapshot, or for any ordinary production
+    /// snapshot validation/commit failure.
+    pub fn commit_wave5_baseline_export_snapshot_v2(
+        &mut self,
+        validation_id: &StableString,
+        snapshot: &ValidatedProductionSnapshotV2,
+        context: &OperationalCommitContext,
+    ) -> Result<ProductionExportCommitReceipt> {
+        if self.catalog_schema_id()?.as_str() != "joshi.sqlite.v9"
+            || !matches!(
+                snapshot.catalog_schema().as_str(),
+                "joshi.sqlite.v8" | "joshi.sqlite.v9"
+            )
+            || snapshot.tables().len() != 14
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 5 baseline export requires V9 and the exact legacy Snapshot V2 profile"
+                    .into(),
+            ));
+        }
+        self.commit_production_export_snapshot_v2(validation_id, snapshot, context)
+    }
+
     /// Atomically appends one exact, already-validated prospective protocol registration.
     ///
     /// This freezes read-only study timing and exact bytes. It does not create a launch, browser
@@ -1991,6 +2023,57 @@ mod tests {
             .expect("read durable closure");
         assert_eq!(closure, (1, 1, 14));
         joshi_admission_test_receipt(&accepted);
+    }
+
+    #[test]
+    fn wave5_baseline_snapshot_commits_at_v9_and_refuses_after_v10() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        fs::copy(
+            workspace().join("fixtures/export/operational_catalog_v8.sqlite"),
+            temporary.path().join("catalog.sqlite"),
+        )
+        .expect("copy V8 catalog");
+        let snapshot = validated_snapshot(temporary.path().join("validated-baseline-snapshot"));
+        let mut store = SqliteStore::open(config(temporary.path()), StoreMode::SingleWriter)
+            .expect("open baseline store");
+        let baseline = store
+            .migrate_wave5_baseline_v9(
+                "2026-08-18T11:59:00.000000Z"
+                    .parse()
+                    .expect("migration timestamp"),
+            )
+            .expect("advance fixture to V9");
+        assert_eq!(baseline.current, 9);
+        let context = OperationalCommitContext::new(
+            stable("export-store-baseline-001"),
+            "2026-08-18T12:01:00.000000Z"
+                .parse()
+                .expect("commit timestamp"),
+            stable("store-test-clock"),
+            1,
+            stable("store-test-build"),
+        );
+        let validation_id = stable("export-validation-baseline-001");
+        let accepted = store
+            .commit_wave5_baseline_export_snapshot_v2(&validation_id, &snapshot, &context)
+            .expect("commit validated V8 snapshot under V9 baseline");
+        assert_eq!(accepted.status(), IdempotencyStatus::Accepted);
+        assert_eq!(accepted.catalog_schema().as_str(), "joshi.sqlite.v9");
+
+        let current = store
+            .migrate(
+                "2026-08-18T12:02:00.000000Z"
+                    .parse()
+                    .expect("V10 timestamp"),
+            )
+            .expect("advance baseline to V10");
+        assert_eq!(current.current, 10);
+        assert!(
+            store
+                .commit_wave5_baseline_export_snapshot_v2(&validation_id, &snapshot, &context)
+                .is_err(),
+            "V10 cannot use the V9-only baseline commit waist"
+        );
     }
 
     #[test]
