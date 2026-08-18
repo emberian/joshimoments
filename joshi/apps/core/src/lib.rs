@@ -6,6 +6,8 @@ pub mod readiness;
 pub mod service;
 mod wave5_circulation;
 pub mod wave5_g0;
+#[cfg(test)]
+mod wave5_g0_fault_map;
 pub mod wave5_g0_root_evidence;
 pub mod wave5_readiness;
 
