@@ -1,8 +1,8 @@
 # Wave 6 authority and fixture registry
 
-Status: `N00/W6-0` authority/registry foundation and exact V11 store persistence implemented at
-`unverified_semantic_fixture_only`; no Wave 5 gate-resolved program or Wave 6 operational release
-exists.
+Status: `N00/W6-0` authority/registry foundation and exact V11-V12 program/schema persistence
+implemented at `unverified_semantic_fixture_only`; no Wave 5 gate-resolved program or Wave 6
+operational release exists.
 
 The implementation lives in
 [`crates/joshi-wave6-registry`](../../../crates/joshi-wave6-registry). Its checked-in exact
@@ -114,6 +114,11 @@ walks the commit, exact retry and read-only restart. The adapter accepts only th
 shape with an empty Wave 5 gate set and zero provider/external-mutation budgets. This is durable
 storage of an unverified fixture contract, not resolution of the gates it deliberately omits. See
 [12_STORE_PROGRAM_REGISTRY.md](12_STORE_PROGRAM_REGISTRY.md).
+
+V12 additionally retains and rehashes the exact six schema documents named by the N00 artifact
+kind registry. Each kind/schema/digest triple must be present in the exact stored registration.
+That closes the schema catalog, not an artifact occurrence. See
+[13_STORE_ARTIFACT_SCHEMAS.md](13_STORE_ARTIFACT_SCHEMAS.md).
 
 Per the Wave 6 master plan, a future sole-store adapter may be considered only after the exact
 external gates close. The current offline Wave 5 G0 component evidence does not satisfy `W5-G1`,

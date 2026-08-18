@@ -36,9 +36,9 @@ providerUnits           0
 externalMutationUnits   0
 ```
 
-The ordinary/latest store migrates to V11. The Wave 5 G0 root path uses the explicit forward-only
-V10 migration boundary, so its frozen V10 export contract does not silently change when Wave 6
-tables exist.
+The program row is introduced by V11; the ordinary/latest store now migrates through the additive
+V12 exact-schema table. The Wave 5 G0 root path uses the explicit forward-only V10 migration
+boundary, so its frozen V10 export contract does not silently change when Wave 6 tables exist.
 
 Core exposes a bounded local witness:
 
@@ -47,7 +47,7 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one V11 catalog, commits the checked fixture, makes an exact idempotent
+It creates or reopens one latest V12 catalog, commits the checked fixture, makes an exact idempotent
 retry, drops the writer, and independently loads the registration through a read-only store. Its
 JSON report fixes `status=fixture_only`, the unverified ceiling, zero consumed gates/provider
 units/external mutation units, and false operational/empirical/product/live fields. A repeated
@@ -75,5 +75,5 @@ cargo test --locked --offline -p joshi-core \
 cargo test --locked --offline -p joshi-core wave6_registration --lib
 ```
 
-These gates cover V4-to-V11 upgrade, V9/V10 frozen migration boundaries, exact registration,
+These gates cover V4-to-V12 upgrade, V9/V10 frozen migration boundaries, exact registration,
 conflict refusal, idempotent retry, read-only reopen and continued V10 G0 isolation.

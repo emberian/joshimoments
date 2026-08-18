@@ -47,7 +47,10 @@ pub use wave5::{
     Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1, Wave5RunRegistrationByteBundle,
     Wave5SpoolCatalogBindingV1,
 };
-pub use wave6::{StoredWave6ProgramRegistration, Wave6ProgramRegistrationReceipt};
+pub use wave6::{
+    StoredWave6ArtifactSchema, StoredWave6ProgramRegistration, Wave6ArtifactSchemaReceipt,
+    Wave6ProgramRegistrationReceipt,
+};
 
 /// `SQLite` application identifier (`JOSH` in ASCII).
 pub const APPLICATION_ID: i32 = 0x4a4f_5348;

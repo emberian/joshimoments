@@ -12,6 +12,7 @@ use rusqlite::{OptionalExtension as _, Transaction, params};
 use sha2::{Digest as _, Sha256};
 
 const MAX_REGISTRATION_BYTES: usize = 512 * 1024;
+const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 
 /// Durable receipt for an exact fixture-only Wave 6 program registration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +43,36 @@ pub struct StoredWave6ProgramRegistration {
     pub semantic_ceiling: SemanticCeilingV1,
 }
 
+/// Durable receipt for one exact schema named by the frozen Wave 6 registration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wave6ArtifactSchemaReceipt {
+    pub catalog_id: StableString,
+    pub catalog_schema: StableString,
+    pub batch_id: StableString,
+    pub program_id: StableString,
+    pub kind_id: StableString,
+    pub schema_id: StableString,
+    pub schema_digest: ValueDigest,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+    pub status: IdempotencyStatus,
+}
+
+/// Exact registered schema rehashed and reverified after durable readback.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredWave6ArtifactSchema {
+    pub batch_id: StableString,
+    pub program_id: StableString,
+    pub kind_id: StableString,
+    pub schema_id: StableString,
+    pub exact_bytes: Vec<u8>,
+    pub schema_digest: ValueDigest,
+    pub commit_seq: CommitSeq,
+    pub commit_digest: ValueDigest,
+    pub semantic_ceiling: SemanticCeilingV1,
+}
+
 struct RegistrationRow {
     batch_id: String,
     family_id: String,
@@ -64,6 +95,18 @@ struct RegistrationRow {
     external_mutation_units: i64,
     max_artifacts: i64,
     registered_us: i64,
+    authority: String,
+    semantic_ceiling: String,
+    commit_seq: i64,
+    commit_digest_raw: String,
+}
+
+struct ArtifactSchemaRow {
+    batch_id: String,
+    schema_id: String,
+    schema_raw: String,
+    bytes: Vec<u8>,
+    byte_length: i64,
     authority: String,
     semantic_ceiling: String,
     commit_seq: i64,
@@ -240,6 +283,291 @@ impl SqliteStore {
         };
         stored_registration(program_id, row).map(Some)
     }
+
+    /// Persists one exact canonical schema whose kind/digest are named by the stored N00 program.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an absent program/kind, noncanonical or oversized JSON, a digest mismatch,
+    /// conflicting identity, read-only state, or failed exact readback.
+    pub fn commit_wave6_artifact_schema_v1(
+        &mut self,
+        program_id: &StableString,
+        kind_id: StableString,
+        exact_bytes: &[u8],
+        batch_id: StableString,
+        writer_build: StableString,
+    ) -> Result<Wave6ArtifactSchemaReceipt> {
+        validate_canonical_schema(exact_bytes)?;
+        let registration = self
+            .load_wave6_program_registration_v1(program_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 program registration",
+                identity: program_id.to_string(),
+            })?;
+        let parsed = parse_program_registration_exact(&registration.exact_bytes)
+            .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+        let kind = parsed
+            .value()
+            .artifact_kinds
+            .iter()
+            .find(|candidate| candidate.kind_id == kind_id)
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 registered artifact kind",
+                identity: kind_id.to_string(),
+            })?;
+        let actual_digest = digest_bytes(exact_bytes)?;
+        if actual_digest != kind.schema_digest {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 schema bytes differ from the digest registered for their kind".into(),
+            ));
+        }
+        let schema_id = kind.schema_id.clone();
+        reject_second_schema_batch(self, program_id, &kind_id, &batch_id)?;
+        let occurrence_id = schema_occurrence_id(program_id, &kind_id, &schema_id)?;
+        let operation_digest =
+            schema_operation_digest(program_id, &kind_id, &schema_id, &actual_digest)?;
+        let context = self.begin_wave5_commit(batch_id.clone(), writer_build)?;
+        let generic = self.commit_wave5(
+            &context,
+            "maintenance",
+            &occurrence_id,
+            &actual_digest,
+            &operation_digest,
+            |tx, seq| {
+                tx.execute(
+                    "INSERT INTO wave6_registered_artifact_schema_v1
+                     (program_id,kind_id,schema_id,schema_sha256,schema_bytes,
+                      schema_byte_length,authority,semantic_ceiling,created_commit_seq)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    params![
+                        program_id.as_str(),
+                        kind_id.as_str(),
+                        schema_id.as_str(),
+                        raw_digest(&actual_digest, "Wave 6 schema digest")?,
+                        exact_bytes,
+                        sqlite_len(exact_bytes.len(), "Wave 6 schema bytes")?,
+                        "read_record_replay_propose_shadow_only",
+                        "unverified_semantic_fixture_only",
+                        seq,
+                    ],
+                )?;
+                Ok(())
+            },
+        )?;
+        let stored = self
+            .load_wave6_artifact_schema_v1(program_id, &kind_id)?
+            .ok_or_else(|| StoreError::MissingIdentity {
+                kind: "Wave 6 artifact schema",
+                identity: kind_id.to_string(),
+            })?;
+        if stored.batch_id != batch_id
+            || stored.schema_id != schema_id
+            || stored.exact_bytes != exact_bytes
+            || stored.schema_digest != actual_digest
+            || stored.commit_seq != generic.commit_seq
+        {
+            return Err(StoreError::InvalidBatch(
+                "Wave 6 schema readback differs from its exact commit".into(),
+            ));
+        }
+        Ok(Wave6ArtifactSchemaReceipt {
+            catalog_id: generic.catalog_id,
+            catalog_schema: generic.catalog_schema,
+            batch_id,
+            program_id: program_id.clone(),
+            kind_id,
+            schema_id,
+            schema_digest: stored.schema_digest,
+            commit_seq: stored.commit_seq,
+            commit_digest: stored.commit_digest,
+            semantic_ceiling: stored.semantic_ceiling,
+            status: generic.status,
+        })
+    }
+
+    /// Loads and independently rehashes one exact schema registered to the N00 program.
+    ///
+    /// # Errors
+    ///
+    /// Refuses changed/noncanonical bytes, divergent registration mapping or malformed commit
+    /// lineage.
+    pub fn load_wave6_artifact_schema_v1(
+        &self,
+        program_id: &StableString,
+        kind_id: &StableString,
+    ) -> Result<Option<StoredWave6ArtifactSchema>> {
+        let row: Option<ArtifactSchemaRow> = self
+            .connection
+            .query_row(
+                "SELECT commit_row.commit_id,schema_row.schema_id,schema_row.schema_sha256,
+                        schema_row.schema_bytes,schema_row.schema_byte_length,
+                        schema_row.authority,schema_row.semantic_ceiling,
+                        schema_row.created_commit_seq,commit_row.commit_digest
+                 FROM wave6_registered_artifact_schema_v1 schema_row
+                 JOIN ingest_commit commit_row
+                   ON commit_row.commit_seq=schema_row.created_commit_seq
+                 WHERE schema_row.program_id=?1 AND schema_row.kind_id=?2",
+                params![program_id.as_str(), kind_id.as_str()],
+                |row| {
+                    Ok(ArtifactSchemaRow {
+                        batch_id: row.get(0)?,
+                        schema_id: row.get(1)?,
+                        schema_raw: row.get(2)?,
+                        bytes: row.get(3)?,
+                        byte_length: row.get(4)?,
+                        authority: row.get(5)?,
+                        semantic_ceiling: row.get(6)?,
+                        commit_seq: row.get(7)?,
+                        commit_digest_raw: row.get(8)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        stored_artifact_schema(self, program_id, kind_id, row).map(Some)
+    }
+}
+
+fn validate_canonical_schema(bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() || bytes.len() > MAX_SCHEMA_BYTES {
+        return Err(StoreError::InvalidBatch(
+            "Wave 6 schema is empty or exceeds the exact-byte limit".into(),
+        ));
+    }
+    let body = bytes.strip_suffix(b"\n").ok_or_else(|| {
+        StoreError::InvalidBatch("Wave 6 schema must end in exactly one newline".into())
+    })?;
+    if body.ends_with(b"\n") {
+        return Err(StoreError::InvalidBatch(
+            "Wave 6 schema must end in exactly one newline".into(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(body)?;
+    if !value.is_object() {
+        return Err(StoreError::InvalidBatch(
+            "Wave 6 schema must be a JSON object".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_second_schema_batch(
+    store: &SqliteStore,
+    program_id: &StableString,
+    kind_id: &StableString,
+    batch_id: &StableString,
+) -> Result<()> {
+    let existing: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT commit_row.commit_id
+             FROM wave6_registered_artifact_schema_v1 schema_row
+             JOIN ingest_commit commit_row
+               ON commit_row.commit_seq=schema_row.created_commit_seq
+             WHERE schema_row.program_id=?1 AND schema_row.kind_id=?2",
+            params![program_id.as_str(), kind_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing
+        .as_deref()
+        .is_some_and(|value| value != batch_id.as_str())
+    {
+        return Err(StoreError::IdentityConflict {
+            kind: "Wave 6 artifact schema",
+            identity: format!("{}:{}", program_id.as_str(), kind_id.as_str()),
+        });
+    }
+    Ok(())
+}
+
+fn schema_operation_digest(
+    program_id: &StableString,
+    kind_id: &StableString,
+    schema_id: &StableString,
+    schema_digest: &ValueDigest,
+) -> Result<ValueDigest> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_artifact_schema_commit.v1",
+        program_id,
+        kind_id,
+        schema_id,
+        schema_digest,
+    ))?;
+    digest_bytes(&bytes)
+}
+
+fn schema_occurrence_id(
+    program_id: &StableString,
+    kind_id: &StableString,
+    schema_id: &StableString,
+) -> Result<StableString> {
+    let bytes = serde_json::to_vec(&(
+        "joshi.store.wave6_artifact_schema_identity.v1",
+        program_id,
+        kind_id,
+        schema_id,
+    ))?;
+    let digest = digest_bytes(&bytes)?;
+    stable(
+        &format!(
+            "wave6-schema:{}",
+            raw_digest(&digest, "Wave 6 schema occurrence digest")?
+        ),
+        "Wave 6 schema occurrence ID",
+    )
+}
+
+fn stored_artifact_schema(
+    store: &SqliteStore,
+    program_id: &StableString,
+    kind_id: &StableString,
+    row: ArtifactSchemaRow,
+) -> Result<StoredWave6ArtifactSchema> {
+    validate_canonical_schema(&row.bytes)?;
+    let registration = store
+        .load_wave6_program_registration_v1(program_id)?
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 program registration",
+            identity: program_id.to_string(),
+        })?;
+    let parsed = parse_program_registration_exact(&registration.exact_bytes)
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    let kind = parsed
+        .value()
+        .artifact_kinds
+        .iter()
+        .find(|candidate| candidate.kind_id == *kind_id)
+        .ok_or_else(|| StoreError::MissingIdentity {
+            kind: "Wave 6 registered artifact kind",
+            identity: kind_id.to_string(),
+        })?;
+    let actual_digest = digest_bytes(&row.bytes)?;
+    if row.schema_id != kind.schema_id.as_str()
+        || actual_digest != kind.schema_digest
+        || raw_digest(&actual_digest, "Wave 6 schema digest")? != row.schema_raw
+        || usize_from_i64(row.byte_length, "Wave 6 schema byte length")? != row.bytes.len()
+        || row.authority != "read_record_replay_propose_shadow_only"
+        || row.semantic_ceiling != "unverified_semantic_fixture_only"
+    {
+        return Err(StoreError::InvalidBatch(
+            "persisted Wave 6 schema differs from its exact registered mapping".into(),
+        ));
+    }
+    Ok(StoredWave6ArtifactSchema {
+        batch_id: stable(&row.batch_id, "Wave 6 schema batch ID")?,
+        program_id: program_id.clone(),
+        kind_id: kind_id.clone(),
+        schema_id: kind.schema_id.clone(),
+        exact_bytes: row.bytes,
+        schema_digest: actual_digest,
+        commit_seq: CommitSeq::new(u64_from_i64(row.commit_seq, "Wave 6 schema commit")?),
+        commit_digest: qualified_digest(&row.commit_digest_raw, "Wave 6 schema commit digest")?,
+        semantic_ceiling: SemanticCeilingV1::UnverifiedSemanticFixtureOnly,
+    })
 }
 
 fn insert_registration(
@@ -442,6 +770,39 @@ mod tests {
     const REGISTRATION: &[u8] =
         include_bytes!("../../../fixtures/wave6/program_registration_v1.json");
 
+    fn schemas() -> [(&'static str, &'static [u8]); 6] {
+        [
+            (
+                "campaign_registration_fixture",
+                include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json"),
+            ),
+            (
+                "known_truth_evaluation_fixture",
+                include_bytes!("../../../fixtures/wave6/schemas/known_truth_evaluation_v1.json"),
+            ),
+            (
+                "market_atlas_fixture",
+                include_bytes!("../../../fixtures/wave6/schemas/market_atlas_snapshot_v1.json"),
+            ),
+            (
+                "protocol_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
+                ),
+            ),
+            (
+                "research_proposal_fixture",
+                include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json"),
+            ),
+            (
+                "structural_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
+                ),
+            ),
+        ]
+    }
+
     fn config(root: &std::path::Path) -> StoreConfig {
         StoreConfig {
             catalog_path: root.join("catalog.sqlite"),
@@ -467,8 +828,8 @@ mod tests {
                     .parse()
                     .expect("migration time"),
             )
-            .expect("V11 migration");
-        assert_eq!(migration.current, 11);
+            .expect("latest migration");
+        assert_eq!(migration.current, 12);
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -476,7 +837,7 @@ mod tests {
             .commit_wave6_program_registration_v1(REGISTRATION, batch_id.clone(), build.clone())
             .expect("accepted registration");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v11");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v12");
         assert_eq!(
             accepted.semantic_ceiling,
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
@@ -515,7 +876,7 @@ mod tests {
                     .parse()
                     .expect("migration time"),
             )
-            .expect("V11 migration");
+            .expect("latest migration");
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -555,7 +916,7 @@ mod tests {
                     .parse()
                     .expect("migration time"),
             )
-            .expect("V11 migration");
+            .expect("latest migration");
         let mut value: Wave6ProgramRegistrationV1 =
             serde_json::from_slice(REGISTRATION).expect("registration fixture");
         value.consumed_wave5_gates.push(Wave5GateRefV1 {
@@ -580,5 +941,110 @@ mod tests {
             Err(StoreError::InvalidBatch(message))
                 if message.contains("cannot consume unresolved Wave 5 gate")
         ));
+    }
+
+    #[test]
+    fn all_registered_schema_bytes_are_exact_idempotent_and_restart_safe() {
+        let root = tempfile::tempdir().expect("temporary store");
+        let store_config = config(root.path());
+        let mut store =
+            SqliteStore::open(store_config.clone(), StoreMode::SingleWriter).expect("writer store");
+        store
+            .migrate(
+                "2026-08-18T16:00:00.000000Z"
+                    .parse()
+                    .expect("migration time"),
+            )
+            .expect("latest migration");
+        let program_id = StableString::new("w6-program-fixture-001").expect("program ID");
+        store
+            .commit_wave6_program_registration_v1(
+                REGISTRATION,
+                StableString::new("wave6:program-registration:fixture-001")
+                    .expect("registration batch"),
+                StableString::new("wave6-store-test").expect("writer build"),
+            )
+            .expect("program registration");
+        let mut commits = Vec::new();
+        for (kind, bytes) in schemas() {
+            let kind_id = StableString::new(kind).expect("kind ID");
+            let batch_id =
+                StableString::new(format!("wave6:schema:{kind}")).expect("schema batch ID");
+            let accepted = store
+                .commit_wave6_artifact_schema_v1(
+                    &program_id,
+                    kind_id.clone(),
+                    bytes,
+                    batch_id.clone(),
+                    StableString::new("wave6-store-test").expect("writer build"),
+                )
+                .unwrap_or_else(|error| panic!("schema commit {kind}: {error}"));
+            assert_eq!(accepted.status, IdempotencyStatus::Accepted);
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v12");
+            let retry = store
+                .commit_wave6_artifact_schema_v1(
+                    &program_id,
+                    kind_id,
+                    bytes,
+                    batch_id,
+                    StableString::new("wave6-store-test").expect("writer build"),
+                )
+                .expect("schema retry");
+            assert_eq!(retry.status, IdempotencyStatus::Idempotent);
+            assert_eq!(retry.commit_seq, accepted.commit_seq);
+            assert_eq!(retry.commit_digest, accepted.commit_digest);
+            commits.push((kind, bytes, accepted));
+        }
+
+        assert!(
+            store
+                .commit_wave6_artifact_schema_v1(
+                    &program_id,
+                    StableString::new("campaign_registration_fixture").expect("kind ID"),
+                    schemas()[1].1,
+                    StableString::new("wave6:schema:wrong-content").expect("batch ID"),
+                    StableString::new("wave6-store-test").expect("writer build"),
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            store.commit_wave6_artifact_schema_v1(
+                &program_id,
+                StableString::new("campaign_registration_fixture").expect("kind ID"),
+                schemas()[0].1,
+                StableString::new("wave6:schema:second-batch").expect("batch ID"),
+                StableString::new("wave6-store-test").expect("writer build"),
+            ),
+            Err(StoreError::IdentityConflict { .. })
+        ));
+        assert!(matches!(
+            store.commit_wave6_artifact_schema_v1(
+                &program_id,
+                StableString::new("invented_schema_kind").expect("kind ID"),
+                schemas()[0].1,
+                StableString::new("wave6:schema:invented-kind").expect("batch ID"),
+                StableString::new("wave6-store-test").expect("writer build"),
+            ),
+            Err(StoreError::MissingIdentity { .. })
+        ));
+        drop(store);
+
+        let reopened = SqliteStore::open(store_config, StoreMode::ReadOnly).expect("reader store");
+        for (kind, bytes, accepted) in commits {
+            let stored = reopened
+                .load_wave6_artifact_schema_v1(
+                    &program_id,
+                    &StableString::new(kind).expect("kind ID"),
+                )
+                .expect("schema readback")
+                .expect("stored schema");
+            assert_eq!(stored.exact_bytes, bytes);
+            assert_eq!(stored.schema_digest, accepted.schema_digest);
+            assert_eq!(stored.commit_digest, accepted.commit_digest);
+            assert_eq!(
+                stored.semantic_ceiling,
+                SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+            );
+        }
     }
 }
