@@ -2,16 +2,19 @@
 
 Status: `N03/W6-C0` is implemented only at
 `unverified_semantic_fixture_only`. The implementation freezes and revalidates an exact caller-fed
-campaign chain; it does not run, randomize, persist, seal, reveal, score, publish, or promote a
+campaign chain. The sole store can now retain those five exact documents as one atomic fixture
+bundle, but it does not run, randomize, prospectively journal, reveal, score, publish, or promote a
 campaign.
 
 The Rust contract lives in
 [`crates/joshi-wave6-campaign`](../../../crates/joshi-wave6-campaign). N00 registers its checked
 schema bytes at
 [`fixtures/wave6/schemas/campaign_registration_v1.json`](../../../fixtures/wave6/schemas/campaign_registration_v1.json).
-The deterministic five-document chain is now checked in under
+The deterministic five-document chain is checked in under
 [`fixtures/wave6/campaign`](../../../fixtures/wave6/campaign) and cross-parsed byte-for-byte by the
-crate; repository presence still grants no durable or prospective authority.
+crate. Migration V16 can retain that exact chain in one store commit after resolving the prior N00
+program and campaign schema. Repository presence and bundle durability still grant no prospective
+authority.
 
 ## Exact N00 boundary
 
@@ -83,14 +86,17 @@ effect, causal, policy-value, product, or economic claim API.
 
 Every successful parser returns `UnverifiedSemantic<T>`. The wrapper exposes exact bytes and a
 document digest, but its ceiling is permanently
-`unverified_semantic_fixture_only`. The crate has no `joshi-store` dependency, opaque receipt,
-durable constructor, provider client, runner, presentation hook, wallet, signer, or action API.
+`unverified_semantic_fixture_only`. The campaign crate has no `joshi-store` dependency, opaque
+receipt, provider client, runner, presentation hook, wallet, signer, or action API. The separate
+store adapter reparses all five documents, preserves their semantic and physical digests, and
+issues a store commit receipt without changing that ceiling.
 
 The words `frozen`, `assigned`, `seal`, and `adjudication` therefore mean only that a complete
 caller-fed document passed intrinsic exactness checks. They do not establish prospectivity,
-mutual blindness, durable append order, real enrollment, actual treatment, outcome truth, or a
-scientific result. Those remain blocked on an independently reviewed sole-store campaign journal
-and a later registered execution/reveal boundary.
+mutual blindness, phase-by-phase append order, real enrollment, actual treatment, outcome truth,
+or a scientific result. Those remain blocked on a prospective sole-store campaign journal and a
+later registered execution/reveal boundary. The V16 atomic bundle deliberately cannot satisfy
+those gates.
 
 ## Verification
 

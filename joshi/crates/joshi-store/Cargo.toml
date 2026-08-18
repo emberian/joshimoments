@@ -18,6 +18,7 @@ joshi-publication = { path = "../joshi-publication" }
 joshi-projection = { path = "../joshi-projection" }
 joshi-scientific-memory = { path = "../joshi-scientific-memory" }
 joshi-surface = { path = "../joshi-surface" }
+joshi-wave6-campaign = { path = "../joshi-wave6-campaign" }
 joshi-wave6-registry = { path = "../joshi-wave6-registry" }
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled", "extra_check"] }
 serde.workspace = true

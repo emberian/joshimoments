@@ -14,6 +14,7 @@ mod store;
 mod wave5;
 mod wave5_status;
 mod wave6;
+mod wave6_campaign;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
 pub use error::{Result, StoreError};
@@ -52,6 +53,10 @@ pub use wave6::{
     StoredWave6FixtureDecisionLedger, StoredWave6ProgramRegistration, Wave6ArtifactSchemaReceipt,
     Wave6FixtureArtifactDagReceipt, Wave6FixtureArtifactReceipt, Wave6FixtureDecisionLedgerReceipt,
     Wave6ProgramRegistrationReceipt,
+};
+pub use wave6_campaign::{
+    StoredWave6FixtureCampaignBundle, Wave6FixtureCampaignBundleBytes,
+    Wave6FixtureCampaignBundleReceipt,
 };
 
 /// `SQLite` application identifier (`JOSH` in ASCII).

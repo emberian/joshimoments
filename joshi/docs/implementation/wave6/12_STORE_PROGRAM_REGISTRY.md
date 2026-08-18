@@ -37,8 +37,10 @@ externalMutationUnits   0
 ```
 
 The program row is introduced by V11; the ordinary/latest store now migrates through the additive
-V15 exact fixture-decision ledger. The Wave 5 G0 root path uses the explicit forward-only V10 migration
-boundary, so its frozen V10 export contract does not silently change when Wave 6 tables exist.
+V16 exact campaign-bundle table. V15 retains the fixture-decision ledger; V16 atomically retains
+the five exact N03 campaign documents after resolving the prior program and campaign schema. The
+Wave 5 G0 root path uses the explicit forward-only V10 migration boundary, so its frozen V10 export
+contract does not silently change when Wave 6 tables exist.
 
 Core exposes a bounded local witness:
 
@@ -47,7 +49,7 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one latest V15 catalog, commits the checked fixture, all six registered
+It creates or reopens one latest V16 catalog, commits the checked fixture, all six registered
 schema documents, three exact evaluation outputs, their exact fixture DAG and three fixture
 dispositions, makes exact idempotent retries, drops the writer, and independently loads the full
 chain through a read-only store. Its V5 JSON report fixes
@@ -57,10 +59,10 @@ original commit identities.
 
 ## Refusals and ceiling
 
-This adapter does not accept or resolve a Wave 5 gate reference. It persists only the checked
-fixture DAG and fixture dispositions, not a campaign, human approval, observation, outcome, score
-or nonfixture model output. It has no provider, Glass,
-wallet, signing, submission, deployment or external-mutation path.
+This adapter does not accept or resolve a Wave 5 gate reference. It persists the checked fixture
+DAG, fixture dispositions and one exact five-document campaign bundle, but not a prospective
+campaign journal, human approval, observed outcome, score or nonfixture model output. It has no
+provider, Glass, wallet, signing, submission, deployment or external-mutation path.
 
 Consequently, the durable receipt proves only that the exact fixture contract was stored and
 reopened. It does not make the program `store_resolved` in the operational sense and cannot raise
@@ -78,5 +80,5 @@ cargo test --locked --offline -p joshi-core \
 cargo test --locked --offline -p joshi-core wave6_registration --lib
 ```
 
-These gates cover V4-to-V15 upgrade, V9/V10 frozen migration boundaries, exact registration,
+These gates cover V4-to-V16 upgrade, V9/V10 frozen migration boundaries, exact registration,
 conflict refusal, idempotent retry, read-only reopen and continued V10 G0 isolation.
