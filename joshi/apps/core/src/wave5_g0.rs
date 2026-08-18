@@ -9,6 +9,12 @@ use joshi_admission::{Sha256Digest, operational::AUTHORITY};
 use joshi_domain::{StableString, WireStringError};
 use joshi_publication::{CockpitPublicationId, CockpitV2MembershipKind};
 use joshi_pump_adapter::prepare_direct_with_offline_fixture_selection;
+use joshi_scientific_memory::{
+    ActId, ActKind, CatalogCommitSeq, Digest as MemoryDigest, EffectStatus, Episode,
+    EpisodeCompleteness, EpisodeId, EpisodePath, EpisodeSegment, LogicalSessionTick,
+    LotAssociation, MemoryOccurrence, OperatorAct, PresentationBinding, PresentationGap,
+    PresentationGapReason, SceneBinding, SceneId, SceneRef, SegmentId, SessionId,
+};
 use joshi_spool::LocalSpool;
 use joshi_store::{IdempotencyStatus, SqliteStore, StoreMode};
 use serde::Serialize;
@@ -35,6 +41,10 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterPublicationBody,
     BeforePublicationHead,
     AfterPublicationHead,
+    BeforeMemoryAct,
+    AfterMemoryAct,
+    BeforeMemoryEpisode,
+    AfterMemoryEpisode,
 }
 
 /// Exact component evidence. Every positive field is reverified after a read-only reopen.
@@ -62,8 +72,14 @@ pub struct Wave5G0SourcePublicationReport {
     pub publication_digest: String,
     pub publication_bytes_digest: String,
     pub head_digest: String,
+    pub memory_act_id: String,
+    pub memory_act_digest: String,
+    pub memory_episode_id: String,
+    pub memory_episode_digest: String,
+    pub memory_queue_through: u64,
     pub source_semantics_closed: bool,
     pub publication_prepare_body_head_closed: bool,
+    pub partial_memory_chain_closed: bool,
     pub restart_reverified: bool,
     pub full_offline_fault_walk: bool,
     pub provider_io: bool,
@@ -255,6 +271,49 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "Cockpit V2 prepare/body/head commit order is not strict",
         ));
     }
+
+    let (act_bytes, episode_bytes) = memory_fixture(&publication)?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeMemoryAct)?;
+    let act_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:source-publication:memory-act")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let act_receipt = store.commit_scientific_memory_occurrence_v1(&act_bytes, &act_context)?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterMemoryAct)?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeMemoryEpisode,
+    )?;
+    let episode_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:source-publication:memory-episode")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let episode_receipt =
+        store.commit_scientific_memory_occurrence_v1(&episode_bytes, &episode_context)?;
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
+    )?;
+    let act = store
+        .load_scientific_memory_occurrence_v1(act_receipt.occurrence_id())?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "memory act was absent immediately after commit",
+        ))?;
+    let episode = store
+        .load_scientific_memory_occurrence_v1(episode_receipt.occurrence_id())?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "memory episode was absent immediately after commit",
+        ))?;
+    if head.commit_seq >= act.commit_seq
+        || act.commit_seq >= episode.commit_seq
+        || act_receipt.queue_generation() != act.queue_generation
+        || episode_receipt.queue_generation() != episode.queue_generation
+        || act.queue_generation.checked_add(1) != Some(episode.queue_generation)
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "memory act/episode commit or queue order is not strict",
+        ));
+    }
     drop(store);
 
     let reopened = SqliteStore::open(config(state)?, StoreMode::ReadOnly)?;
@@ -276,10 +335,22 @@ pub fn run_wave5_g0_source_publication_with_fault(
     let reopened_head = reopened.load_cockpit_v2_head_v1(&publication_id)?.ok_or(
         Wave5G0SourcePublicationError::Invariant("Cockpit V2 head was absent after restart"),
     )?;
+    let reopened_act = reopened
+        .load_scientific_memory_occurrence_v1(act_receipt.occurrence_id())?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "memory act was absent after restart",
+        ))?;
+    let reopened_episode = reopened
+        .load_scientific_memory_occurrence_v1(episode_receipt.occurrence_id())?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "memory episode was absent after restart",
+        ))?;
     if reopened_source != source
         || reopened_preparation != preparation
         || reopened_publication != publication
         || reopened_head != head
+        || reopened_act != act
+        || reopened_episode != episode
     {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "restart changed source/publication exact truth",
@@ -307,14 +378,85 @@ pub fn run_wave5_g0_source_publication_with_fault(
         publication_digest: publication_receipt.publication_digest().to_string(),
         publication_bytes_digest: publication_receipt.publication_bytes_digest().to_string(),
         head_digest: head.head_digest.to_string(),
+        memory_act_id: act_receipt.occurrence_id().to_string(),
+        memory_act_digest: act_receipt.occurrence_digest().to_string(),
+        memory_episode_id: episode_receipt.occurrence_id().to_string(),
+        memory_episode_digest: episode_receipt.occurrence_digest().to_string(),
+        memory_queue_through: episode_receipt.queue_generation(),
         source_semantics_closed: true,
         publication_prepare_body_head_closed: true,
+        partial_memory_chain_closed: true,
         restart_reverified: true,
         full_offline_fault_walk: false,
         provider_io: false,
         product_qualified: false,
         live_qualified: false,
     })
+}
+
+fn memory_fixture(
+    publication: &joshi_store::StoredCockpitV2Publication,
+) -> Result<(Vec<u8>, Vec<u8>), Wave5G0SourcePublicationError> {
+    let scene = SceneRef {
+        scene_id: memory_value(SceneId::new(
+            publication.publication.publication_id.to_string(),
+        ))?,
+        scene_digest: memory_value(MemoryDigest::new(
+            publication.publication.publication_digest.to_string(),
+        ))?,
+        catalog_cutoff: memory_value(CatalogCommitSeq::new(publication.commit_seq.get()))?,
+    };
+    let act = MemoryOccurrence::OperatorAct(OperatorAct {
+        act_id: memory_value(ActId::new("g0-act-0001"))?,
+        session_id: memory_value(SessionId::new("g0-session-0001"))?,
+        occurred_at: memory_value(LogicalSessionTick::new(12))?,
+        scene: SceneBinding::Committed(scene.clone()),
+        presentation: PresentationBinding::Gap(PresentationGap {
+            gap_id: "g0-presentation-gap-0001".into(),
+            scene: Some(scene),
+            reason: PresentationGapReason::NotMounted,
+            detected_at: memory_value(LogicalSessionTick::new(11))?,
+        }),
+        kind: ActKind::Mark,
+        subject: Some("MintA".into()),
+        assertion: None,
+    });
+    let episode = MemoryOccurrence::Episode(Episode {
+        episode_id: memory_value(EpisodeId::new("g0-episode-0001"))?,
+        session_id: memory_value(SessionId::new("g0-session-0001"))?,
+        act_ids: vec![memory_value(ActId::new("g0-act-0001"))?],
+        decision_cutoff: memory_value(LogicalSessionTick::new(20))?,
+        started_at: memory_value(LogicalSessionTick::new(12))?,
+        ended_at: Some(memory_value(LogicalSessionTick::new(20))?),
+        completeness: EpisodeCompleteness::Partial,
+        segments: vec![
+            EpisodeSegment {
+                segment_id: memory_value(SegmentId::new("g0-segment-flat-watch"))?,
+                start_at: memory_value(LogicalSessionTick::new(12))?,
+                end_at: Some(memory_value(LogicalSessionTick::new(16))?),
+                path: EpisodePath::FlatWatch,
+                effect: EffectStatus::Unknown {
+                    reason: "manual effect not witnessed".into(),
+                },
+                lot: LotAssociation::Unresolved {
+                    reason: "no lot association".into(),
+                },
+            },
+            EpisodeSegment {
+                segment_id: memory_value(SegmentId::new("g0-segment-no-trade"))?,
+                start_at: memory_value(LogicalSessionTick::new(16))?,
+                end_at: Some(memory_value(LogicalSessionTick::new(20))?),
+                path: EpisodePath::NoTrade,
+                effect: EffectStatus::NotApplicableByNoTrade,
+                lot: LotAssociation::NotApplicable,
+            },
+        ],
+    });
+    Ok((serde_json::to_vec(&act)?, serde_json::to_vec(&episode)?))
+}
+
+fn memory_value<T>(value: Result<T, String>) -> Result<T, Wave5G0SourcePublicationError> {
+    value.map_err(Wave5G0SourcePublicationError::MemoryFixture)
 }
 
 fn inject(
@@ -342,6 +484,10 @@ pub enum Wave5G0SourcePublicationError {
     Readiness(#[from] crate::wave5_readiness::Wave5ReadinessError),
     #[error("Wave 5 G0 circulation failed: {0}")]
     Circulation(String),
+    #[error("invalid static Wave 5 G0 memory fixture: {0}")]
+    MemoryFixture(String),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error("injected Wave 5 G0 source/publication interruption at {0:?}")]
     Injected(Wave5G0SourcePublicationFaultPoint),
     #[error("Wave 5 G0 source/publication invariant failed: {0}")]
@@ -362,6 +508,8 @@ mod tests {
         assert_eq!(report.cold_control_subject_count, 1);
         assert!(report.source_semantics_closed);
         assert!(report.publication_prepare_body_head_closed);
+        assert!(report.partial_memory_chain_closed);
+        assert_eq!(report.memory_queue_through, 2);
         assert!(report.restart_reverified);
         assert!(!report.full_offline_fault_walk);
         assert!(!report.provider_io);
@@ -383,6 +531,10 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterPublicationBody,
             Wave5G0SourcePublicationFaultPoint::BeforePublicationHead,
             Wave5G0SourcePublicationFaultPoint::AfterPublicationHead,
+            Wave5G0SourcePublicationFaultPoint::BeforeMemoryAct,
+            Wave5G0SourcePublicationFaultPoint::AfterMemoryAct,
+            Wave5G0SourcePublicationFaultPoint::BeforeMemoryEpisode,
+            Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
         ];
         for point in points {
             let state = tempfile::tempdir().expect("temporary G0 fault state");

@@ -133,8 +133,11 @@ occurrences prove those states. The C0 component walk may report
 publication, export/import, status recovery and backup/restore crash boundaries remain open. The
 separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
-`fullOfflineFaultWalk:false`; supervisor accounting, crash matrix, pairing/Glass, memory,
-export/import, status and backup/restore remain outside that component. A fixture may
+`fullOfflineFaultWalk:false`; supervisor accounting, the full crash matrix, pairing/Glass,
+complete memory closure, export/import, status and backup/restore remain outside that component.
+The component now also
+retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
+interview memory closure remains outside it. A fixture may
 exercise canonical Pump policy bytes without network I/O; the supervisor fake
 `joshi.store.policy.v1` is not a production physical-policy contract and cannot qualify spool
 circulation.

@@ -93,9 +93,11 @@ Source and publication:
   sole store, checks a two-subject one-hot/one-cold partition, commits prepare/body/head in strict
   order, reopens every exact artifact read-only, and proves an identical second invocation is
   idempotent. A component-local matrix additionally interrupts immediately before and after
-  semantic fact, prepare, body and head, then proves exact convergence after reopen. Its report
-  keeps `fullOfflineFaultWalk`, product and live qualification false because the other G0 seams
-  and the complete 18-step harness remain outside this component.
+  semantic fact, prepare, body, head, memory act and partial episode, then proves exact convergence
+  after reopen. The act is bound to the exact headed scene with a typed `not_mounted` presentation
+  gap; the episode is partial with only unknown/unresolved/no-trade effects. Its report keeps
+  `fullOfflineFaultWalk`, product and live qualification false because the complete memory closure,
+  other G0 seams and 18-step harness remain outside this component.
 
 Scientific memory:
 
