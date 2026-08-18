@@ -25,8 +25,8 @@ proposal lineage, idempotent retry, and restart readback—not that the named re
 a decision. Changed bytes, a missing proposal, a second batch for one identity, and backdated or
 foreign proposal binding refuse.
 
-Core report `joshi.core.wave6_program_registration_report.v8` and root witness
-`joshi.wave6.fixture_foundation_witness.v7` now carry the exact disposition/proposal binding and
+Core report `joshi.core.wave6_program_registration_report.v9` and root witness
+`joshi.wave6.fixture_foundation_witness.v8` carry the exact disposition/proposal binding and
 retain authenticated human review, proposal execution, and research-result qualification as
 false.
 

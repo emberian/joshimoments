@@ -15,6 +15,7 @@ mod wave5;
 mod wave5_status;
 mod wave6;
 mod wave6_campaign;
+mod wave6_market;
 mod wave6_research;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
@@ -59,6 +60,7 @@ pub use wave6_campaign::{
     StoredWave6FixtureCampaignBundle, Wave6FixtureCampaignBundleBytes,
     Wave6FixtureCampaignBundleReceipt,
 };
+pub use wave6_market::{StoredWave6MarketAtlasFixture, Wave6MarketAtlasFixtureReceipt};
 pub use wave6_research::{
     ResearchDispositionAuthorityV1, StoredWave6FixtureResearchDisposition,
     StoredWave6FixtureResearchProposal, StoredWave6ResearchArtifactBinding,

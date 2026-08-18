@@ -98,9 +98,12 @@ ruff check analysis/src/joshi_analysis/wave6_market_atlas analysis/tests/wave6_m
 cargo test --locked --offline -p joshi-wave6-registry --lib
 ```
 
-This remains caller-fed `UnverifiedSemantic` fixture material. A typed source ID, event ID, version,
-coverage status, clock, digest, or identity relation is an intrinsic consistency check over supplied
-rows—not proof that the caller resolved it from retained source evidence. This is not an operational
-Wave 6 release adapter. A later store-resolved release must provide the plan's campaign-local
-topology, coverage, source-manifest, and Wave 5 gate closure before the same contract can be used
-beyond fixtures.
+V19 now retains this exact cross-runtime document through the sole store with registered-schema,
+idempotent retry, and restart readback closure; see
+[`21_STORE_MARKET_ATLAS.md`](21_STORE_MARKET_ATLAS.md). It remains caller-fed
+`UnverifiedSemantic` fixture material. A typed source ID, event ID, version, coverage status, clock,
+digest, or identity relation is an intrinsic consistency check over supplied rows—not proof that the
+caller resolved it from retained source evidence. This is not an operational Wave 6 release
+adapter. A later store-resolved release must provide the plan's campaign-local topology, coverage,
+source-manifest, and Wave 5 gate closure through a new authority-bearing contract rather than
+relabel these fixture bytes.

@@ -6,7 +6,7 @@ use joshi_domain::StableString;
 use joshi_store::{
     IdempotencyStatus, ResearchDispositionAuthorityV1, SqliteStore, StoreConfig, StoreMode,
     StoredWave6FixtureResearchDisposition, StoredWave6FixtureResearchProposal,
-    Wave6FixtureCampaignBundleBytes,
+    StoredWave6MarketAtlasFixture, Wave6FixtureCampaignBundleBytes,
 };
 use joshi_wave6_registry::{ResearchDispositionKindV1, SemanticCeilingV1};
 use serde::Serialize;
@@ -19,6 +19,8 @@ const RESEARCH_PROPOSAL: &[u8] =
     include_bytes!("../../../fixtures/wave6/research_proposal_v1.json");
 const RESEARCH_DISPOSITION: &[u8] =
     include_bytes!("../../../fixtures/wave6/research_disposition_v1.json");
+const MARKET_ATLAS: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/market_atlas_snapshot_v1.json");
 const CAMPAIGN_REGISTRATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/campaign/registration_v1.json");
 const CAMPAIGN_ENROLLMENT: &[u8] =
@@ -62,6 +64,26 @@ pub struct Wave6FixtureArtifactReport {
     pub content_digest: String,
     pub evaluation_digest: String,
     pub result_count: String,
+    pub commit_seq: String,
+}
+
+/// One exact caller-fed market-atlas fixture retained and reparsed by the sole store.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Wave6MarketAtlasFixtureReport {
+    pub artifact_id: String,
+    pub schema_id: String,
+    pub content_digest: String,
+    pub artifact_digest: String,
+    pub atlas_snapshot_id: String,
+    pub atlas_snapshot_digest: String,
+    pub input_snapshot_id: String,
+    pub input_logical_digest: String,
+    pub cut_id: String,
+    pub state_time: String,
+    pub knowledge_cutoff: String,
+    pub input_as_of_commit_seq: String,
+    pub row_count: String,
     pub commit_seq: String,
 }
 
@@ -187,6 +209,9 @@ pub struct Wave6ProgramRegistrationReport {
     pub fixture_artifacts: Vec<Wave6FixtureArtifactReport>,
     pub fixture_artifact_content_persisted: bool,
     pub fixture_artifact_content_restart_reverified: bool,
+    pub fixture_market_atlas: Wave6MarketAtlasFixtureReport,
+    pub fixture_market_atlas_persisted: bool,
+    pub fixture_market_atlas_restart_reverified: bool,
     pub fixture_artifact_dag: Wave6FixtureArtifactDagReport,
     pub fixture_artifact_dag_persisted: bool,
     pub fixture_artifact_dag_restart_reverified: bool,
@@ -232,9 +257,9 @@ pub fn run_wave6_program_registration(
     let store_config = config(state)?;
     let mut store = SqliteStore::open(store_config.clone(), StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
-    if migration.current != 18 {
+    if migration.current != 19 {
         return Err(Wave6RegistrationError::Invariant(
-            "Wave 6 registration did not reach V18",
+            "Wave 6 registration did not reach V19",
         ));
     }
     let batch_id = StableString::new(BATCH_ID)?;
@@ -247,7 +272,7 @@ pub fn run_wave6_program_registration(
     if !matches!(
         accepted.status,
         IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
-    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v18"
+    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v19"
         || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     {
         return Err(Wave6RegistrationError::Invariant(
@@ -268,6 +293,7 @@ pub fn run_wave6_program_registration(
         ));
     }
     let schema_reports = commit_schemas(&mut store, &accepted.program_id, &writer_build)?;
+    let market_atlas = commit_market_atlas(&mut store, &accepted.program_id, &writer_build)?;
     let artifact_reports = commit_artifacts(&mut store, &accepted.program_id, &writer_build)?;
     let research_proposal =
         commit_research_proposal(&mut store, &accepted.program_id, &writer_build)?;
@@ -298,6 +324,7 @@ pub fn run_wave6_program_registration(
         ));
     }
     verify_schemas(&reopened, &program_id, &schema_reports)?;
+    verify_market_atlas(&reopened, &market_atlas)?;
     verify_artifacts(&reopened, &artifact_reports)?;
     verify_research_proposal(&reopened, &research_proposal)?;
     verify_research_disposition(&reopened, &research_disposition)?;
@@ -306,8 +333,8 @@ pub fn run_wave6_program_registration(
     verify_campaign_bundle(&reopened, &campaign_report)?;
 
     Ok(Wave6ProgramRegistrationReport {
-        contract: "joshi.core.wave6_program_registration_report.v8",
-        schema_version: 8,
+        contract: "joshi.core.wave6_program_registration_report.v9",
+        schema_version: 9,
         status: "fixture_only",
         authority: AUTHORITY,
         semantic_ceiling: stored.semantic_ceiling,
@@ -328,6 +355,9 @@ pub fn run_wave6_program_registration(
         fixture_artifacts: artifact_reports,
         fixture_artifact_content_persisted: true,
         fixture_artifact_content_restart_reverified: true,
+        fixture_market_atlas: market_atlas,
+        fixture_market_atlas_persisted: true,
+        fixture_market_atlas_restart_reverified: true,
         fixture_artifact_dag: dag_report,
         fixture_artifact_dag_persisted: true,
         fixture_artifact_dag_restart_reverified: true,
@@ -356,6 +386,108 @@ pub fn run_wave6_program_registration(
         product_qualified: false,
         live_qualified: false,
     })
+}
+
+fn commit_market_atlas(
+    store: &mut SqliteStore,
+    program_id: &StableString,
+    writer_build: &StableString,
+) -> Result<Wave6MarketAtlasFixtureReport, Wave6RegistrationError> {
+    let batch_id = StableString::new("wave6:market-atlas:fixture-001")?;
+    let accepted = store.commit_wave6_market_atlas_fixture_v1(
+        program_id,
+        MARKET_ATLAS,
+        batch_id.clone(),
+        writer_build.clone(),
+    )?;
+    if !matches!(
+        accepted.status,
+        IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
+    ) || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+        || accepted.row_count != 6
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 market-atlas fixture returned an impossible first receipt",
+        ));
+    }
+    let retry = store.commit_wave6_market_atlas_fixture_v1(
+        program_id,
+        MARKET_ATLAS,
+        batch_id,
+        writer_build.clone(),
+    )?;
+    if retry.status != IdempotencyStatus::Idempotent
+        || retry.artifact_id != accepted.artifact_id
+        || retry.schema_id != accepted.schema_id
+        || retry.content_digest != accepted.content_digest
+        || retry.artifact_digest != accepted.artifact_digest
+        || retry.atlas_snapshot_id != accepted.atlas_snapshot_id
+        || retry.atlas_snapshot_digest != accepted.atlas_snapshot_digest
+        || retry.input_snapshot_id != accepted.input_snapshot_id
+        || retry.input_logical_digest != accepted.input_logical_digest
+        || retry.row_count != accepted.row_count
+        || retry.commit_seq != accepted.commit_seq
+        || retry.commit_digest != accepted.commit_digest
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "exact Wave 6 market-atlas retry changed durable identity",
+        ));
+    }
+    let stored = store
+        .load_wave6_market_atlas_fixture_v1(&accepted.artifact_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 market-atlas fixture was absent after commit",
+        ))?;
+    if stored.exact_bytes != MARKET_ATLAS
+        || stored.commit_seq != accepted.commit_seq
+        || stored.commit_digest != accepted.commit_digest
+        || stored.row_count != 6
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 market-atlas readback differed from its receipt",
+        ));
+    }
+    Ok(market_atlas_report(&stored))
+}
+
+fn market_atlas_report(stored: &StoredWave6MarketAtlasFixture) -> Wave6MarketAtlasFixtureReport {
+    Wave6MarketAtlasFixtureReport {
+        artifact_id: stored.artifact_id.to_string(),
+        schema_id: stored.schema_id.to_string(),
+        content_digest: stored.content_digest.to_string(),
+        artifact_digest: stored.artifact_digest.to_string(),
+        atlas_snapshot_id: stored.atlas_snapshot_id.to_string(),
+        atlas_snapshot_digest: stored.atlas_snapshot_digest.to_string(),
+        input_snapshot_id: stored.input_snapshot_id.to_string(),
+        input_logical_digest: stored.input_logical_digest.to_string(),
+        cut_id: stored.cut_id.to_string(),
+        state_time: stored.state_time.to_string(),
+        knowledge_cutoff: stored.knowledge_cutoff.to_string(),
+        input_as_of_commit_seq: stored.input_as_of_commit_seq.to_string(),
+        row_count: stored.row_count.to_string(),
+        commit_seq: stored.commit_seq.get().to_string(),
+    }
+}
+
+fn verify_market_atlas(
+    store: &SqliteStore,
+    report: &Wave6MarketAtlasFixtureReport,
+) -> Result<(), Wave6RegistrationError> {
+    let artifact_id = StableString::new(report.artifact_id.clone())?;
+    let stored = store
+        .load_wave6_market_atlas_fixture_v1(&artifact_id)?
+        .ok_or(Wave6RegistrationError::Invariant(
+            "Wave 6 market-atlas fixture was absent after restart",
+        ))?;
+    if market_atlas_report(&stored) != *report
+        || stored.exact_bytes != MARKET_ATLAS
+        || stored.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
+    {
+        return Err(Wave6RegistrationError::Invariant(
+            "Wave 6 market-atlas fixture changed across read-only reopen",
+        ));
+    }
+    Ok(())
 }
 
 fn campaign_bundle_bytes() -> Wave6FixtureCampaignBundleBytes<'static> {
@@ -1155,7 +1287,7 @@ mod tests {
         let first =
             run_wave6_program_registration(state.path()).expect("first registration witness");
         assert_eq!(first.status, "fixture_only");
-        assert_eq!(first.catalog_schema, "joshi.sqlite.v18");
+        assert_eq!(first.catalog_schema, "joshi.sqlite.v19");
         assert_eq!(first.first_status, IdempotencyStatus::Accepted);
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);
@@ -1168,6 +1300,10 @@ mod tests {
         assert_eq!(first.fixture_artifacts.len(), 3);
         assert!(first.fixture_artifact_content_persisted);
         assert!(first.fixture_artifact_content_restart_reverified);
+        assert_eq!(first.fixture_market_atlas.row_count, "6");
+        assert_eq!(first.fixture_market_atlas.input_as_of_commit_seq, "4");
+        assert!(first.fixture_market_atlas_persisted);
+        assert!(first.fixture_market_atlas_restart_reverified);
         assert_eq!(first.fixture_artifact_dag.artifact_count, "3");
         assert!(first.fixture_artifact_dag_persisted);
         assert!(first.fixture_artifact_dag_restart_reverified);
@@ -1224,6 +1360,7 @@ mod tests {
         assert_eq!(repeated.accepted_commit_seq, first.accepted_commit_seq);
         assert_eq!(repeated.schemas, first.schemas);
         assert_eq!(repeated.fixture_artifacts, first.fixture_artifacts);
+        assert_eq!(repeated.fixture_market_atlas, first.fixture_market_atlas);
         assert_eq!(repeated.fixture_artifact_dag, first.fixture_artifact_dag);
         assert_eq!(
             repeated.fixture_decision_ledger,

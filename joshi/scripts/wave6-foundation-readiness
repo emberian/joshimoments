@@ -30,6 +30,9 @@ cargo test --locked --offline -p joshi-wave6-registry --all-targets
 cargo test --locked --offline -p joshi-wave6-campaign --all-targets
 cargo test --locked --offline -p joshi-store wave6 --lib
 cargo test --locked --offline -p joshi-core wave6_registration --lib
+uv --directory analysis run --locked pytest tests/wave6_market_atlas -q
+uv --directory analysis run --locked ruff check \
+  src/joshi_analysis/wave6_market_atlas tests/wave6_market_atlas
 
 mkdir -p "$JOSHI_W6_STATE/catalog"
 cargo run --locked --offline -q -p joshi-core -- wave6-program-registration \
@@ -38,12 +41,12 @@ cargo run --locked --offline -q -p joshi-core -- wave6-program-registration \
   --state "$JOSHI_W6_STATE/catalog" > "$JOSHI_W6_STATE/program-retry.json"
 
 jq -e '
-  .contract == "joshi.core.wave6_program_registration_report.v8"
-  and .schemaVersion == 8
+  .contract == "joshi.core.wave6_program_registration_report.v9"
+  and .schemaVersion == 9
   and .status == "fixture_only"
   and .authority == "read_record_replay_propose_shadow_only"
   and .semanticCeiling == "unverified_semantic_fixture_only"
-  and .catalogSchema == "joshi.sqlite.v18"
+  and .catalogSchema == "joshi.sqlite.v19"
   and .programId == "w6-program-fixture-001"
   and (.registrationDigest | test("^sha256:[0-9a-f]{64}$"))
   and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
@@ -83,6 +86,22 @@ jq -e '
     | all(test("^[1-9][0-9]*$")))
   and .fixtureArtifactContentPersisted == true
   and .fixtureArtifactContentRestartReverified == true
+  and (.fixtureMarketAtlas.artifactId | test("^wave6-market-atlas:[0-9a-f]{64}$"))
+  and .fixtureMarketAtlas.schemaId == "joshi.analysis.wave6-market-atlas-snapshot/v1"
+  and .fixtureMarketAtlas.contentDigest == "sha256:333ade5f5234b26dd09a1828eb1fdcb5bc4183c03ff23bb9b2ad1b9e510417d9"
+  and .fixtureMarketAtlas.artifactDigest == "sha256:21e030577ebb13590d9915652a08583bb61c10aa28f6f08efd53ad34e842a7a1"
+  and .fixtureMarketAtlas.atlasSnapshotId == "market-atlas-snapshot:d21afa5a4168318a62eac5b0aa89d34b2f2626317add1eafeab2ad7149b7ae4d"
+  and .fixtureMarketAtlas.atlasSnapshotDigest == "sha256:d21afa5a4168318a62eac5b0aa89d34b2f2626317add1eafeab2ad7149b7ae4d"
+  and .fixtureMarketAtlas.inputSnapshotId == "market-atlas-input:81e9f3bc79e3a6a539249e7ab7be1cc4a40a0467a5ce40c1a1c59751d352f7e4"
+  and .fixtureMarketAtlas.inputLogicalDigest == "sha256:64e95f1e2bea3877784a66b0c96f892f7714521ce624132b23d524ca61c78add"
+  and .fixtureMarketAtlas.cutId == "cut:fixture-one"
+  and .fixtureMarketAtlas.stateTime == "2026-01-01T00:10:00.000000Z"
+  and .fixtureMarketAtlas.knowledgeCutoff == "2026-01-01T00:20:00.000000Z"
+  and .fixtureMarketAtlas.inputAsOfCommitSeq == "4"
+  and .fixtureMarketAtlas.rowCount == "6"
+  and (.fixtureMarketAtlas.commitSeq | test("^[1-9][0-9]*$"))
+  and .fixtureMarketAtlasPersisted == true
+  and .fixtureMarketAtlasRestartReverified == true
   and (.fixtureArtifactDag.dagId | test("^wave6-dag:[0-9a-f]{64}$"))
   and .fixtureArtifactDag.dagDigest == "sha256:54c1773c3c0c29a9663bb5ad53b2d9b203a9dc8a1c7723935cabed74bc65ce09"
   and (.fixtureArtifactDag.documentDigest | test("^sha256:[0-9a-f]{64}$"))
@@ -174,6 +193,9 @@ jq -e --slurpfile first "$JOSHI_W6_STATE/program-first.json" '
   and .documentDigest == $first[0].documentDigest
   and .schemas == $first[0].schemas
   and .fixtureArtifacts == $first[0].fixtureArtifacts
+  and .fixtureMarketAtlas == $first[0].fixtureMarketAtlas
+  and .fixtureMarketAtlasPersisted == true
+  and .fixtureMarketAtlasRestartReverified == true
   and .fixtureArtifactDag == $first[0].fixtureArtifactDag
   and .fixtureDecisionLedger == $first[0].fixtureDecisionLedger
   and .fixtureCampaignBundle == $first[0].fixtureCampaignBundle
@@ -211,6 +233,8 @@ JOSHI_W6_RESEARCH_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0017_wave6_research_proposal.sql | awk '{print $1}')
 JOSHI_W6_REVIEW_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0018_wave6_research_disposition.sql | awk '{print $1}')
+JOSHI_W6_MARKET_ATLAS_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0019_wave6_market_atlas_fixture.sql | awk '{print $1}')
 
 jq -cn \
   --arg report "sha256:$JOSHI_W6_PROGRAM_SHA" \
@@ -222,10 +246,11 @@ jq -cn \
   --arg campaign_migration "sha256:$JOSHI_W6_CAMPAIGN_MIGRATION_SHA" \
   --arg research_migration "sha256:$JOSHI_W6_RESEARCH_MIGRATION_SHA" \
   --arg review_migration "sha256:$JOSHI_W6_REVIEW_MIGRATION_SHA" \
+  --arg market_atlas_migration "sha256:$JOSHI_W6_MARKET_ATLAS_MIGRATION_SHA" \
   --slurpfile program "$JOSHI_W6_STATE/program-first.json" '
   {
-    contract: "joshi.wave6.fixture_foundation_witness.v7",
-    schemaVersion: 7,
+    contract: "joshi.wave6.fixture_foundation_witness.v8",
+    schemaVersion: 8,
     authority: "read_record_replay_propose_shadow_only",
     status: "fixture_only",
     semanticCeiling: "unverified_semantic_fixture_only",
@@ -241,10 +266,12 @@ jq -cn \
     campaignMigrationDigest: $campaign_migration,
     researchMigrationDigest: $research_migration,
     reviewMigrationDigest: $review_migration,
+    marketAtlasMigrationDigest: $market_atlas_migration,
     registeredSchemaCount: $program[0].registeredSchemaCount,
     schemas: $program[0].schemas,
     fixtureArtifactContentCount: $program[0].fixtureArtifactContentCount,
     fixtureArtifacts: $program[0].fixtureArtifacts,
+    fixtureMarketAtlas: $program[0].fixtureMarketAtlas,
     fixtureArtifactDag: $program[0].fixtureArtifactDag,
     fixtureDecisionLedger: $program[0].fixtureDecisionLedger,
     fixtureCampaignBundle: $program[0].fixtureCampaignBundle,
@@ -254,6 +281,7 @@ jq -cn \
       "exact_fixture_program_restart",
       "exact_fixture_schema_catalog_restart",
       "exact_fixture_artifact_content_restart",
+      "exact_fixture_market_atlas_bytes_restart",
       "exact_fixture_artifact_dag_restart",
       "exact_fixture_decision_ledger_restart",
       "exact_fixture_campaign_bundle_restart",
@@ -269,6 +297,8 @@ jq -cn \
       prospectiveCampaignJournal: false,
       fixtureResearchProposalOccurrence: true,
       fixtureResearchDispositionOccurrence: true,
+      fixtureMarketAtlasBytesOccurrence: true,
+      storeResolvedMarketAtlas: false,
       authenticatedHumanReview: false,
       humanResearchReview: false,
       proposalExecuted: false,
@@ -281,7 +311,7 @@ jq -cn \
       productQualified: false,
       liveQualified: false
     },
-    claim: "fixture_program_schema_evaluation_content_dag_dispositions_atomic_campaign_bundle_non_executable_research_proposal_and_caller_fed_hold_bytes_only"
+    claim: "fixture_program_schema_evaluation_content_market_atlas_bytes_dag_dispositions_atomic_campaign_bundle_non_executable_research_proposal_and_caller_fed_hold_bytes_only"
   }
 ' > "$JOSHI_W6_STATE/wave6-foundation-witness.json"
 
