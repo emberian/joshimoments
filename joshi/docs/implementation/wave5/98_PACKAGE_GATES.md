@@ -73,11 +73,11 @@ Wave 5 witness (`wave5-witness.json`):
 schemaVersion=5
 status=useful_partial
 circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
-g0RootEvidenceDigest=sha256:6f4e44d3c1bec7b0b89143220a9f624a851bae3752119498b9b636714f246997
-g0ComponentDigest=sha256:0278bcb0c29788bfda9850249db8155c1495bb90d9981c4aefe676a202e75128
-g0InspectorSmokeDigest=sha256:046f6c33695a3bda6703bb4c38120d2faff7abac9a0f429bc793c6a7a5f376ce
-g0EvidenceBundleDigest=sha256:e3d6a5fb6589f072b8e8d91fa781dee23b456c899a63b8be62aebf88011ed30a
-g0SnapshotId=sha256:f9e9d36ee192269b3b16aceec4281e42af3ae62d4c760ecca487008c632e0327
+g0RootEvidenceDigest=sha256:27c8bb8592d59472d4fe9b20e0ad6877fb9e9adca7145bc9b6450dff372c302d
+g0ComponentDigest=sha256:62ac50fe861be81d5d4b56970866cf35211a8c8b0861c40b54d01303868dd1f4
+g0InspectorSmokeDigest=sha256:cd0b0dc11b8d1c32f17fe7534b4a522c59d2c072d841a7f67bfeef40393c231e
+g0EvidenceBundleDigest=sha256:5fbd7c95238ddd7eff35dfb00c34751fc6f137829d517b5372dabc6dee4b10c3
+g0SnapshotId=sha256:45130f5ec35a1b12776d823f33daace3f850d4ce4a150e8b4d4a53af4975f76e
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
 g0CatalogMigrationDigest=sha256:92616764f786ba3eaf3f2da9c739c1f5ed36f9da1beb47416bd74e20cdf69c1b
 attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
@@ -85,6 +85,7 @@ attained=run_registered, public_c0_spool_catalog_closed, component_restart_readb
          paired_fixture_api_reopen, censored_scientific_memory,
          nonempty_v10_export_import, v10_export_recovered,
          artifact_bearing_backup_restore, g0_component_30_prefix_recovery,
+         g0_final_recovery_6_prefix_recovery,
          partial_root_18_role_evidence, final_distinct_root_store_origin_reopen
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
@@ -104,6 +105,9 @@ eight-occurrence censored-memory closure and nonempty V10 snapshot, exact-matche
 run/source/publication/head and route bytes, then reopens the store and supervisor origin from
 distinct restored roots while their original paths are unavailable. It emits one eighteen-role
 baseline evidence bundle whose final role binds that composite readback.
+The same Core suite injects process loss immediately before and after composite backup, restore and
+final reopen on six fresh catalogs; every exact retry recovers the same restored truth. These are
+six scheduled final-boundary cases, not the complete 37-scenario result.
 It refuses to emit the witness if the paired route changes bytes, accepts the prior capability,
 substitutes the run or publication, raises a browser/product/live bit, or if any partial component
 closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial

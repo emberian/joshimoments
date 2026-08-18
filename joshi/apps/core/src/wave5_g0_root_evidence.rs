@@ -99,6 +99,17 @@ pub struct G0FinalRecoveryReport {
     pub full_offline_fault_walk: bool,
 }
 
+/// Deterministic interruption points for the composite final backup/restore/reopen boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum G0FinalRecoveryFaultPoint {
+    BeforeBackup,
+    AfterBackup,
+    BeforeRestore,
+    AfterRestore,
+    BeforeReopen,
+    AfterReopen,
+}
+
 #[derive(Debug, Error)]
 pub enum Wave5G0RootEvidenceError {
     #[error(transparent)]
@@ -117,6 +128,8 @@ pub enum Wave5G0RootEvidenceError {
     Supervisor(#[from] joshi_supervisor::SupervisorError),
     #[error(transparent)]
     Wire(#[from] joshi_domain::WireStringError),
+    #[error("injected Wave 5 G0 final recovery interruption at {0:?}")]
+    Injected(G0FinalRecoveryFaultPoint),
     #[error("Wave 5 G0 root evidence invariant failed: {0}")]
     Invariant(&'static str),
 }
@@ -351,6 +364,16 @@ fn run_final_recovery(
     component: &Wave5G0SourcePublicationReport,
     inspector: &G0InspectorSmokeReport,
 ) -> Result<G0FinalRecoveryReport, Wave5G0RootEvidenceError> {
+    run_final_recovery_with_fault(state, component, inspector, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_final_recovery_with_fault(
+    state: &Path,
+    component: &Wave5G0SourcePublicationReport,
+    inspector: &G0InspectorSmokeReport,
+    fault: Option<G0FinalRecoveryFaultPoint>,
+) -> Result<G0FinalRecoveryReport, Wave5G0RootEvidenceError> {
     let tag = inspector
         .pairing_occurrence_digest
         .strip_prefix("sha256:")
@@ -363,6 +386,7 @@ fn run_final_recovery(
     let restore_id = StableString::new(format!("restore:g0-root-final-{tag}"))?;
     let config = offline_fixture_store_config(state)?;
     let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter)?;
+    inject_final(fault, G0FinalRecoveryFaultPoint::BeforeBackup)?;
     let backup_context = store.begin_wave5_commit(
         StableString::new(format!("wave5:g0:root-final-backup:{tag}"))?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
@@ -374,6 +398,18 @@ fn run_final_recovery(
         &root.join("backup/artifacts"),
         &backup_context,
     )?;
+    let supervisor_backup = root.join("backup/supervisor");
+    let supervisor_entries = copy_exact_tree(&state.join("supervisor"), &supervisor_backup)?;
+    if supervisor_entries.is_empty() {
+        return Err(Wave5G0RootEvidenceError::Invariant(
+            "supervisor backup inventory is empty",
+        ));
+    }
+    let supervisor_manifest_bytes = serde_json::to_vec(&supervisor_entries)?;
+    let supervisor_manifest_digest = Sha256Digest::of_bytes(&supervisor_manifest_bytes).to_string();
+    inject_final(fault, G0FinalRecoveryFaultPoint::AfterBackup)?;
+
+    inject_final(fault, G0FinalRecoveryFaultPoint::BeforeRestore)?;
     let restore_context = store.begin_wave5_commit(
         StableString::new(format!("wave5:g0:root-final-restore:{tag}"))?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
@@ -385,24 +421,16 @@ fn run_final_recovery(
         &root.join("restored/artifacts"),
         &restore_context,
     )?;
-    drop(store);
-
-    let supervisor_backup = root.join("backup/supervisor");
-    let supervisor_restore = root.join("restored/supervisor");
-    let supervisor_entries = copy_exact_tree(&state.join("supervisor"), &supervisor_backup)?;
-    if supervisor_entries.is_empty() {
-        return Err(Wave5G0RootEvidenceError::Invariant(
-            "supervisor backup inventory is empty",
-        ));
-    }
+    let supervisor_restore_state = next_supervisor_restore_state(&root)?;
+    let supervisor_restore = supervisor_restore_state.join("supervisor");
     let restored_supervisor_entries = copy_exact_tree(&supervisor_backup, &supervisor_restore)?;
     if supervisor_entries != restored_supervisor_entries {
         return Err(Wave5G0RootEvidenceError::Invariant(
             "restored supervisor inventory differs from its backup",
         ));
     }
-    let supervisor_manifest_bytes = serde_json::to_vec(&supervisor_entries)?;
-    let supervisor_manifest_digest = Sha256Digest::of_bytes(&supervisor_manifest_bytes).to_string();
+    inject_final(fault, G0FinalRecoveryFaultPoint::AfterRestore)?;
+    drop(store);
 
     let original_paths = [
         config.catalog_path.clone(),
@@ -422,6 +450,7 @@ fn run_final_recovery(
             "an original root remained available during restored reopen",
         ));
     }
+    inject_final(fault, G0FinalRecoveryFaultPoint::BeforeReopen)?;
 
     let mut restored_config = config;
     restored_config
@@ -487,7 +516,7 @@ fn run_final_recovery(
             "pairing occurrence is absent from restored catalog",
         ))?;
 
-    let restored_supervisor = Supervisor::open(supervisor_config(&root.join("restored")))?;
+    let restored_supervisor = Supervisor::open(supervisor_config(&supervisor_restore_state))?;
     let reservations = restored_supervisor
         .completed_no_gap_reservations_for_run(&component.run_registration_id)?;
     let [reservation] = reservations.as_slice() else {
@@ -524,6 +553,7 @@ fn run_final_recovery(
     };
     let final_readback_digest =
         Sha256Digest::of_bytes(&serde_json::to_vec(&final_material)?).to_string();
+    inject_final(fault, G0FinalRecoveryFaultPoint::AfterReopen)?;
     drop(restored_supervisor);
     drop(restored_store);
     guard.restore()?;
@@ -549,19 +579,104 @@ fn run_final_recovery(
     })
 }
 
+fn inject_final(
+    requested: Option<G0FinalRecoveryFaultPoint>,
+    current: G0FinalRecoveryFaultPoint,
+) -> Result<(), Wave5G0RootEvidenceError> {
+    if requested == Some(current) {
+        return Err(Wave5G0RootEvidenceError::Injected(current));
+    }
+    Ok(())
+}
+
 fn copy_exact_tree(
     source: &Path,
     destination: &Path,
 ) -> Result<Vec<SupervisorBackupEntry>, Wave5G0RootEvidenceError> {
     if destination.try_exists()? {
-        return Err(Wave5G0RootEvidenceError::Invariant(
-            "supervisor backup/restore destination already exists",
-        ));
+        let source_entries = exact_tree_inventory(source)?;
+        let destination_entries = exact_tree_inventory(destination)?;
+        if source_entries != destination_entries {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "existing supervisor backup/restore inventory differs",
+            ));
+        }
+        return Ok(destination_entries);
     }
     let mut entries = Vec::new();
     copy_exact_tree_inner(source, source, destination, &mut entries)?;
     entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(entries)
+}
+
+fn next_supervisor_restore_state(root: &Path) -> Result<PathBuf, Wave5G0RootEvidenceError> {
+    let attempts = root.join("supervisor-restore-attempts");
+    fs::create_dir_all(&attempts)?;
+    for ordinal in 1..=64_u8 {
+        let candidate = attempts.join(format!("attempt-{ordinal:02}"));
+        if !candidate.try_exists()? {
+            return Ok(candidate);
+        }
+    }
+    Err(Wave5G0RootEvidenceError::Invariant(
+        "supervisor restore retry bound is exhausted",
+    ))
+}
+
+fn exact_tree_inventory(
+    root: &Path,
+) -> Result<Vec<SupervisorBackupEntry>, Wave5G0RootEvidenceError> {
+    let mut entries = Vec::new();
+    exact_tree_inventory_inner(root, root, &mut entries)?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(entries)
+}
+
+fn exact_tree_inventory_inner(
+    root: &Path,
+    current: &Path,
+    entries: &mut Vec<SupervisorBackupEntry>,
+) -> Result<(), Wave5G0RootEvidenceError> {
+    let metadata = fs::symlink_metadata(current)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(Wave5G0RootEvidenceError::Invariant(
+            "supervisor inventory root contains a non-directory or symlink",
+        ));
+    }
+    let mut children = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
+    children.sort_by_key(fs::DirEntry::file_name);
+    for child in children {
+        let path = child.path();
+        let file_type = child.file_type()?;
+        if file_type.is_symlink() {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "supervisor inventory contains a symlink",
+            ));
+        }
+        let relative = path.strip_prefix(root).map_err(|_| {
+            Wave5G0RootEvidenceError::Invariant("supervisor inventory path escaped")
+        })?;
+        if relative == Path::new("identity/supervisor.lock") {
+            continue;
+        }
+        if file_type.is_dir() {
+            exact_tree_inventory_inner(root, &path, entries)?;
+        } else if file_type.is_file() {
+            let bytes = fs::read(&path)?;
+            entries.push(SupervisorBackupEntry {
+                relative_path: relative.to_string_lossy().into_owned(),
+                byte_length: u64::try_from(bytes.len()).map_err(|_| {
+                    Wave5G0RootEvidenceError::Invariant("supervisor file length overflow")
+                })?,
+                content_digest: Sha256Digest::of_bytes(&bytes).to_string(),
+            });
+        } else {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "supervisor inventory contains a special file",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn copy_exact_tree_inner(
@@ -634,11 +749,18 @@ struct OriginalRootsGuard {
 impl OriginalRootsGuard {
     fn hide(paths: &[PathBuf], unavailable: &Path) -> Result<Self, Wave5G0RootEvidenceError> {
         if unavailable.try_exists()? {
-            return Err(Wave5G0RootEvidenceError::Invariant(
-                "original-root quarantine already exists",
-            ));
+            let metadata = fs::symlink_metadata(unavailable)?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || fs::read_dir(unavailable)?.next().is_some()
+            {
+                return Err(Wave5G0RootEvidenceError::Invariant(
+                    "original-root quarantine exists and is not an empty real directory",
+                ));
+            }
+        } else {
+            fs::create_dir_all(unavailable)?;
         }
-        fs::create_dir_all(unavailable)?;
         let mut guard = Self { moved: Vec::new() };
         for (ordinal, path) in paths.iter().enumerate() {
             if !path.try_exists()? {
@@ -747,5 +869,33 @@ mod tests {
             (left.role, left.evidence_id.as_str()).cmp(&(right.role, right.evidence_id.as_str()))
         });
         assert!(duplicate.recompute_digest().is_err());
+    }
+
+    #[tokio::test]
+    async fn every_final_recovery_prefix_retries_to_exact_restored_truth() {
+        for point in [
+            G0FinalRecoveryFaultPoint::BeforeBackup,
+            G0FinalRecoveryFaultPoint::AfterBackup,
+            G0FinalRecoveryFaultPoint::BeforeRestore,
+            G0FinalRecoveryFaultPoint::AfterRestore,
+            G0FinalRecoveryFaultPoint::BeforeReopen,
+            G0FinalRecoveryFaultPoint::AfterReopen,
+        ] {
+            let state = tempfile::tempdir().expect("temporary final recovery fault state");
+            let component = run_wave5_g0_source_publication(state.path()).expect("G0 component");
+            let inspector = run_g0_inspector_smoke(state.path())
+                .await
+                .expect("fresh pairing/open witness");
+            assert!(matches!(
+                run_final_recovery_with_fault(state.path(), &component, &inspector, Some(point)),
+                Err(Wave5G0RootEvidenceError::Injected(actual)) if actual == point
+            ));
+            let recovered = run_final_recovery(state.path(), &component, &inspector)
+                .unwrap_or_else(|error| {
+                    panic!("exact final recovery retry after {point:?}: {error}")
+                });
+            validate_final_recovery(&component, &recovered).expect("valid final recovery");
+            assert!(!recovered.full_offline_fault_walk);
+        }
     }
 }

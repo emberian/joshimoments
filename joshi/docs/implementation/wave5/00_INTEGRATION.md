@@ -178,8 +178,11 @@ creates a later store backup containing that pairing lineage, separately copies 
 complete supervisor journal/origin/ACK tree, restores both into distinct roots, temporarily makes
 the original catalog/blob/export/supervisor paths unavailable, and reopens the registered run,
 source, headed publication, memory terminal, import/export/status, pairing occurrence and exact
-origin from only the restored roots. This closes the baseline recovery set; crash-safe orchestration
-of that composite copy remains part of the unqualified 37-scenario fault walk.
+origin from only the restored roots. Deterministic interruption immediately before and after the
+composite backup, composite restore and final reopen now retries to the same verified truth in six
+fresh-state scenarios. This closes the baseline recovery set and those six exact prefix cases;
+crash-safe orchestration of every earlier seam remains part of the unqualified 37-scenario fault
+walk.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
