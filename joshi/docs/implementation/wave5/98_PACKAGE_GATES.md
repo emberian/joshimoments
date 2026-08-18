@@ -54,7 +54,8 @@ production or manifest files were edited by this lane.
 
 ## Witness and exact claim ceiling
 
-The fresh root run used `/tmp/joshi-wave5-readiness.final.6UcakP` and exited `RC:0`.
+The fresh root run retained `/tmp/joshi-wave5-readiness.jRQLVa/wave5-witness.json` and exited
+`RC:0`.
 Wave 4 component witness:
 
 ```text
@@ -68,14 +69,22 @@ gates=workspaceOffline, schemaFreshAndUpgrade, glassOffline, companionOffline,
 Wave 5 witness (`wave5-witness.json`):
 
 ```text
+schemaVersion=3
 status=useful_partial
-circulationWalkDigest=sha256:702d3008b9afaf6ecfb2a3784328b79a7a89201770df65fc4d29abc33ac86505
+circulationWalkDigest=sha256:739bfee212739ab908d60c837ef8bed11083824379eb2dc91f8ef15ddcea82fa
+g0ComponentDigest=sha256:339023c10f05c06f3b4a5586b9892d0f1085af17e9d41f1a417d911ae437aa85
+g0EvidenceBundleDigest=sha256:af32fff4bdc934cb6dfec9f4e9d6429c6b1c8b393bbf431d3ac664aa44fd1b66
+g0SnapshotId=sha256:28d1f7bba3a7fe95ddde1b939a1f0995da1437f616474873d95342759348a50c
 catalogMigrationDigest=sha256:47a56fe77d690c26c94e5722a3e5c13070519eda4a780d9702f31669bc29e9df
-attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback
+g0CatalogMigrationDigest=sha256:2ec64789759db2f6c6b189b6942a85e48bc1e18d24c301f4cb2bd88cb29b2800
+attained=run_registered, public_c0_spool_catalog_closed, component_restart_readback,
+         store_resolved_fixture_source, headed_cockpit_v2_publication,
+         partial_scientific_memory, nonempty_v10_export_import, v10_export_recovered,
+         artifact_bearing_backup_restore, g0_component_28_prefix_recovery
 fullOfflineFaultWalk=false; boundedNonfixture=false; restartRecovered=false;
 sustainedObserved=false; liveReadOnly=false; preliminaryEmberUse=false;
 criticalSurfaceAccessibility=false; broadParity=false
-claim=offline_run_registration_and_public_c0_spool_catalog_closure_only
+claim=offline_run_registration_public_c0_and_partial_g0_component_closure_only
 ```
 
 The ignition detail (`ignition-readiness.json`) independently reports
@@ -83,6 +92,11 @@ The ignition detail (`ignition-readiness.json`) independently reports
 `acceptedCommitSeq=1`, `retryStatus=idempotent`, `changedSameIdRefused=true`,
 `durableProgressCount=2`, `circulationClosed=true`, `originSegmentRetained=true`,
 `catalogAckReverified=true`, `restartReverified=true`, and `providerIo=false`.
+
+The same root invocation executes `wave5-g0-source-publication`, checks its fifteen-role evidence
+bundle and nonempty V10 snapshot identity, and refuses to emit the witness if any partial component
+closure or negative qualification bit changes. This is a root-gate pass over an explicitly partial
+offline component, not a W5-G0/product/live pass.
 
 There is no red package/root gate in this current run. The remaining blockers are semantic
 qualification gates, not compile/test/tooling failures: no live provider I/O, no sustained

@@ -121,18 +121,19 @@ cargo test --locked --offline -p joshi-operational-status
 
 The migration validator, combined admission/artifact/store/core tests, operational-status and
 mechanics-capability tests, and strict focused Clippy gates pass at this handoff. The standalone
-`wave5-ignition-readiness` command also emits the expected V9 `useful_partial` result. The full root
-script is not recorded as passing yet: its preserved Wave 4 workspace gate encountered a concurrent
-scientific-memory compile failure outside this lane, so no root PASS is inferred from focused gates.
+`wave5-ignition-readiness` command also emits the expected V9 `useful_partial` result. A fresh full
+`./scripts/wave5-readiness` run now passes the preserved workspace gate and executes both the C0
+ignition component and the joined partial G0 component. Its schema-V3 witness binds the exact G0
+component file, fifteen-role evidence bundle, V10 snapshot and V9/V10 migration digests while
+keeping every root/product/live qualification false.
 
 The final script output must continue to state `useful_partial`,
 `qualification.fullOfflineFaultWalk: false`, and false for bounded-nonfixture,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
-occurrences prove those states. The C0 component walk may report
+occurrences prove those states. The C0 component walk reports
 `public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because complete
-memory, default product mount, and the full backup/restore crash
-boundary remain open. The
-separate `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
+memory, default product mount, and the full 37-scenario crash boundary remain open. The separate
+`wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
 reservation/accounting prefix before the no-network attempt. The supervisor fsyncs the Pump

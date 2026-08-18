@@ -47,8 +47,9 @@ export now uses its parser dependencies, and Core exercises the private store wr
 exact input backup and registered CAS import through the 24-table commit/reopen path. The root
 cannot infer persistence or semantic verification from a public port, import or package edge. The
 G0 component now joins its supervisor reservation and exact Pump batch to the sole store/catalog
-origin; the older readiness command still emits component booleans rather than an artifact-bearing
-root evidence bundle.
+origin. The root readiness wrapper executes that component and binds its report digest, fifteen-role
+evidence-bundle digest and V10 snapshot ID into a schema-V3 witness. The witness remains a partial
+artifact index rather than a completed root occurrence and keeps every qualification bit false.
 
 ## Per-component gate ledger
 
@@ -380,7 +381,7 @@ the original paths unavailable.
 
 The harness freezes baseline plus all 18 before/after crash scenarios and its V1 result can never
 emit `fullOfflineFaultWalk:true`. It is now a root-workspace library with six tests. Core supplies
-thirteen artifact digests rederived from its owner/store objects; the harness maps those roles
+fifteen artifact digests rederived from its owner/store objects; the harness maps those roles
 one-to-one to `observed_partial` and refuses hidden/duplicate/missing-role evidence. This is a
 **PASS for strict partial baseline accounting only**. The harness does not independently open the
 artifacts, and no positive authority follows from its digest. Unimplemented seams remain typed,
