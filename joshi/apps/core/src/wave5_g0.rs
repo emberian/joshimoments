@@ -61,6 +61,10 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterMemoryEpisode,
     BeforeStatus,
     AfterStatus,
+    BeforeBackup,
+    AfterBackup,
+    BeforeRestore,
+    AfterRestore,
 }
 
 /// Exact component evidence. Every positive field is reverified after a read-only reopen.
@@ -101,6 +105,13 @@ pub struct Wave5G0SourcePublicationReport {
     pub status_record_id: String,
     pub status_record_digest: String,
     pub store_progress_count: usize,
+    pub backup_id: String,
+    pub backup_catalog_digest: String,
+    pub backup_inventory_digest: String,
+    pub backup_artifact_count: u64,
+    pub restore_id: String,
+    pub restore_readback_digest: String,
+    pub restored_max_commit_seq: u64,
     pub partial_fault_result: G0Result,
     pub source_semantics_closed: bool,
     pub supervisor_reservation_closed: bool,
@@ -108,6 +119,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
     pub partial_status_closed: bool,
+    pub partial_backup_restore_closed: bool,
     pub restart_reverified: bool,
     pub full_offline_fault_walk: bool,
     pub provider_io: bool,
@@ -143,7 +155,9 @@ pub fn run_wave5_g0_source_publication_with_fault(
     fault: Option<Wave5G0SourcePublicationFaultPoint>,
 ) -> Result<Wave5G0SourcePublicationReport, Wave5G0SourcePublicationError> {
     let (registration, bundle, _) = fixture_registration_bundles()?;
-    let mut store = SqliteStore::open(config(state)?, StoreMode::SingleWriter)?;
+    let mut store_config = config(state)?;
+    store_config.inline_blob_max_bytes = 1024;
+    let mut store = SqliteStore::open(store_config, StoreMode::SingleWriter)?;
     store.migrate(now()?)?;
     let run_id = StableString::new(registration.run_id.clone())?;
     let registration_context = store.begin_wave5_commit(
@@ -474,9 +488,60 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "degraded status does not strictly follow the memory prefix",
         ));
     }
+    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeBackup)?;
+    let backup_id = StableString::new("backup:wave5-g0-partial-0001")?;
+    let backup_catalog = state.join("g0-backup/catalog.sqlite");
+    let backup_artifacts = state.join("g0-backup/artifacts");
+    let backup_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:source-publication:backup")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let backup = store.commit_wave5_g0_backup_v1(
+        &backup_id,
+        &run_id,
+        &backup_catalog,
+        &backup_artifacts,
+        &backup_context,
+    )?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterBackup)?;
+    if backup.artifact_count == 0
+        || status.available_commit_seq >= backup.source_max_commit_seq
+        || backup.source_max_commit_seq >= backup.commit_seq
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "backup did not close a nonempty post-status immutable inventory",
+        ));
+    }
+    inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeRestore)?;
+    let restore_id = StableString::new("restore:wave5-g0-partial-0001")?;
+    let restored_catalog = state.join("g0-restore/catalog.sqlite");
+    let restored_artifacts = state.join("g0-restore/artifacts");
+    let restore_context = store.begin_wave5_commit(
+        StableString::new("wave5:g0:source-publication:restore")?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let restore = store.commit_wave5_g0_backup_restore_v1(
+        &restore_id,
+        &backup_id,
+        &restored_catalog,
+        &restored_artifacts,
+        &restore_context,
+    )?;
+    inject(fault, Wave5G0SourcePublicationFaultPoint::AfterRestore)?;
+    if restore.restored_catalog_digest != backup.catalog_digest
+        || restore.artifact_inventory_digest != backup.artifact_inventory_digest
+        || restore.restored_max_commit_seq != backup.source_max_commit_seq
+        || backup.commit_seq >= restore.commit_seq
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "restore did not close the exact artifact-bearing backup",
+        ));
+    }
     drop(store);
 
-    let reopened = SqliteStore::open(config(state)?, StoreMode::ReadOnly)?;
+    let mut reopened_config = config(state)?;
+    reopened_config.inline_blob_max_bytes = 1024;
+    let reopened = SqliteStore::open(reopened_config, StoreMode::ReadOnly)?;
     let reopened_registration = reopened.load_wave5_run_registration_v1(&run_id)?.ok_or(
         Wave5G0SourcePublicationError::Invariant("run registration was absent after restart"),
     )?;
@@ -514,6 +579,18 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "degraded status occurrence was absent after restart",
         ))?;
     let reopened_store_status_view = reopened.load_wave5_store_status_view_v1(&run_id)?;
+    let reopened_backup = reopened.load_wave5_g0_backup_v1(&backup_id)?.ok_or(
+        Wave5G0SourcePublicationError::Invariant("backup occurrence was absent after restart"),
+    )?;
+    let reopened_restore = reopened
+        .load_wave5_g0_backup_restore_v1(&restore_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "restore occurrence was absent after restart",
+        ))?;
+    let mut expected_backup = backup.clone();
+    expected_backup.status = IdempotencyStatus::Accepted;
+    let mut expected_restore = restore.clone();
+    expected_restore.status = IdempotencyStatus::Accepted;
     if reopened_source != source
         || reopened_preparation != preparation
         || reopened_publication != publication
@@ -522,6 +599,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         || reopened_episode != episode
         || reopened_status != status
         || reopened_store_status_view != store_status_view
+        || reopened_backup != expected_backup
+        || reopened_restore != expected_restore
     {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "restart changed source/publication exact truth",
@@ -544,6 +623,8 @@ pub fn run_wave5_g0_source_publication_with_fault(
         episode_receipt.occurrence_id(),
         episode_receipt.occurrence_digest(),
         &status,
+        &backup,
+        &restore,
     )?;
 
     Ok(Wave5G0SourcePublicationReport {
@@ -580,6 +661,13 @@ pub fn run_wave5_g0_source_publication_with_fault(
         status_record_id: status.record_id.to_string(),
         status_record_digest: status.record_bytes_digest.to_string(),
         store_progress_count: store_status_view.durable_progress.len(),
+        backup_id: backup.backup_id.to_string(),
+        backup_catalog_digest: backup.catalog_digest.to_string(),
+        backup_inventory_digest: backup.artifact_inventory_digest.to_string(),
+        backup_artifact_count: backup.artifact_count,
+        restore_id: restore.restore_id.to_string(),
+        restore_readback_digest: restore.readback_digest.to_string(),
+        restored_max_commit_seq: restore.restored_max_commit_seq.get(),
         partial_fault_result,
         source_semantics_closed: true,
         supervisor_reservation_closed: true,
@@ -587,6 +675,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
         partial_status_closed: true,
+        partial_backup_restore_closed: true,
         restart_reverified: true,
         full_offline_fault_walk: false,
         provider_io: false,
@@ -612,6 +701,8 @@ fn partial_fault_result(
     episode_id: &StableString,
     episode_digest: &joshi_domain::ValueDigest,
     status: &joshi_store::Wave5G0StatusOccurrence,
+    backup: &joshi_store::Wave5G0BackupOccurrence,
+    restore: &joshi_store::Wave5G0BackupRestoreOccurrence,
 ) -> Result<G0Result, Wave5G0SourcePublicationError> {
     let schedule: FakeFaultSchedule = serde_json::from_slice(include_bytes!(
         "../../../fixtures/g0-fault/fake_fault_schedule.json"
@@ -690,6 +781,16 @@ fn partial_fault_result(
                 role: EvidenceRole::StatusReadback,
                 evidence_id: status.record_id.to_string(),
                 content_digest: status.record_bytes_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::BackupManifest,
+                evidence_id: backup.backup_id.to_string(),
+                content_digest: Sha256Digest::of_bytes(&backup.manifest_bytes).to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::RestoreReadback,
+                evidence_id: restore.restore_id.to_string(),
+                content_digest: restore.readback_digest.to_string(),
             },
         ],
         digest: String::new(),
@@ -837,8 +938,10 @@ mod tests {
         assert!(report.publication_prepare_body_head_closed);
         assert!(report.partial_memory_chain_closed);
         assert!(report.partial_status_closed);
+        assert!(report.partial_backup_restore_closed);
         assert_eq!(report.memory_queue_through, 2);
         assert!(report.store_progress_count >= 2);
+        assert!(report.backup_artifact_count > 0);
         assert!(report.supervisor_reservation_closed);
         assert!(report.supervisor_origin_handoff_closed);
         assert!(report.origin_segment_id.starts_with("segment-attempt-"));
@@ -860,7 +963,27 @@ mod tests {
             .expect("status evidence");
         assert_eq!(status_evidence.evidence_id, report.status_record_id);
         assert_eq!(status_evidence.content_digest, report.status_record_digest);
-        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 11);
+        let backup_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::BackupManifest)
+            .expect("backup evidence");
+        assert_eq!(backup_evidence.evidence_id, report.backup_id);
+        let restore_evidence = report
+            .partial_fault_result
+            .evidence_bundle
+            .items
+            .iter()
+            .find(|value| value.role == EvidenceRole::RestoreReadback)
+            .expect("restore evidence");
+        assert_eq!(restore_evidence.evidence_id, report.restore_id);
+        assert_eq!(
+            restore_evidence.content_digest,
+            report.restore_readback_digest
+        );
+        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 13);
         assert_eq!(
             report
                 .partial_fault_result
@@ -870,7 +993,7 @@ mod tests {
                     value.disposition == joshi_g0_harness::StepDisposition::ObservedPartial
                 })
                 .count(),
-            11
+            13
         );
         assert!(
             !report
@@ -905,6 +1028,10 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
             Wave5G0SourcePublicationFaultPoint::BeforeStatus,
             Wave5G0SourcePublicationFaultPoint::AfterStatus,
+            Wave5G0SourcePublicationFaultPoint::BeforeBackup,
+            Wave5G0SourcePublicationFaultPoint::AfterBackup,
+            Wave5G0SourcePublicationFaultPoint::BeforeRestore,
+            Wave5G0SourcePublicationFaultPoint::AfterRestore,
         ];
         for point in points {
             let state = tempfile::tempdir().expect("temporary G0 fault state");

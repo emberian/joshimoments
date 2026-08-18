@@ -138,7 +138,7 @@ reservation/accounting prefix before the no-network attempt. The supervisor fsyn
 adapter's exact semantic batch with no store digest; the store consumes those same segment bytes,
 then binds its receipt to the run before the supervisor spool records the ACK. The full crash
 matrix, default product mount, complete memory closure, export/import, positive status recovery and
-backup/restore remain outside that component.
+final no-original-root reopen remain outside that component.
 The component now also
 retains one exact headed-scene act and partial unresolved episode; complete session/outcome/reveal/
 interview memory closure remains outside it. This component exercises the canonical Pump policy
@@ -148,6 +148,12 @@ After the memory prefix, the component also persists and reopens one exact same-
 degradation. It first resolves the store-derived run-registration and spool-catalog progress rows,
 then records the negative operational fact after the episode commit. This proves a durable degraded
 status only; it neither records `Ready` nor claims recovery, export completion, or root readiness.
+The component uses a 1 KiB inline threshold so the retained source body produces one genuine
+external immutable object, then executes the store-owned backup and restore writers into distinct
+roots. It requires a nonempty inventory, exact retry, restored catalog/artifact digest equality and
+read-only restart verification. The supervisor spool remains outside that store inventory and the
+original roots remain available, so this is partial backup/restore evidence rather than the final
+root recovery proof.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a
@@ -155,9 +161,10 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 `Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
 recorded as Glass use or as a completed root occurrence.
 
-The component report now embeds a strict G0 V1 partial fault result. Eleven baseline artifacts are
+The component report now embeds a strict G0 V1 partial fault result. Thirteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,
-prepare, head, act, episode, and status), and each maps one-to-one to `observed_partial`. The provider plan
+prepare, head, act, episode, status, backup, and restore), and each maps one-to-one to
+`observed_partial`. The provider plan
 binds the same registered run and exact fixture digest before its no-network attempt. The runtime
 fsyncs the exact Pump batch as the sole origin subsequently consumed by store/catalog; no second
 segment is generated. The remaining roles and full 37-scenario matrix are absent, and both the embedded and outer

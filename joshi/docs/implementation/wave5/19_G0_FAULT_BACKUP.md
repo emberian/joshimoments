@@ -104,15 +104,16 @@ catalog ACK, source/fact artifact, publication prepare/head, pairing and Glass
 read, memory act/episode, export/import, status, backup, restore, and reopen.
 It must bind the corresponding physical bytes or store readback—not booleans.
 The adapter-free result legitimately emits an empty, correctly digested bundle.
-The current Core component result carries eleven exact roles: supervisor reservation,
+The current Core component result carries thirteen exact roles: supervisor reservation,
 origin segment, store receipt, catalog binding, catalog ACK, semantic fact,
 publication prepare, publication head, memory act, memory episode, and durable degraded-status
-readback. Their identities may contain
+readback, plus an artifact-bearing backup manifest and distinct-root restore readback. Their identities may contain
 the colon separators used by actual store/spool contracts. The reservation and later origin are
 now one ordered handoff: the supervisor fsyncs the exact Pump batch and the store consumes that
 same immutable segment before the run binding and ACK. Pairing/Glass fault evidence,
-export/import, positive status recovery, backup, restore, and final
-root reopen remain absent and therefore cannot appear `observed_partial`.
+export/import, positive status recovery, and final root reopen remain absent and therefore cannot
+appear `observed_partial`. The partial backup contains the store-reachable external source object,
+but not the separate supervisor spool inventory, and does not make the original roots unavailable.
 
 ## Backup, restore, and reopen requirements
 
