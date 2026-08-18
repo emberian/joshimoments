@@ -188,11 +188,12 @@ fresh-state scenarios. This closes the baseline recovery set and those six exact
 crash-safe orchestration of every earlier seam remains part of the unqualified 37-scenario fault
 walk.
 
-The frozen schedule now has an exact compile-time adapter map for 32 of its 36 transition cases.
+The frozen schedule now has an exact typed adapter map for all 36 transition cases.
 Export maps to the private backup-bound V10 commit, import maps to the post-export restricted CAS
-readback, and status maps to `RecoveryVerified/Ready` over the exact export binding. The remaining
-four cases are the before/after pre-I/O reservation and before/after origin-fsync boundaries; no
-result is emitted for any schedule scenario yet, so `fullOfflineFaultWalk` remains false.
+readback, and status maps to `RecoveryVerified/Ready` over the exact export binding. Real child
+processes are killed immediately before/after durable reservation and local-spool fsync; restart
+then proves respectively empty, explicit-gap, or exact-evidence recovery. No root runner emits one
+result and evidence bundle per schedule scenario yet, so `fullOfflineFaultWalk` remains false.
 
 An opt-in Core integration test now joins the same durable Cockpit V2 body/head to ordinary
 SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed response; a

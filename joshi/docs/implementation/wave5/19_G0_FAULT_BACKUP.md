@@ -129,11 +129,11 @@ The one-shot paired route has its own six exact component-local interruptions: b
 exchange, before/after exact Cockpit read, and before/after pairing reopen. Each injected run is
 followed by a fresh-session recovery on the same catalog and an identical response-body check.
 Together with the thirty-two source/publication/memory/export points this is 38 package-local fault
-checks. A separate exact adapter map covers 32 of the frozen schedule's 36 transitions: six
-origin/store transitions, sixteen component transitions, four pairing/Glass transitions, and six
-final backup/restore/reopen transitions. Only before/after pre-I/O reservation and before/after
-origin fsync remain unmapped. Those package-local checks still do not emit a result for each frozen
-scenario and therefore are not a root qualification.
+checks. A separate exact adapter map covers all 36 frozen transitions: four supervisor
+reservation/origin process kills, six store/catalog transitions, sixteen component transitions,
+four pairing/Glass transitions, and six final backup/restore/reopen transitions. Those
+package-local checks still do not emit a result and evidence bundle for each frozen scenario and
+therefore are not a root qualification.
 
 ## Backup, restore, and reopen requirements
 
