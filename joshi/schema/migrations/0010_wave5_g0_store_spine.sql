@@ -249,7 +249,10 @@ CREATE TABLE scientific_memory_occurrence_v1 (
     occurrence_id TEXT PRIMARY KEY CHECK (
         length(occurrence_id) BETWEEN 1 AND 512 AND occurrence_id = trim(occurrence_id)
     ),
-    occurrence_kind TEXT NOT NULL CHECK (occurrence_kind IN ('operator_act', 'episode')),
+    occurrence_kind TEXT NOT NULL CHECK (occurrence_kind IN (
+        'operator_act', 'episode', 'replay', 'session_close', 'knowledge_closure',
+        'outcome_at_horizon', 'interview_disposition'
+    )),
     occurrence_sha256 TEXT NOT NULL UNIQUE CHECK (
         length(occurrence_sha256) = 64 AND occurrence_sha256 NOT GLOB '*[^0-9a-f]*'
     ),
@@ -279,7 +282,8 @@ CREATE TABLE scientific_memory_occurrence_v1 (
         (occurrence_kind = 'operator_act'
             AND opening_act_id IS NULL AND closing_act_id IS NULL)
         OR
-        (occurrence_kind = 'episode' AND opening_act_id IS NOT NULL)
+        (occurrence_kind <> 'operator_act'
+            AND opening_act_id IS NOT NULL AND closing_act_id IS NOT NULL)
     )
 ) STRICT;
 
@@ -291,7 +295,7 @@ BEGIN
         WHERE h.publication_id = NEW.scene_publication_id
           AND h.created_commit_seq < NEW.created_commit_seq
     ) THEN RAISE(ABORT, 'scientific-memory occurrence does not close a prior Cockpit V2 head') END;
-    SELECT CASE WHEN NEW.occurrence_kind = 'episode' AND NOT EXISTS (
+    SELECT CASE WHEN NEW.occurrence_kind <> 'operator_act' AND NOT EXISTS (
         SELECT 1 FROM scientific_memory_occurrence_v1 first_act
         WHERE first_act.occurrence_id = NEW.opening_act_id
           AND first_act.occurrence_kind = 'operator_act'

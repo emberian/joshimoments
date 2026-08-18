@@ -24,9 +24,12 @@ use joshi_publication::{CockpitPublicationId, CockpitV2MembershipKind};
 use joshi_pump_adapter::{PUMP_POLICY_CONTRACT, prepare_direct_with_offline_fixture_selection};
 use joshi_scientific_memory::{
     ActId, ActKind, CatalogCommitSeq, Digest as MemoryDigest, EffectStatus, Episode,
-    EpisodeCompleteness, EpisodeId, EpisodePath, EpisodeSegment, LogicalSessionTick,
-    LotAssociation, MemoryOccurrence, OperatorAct, PresentationBinding, PresentationGap,
-    PresentationGapReason, SceneBinding, SceneId, SceneRef, SegmentId, SessionId,
+    EpisodeCompleteness, EpisodeId, EpisodePath, EpisodeSegment, InterviewDisposition,
+    InterviewDispositionKind, InterviewId, KnowledgeClosure, KnowledgeClosureId, KnowledgeState,
+    LogicalSessionTick, LotAssociation, MemoryOccurrence, OperatorAct, OutcomeAtHorizon, OutcomeId,
+    OutcomeState, OutcomeVisibility, PresentationBinding, PresentationGap, PresentationGapReason,
+    Qualification, ReplayArtifact, ReplayContentRole, ReplayId, ReplayPhase, SceneBinding, SceneId,
+    SceneRef, SegmentId, SessionClose, SessionCloseStatus, SessionId,
 };
 use joshi_spool::SpoolConfig;
 use joshi_store::{
@@ -83,6 +86,8 @@ pub enum Wave5G0SourcePublicationFaultPoint {
     AfterMemoryAct,
     BeforeMemoryEpisode,
     AfterMemoryEpisode,
+    BeforeMemoryClosure,
+    AfterMemoryClosure,
     BeforeStatus,
     AfterStatus,
     BeforeExportRecoveryStart,
@@ -135,6 +140,9 @@ pub struct Wave5G0SourcePublicationReport {
     pub memory_act_digest: String,
     pub memory_episode_id: String,
     pub memory_episode_digest: String,
+    pub memory_terminal_id: String,
+    pub memory_terminal_digest: String,
+    pub memory_closure_count: usize,
     pub memory_queue_through: u64,
     pub baseline_export_binding_id: String,
     pub baseline_export_snapshot_id: String,
@@ -162,6 +170,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub supervisor_origin_handoff_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
+    pub censored_memory_chain_closed: bool,
     pub baseline_export_import_closed: bool,
     pub nonempty_v10_export_closed: bool,
     pub partial_status_closed: bool,
@@ -507,13 +516,14 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
 
-    let (act_bytes, episode_bytes) = memory_fixture(&publication)?;
+    let memory_fixture = memory_fixture(&publication)?;
     inject(fault, Wave5G0SourcePublicationFaultPoint::BeforeMemoryAct)?;
     let act_context = store.begin_wave5_commit(
         StableString::new("wave5:g0:source-publication:memory-act")?,
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     )?;
-    let act_receipt = store.commit_scientific_memory_occurrence_v1(&act_bytes, &act_context)?;
+    let act_receipt =
+        store.commit_scientific_memory_occurrence_v1(&memory_fixture.act, &act_context)?;
     inject(fault, Wave5G0SourcePublicationFaultPoint::AfterMemoryAct)?;
     inject(
         fault,
@@ -524,7 +534,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         StableString::new(env!("CARGO_PKG_VERSION"))?,
     )?;
     let episode_receipt =
-        store.commit_scientific_memory_occurrence_v1(&episode_bytes, &episode_context)?;
+        store.commit_scientific_memory_occurrence_v1(&memory_fixture.episode, &episode_context)?;
     inject(
         fault,
         Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
@@ -549,6 +559,55 @@ pub fn run_wave5_g0_source_publication_with_fault(
             "memory act/episode commit or queue order is not strict",
         ));
     }
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::BeforeMemoryClosure,
+    )?;
+    let mut memory_closure_receipts = Vec::with_capacity(memory_fixture.closure.len());
+    let mut previous_memory_commit = episode.commit_seq;
+    let mut previous_queue_generation = episode.queue_generation;
+    for (index, bytes) in memory_fixture.closure.iter().enumerate() {
+        let context = store.begin_wave5_commit(
+            StableString::new(format!(
+                "wave5:g0:source-publication:memory-closure-{:02}",
+                index + 1
+            ))?,
+            StableString::new(env!("CARGO_PKG_VERSION"))?,
+        )?;
+        let receipt = store.commit_scientific_memory_occurrence_v1(bytes, &context)?;
+        let loaded = store
+            .load_scientific_memory_occurrence_v1(receipt.occurrence_id())?
+            .ok_or(Wave5G0SourcePublicationError::Invariant(
+                "censored memory occurrence was absent immediately after commit",
+            ))?;
+        if previous_memory_commit >= loaded.commit_seq
+            || previous_queue_generation.checked_add(1) != Some(loaded.queue_generation)
+            || receipt.commit_seq() != loaded.commit_seq
+            || receipt.queue_generation() != loaded.queue_generation
+        {
+            return Err(Wave5G0SourcePublicationError::Invariant(
+                "censored memory commit or queue order is not strict",
+            ));
+        }
+        previous_memory_commit = loaded.commit_seq;
+        previous_queue_generation = loaded.queue_generation;
+        memory_closure_receipts.push(receipt);
+    }
+    inject(
+        fault,
+        Wave5G0SourcePublicationFaultPoint::AfterMemoryClosure,
+    )?;
+    let memory_terminal_receipt =
+        memory_closure_receipts
+            .last()
+            .ok_or(Wave5G0SourcePublicationError::Invariant(
+                "censored memory closure is empty",
+            ))?;
+    let memory_terminal = store
+        .load_scientific_memory_occurrence_v1(memory_terminal_receipt.occurrence_id())?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "censored memory terminal was absent immediately after commit",
+        ))?;
     let initial_store_status_view = store.load_wave5_store_status_view_v1(&run_id)?;
     if initial_store_status_view.durable_progress.len() < 2
         || !initial_store_status_view
@@ -607,7 +666,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
             stored
         };
     inject(fault, Wave5G0SourcePublicationFaultPoint::AfterStatus)?;
-    if episode.commit_seq >= degraded_status.available_commit_seq {
+    if memory_terminal.commit_seq >= degraded_status.available_commit_seq {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "degraded status does not strictly follow the memory prefix",
         ));
@@ -814,6 +873,16 @@ pub fn run_wave5_g0_source_publication_with_fault(
         .ok_or(Wave5G0SourcePublicationError::Invariant(
             "memory episode was absent after restart",
         ))?;
+    let mut reopened_memory_closure = Vec::with_capacity(memory_closure_receipts.len());
+    for receipt in &memory_closure_receipts {
+        reopened_memory_closure.push(
+            reopened
+                .load_scientific_memory_occurrence_v1(receipt.occurrence_id())?
+                .ok_or(Wave5G0SourcePublicationError::Invariant(
+                    "censored memory occurrence was absent after restart",
+                ))?,
+        );
+    }
     let reopened_export = reopened
         .load_wave5_g0_export_occurrence_v1(&baseline.export.export_binding_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -854,6 +923,18 @@ pub fn run_wave5_g0_source_publication_with_fault(
         || reopened_head != head
         || reopened_act != act
         || reopened_episode != episode
+        || reopened_memory_closure.last() != Some(&memory_terminal)
+        || reopened_memory_closure.len() != memory_closure_receipts.len()
+        || reopened_memory_closure
+            .iter()
+            .zip(&memory_fixture.closure)
+            .zip(&memory_closure_receipts)
+            .any(|((loaded, bytes), receipt)| {
+                loaded.occurrence_bytes != *bytes
+                    || &loaded.occurrence_digest != receipt.occurrence_digest()
+                    || loaded.commit_seq != receipt.commit_seq()
+                    || loaded.queue_generation != receipt.queue_generation()
+            })
         || reopened_export != baseline.export
         || reopened_import != baseline.import
         || reopened_v10_export_binding != v10_export_binding
@@ -919,7 +1000,10 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_act_digest: act_receipt.occurrence_digest().to_string(),
         memory_episode_id: episode_receipt.occurrence_id().to_string(),
         memory_episode_digest: episode_receipt.occurrence_digest().to_string(),
-        memory_queue_through: episode_receipt.queue_generation(),
+        memory_terminal_id: memory_terminal_receipt.occurrence_id().to_string(),
+        memory_terminal_digest: memory_terminal_receipt.occurrence_digest().to_string(),
+        memory_closure_count: memory_closure_receipts.len(),
+        memory_queue_through: memory_terminal_receipt.queue_generation(),
         baseline_export_binding_id: baseline.export.export_binding_id.to_string(),
         baseline_export_snapshot_id: baseline.export.snapshot_id.to_string(),
         baseline_import_id: baseline.import.import_id.to_string(),
@@ -946,6 +1030,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         supervisor_origin_handoff_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
+        censored_memory_chain_closed: true,
         baseline_export_import_closed: true,
         nonempty_v10_export_closed: true,
         partial_status_closed: true,
@@ -1660,9 +1745,16 @@ pub fn offline_fixture_store_config(
     Ok(value)
 }
 
+struct CensoredMemoryFixture {
+    act: Vec<u8>,
+    episode: Vec<u8>,
+    closure: Vec<Vec<u8>>,
+}
+
+#[allow(clippy::too_many_lines)]
 fn memory_fixture(
     publication: &joshi_store::StoredCockpitV2Publication,
-) -> Result<(Vec<u8>, Vec<u8>), Wave5G0SourcePublicationError> {
+) -> Result<CensoredMemoryFixture, Wave5G0SourcePublicationError> {
     let scene = SceneRef {
         scene_id: memory_value(SceneId::new(
             publication.publication.publication_id.to_string(),
@@ -1679,7 +1771,7 @@ fn memory_fixture(
         scene: SceneBinding::Committed(scene.clone()),
         presentation: PresentationBinding::Gap(PresentationGap {
             gap_id: "g0-presentation-gap-0001".into(),
-            scene: Some(scene),
+            scene: Some(scene.clone()),
             reason: PresentationGapReason::NotMounted,
             detected_at: memory_value(LogicalSessionTick::new(11))?,
         }),
@@ -1718,7 +1810,91 @@ fn memory_fixture(
             },
         ],
     });
-    Ok((serde_json::to_vec(&act)?, serde_json::to_vec(&episode)?))
+    let episode_id = memory_value(EpisodeId::new("g0-episode-0001"))?;
+    let hidden_replay_id = memory_value(ReplayId::new("g0-replay-hidden-0001"))?;
+    let hidden_replay = MemoryOccurrence::Replay(ReplayArtifact {
+        replay_id: hidden_replay_id.clone(),
+        episode_id: episode_id.clone(),
+        phase: ReplayPhase::OutcomeHiddenReconstruction,
+        visibility: OutcomeVisibility::Hidden,
+        content_role: ReplayContentRole::OutcomeHiddenReconstruction,
+        information_cutoff: memory_value(LogicalSessionTick::new(12))?,
+        witnessed_scene: Some(scene.clone()),
+        blob_digest: MemoryDigest::of_bytes(b"g0 outcome-hidden reconstruction"),
+        recorded_at: memory_value(LogicalSessionTick::new(21))?,
+        qualification: Qualification::UnverifiedSemantic,
+    });
+    let session_close = MemoryOccurrence::SessionClose(SessionClose {
+        session_id: memory_value(SessionId::new("g0-session-0001"))?,
+        closed_at: memory_value(LogicalSessionTick::new(22))?,
+        status: SessionCloseStatus::IncompleteLate,
+        cutoff: memory_value(LogicalSessionTick::new(20))?,
+        recorded_at: memory_value(LogicalSessionTick::new(22))?,
+        committed_at: memory_value(LogicalSessionTick::new(23))?,
+        qualification: Qualification::UnverifiedSemantic,
+    });
+    let knowledge_id = memory_value(KnowledgeClosureId::new("g0-knowledge-0001"))?;
+    let knowledge = MemoryOccurrence::KnowledgeClosure(KnowledgeClosure {
+        closure_id: knowledge_id.clone(),
+        episode_id: episode_id.clone(),
+        knowledge_deadline: memory_value(LogicalSessionTick::new(25))?,
+        evidence_cutoff: memory_value(LogicalSessionTick::new(24))?,
+        gap_ids: vec!["g0-outcome-source-gap-0001".into()],
+        state: KnowledgeState::Partial,
+        recorded_at: memory_value(LogicalSessionTick::new(26))?,
+        committed_at: memory_value(LogicalSessionTick::new(27))?,
+        qualification: Qualification::UnverifiedSemantic,
+    });
+    let outcome = MemoryOccurrence::OutcomeAtHorizon(OutcomeAtHorizon {
+        outcome_id: memory_value(OutcomeId::new("g0-outcome-0001"))?,
+        episode_id: episode_id.clone(),
+        horizon: memory_value(LogicalSessionTick::new(30))?,
+        knowledge_closure_id: knowledge_id,
+        state: OutcomeState::Missing {
+            reason: "source gap retained at the knowledge deadline".into(),
+        },
+        interpretation: None,
+        outcome_known_at: memory_value(LogicalSessionTick::new(31))?,
+        recorded_at: memory_value(LogicalSessionTick::new(32))?,
+        committed_at: memory_value(LogicalSessionTick::new(33))?,
+        qualification: Qualification::UnverifiedSemantic,
+    });
+    let retrospective = MemoryOccurrence::Replay(ReplayArtifact {
+        replay_id: memory_value(ReplayId::new("g0-replay-retrospective-0001"))?,
+        episode_id: episode_id.clone(),
+        phase: ReplayPhase::RetrospectiveInterpretation,
+        visibility: OutcomeVisibility::Revealed {
+            reveal_id: hidden_replay_id,
+            revealed_at: memory_value(LogicalSessionTick::new(33))?,
+        },
+        content_role: ReplayContentRole::RetrospectiveInterpretation,
+        information_cutoff: memory_value(LogicalSessionTick::new(12))?,
+        witnessed_scene: Some(scene),
+        blob_digest: MemoryDigest::of_bytes(b"g0 retrospective censored interpretation"),
+        recorded_at: memory_value(LogicalSessionTick::new(34))?,
+        qualification: Qualification::UnverifiedSemantic,
+    });
+    let interview = MemoryOccurrence::InterviewDisposition(InterviewDisposition {
+        interview_id: memory_value(InterviewId::new("g0-interview-0001"))?,
+        episode_id,
+        disposition: InterviewDispositionKind::CannotRecall,
+        recorded_at: memory_value(LogicalSessionTick::new(35))?,
+    });
+    Ok(CensoredMemoryFixture {
+        act: serde_json::to_vec(&act)?,
+        episode: serde_json::to_vec(&episode)?,
+        closure: [
+            hidden_replay,
+            session_close,
+            knowledge,
+            outcome,
+            retrospective,
+            interview,
+        ]
+        .into_iter()
+        .map(|occurrence| serde_json::to_vec(&occurrence))
+        .collect::<std::result::Result<Vec<_>, _>>()?,
+    })
 }
 
 fn memory_value<T>(value: Result<T, String>) -> Result<T, Wave5G0SourcePublicationError> {
@@ -1771,6 +1947,7 @@ pub enum Wave5G0SourcePublicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use joshi_scientific_memory::parse_memory_occurrence_exact;
 
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -1789,7 +1966,10 @@ mod tests {
         assert!(report.partial_status_closed);
         assert!(report.v10_export_recovery_closed);
         assert!(report.partial_backup_restore_closed);
-        assert_eq!(report.memory_queue_through, 2);
+        assert_eq!(report.memory_closure_count, 6);
+        assert_eq!(report.memory_queue_through, 8);
+        assert_eq!(report.memory_terminal_id, "interview:g0-interview-0001");
+        assert!(report.censored_memory_chain_closed);
         assert!(report.store_progress_count >= 2);
         assert!(report.backup_artifact_count > 0);
         assert!(report.supervisor_reservation_closed);
@@ -1883,6 +2063,185 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn fixture_store_refuses_complete_knowledge_and_available_outcome_claims() {
+        let state = tempfile::tempdir().expect("temporary G0 memory refusal state");
+        let report = run_wave5_g0_source_publication(state.path()).expect("G0 component witness");
+        let mut store = SqliteStore::open(
+            offline_fixture_store_config(state.path()).expect("fixture store config"),
+            StoreMode::SingleWriter,
+        )
+        .expect("reopen fixture writer");
+        let publication_id = CockpitPublicationId::new(report.publication_id).expect("publication");
+        let publication = store
+            .load_cockpit_v2_publication_v1(&publication_id)
+            .expect("load publication")
+            .expect("publication exists");
+        let fixture = memory_fixture(&publication).expect("memory fixture");
+        let MemoryOccurrence::OperatorAct(mut act) =
+            parse_memory_occurrence_exact(&fixture.act).expect("act bytes")
+        else {
+            panic!("fixture act kind changed");
+        };
+        act.act_id = ActId::new("g0-refusal-act").expect("act ID");
+        act.session_id = SessionId::new("g0-refusal-session").expect("session ID");
+        act.occurred_at = LogicalSessionTick::new(40).expect("act tick");
+        let act_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-act").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("act context");
+        store
+            .commit_scientific_memory_occurrence_v1(
+                &serde_json::to_vec(&MemoryOccurrence::OperatorAct(act)).expect("act JSON"),
+                &act_context,
+            )
+            .expect("append refusal act");
+
+        let MemoryOccurrence::Episode(mut episode) =
+            parse_memory_occurrence_exact(&fixture.episode).expect("episode bytes")
+        else {
+            panic!("fixture episode kind changed");
+        };
+        episode.episode_id = EpisodeId::new("g0-refusal-episode").expect("episode ID");
+        episode.session_id = SessionId::new("g0-refusal-session").expect("session ID");
+        episode.act_ids = vec![ActId::new("g0-refusal-act").expect("act ID")];
+        episode.decision_cutoff = LogicalSessionTick::new(42).expect("decision tick");
+        episode.started_at = LogicalSessionTick::new(40).expect("start tick");
+        episode.ended_at = Some(LogicalSessionTick::new(42).expect("end tick"));
+        episode.segments[0].start_at = LogicalSessionTick::new(40).expect("segment tick");
+        episode.segments[0].end_at = Some(LogicalSessionTick::new(41).expect("segment tick"));
+        episode.segments[1].start_at = LogicalSessionTick::new(41).expect("segment tick");
+        episode.segments[1].end_at = Some(LogicalSessionTick::new(42).expect("segment tick"));
+        let episode_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-episode").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("episode context");
+        store
+            .commit_scientific_memory_occurrence_v1(
+                &serde_json::to_vec(&MemoryOccurrence::Episode(episode)).expect("episode JSON"),
+                &episode_context,
+            )
+            .expect("append refusal episode");
+
+        let close = SessionClose {
+            session_id: SessionId::new("g0-refusal-session").expect("session ID"),
+            closed_at: LogicalSessionTick::new(43).expect("close tick"),
+            status: SessionCloseStatus::Complete,
+            cutoff: LogicalSessionTick::new(42).expect("cutoff tick"),
+            recorded_at: LogicalSessionTick::new(43).expect("recorded tick"),
+            committed_at: LogicalSessionTick::new(44).expect("committed tick"),
+            qualification: Qualification::UnverifiedSemantic,
+        };
+        let complete_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-complete").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("complete context");
+        assert!(
+            store
+                .commit_scientific_memory_occurrence_v1(
+                    &serde_json::to_vec(&MemoryOccurrence::SessionClose(close.clone()))
+                        .expect("complete close JSON"),
+                    &complete_context,
+                )
+                .is_err()
+        );
+        let mut incomplete = close;
+        incomplete.status = SessionCloseStatus::IncompleteLate;
+        let session_close_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-close").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("close context");
+        store
+            .commit_scientific_memory_occurrence_v1(
+                &serde_json::to_vec(&MemoryOccurrence::SessionClose(incomplete))
+                    .expect("incomplete close JSON"),
+                &session_close_context,
+            )
+            .expect("append incomplete close");
+
+        let knowledge = KnowledgeClosure {
+            closure_id: KnowledgeClosureId::new("g0-refusal-knowledge").expect("knowledge ID"),
+            episode_id: EpisodeId::new("g0-refusal-episode").expect("episode ID"),
+            knowledge_deadline: LogicalSessionTick::new(46).expect("deadline"),
+            evidence_cutoff: LogicalSessionTick::new(45).expect("evidence cutoff"),
+            gap_ids: Vec::new(),
+            state: KnowledgeState::Closed,
+            recorded_at: LogicalSessionTick::new(47).expect("recorded tick"),
+            committed_at: LogicalSessionTick::new(48).expect("committed tick"),
+            qualification: Qualification::UnverifiedSemantic,
+        };
+        let knowledge_refusal_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-closed-knowledge").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("knowledge context");
+        assert!(
+            store
+                .commit_scientific_memory_occurrence_v1(
+                    &serde_json::to_vec(&MemoryOccurrence::KnowledgeClosure(knowledge.clone()))
+                        .expect("closed knowledge JSON"),
+                    &knowledge_refusal_context,
+                )
+                .is_err()
+        );
+        let mut partial = knowledge;
+        partial.state = KnowledgeState::Partial;
+        partial.gap_ids = vec!["g0-refusal-gap".into()];
+        let knowledge_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-partial-knowledge").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("partial knowledge context");
+        store
+            .commit_scientific_memory_occurrence_v1(
+                &serde_json::to_vec(&MemoryOccurrence::KnowledgeClosure(partial))
+                    .expect("partial knowledge JSON"),
+                &knowledge_context,
+            )
+            .expect("append partial knowledge");
+
+        let available = MemoryOccurrence::OutcomeAtHorizon(OutcomeAtHorizon {
+            outcome_id: OutcomeId::new("g0-refusal-outcome").expect("outcome ID"),
+            episode_id: EpisodeId::new("g0-refusal-episode").expect("episode ID"),
+            horizon: LogicalSessionTick::new(50).expect("horizon"),
+            knowledge_closure_id: KnowledgeClosureId::new("g0-refusal-knowledge")
+                .expect("knowledge ID"),
+            state: OutcomeState::Available {
+                evidence_digest: MemoryDigest::of_bytes(b"unqualified available outcome"),
+            },
+            interpretation: None,
+            outcome_known_at: LogicalSessionTick::new(51).expect("known tick"),
+            recorded_at: LogicalSessionTick::new(52).expect("recorded tick"),
+            committed_at: LogicalSessionTick::new(53).expect("committed tick"),
+            qualification: Qualification::UnverifiedSemantic,
+        });
+        let outcome_context = store
+            .begin_wave5_commit(
+                StableString::new("wave5:g0:memory-refusal-available-outcome").expect("batch"),
+                StableString::new(env!("CARGO_PKG_VERSION")).expect("build"),
+            )
+            .expect("outcome context");
+        assert!(
+            store
+                .commit_scientific_memory_occurrence_v1(
+                    &serde_json::to_vec(&available).expect("available outcome JSON"),
+                    &outcome_context,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn every_source_publication_prefix_resumes_to_one_exact_chain() {
         let points = [
             Wave5G0SourcePublicationFaultPoint::BeforeSemanticFact,
@@ -1897,6 +2256,8 @@ mod tests {
             Wave5G0SourcePublicationFaultPoint::AfterMemoryAct,
             Wave5G0SourcePublicationFaultPoint::BeforeMemoryEpisode,
             Wave5G0SourcePublicationFaultPoint::AfterMemoryEpisode,
+            Wave5G0SourcePublicationFaultPoint::BeforeMemoryClosure,
+            Wave5G0SourcePublicationFaultPoint::AfterMemoryClosure,
             Wave5G0SourcePublicationFaultPoint::BeforeStatus,
             Wave5G0SourcePublicationFaultPoint::AfterStatus,
             Wave5G0SourcePublicationFaultPoint::BeforeExportRecoveryStart,

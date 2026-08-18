@@ -36,8 +36,9 @@ use joshi_publication::{
     parse_cockpit_v2_resolved_source_facts_input, prepare_cockpit_v2_from_resolved_source_facts,
 };
 use joshi_scientific_memory::{
-    EpisodeCompleteness, LotAssociation, MemoryKernel, MemoryOccurrence, PresentationBinding,
-    SceneBinding, parse_memory_occurrence_exact,
+    EpisodeCompleteness, KnowledgeState, LotAssociation, MemoryKernel, MemoryOccurrence,
+    OutcomeState, PresentationBinding, ReplayPhase, SceneBinding, SessionCloseStatus,
+    parse_memory_occurrence_exact,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -1251,7 +1252,7 @@ impl SqliteStore {
             .collect()
     }
 
-    /// Privately admits one exact canonical scientific-memory act or episode.
+    /// Privately admits one exact canonical scientific-memory occurrence.
     ///
     /// G0 remains fixture authority: the store reconstructs the exact prefix, resolves the scene
     /// to an immutable headed Cockpit publication, and does not promote public kernel state.
@@ -1530,10 +1531,335 @@ impl SqliteStore {
                         .map(joshi_scientific_memory::LogicalSessionTick::value),
                 })
             }
-            _ => Err(StoreError::InvalidBatch(
-                "G0 store admits only scientific-memory act/episode occurrences".into(),
+            MemoryOccurrence::Replay(replay) => {
+                let lineage = Self::memory_episode_lineage(connection, &replay.episode_id)?;
+                let Some(witnessed_scene) = &replay.witnessed_scene else {
+                    return Err(StoreError::InvalidBatch(
+                        "durable G0 replay requires the exact witnessed scene".into(),
+                    ));
+                };
+                if witnessed_scene.scene_id.as_str() != lineage.scene_publication.as_str() {
+                    return Err(StoreError::InvalidBatch(
+                        "G0 replay witnessed a foreign scene".into(),
+                    ));
+                }
+                Self::validate_memory_scene(connection, occurrence, &lineage.scene_publication)?;
+                if replay.phase == ReplayPhase::RetrospectiveInterpretation {
+                    let outcome = Self::memory_episode_outcome(connection, &replay.episode_id)?
+                        .ok_or_else(|| {
+                            StoreError::InvalidBatch(
+                                "retrospective replay requires a prior censored outcome".into(),
+                            )
+                        })?;
+                    let joshi_scientific_memory::OutcomeVisibility::Revealed {
+                        revealed_at, ..
+                    } = &replay.visibility
+                    else {
+                        return Err(StoreError::InvalidBatch(
+                            "retrospective replay lacks an explicit reveal".into(),
+                        ));
+                    };
+                    if *revealed_at < outcome.recorded_at || *revealed_at > replay.recorded_at {
+                        return Err(StoreError::InvalidBatch(
+                            "retrospective reveal is outside the stored outcome/replay interval"
+                                .into(),
+                        ));
+                    }
+                }
+                Ok(MemoryMetadata {
+                    kind: "replay",
+                    session_id: lineage.session,
+                    scene_publication_id: lineage.scene_publication,
+                    opening_act_id: Some(lineage.opening_act),
+                    closing_act_id: Some(lineage.closing_act),
+                    start_tick: replay.information_cutoff.value(),
+                    end_tick: Some(replay.recorded_at.value()),
+                })
+            }
+            MemoryOccurrence::SessionClose(close) => {
+                if close.status == SessionCloseStatus::Complete {
+                    return Err(StoreError::InvalidBatch(
+                        "G0 fixture authority cannot claim a complete session".into(),
+                    ));
+                }
+                let lineage = Self::memory_session_lineage(connection, &close.session_id)?;
+                Ok(MemoryMetadata {
+                    kind: "session_close",
+                    session_id: lineage.session,
+                    scene_publication_id: lineage.scene_publication,
+                    opening_act_id: Some(lineage.opening_act),
+                    closing_act_id: Some(lineage.closing_act),
+                    start_tick: close.cutoff.value(),
+                    end_tick: Some(close.closed_at.value()),
+                })
+            }
+            MemoryOccurrence::KnowledgeClosure(knowledge) => {
+                if knowledge.state == KnowledgeState::Closed
+                    || (knowledge.state == KnowledgeState::Partial && knowledge.gap_ids.is_empty())
+                {
+                    return Err(StoreError::InvalidBatch(
+                        "G0 knowledge must remain explicitly gapped and nonclosed".into(),
+                    ));
+                }
+                let lineage = Self::memory_episode_lineage(connection, &knowledge.episode_id)?;
+                Ok(MemoryMetadata {
+                    kind: "knowledge_closure",
+                    session_id: lineage.session,
+                    scene_publication_id: lineage.scene_publication,
+                    opening_act_id: Some(lineage.opening_act),
+                    closing_act_id: Some(lineage.closing_act),
+                    start_tick: knowledge.evidence_cutoff.value(),
+                    end_tick: Some(knowledge.knowledge_deadline.value()),
+                })
+            }
+            MemoryOccurrence::OutcomeAtHorizon(outcome) => {
+                match &outcome.state {
+                    OutcomeState::Available { .. } => {
+                        return Err(StoreError::InvalidBatch(
+                            "G0 fixture authority cannot claim an available outcome".into(),
+                        ));
+                    }
+                    OutcomeState::Missing { reason } | OutcomeState::Unsupported { reason }
+                        if reason.trim().is_empty() || reason.len() > 4096 =>
+                    {
+                        return Err(StoreError::InvalidBatch(
+                            "censored outcome reason is empty or oversized".into(),
+                        ));
+                    }
+                    OutcomeState::Conflicting { evidence_digests }
+                        if evidence_digests.len() < 2 =>
+                    {
+                        return Err(StoreError::InvalidBatch(
+                            "conflicting outcome requires at least two exact evidence digests"
+                                .into(),
+                        ));
+                    }
+                    OutcomeState::Missing { .. }
+                    | OutcomeState::Conflicting { .. }
+                    | OutcomeState::Unsupported { .. }
+                    | OutcomeState::NotApplicableByAbstention => {}
+                }
+                let lineage = Self::memory_episode_lineage(connection, &outcome.episode_id)?;
+                Ok(MemoryMetadata {
+                    kind: "outcome_at_horizon",
+                    session_id: lineage.session,
+                    scene_publication_id: lineage.scene_publication,
+                    opening_act_id: Some(lineage.opening_act),
+                    closing_act_id: Some(lineage.closing_act),
+                    start_tick: outcome.horizon.value(),
+                    end_tick: Some(outcome.outcome_known_at.value()),
+                })
+            }
+            MemoryOccurrence::InterviewDisposition(interview) => {
+                if !Self::memory_has_episode_occurrence(
+                    connection,
+                    &interview.episode_id,
+                    "outcome_at_horizon",
+                )? || !Self::memory_has_episode_occurrence(
+                    connection,
+                    &interview.episode_id,
+                    "retrospective_replay",
+                )? {
+                    return Err(StoreError::InvalidBatch(
+                        "interview requires prior outcome and retrospective replay".into(),
+                    ));
+                }
+                let lineage = Self::memory_episode_lineage(connection, &interview.episode_id)?;
+                Ok(MemoryMetadata {
+                    kind: "interview_disposition",
+                    session_id: lineage.session,
+                    scene_publication_id: lineage.scene_publication,
+                    opening_act_id: Some(lineage.opening_act),
+                    closing_act_id: Some(lineage.closing_act),
+                    start_tick: interview.recorded_at.value(),
+                    end_tick: None,
+                })
+            }
+            MemoryOccurrence::PresentationGapRepair(_)
+            | MemoryOccurrence::ActCorrection(_)
+            | MemoryOccurrence::OntologyVersion(_) => Err(StoreError::InvalidBatch(
+                "G0 store has no reviewed durable adapter for this memory occurrence".into(),
             )),
         }
+    }
+
+    fn memory_episode_lineage(
+        connection: &Connection,
+        episode_id: &joshi_scientific_memory::EpisodeId,
+    ) -> Result<MemoryLineage> {
+        type Row = (Vec<u8>, String, String, String);
+        let occurrence_id = format!("episode:{}", episode_id.as_str());
+        let row: Row = connection
+            .query_row(
+                "SELECT occurrence_bytes,scene_publication_id,opening_act_id,closing_act_id
+                 FROM scientific_memory_occurrence_v1
+                 WHERE occurrence_id=?1 AND occurrence_kind='episode'",
+                [&occurrence_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|_| StoreError::MissingIdentity {
+                kind: "scientific-memory episode",
+                identity: occurrence_id,
+            })?;
+        let occurrence = parse_memory_occurrence_exact(&row.0).map_err(|error| {
+            StoreError::InvalidBatch(format!("stored memory episode lineage: {error}"))
+        })?;
+        let MemoryOccurrence::Episode(episode) = occurrence else {
+            return Err(StoreError::InvalidBatch(
+                "memory episode lineage has the wrong occurrence kind".into(),
+            ));
+        };
+        let expected_opening = episode
+            .act_ids
+            .first()
+            .map(|act| format!("act:{}", act.as_str()));
+        let expected_closing = episode
+            .act_ids
+            .last()
+            .map(|act| format!("act:{}", act.as_str()));
+        if &episode.episode_id != episode_id
+            || expected_opening.as_deref() != Some(row.2.as_str())
+            || expected_closing.as_deref() != Some(row.3.as_str())
+        {
+            return Err(StoreError::InvalidBatch(
+                "memory episode lineage changed identity or act closure".into(),
+            ));
+        }
+        Ok(MemoryLineage {
+            session: stable(episode.session_id.as_str().to_owned())?,
+            scene_publication: CockpitPublicationId::new(row.1)
+                .map_err(|error| StoreError::InvalidBatch(error.to_string()))?,
+            opening_act: stable(row.2)?,
+            closing_act: stable(row.3)?,
+        })
+    }
+
+    fn memory_session_lineage(
+        connection: &Connection,
+        session_id: &joshi_scientific_memory::SessionId,
+    ) -> Result<MemoryLineage> {
+        let mut statement = connection.prepare(
+            "SELECT occurrence_id,occurrence_bytes,scene_publication_id
+             FROM scientific_memory_occurrence_v1
+             WHERE occurrence_kind='operator_act' AND session_id=?1
+             ORDER BY queue_generation",
+        )?;
+        let rows = statement
+            .query_map([session_id.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let Some((first, _, scene)) = rows.first() else {
+            return Err(StoreError::MissingIdentity {
+                kind: "scientific-memory session",
+                identity: session_id.to_string(),
+            });
+        };
+        let Some((last, _, _)) = rows.last() else {
+            unreachable!("nonempty session rows have a last item");
+        };
+        if rows.iter().any(|(id, bytes, candidate)| {
+            if candidate != scene {
+                return true;
+            }
+            let Ok(MemoryOccurrence::OperatorAct(act)) = parse_memory_occurrence_exact(bytes)
+            else {
+                return true;
+            };
+            id != &format!("act:{}", act.act_id.as_str())
+                || &act.session_id != session_id
+                || !matches!(
+                    act.scene,
+                    SceneBinding::Committed(ref value)
+                        if value.scene_id.as_str() == candidate
+                )
+        }) || !Self::memory_session_has_episode(connection, session_id)?
+        {
+            return Err(StoreError::InvalidBatch(
+                "G0 session closure requires one-scene episode lineage".into(),
+            ));
+        }
+        Ok(MemoryLineage {
+            session: stable(session_id.as_str().to_owned())?,
+            scene_publication: CockpitPublicationId::new(scene.clone())
+                .map_err(|error| StoreError::InvalidBatch(error.to_string()))?,
+            opening_act: stable(first.clone())?,
+            closing_act: stable(last.clone())?,
+        })
+    }
+
+    fn memory_session_has_episode(
+        connection: &Connection,
+        session_id: &joshi_scientific_memory::SessionId,
+    ) -> Result<bool> {
+        let mut statement = connection.prepare(
+            "SELECT occurrence_bytes FROM scientific_memory_occurrence_v1
+             WHERE occurrence_kind='episode' AND session_id=?1",
+        )?;
+        for row in statement.query_map([session_id.as_str()], |row| row.get::<_, Vec<u8>>(0))? {
+            let occurrence = parse_memory_occurrence_exact(&row?).map_err(|error| {
+                StoreError::InvalidBatch(format!("stored session episode: {error}"))
+            })?;
+            if matches!(occurrence, MemoryOccurrence::Episode(_)) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn memory_has_episode_occurrence(
+        connection: &Connection,
+        episode_id: &joshi_scientific_memory::EpisodeId,
+        required: &str,
+    ) -> Result<bool> {
+        let mut statement = connection.prepare(
+            "SELECT occurrence_bytes FROM scientific_memory_occurrence_v1
+             ORDER BY queue_generation",
+        )?;
+        for row in statement.query_map([], |row| row.get::<_, Vec<u8>>(0))? {
+            let occurrence = parse_memory_occurrence_exact(&row?).map_err(|error| {
+                StoreError::InvalidBatch(format!("stored memory prerequisite: {error}"))
+            })?;
+            let matches = match (&occurrence, required) {
+                (MemoryOccurrence::OutcomeAtHorizon(value), "outcome_at_horizon") => {
+                    &value.episode_id == episode_id
+                }
+                (MemoryOccurrence::Replay(value), "retrospective_replay") => {
+                    &value.episode_id == episode_id
+                        && value.phase == ReplayPhase::RetrospectiveInterpretation
+                }
+                _ => false,
+            };
+            if matches {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn memory_episode_outcome(
+        connection: &Connection,
+        episode_id: &joshi_scientific_memory::EpisodeId,
+    ) -> Result<Option<joshi_scientific_memory::OutcomeAtHorizon>> {
+        let mut statement = connection.prepare(
+            "SELECT occurrence_bytes FROM scientific_memory_occurrence_v1
+             WHERE occurrence_kind='outcome_at_horizon' ORDER BY queue_generation",
+        )?;
+        for row in statement.query_map([], |row| row.get::<_, Vec<u8>>(0))? {
+            let occurrence = parse_memory_occurrence_exact(&row?).map_err(|error| {
+                StoreError::InvalidBatch(format!("stored censored outcome: {error}"))
+            })?;
+            if let MemoryOccurrence::OutcomeAtHorizon(outcome) = occurrence
+                && &outcome.episode_id == episode_id
+            {
+                return Ok(Some(outcome));
+            }
+        }
+        Ok(None)
     }
 
     fn validate_memory_scene(
@@ -1580,27 +1906,33 @@ impl SqliteStore {
                 "scientific-memory headed scene readback differs".into(),
             ));
         }
-        if let MemoryOccurrence::OperatorAct(act) = occurrence {
-            let SceneBinding::Committed(scene) = &act.scene else {
-                return Err(StoreError::InvalidBatch(
-                    "durable G0 act requires committed scene".into(),
-                ));
-            };
-            if scene.scene_id.as_str() != expected.as_str()
+        let scene = match occurrence {
+            MemoryOccurrence::OperatorAct(act) => {
+                let SceneBinding::Committed(scene) = &act.scene else {
+                    return Err(StoreError::InvalidBatch(
+                        "durable G0 act requires committed scene".into(),
+                    ));
+                };
+                if let PresentationBinding::Occurrence(value) = &act.presentation
+                    && value.scene != *scene
+                {
+                    return Err(StoreError::InvalidBatch(
+                        "presentation occurrence changes exact scene".into(),
+                    ));
+                }
+                Some(scene)
+            }
+            MemoryOccurrence::Replay(replay) => replay.witnessed_scene.as_ref(),
+            _ => None,
+        };
+        if let Some(scene) = scene
+            && (scene.scene_id.as_str() != expected.as_str()
                 || scene.scene_digest.as_str() != body.publication_digest.as_str()
-                || scene.catalog_cutoff.value() != as_u64(row.3, "memory scene commit")?
-            {
-                return Err(StoreError::InvalidBatch(
-                    "scientific-memory scene differs from exact Cockpit publication".into(),
-                ));
-            }
-            if let PresentationBinding::Occurrence(value) = &act.presentation
-                && value.scene != *scene
-            {
-                return Err(StoreError::InvalidBatch(
-                    "presentation occurrence changes exact scene".into(),
-                ));
-            }
+                || scene.catalog_cutoff.value() != as_u64(row.3, "memory scene commit")?)
+        {
+            return Err(StoreError::InvalidBatch(
+                "scientific-memory scene differs from exact Cockpit publication".into(),
+            ));
         }
         Ok(())
     }
@@ -2018,6 +2350,14 @@ struct MemoryMetadata {
     closing_act_id: Option<StableString>,
     start_tick: u64,
     end_tick: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct MemoryLineage {
+    session: StableString,
+    scene_publication: CockpitPublicationId,
+    opening_act: StableString,
+    closing_act: StableString,
 }
 
 fn build_source_capability(
