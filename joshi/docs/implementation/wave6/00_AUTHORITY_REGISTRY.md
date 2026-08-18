@@ -32,6 +32,12 @@ missing prohibitions, and a reclosed nonzero provider budget all refuse.
 The checked-in registration deliberately consumes no Wave 5 gates. Adding a caller-authored gate
 reference cannot raise its ceiling.
 
+The registered fixture kinds currently cover the checked campaign-registration, market-atlas,
+and research-proposal schemas. Registering the campaign schema grants only
+`fixture_campaign_protocol_only`; it explicitly prohibits any prospective result or operational
+campaign inference. The independently bounded N03 contract is documented in
+[11_PROSPECTIVE_CAMPAIGN_CONTRACT.md](11_PROSPECTIVE_CAMPAIGN_CONTRACT.md).
+
 ## Artifact lineage and claim grammar
 
 `ArtifactDagV1` binds the exact program and registration digest, registered artifact kinds,

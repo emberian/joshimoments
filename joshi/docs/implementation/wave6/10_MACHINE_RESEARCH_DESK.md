@@ -96,8 +96,8 @@ not durable proof that a person, clock, review, policy registration, or append-o
 3. requires zero consumed Wave 5 gates, zero provider/external-mutation budgets, the fixed fixture
    data policy, desk operation list, claim/source/output/side-effect prohibitions, artifact claim
    boundaries, and sorted local symbols;
-4. rehashes every registered artifact schema document, including an Arrow-derived market-atlas
-   schema and the research-proposal contract descriptor;
+4. rehashes every registered artifact schema document, including the campaign-registration
+   contract, an Arrow-derived market-atlas schema, and the research-proposal contract descriptor;
 5. rebuilds and evaluates the exact eight-case `N01` signed-flow known-truth suite;
 6. admits that evaluation only as a fixture `DESIGN` descriptor; and
 7. produces one deterministic protocol draft for comparing a separately implemented candidate
