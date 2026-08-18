@@ -1,8 +1,9 @@
 # Wave 5 — Glass sensorium
 
-Status: daily shell and bounded pending transport implemented; live surface and scientific-memory
-qualification remain deliberately disabled until their Rust contracts and exact publication
-vectors pass cross-seam review.
+Status: daily shell, bounded pending transport, and an explicit offline Cockpit V2 inspector are
+implemented. Live surface, scientific-memory, and product-use qualification remain deliberately
+disabled until their complete durable contracts and attached-browser witnesses pass cross-seam
+review.
 
 The reviewed scientific-memory seam now also has a fail-closed browser transport primitive. It
 mirrors the canonical `MemoryOccurrence::OperatorAct` bytes from
@@ -98,6 +99,41 @@ semantics. They will be mirrored only from cross-reviewed Rust DTOs and exact go
 join lands, the current feed is fixture/partial and cannot promote `live_read_only`, product parity,
 critical-task accessibility, or scientific-memory research admission.
 
+## Explicit Cockpit V2 fixture inspector
+
+The default production build still renders the honest unavailable operational shell. Setting
+`VITE_JOSHI_G0_INSPECTOR=1` selects a separate read-only inspector; it never constructs `GlassApp`,
+an operator sink, a presentation sink, or a V1 launch envelope. Its same-origin client consumes
+only the explicit `wave5-g0-inspect` launcher:
+
+```text
+# terminal 1, from the repository root
+cargo run --locked --offline -p joshi-core -- wave5-g0-inspect \
+  --state /tmp/joshi-g0-inspect.manual
+
+# terminal 2
+cd apps/glass
+npm run dev:g0-inspect
+```
+
+Core exact-retries the offline component before it binds, mounts only a `CockpitRead` ordinary
+session, prints one short-lived code after the API listener is bound, and exposes a bounded exact
+head index plus explicit-ID open. Vite preserves the browser's `127.0.0.1:4173` Host through its
+loopback-only `/api` proxy to Core on `127.0.0.1:43119`.
+
+The browser strictly parses every manifest/body/head field, rejects duplicate/prototype keys,
+recomputes the universe, semantic, container, checkpoint, publication, head, and physical-byte
+SHA-256 domains, and closes profile × eligible-subject coverage, public-only facts, cutoffs,
+rendered/omitted partition, durable index order, and selected-entry lineage. The positive test
+matches the frozen Rust publication digest `sha256:8c79941372588b2001608267ce562288488d3c0dd519595674cc6c0721af0f0f`.
+Self-consistent private facts, future knowledge, denominator narrowing, index/byte substitution,
+unknown fields, and unstable order all refuse.
+
+The inspector shows denominator, membership, presentation partition, facts, coverage, cutoffs, and
+exact identities under an `unverified_semantic` banner. It has no action affordance. This raises the
+offline cross-runtime inspection seam, not default mount, product use, accessibility, presentation,
+or live qualification.
+
 ## Verification
 
 Executed from `apps/glass`:
@@ -108,13 +144,20 @@ npm test -- --run
 npm run build
 ```
 
-Current result: TypeScript passed, 20 test files / 148 tests passed, and the production Vite build
-passed. The build reports one non-fatal main-chunk size warning (>500 KiB); code splitting remains a
-performance follow-up rather than an authority or correctness claim.
+Current result: TypeScript passed, 23 test files / 157 tests passed, the default production Vite
+build passed, and the explicit inspector build passed. The default build reports one non-fatal
+main-chunk size warning (>500 KiB); code splitting remains a performance follow-up rather than an
+authority or correctness claim.
 
-Attached-browser QA: **not run**. The required browser workflow was attempted against a local Vite
-server, but no in-app or extension browser instance was connected. No screenshot, visual-layout,
-real screen-reader, pointer, touch, or actual Ember daily-use claim is inferred from DOM tests.
+A real local smoke also ran through the Vite proxy and Core listener: one-time exchange returned
+only `cockpit_read`, the exact index returned one head with two eligible subjects/two facts/zero
+gaps, and explicit-ID open returned the same source occurrence with body/head store commits 25/26.
+The capability value was not printed. This checks the loopback transport/proxy, not visual UI.
+
+Attached-browser QA: **not run**. The required browser workflow was attempted again after a real
+local Core fixture launcher and inspector Vite server both started successfully, but no in-app or
+extension browser instance was connected. No screenshot, visual-layout, real screen-reader,
+pointer, touch, or actual Ember daily-use claim is inferred from DOM tests.
 
 ## Remaining integration gates
 
@@ -122,9 +165,10 @@ real screen-reader, pointer, touch, or actual Ember daily-use claim is inferred 
   mirror its exact golden and show independent status, field truth, freshness, and gaps for every
   declared critical surface. Fixture booleans or vacuous zero-session witnesses must never promote
   the UI.
-- Cross-review and freeze Cockpit V2 publication/launch closure, then make the same-origin client
-  parse the exact immutable broad manifest. A narrow exact-mint child cannot become the root
-  attention universe.
+- Extend the strict Cockpit V2 inspection contract into a separately reviewed presentation/scene
+  launch only after the default product can retain the exact broad manifest and a real browser
+  presentation occurrence. The fixture inspector must never be treated as the root attention
+  universe.
 - Cross-review and freeze `joshi-scientific-memory`, then extend the existing authoritative command
   family and pending transport with its exact act, scene/presentation gap, optional assertion,
   correction, episode, and two-pass replay bytes. Do not create another client-owned action truth.

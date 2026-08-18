@@ -67,8 +67,6 @@ enum Command {
         glass_origin: String,
         #[arg(long)]
         state: PathBuf,
-        #[arg(long)]
-        pairing_token_file: PathBuf,
     },
     /// Run the legacy deterministic in-memory fixture seam.
     Fixture(FixtureArguments),
@@ -127,7 +125,6 @@ async fn main() -> Result<(), CliError> {
             listen,
             glass_origin,
             state,
-            pairing_token_file,
         }) => {
             if !listen.ip().is_loopback() {
                 return Err(CliError::NonLoopback(listen));
@@ -153,8 +150,7 @@ async fn main() -> Result<(), CliError> {
                 joshi_core::wave5_g0::offline_fixture_store_config(&state)?,
                 StoreMode::SingleWriter,
             )?;
-            let pairing_token = read_pairing_token(&pairing_token_file)?;
-            let pairing = PairingCapability::from_hex(&pairing_token)?;
+            let pairing = PairingCapability::generate_os_random()?;
             let origin = PairingOrigin::new(glass_origin)?;
             let (core, launcher) = CoreService::with_sqlite_pairing(
                 store,
@@ -259,6 +255,8 @@ enum CliError {
     Service(#[from] joshi_core::service::ServiceError),
     #[error(transparent)]
     Pairing(#[from] joshi_core::service::PairingCapabilityError),
+    #[error(transparent)]
+    PairingGeneration(#[from] joshi_core::service::PairingCapabilityGenerationError),
     #[error(transparent)]
     OrdinaryPairing(#[from] OrdinaryPairingError),
     #[error(transparent)]

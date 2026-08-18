@@ -39,10 +39,16 @@ ambiguous `Origin`; exchange and write POSTs still carry and validate the exact 
 from the default server and the production Glass shell remains unavailable. The explicit
 `wave5-g0-inspect` developer command is the only CLI path that selects the sealed adapter: it first
 exact-retries the offline G0 component, refuses impossible positive qualification bits, reopens its
-fixture catalog, binds a caller-declared loopback Glass origin, and prints one OS-random
-`CockpitRead` code only after the listener is bound. It does not enable write scopes or change the
-default server. This is an isolated durable protocol/publication inspection seam, not a product
-mount, daily-use witness, or root G0 pass.
+fixture catalog, binds a caller-declared loopback Glass origin, generates the unrelated legacy
+handler guard from OS entropy without a file, and prints one OS-random `CockpitRead` code only after
+the listener is bound. It does not enable write scopes or change the default server. This is an
+isolated durable protocol/publication inspection seam, not a product mount, daily-use witness, or
+root G0 pass.
+
+Glass's explicit `VITE_JOSHI_G0_INSPECTOR=1` build now consumes this seam and only this seam. It
+independently verifies the bounded index plus exact V2 body/head and renders descriptive fixture
+facts without operator/presentation controls. The default build does not select it, and attached
+browser QA remains not run because no browser instance was connected.
 
 Production adapters provide an OS-backed `Entropy` implementation and a monotonic `MonotonicClock`;
 the crate performs no wall-clock or device I/O. Public transitions use the monotonic-clock

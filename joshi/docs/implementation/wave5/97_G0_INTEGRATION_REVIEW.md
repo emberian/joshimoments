@@ -60,7 +60,7 @@ artifact index rather than a completed root occurrence and keeps every qualifica
 | Denominator + hot/control | Nonempty store-derived eligible identities/count/digest at one cutoff; independently derived hot and cold-control membership | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | The exact selection is retained separately from the exact provider body, its subjects must equal the parsed fact denominator, and the private resolver/reopen derives one hot plus one cold-control subject. This is fixture membership, not product parity or a live acquisition-policy result. |
 | Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **PASS only as a joined durable offline-fixture component; BLOCKED root/live** | `wave5-g0-source-publication` derives the source occurrence from the receipt over the supervisor-owned Pump segment and decoded provider bytes, then fully rederives it after read-only reopen and exact retry. A nonfixture source and the remaining root components are absent. |
 | Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The explicit inspector returns a bounded, store-rederived head index and those exact body/head bytes under a durable scoped session, but default `Serve` and the product remain unmounted and the other root seams are absent. |
-| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication protocol; BLOCKED Glass/default-product/root G0** | The SQLite exchange now opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. `wave5-g0-inspect` is an explicit read-only developer launcher, while default `Serve` and the production Glass shell remain unavailable; no product presentation occurrence or complete root evidence bundle exists. |
+| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication + Glass inspection protocol; BLOCKED default-product/root G0** | The SQLite exchange opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. The explicit Glass inspector independently parses and recomputes the V2 closure without action sinks. Default `Serve`/Glass remain unavailable, no browser instance was connected for UI QA, and no product presentation occurrence or complete root evidence bundle exists. |
 | Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable act + partial episode prefix; BLOCKED complete chain/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap plus one partial unresolved/no-trade episode in strict queue order. The store intentionally refuses the later session/outcome/reveal/interview states, so the required complete chain remains absent. |
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS as a joined durable offline-fixture component; BLOCKED complete root/live** | Core copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the restricted manifest plus Parquet CAS. It then creates an immutable input backup, runs the private backup-bound 24-table V10 wrapper, independently validates Rust/Python readback, commits the exact snapshot, and captures it in the final backup. This remains fixture-only and does not imply status recovery, product use, or root completion. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS as a joined durable offline-fixture export recovery; BLOCKED root/live** | Core commits `export_stale`, starts recovery before the immutable input backup, commits the V10 snapshot, and adds a canonical same-run export binding. `RecoveryVerified/Ready` cites only that binding's exact commit sequence and commit digest; store semantics reject a production receipt or unrelated commit. The full chain reopens exactly but does not imply product, live, or root readiness. |
@@ -336,7 +336,9 @@ that vector before mapping the result, and has focused expiry-on-refusal tests.
 The generic public `PairingSessionPort::authorize_capability` initially retained the older result
 shape and still dropped rejection-side expiry vectors. It now returns the same explicit
 authorization outcome, closing that public mutation-without-receipt trap. Pairing nevertheless
-remains **BLOCKED for W5-G0** pending a real launch selection and paired Glass/open occurrence.
+remains **BLOCKED for W5-G0** pending a default product launch, a real browser presentation
+occurrence, and the complete root conjunction. The explicit offline inspector is not that product
+occurrence.
 
 ### P0 — a backup inventory and a false-only schedule are not restored artifact recovery
 
@@ -401,15 +403,15 @@ validation unconditionally rejects a positive root Boolean.
 - `cargo test --locked --offline -p joshi-pairing --all-targets`: 13 intrinsic tests passed after
   origin identity, restart ordinal, durable rate-bootstrap and expiry-on-refusal repairs. There is
   still no default mounted route, so this alone is not product evidence.
-- Final `cargo test --locked --offline -p joshi-core --all-targets` passes 20 library, one binary
+- Final `cargo test --locked --offline -p joshi-core --all-targets` passes 21 library, one binary
   and eight HTTP tests. This includes exact SQLite exchange/scoped access/revoke/restart/next
   ordinal/old-capability refusal, boundary-expiry persistence/reopen, and the byte-exact headed G0
   publication open with wrong-scope/revoke/restart adversaries. The HTTP V10 receipt golden is
   aligned. Pairing tests still do not supply a default production mount.
-- Focused Glass pairing/operational tests: 4 files and 24 tests passed, including exact code,
-  origin-tag/session identity, expiry, scope and no-persistence vectors. They validate the browser
-  side plus wire alignment with the optional Core authorization seam; the route is not mounted by
-  the default production service.
+- Full Glass gates pass 23 files / 157 tests plus default and explicit-inspector builds. The six new
+  inspector tests match the frozen Rust V2 digest vector; reject private/future/narrowed/substituted
+  inputs; verify memory-only scoped transport; and exercise pair → exact index → explicit open UI.
+  The route is not mounted by the default production service, and attached-browser QA did not run.
 - An earlier combined targeted package run was red at
   `apps/core/tests/http.rs::ack_is_only_emitted_after_commit_and_exact_retry_is_idempotent` because
   its expected receipt still named catalog V9 after migration V10. The golden was aligned and the
@@ -477,10 +479,11 @@ than that statement:
   one partial unresolved/no-trade episode, including its four before/after interruption points.
   The store deliberately admits no later session/outcome-or-censor/reveal/interview artifacts, so
   the required full chain remains absent.
-- **Pairing: isolated durable paired-publication protocol PASS; default/product/root G0 BLOCKED.**
+- **Pairing: isolated durable paired-publication + Glass inspection protocol PASS; default/product/root G0 BLOCKED.**
   Exact SQLite lifecycle, expiry/reopen, origin, rate-window, restart-count and ordinal tests pass,
-  and a scoped capability opens the exact G0 Cockpit V2 body/head. The CLI and production Glass
-  shell remain deliberately unmounted.
+  and a scoped capability opens the exact G0 Cockpit V2 body/head. The explicit CLI/Glass inspector
+  is mounted only by deliberate developer selection; default `Serve` and production Glass remain
+  deliberately unmounted.
 - **Export store boundary: joined durable offline-fixture V10 PASS; complete root/live BLOCKED.** Core exercises
   the store-owned fourteen-table V8/V9 commit branch, same-run export binding, forward V10
   migration, and exact restricted manifest/Parquet CAS readback. The private V10 wrapper loads an exact backup and import,

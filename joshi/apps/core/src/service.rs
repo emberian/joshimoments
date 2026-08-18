@@ -64,6 +64,20 @@ struct Inner {
 pub struct PairingCapability([u8; 32]);
 
 impl PairingCapability {
+    /// Generates a process-local legacy guard from operating-system entropy.
+    ///
+    /// This is used only where ordinary pairing is the mounted browser authority but the older
+    /// fail-closed handlers still require a nonpublic fallback value in the service state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operating system cannot provide 32 random bytes.
+    pub fn generate_os_random() -> Result<Self, PairingCapabilityGenerationError> {
+        let mut bytes = [0_u8; 32];
+        getrandom::fill(&mut bytes).map_err(|_| PairingCapabilityGenerationError)?;
+        Ok(Self(bytes))
+    }
+
     /// Decode the exact 32-byte local pairing capability from lowercase hexadecimal.
     ///
     /// # Errors
@@ -112,6 +126,10 @@ impl fmt::Debug for PairingCapability {
 #[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
 #[error("pairing token must be exactly 32 bytes encoded as 64 lowercase hexadecimal characters")]
 pub struct PairingCapabilityError;
+
+#[derive(Clone, Copy, Debug, Eq, thiserror::Error, PartialEq)]
+#[error("operating-system entropy is unavailable for the process-local pairing guard")]
+pub struct PairingCapabilityGenerationError;
 
 fn hex(byte: u8) -> Result<u8, PairingCapabilityError> {
     match byte {

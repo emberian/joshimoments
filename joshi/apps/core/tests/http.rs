@@ -87,6 +87,13 @@ fn pairing_capability_is_strict_and_debug_redacted() {
     assert_eq!(format!("{:?}", pairing()), "PairingCapability([REDACTED])");
     assert!(PairingCapability::from_hex(&PAIRING_TOKEN.to_uppercase()).is_err());
     assert!(PairingCapability::from_hex("cc").is_err());
+    assert_eq!(
+        format!(
+            "{:?}",
+            PairingCapability::generate_os_random().expect("OS random guard")
+        ),
+        "PairingCapability([REDACTED])"
+    );
 }
 
 #[tokio::test]
