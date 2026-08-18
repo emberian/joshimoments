@@ -4,6 +4,12 @@ Status: bounded deterministic research-design prototype with one exact `N00`/`N0
 It is intentionally a proposal desk, not a data plane, analyst replacement, Glass surface, claim
 promoter, or action engine.
 
+The exact proposal is now checked in at
+[`fixtures/wave6/research_proposal_v1.json`](../../../fixtures/wave6/research_proposal_v1.json).
+`joshi-wave6-registry` independently reparses the Python bytes, recomputes all four nested digests,
+and enforces the same cutoff, evidence, budget and zero-query boundary. This is cross-runtime
+fixture closure only; no proposal store row or human review receipt exists.
+
 ## Boundary
 
 `analysis/src/joshi_analysis/wave6_research_desk` accepts only already-admitted point-in-time
@@ -111,6 +117,15 @@ the full research proposal, status, authority, claim scope, `executable=false`, 
 `query_count=0` under a recomputed packet ID/digest. The proposal's only experiment manifest is
 likewise non-executable with zero queries.
 
+Frozen proposal identifiers:
+
+```text
+proposalId       research-proposal-482af6e85fb9edae5a00eccf29af12b2
+proposalDigest   sha256:482af6e85fb9edae5a00eccf29af12b24319e5b0ca2cce81fda3aceb9632d5c4
+commitmentDigest sha256:b2ac507fe5b345e86597935cf0bf531ce724a47b1716a6fe34d3d324fc18074e
+documentDigest   sha256:5da44fffda071866e79f80624ecece320884f69a598a582b4a5362c37d731503
+```
+
 The packet authority is:
 
 ```text
@@ -128,6 +143,10 @@ known-truth result, descriptor, or review is store-resolved. The exact N00 fixtu
 uv --directory analysis run --locked pytest tests/wave6_research_desk
 uv --directory analysis run --locked ruff check \
   src/joshi_analysis/wave6_research_desk tests/wave6_research_desk
+cargo test --locked --offline -p joshi-wave6-registry --all-targets
+cargo clippy --locked --offline -p joshi-wave6-registry --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline \
+  -p joshi-wave6-registry --no-deps
 ```
 
 The adversarial suite covers authority laundering, future-known and outcome-role inputs, coverage
@@ -136,11 +155,13 @@ identities, non-executable manifest enforcement, unadmitted experiment evidence,
 budget escape, deterministic policy/evidence/commitment IDs, review-time ordering, and
 outcome-targeted, same-policy-ID budget-replacement, and provenance-swap supersession edits.
 
-The fixture-packet tests additionally cover Rust/Python registration digest parity, exact artifact
+The 20 Python and 18 Rust tests additionally cover Rust/Python registration and proposal digest
+parity, exact artifact
 schema bytes, unknown/reordered registration fields, provider-budget widening, schema
 substitution, deterministic packet construction, exact generic/protocol/structural N01 closure,
 raw Pump/DLMM/structural fixture substitution, the 18-case denominator, packet identity, authority,
-and evaluation substitution.
+evaluation substitution, future/outcome descriptors, duplicated commitment changes and query or
+resource-budget widening.
 
 ## Deferred work
 

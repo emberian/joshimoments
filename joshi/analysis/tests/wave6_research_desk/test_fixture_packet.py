@@ -22,6 +22,7 @@ KNOWN_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/known_truth_evaluation_v1.js
 MARKET_SCHEMA = ROOT / "fixtures/wave6/schemas/market_atlas_snapshot_v1.json"
 PROTOCOL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
 RESEARCH_SCHEMA = ROOT / "fixtures/wave6/schemas/research_proposal_v1.json"
+RESEARCH_PROPOSAL = ROOT / "fixtures/wave6/research_proposal_v1.json"
 STRUCTURAL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json"
 PUMP_FIXTURE = ROOT / "fixtures/protocol/pump_quotes.json"
 DLMM_FIXTURE = ROOT / "fixtures/protocol/dlmm.json"
@@ -69,6 +70,9 @@ def test_registered_schema_bytes_are_exact_and_packet_is_deterministic() -> None
     assert first.status == "protocol_draft"
     assert first.query_count == 0
     assert not first.executable
+    assert RESEARCH_PROPOSAL.read_bytes() == canonical_json_bytes(
+        first.proposal.as_dict(), newline=True
+    )
     assert len(first.known_truth_evaluation.passed_case_ids) == 8
     assert len(first.protocol_known_truth_evaluation.passed_case_ids) == 7
     assert len(first.structural_known_truth_evaluation.passed_case_ids) == 3

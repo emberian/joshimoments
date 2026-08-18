@@ -17,6 +17,7 @@ mod decision;
 mod error;
 mod evaluation;
 mod model;
+mod research;
 mod validate;
 
 pub use campaign::{
@@ -47,6 +48,10 @@ pub use model::{
     ArtifactKindRegistrationV1, ClaimRungV1, DataPolicyV1, DeskOperationV1, FixtureMaturityV1,
     LocalSymbolV1, ProgramAuthorityV1, ProgramBudgetsV1, ProgramRegistrationDigestMaterialV1,
     SemanticCeilingV1, Wave5GateRefV1, Wave5GateV1, Wave6ProgramRegistrationV1,
+};
+pub use research::{
+    RESEARCH_PROPOSAL_KIND, RESEARCH_PROPOSAL_SCHEMA, ResearchProposalV1,
+    ValidatedResearchProposal, parse_research_proposal_exact,
 };
 
 /// Exact wire contract for the fixture-only Wave 6 program registration.
