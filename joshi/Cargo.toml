@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "apps/collector",
     "apps/core",
+    "apps/g0-harness",
     "crates/*",
 ]
 [workspace.package]

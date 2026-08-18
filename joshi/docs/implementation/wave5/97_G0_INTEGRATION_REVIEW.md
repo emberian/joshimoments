@@ -63,8 +63,8 @@ readiness command emits component booleans rather than an artifact-bearing root 
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS only as synthetic cross-runtime format; BLOCKED store/root** | The regenerated 24-relation V10 fixture passes exact Rust/Python readback against frozen 0010 and has ten nonempty G0 rows. The private wrapper overrides catalog identity/path/range from an exact backup and resolves CAS, closing the inspected foreign-catalog gap, but no test invokes it or the 24-table store commit branch. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **BLOCKED** | Existing adapter does not close every G0 component and an aggregate Boolean is not evidence. |
 | Backup/restore | Backup includes SQLite plus every referenced artifact/CAS/publication/origin object; restore into a distinct location; artifact-bearing reads and digest revalidation | **PASS only as isolated durable backup/restore; BLOCKED fault/root** | A public-API test now backs up a forced-external object, retries exactly, hides the live roots, restores to distinct roots, restarts the authority store, reopens exact bytes and rejects postcommit tamper. It does not execute the harness crash matrix or a complete G0 occurrence. |
-| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only as false-only contract scaffold; BLOCKED executable/root** | The source/publication/memory implementation now passes twelve exact before/after prefix interruptions, but the isolated 37-scenario harness still has no adapters and cannot emit a pass. No result joins all 18 root steps. |
-| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **BLOCKED** | The new component report carries exact run/selection/source/prepare/publication/head identities and explicitly has `fullOfflineFaultWalk:false`; it still omits the remaining conjuncts and is not the root bundle. |
+| Fault matrix | Crash/retry at reserve, I/O, spool, store commit, publication prepare/body/head, pairing consume, memory ACK, export/import, backup/restore | **PASS only for strict false contract + partial baseline mapping; BLOCKED full executable/root** | The source/publication/memory implementation passes twelve exact before/after prefix interruptions. The root-workspace harness now maps nine exact baseline artifacts to `observed_partial`, but it has no evidence for the other required steps and does not execute all 37 scenarios. |
+| Root evidence bundle | Canonical machine-readable evidence with exact IDs, digests, cutoffs, clocks, paths/keys, receipts and negative qualification bits, independently reverified after reopen | **PASS only as a nine-role partial artifact bundle; BLOCKED root** | The component report binds origin, receipt, binding, ACK, fact, prepare, head, act, and episode identities/digests, with one exact role per observed step. Reservation, paired-read fault evidence, export/import, status, backup/restore and final root reopen remain absent; both qualification bits stay false. |
 
 ## Red-team invariants for landing components
 
@@ -374,15 +374,14 @@ No backup status or manifest row may qualify without enumerating every reachable
 publication, export and CAS object and reopening their bytes under a distinct restored root with
 the original paths unavailable.
 
-The isolated harness does correctly freeze baseline plus all 18 before/after crash scenarios and
-cannot emit `fullOfflineFaultWalk:true` without adapters. Its five tests pass. This is a **PASS for
-the false-only contract scaffold only**. With every production adapter absent, it supplies no
-crash, retry, backup or artifact-bearing recovery evidence and cannot raise W5-G0.
-Its evidence bundle recomputes a digest over caller-supplied evidence IDs and content digests but
-does not open any artifact. That would be self-authored evidence in a positive harness; here the
-only step dispositions are `not_implemented` and `blocked`, the authority is fixed to
-`fixture_harness_no_execution`, and result validation unconditionally rejects a positive root
-Boolean. The current self-hash therefore cannot promote the false-only scaffold.
+The harness freezes baseline plus all 18 before/after crash scenarios and its V1 result can never
+emit `fullOfflineFaultWalk:true`. It is now a root-workspace library with six tests. Core supplies
+nine artifact digests rederived from its owner/store objects; the harness maps those roles
+one-to-one to `observed_partial` and refuses hidden/duplicate/missing-role evidence. This is a
+**PASS for strict partial baseline accounting only**. The harness does not independently open the
+artifacts, and no positive authority follows from its digest. Unimplemented seams remain typed,
+the authority stays `fixture_harness_no_execution`, the full schedule is not executed, and result
+validation unconditionally rejects a positive root Boolean.
 
 ## Targeted verification during this review
 

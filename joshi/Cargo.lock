@@ -1181,6 +1181,7 @@ dependencies = [
  "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
+ "joshi-g0-harness",
  "joshi-operational-status",
  "joshi-operator",
  "joshi-pairing",
@@ -1276,6 +1277,16 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+]
+
+[[package]]
+name = "joshi-g0-harness"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]

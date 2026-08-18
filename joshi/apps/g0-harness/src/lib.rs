@@ -1,10 +1,9 @@
-//! Adapter-free G0 fault/backup qualification harness.
+//! False-until-complete G0 fault/backup qualification harness.
 //!
-//! This package is intentionally not part of the root workspace.  It freezes
-//! the Phase-0 witness shape and deterministic fake crash schedule, but has no
-//! store, collector, publication, pairing, Glass, export, or backup adapter.
-//! Consequently every current step is typed `not_implemented` or `blocked` and
-//! this package can never emit a positive `fullOfflineFaultWalk` claim.
+//! The package freezes the Phase-0 witness shape and deterministic fake crash schedule. An owner
+//! may attach exact artifact evidence to steps it has actually walked, but partial evidence never
+//! promotes `fullOfflineFaultWalk`; only a future root evaluator with all scenarios may define a
+//! distinct qualifying contract.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -125,6 +124,11 @@ pub struct G0RunManifest {
 }
 
 impl G0RunManifest {
+    /// Validate the exact manifest literals, digests, authority, and ordered step set.
+    ///
+    /// # Errors
+    ///
+    /// Refuses any malformed field, reordered/missing step, or requested positive qualification.
     pub fn validate(&self) -> Result<()> {
         require_literal("manifest.contract", &self.contract, MANIFEST_CONTRACT)?;
         require_version("manifest.schemaVersion", self.schema_version)?;
@@ -142,6 +146,11 @@ impl G0RunManifest {
         require_exact_steps("manifest.steps", &self.steps)
     }
 
+    /// Return the domain-separated digest of the exact validated manifest bytes.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid manifest or a serialization failure.
     pub fn digest(&self) -> Result<String> {
         self.validate()?;
         let bytes = serde_json::to_vec(self).map_err(HarnessError::Json)?;
@@ -149,6 +158,11 @@ impl G0RunManifest {
     }
 }
 
+/// Strictly parse and validate a run manifest.
+///
+/// # Errors
+///
+/// Refuses malformed JSON, unknown fields, invalid literals, or an incomplete step ledger.
 pub fn parse_run_manifest(bytes: &[u8]) -> Result<G0RunManifest> {
     let manifest: G0RunManifest = serde_json::from_slice(bytes)?;
     manifest.validate()?;
@@ -158,6 +172,7 @@ pub fn parse_run_manifest(bytes: &[u8]) -> Result<G0RunManifest> {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepDisposition {
+    ObservedPartial,
     NotImplemented,
     Blocked,
 }
@@ -186,6 +201,7 @@ pub enum RecoveryInvariant {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[repr(u8)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceRole {
     Reservation,
@@ -208,6 +224,53 @@ pub enum EvidenceRole {
     ReopenReadback,
 }
 
+const ALL_EVIDENCE_ROLES: [EvidenceRole; 18] = [
+    EvidenceRole::Reservation,
+    EvidenceRole::OriginSegment,
+    EvidenceRole::StoreReceipt,
+    EvidenceRole::CatalogBinding,
+    EvidenceRole::CatalogAck,
+    EvidenceRole::SemanticFact,
+    EvidenceRole::PublicationPrepare,
+    EvidenceRole::PublicationHead,
+    EvidenceRole::PairingExchange,
+    EvidenceRole::GlassRead,
+    EvidenceRole::MemoryAct,
+    EvidenceRole::MemoryEpisode,
+    EvidenceRole::ExportManifest,
+    EvidenceRole::ImportReceipt,
+    EvidenceRole::StatusReadback,
+    EvidenceRole::BackupManifest,
+    EvidenceRole::RestoreReadback,
+    EvidenceRole::ReopenReadback,
+];
+
+impl EvidenceRole {
+    #[must_use]
+    pub const fn step(self) -> HarnessStep {
+        match self {
+            Self::Reservation => HarnessStep::PreIoReservation,
+            Self::OriginSegment => HarnessStep::OriginFsync,
+            Self::StoreReceipt => HarnessStep::StoreReceipt,
+            Self::CatalogBinding => HarnessStep::CatalogBinding,
+            Self::CatalogAck => HarnessStep::CatalogAck,
+            Self::SemanticFact => HarnessStep::SemanticFact,
+            Self::PublicationPrepare => HarnessStep::PublicationPrepare,
+            Self::PublicationHead => HarnessStep::PublicationHead,
+            Self::PairingExchange => HarnessStep::PairingExchange,
+            Self::GlassRead => HarnessStep::GlassRead,
+            Self::MemoryAct => HarnessStep::MemoryAct,
+            Self::MemoryEpisode => HarnessStep::MemoryEpisode,
+            Self::ExportManifest => HarnessStep::Export,
+            Self::ImportReceipt => HarnessStep::Import,
+            Self::StatusReadback => HarnessStep::Status,
+            Self::BackupManifest => HarnessStep::Backup,
+            Self::RestoreReadback => HarnessStep::Restore,
+            Self::ReopenReadback => HarnessStep::Reopen,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceItem {
@@ -227,22 +290,23 @@ pub struct EvidenceBundle {
 impl EvidenceBundle {
     #[must_use]
     pub fn empty() -> Self {
-        let mut bundle = Self {
+        Self {
             contract: EVIDENCE_CONTRACT.into(),
             items: Vec::new(),
-            digest: String::new(),
-        };
-        bundle.digest = bundle
-            .recompute_digest()
-            .expect("empty evidence bundle is valid");
-        bundle
+            digest: evidence_digest(&[]),
+        }
     }
 
+    /// Recompute the domain-separated digest after validating exact item order and syntax.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a foreign contract, malformed identity/digest, or duplicate/reordered items.
     pub fn recompute_digest(&self) -> Result<String> {
         require_literal("evidenceBundle.contract", &self.contract, EVIDENCE_CONTRACT)?;
         let mut last: Option<(EvidenceRole, &str)> = None;
         for item in &self.items {
-            require_identifier("evidenceBundle.items.evidenceId", &item.evidence_id)?;
+            require_evidence_identifier("evidenceBundle.items.evidenceId", &item.evidence_id)?;
             require_digest("evidenceBundle.items.contentDigest", &item.content_digest)?;
             if let Some(previous) = last
                 && (item.role, item.evidence_id.as_str()) <= previous
@@ -254,17 +318,14 @@ impl EvidenceBundle {
             }
             last = Some((item.role, item.evidence_id.as_str()));
         }
-        let mut hasher = Sha256::new();
-        hasher.update(b"joshi.g0.evidence_bundle.v1\0");
-        hasher.update((self.items.len() as u64).to_be_bytes());
-        for item in &self.items {
-            hasher.update((item.role as u8).to_be_bytes());
-            hash_length_prefixed(&mut hasher, item.evidence_id.as_bytes());
-            hash_length_prefixed(&mut hasher, item.content_digest.as_bytes());
-        }
-        Ok(format!("sha256:{:x}", hasher.finalize()))
+        Ok(evidence_digest(&self.items))
     }
 
+    /// Validate the stored digest against the exact ordered evidence material.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed evidence or any digest mismatch.
     pub fn validate(&self) -> Result<()> {
         let actual = self.recompute_digest()?;
         if actual != self.digest {
@@ -299,6 +360,11 @@ pub struct G0Result {
 }
 
 impl G0Result {
+    /// Validate the hard-false qualification, exact step ledger, and evidence-role closure.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed fields, a positive qualification, mismatched roles, or invalid evidence.
     pub fn validate(&self) -> Result<()> {
         require_literal("result.contract", &self.contract, RESULT_CONTRACT)?;
         require_version("result.schemaVersion", self.schema_version)?;
@@ -338,10 +404,40 @@ impl G0Result {
                 );
             }
         }
+        for role in ALL_EVIDENCE_ROLES {
+            let count = self
+                .evidence_bundle
+                .items
+                .iter()
+                .filter(|item| item.role == role)
+                .count();
+            let disposition = self
+                .step_results
+                .iter()
+                .find(|result| result.step == role.step())
+                .ok_or_else(|| HarnessError::Invalid {
+                    field: "result.stepResults",
+                    detail: "evidence role has no matching required step".into(),
+                })?
+                .disposition;
+            if (disposition == StepDisposition::ObservedPartial && count != 1)
+                || (disposition != StepDisposition::ObservedPartial && count != 0)
+            {
+                return invalid(
+                    "result.evidenceBundle.items",
+                    "each observed_partial step requires exactly one matching role and blocked steps require none",
+                );
+            }
+        }
         self.evidence_bundle.validate()
     }
 }
 
+/// Strictly parse and validate a G0 result.
+///
+/// # Errors
+///
+/// Refuses malformed JSON, unknown fields, positive qualification, or invalid evidence closure.
 pub fn parse_result(bytes: &[u8]) -> Result<G0Result> {
     let result: G0Result = serde_json::from_slice(bytes)?;
     result.validate()?;
@@ -496,6 +592,11 @@ pub struct FakeFaultSchedule {
 }
 
 impl FakeFaultSchedule {
+    /// Validate exact baseline plus all pre/post transition scenarios.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed literals, missing/duplicate crash points, or empty invariants.
     pub fn validate(&self) -> Result<()> {
         require_literal("schedule.contract", &self.contract, SCHEDULE_CONTRACT)?;
         require_version("schedule.schemaVersion", self.schema_version)?;
@@ -551,6 +652,11 @@ impl FakeFaultSchedule {
         Ok(())
     }
 
+    /// Return the domain-separated digest of the exact validated schedule.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid schedule or serialization failure.
     pub fn digest(&self) -> Result<String> {
         self.validate()?;
         let bytes = serde_json::to_vec(self).map_err(HarnessError::Json)?;
@@ -601,8 +707,11 @@ pub fn deterministic_fake_schedule() -> FakeFaultSchedule {
     }
 }
 
-/// Current deterministic outcome. Adapter absence is a result, not a success
-/// surrogate: callers get all required typed outcomes and a hard false ceiling.
+/// Current deterministic adapter-free outcome with a hard false ceiling.
+///
+/// # Errors
+///
+/// Refuses an invalid/foreign manifest or schedule, including a schedule-digest mismatch.
 pub fn run_fake_schedule(
     manifest: &G0RunManifest,
     schedule: &FakeFaultSchedule,
@@ -619,7 +728,7 @@ pub fn run_fake_schedule(
     }
     let step_results = REQUIRED_STEPS.into_iter().map(|step| StepResult {
         step,
-        disposition: if matches!(step, HarnessStep::SemanticFact | HarnessStep::PublicationPrepare | HarnessStep::PublicationHead | HarnessStep::PairingExchange | HarnessStep::GlassRead | HarnessStep::MemoryAct | HarnessStep::MemoryEpisode | HarnessStep::Export | HarnessStep::Import | HarnessStep::Backup | HarnessStep::Restore) { StepDisposition::Blocked } else { StepDisposition::NotImplemented },
+        disposition: if intrinsically_blocked(step) { StepDisposition::Blocked } else { StepDisposition::NotImplemented },
         code: format!("G0_{step:?}_ADAPTER_ABSENT").to_uppercase(),
         detail: "No integrated owner adapter is installed; no receipt, fact, publication, readback, or recovery success is synthesized.".into(),
         recovery_invariants: invariants_for(step),
@@ -641,6 +750,100 @@ pub fn run_fake_schedule(
                 "backup_restore_readback_not_observed".into(),
             ],
         },
+    };
+    result.validate()?;
+    Ok(result)
+}
+
+/// Produce a non-promoting result for the exact subset of steps carrying one artifact each.
+///
+/// # Errors
+///
+/// Refuses a foreign schedule, empty or malformed evidence, duplicate roles, or any result that
+/// does not preserve the full ordered step ledger and hard-false qualification ceiling.
+pub fn run_partial_schedule(
+    manifest: &G0RunManifest,
+    schedule: &FakeFaultSchedule,
+    evidence_bundle: EvidenceBundle,
+) -> Result<G0Result> {
+    manifest.validate()?;
+    schedule.validate()?;
+    evidence_bundle.validate()?;
+    if evidence_bundle.items.is_empty() {
+        return invalid(
+            "evidenceBundle.items",
+            "partial execution requires at least one exact evidence item",
+        );
+    }
+    let manifest_digest = manifest.digest()?;
+    let schedule_digest = schedule.digest()?;
+    if manifest.schedule_digest != schedule_digest {
+        return invalid(
+            "manifest.scheduleDigest",
+            "does not bind the supplied deterministic schedule",
+        );
+    }
+    let observed: BTreeSet<_> = evidence_bundle
+        .items
+        .iter()
+        .map(|item| item.role.step())
+        .collect();
+    if observed.len() != evidence_bundle.items.len() {
+        return invalid(
+            "evidenceBundle.items",
+            "partial execution accepts exactly one evidence artifact per role",
+        );
+    }
+    let step_results = REQUIRED_STEPS
+        .into_iter()
+        .map(|step| {
+            let disposition = if observed.contains(&step) {
+                StepDisposition::ObservedPartial
+            } else if intrinsically_blocked(step) {
+                StepDisposition::Blocked
+            } else {
+                StepDisposition::NotImplemented
+            };
+            StepResult {
+                step,
+                disposition,
+                code: match disposition {
+                    StepDisposition::ObservedPartial => {
+                        format!("G0_{step:?}_OBSERVED_PARTIAL").to_uppercase()
+                    }
+                    StepDisposition::Blocked => {
+                        format!("G0_{step:?}_ADAPTER_BLOCKED").to_uppercase()
+                    }
+                    StepDisposition::NotImplemented => {
+                        format!("G0_{step:?}_ADAPTER_ABSENT").to_uppercase()
+                    }
+                },
+                detail: if disposition == StepDisposition::ObservedPartial {
+                    "Exact artifact evidence was attached for the baseline component only; the complete crash schedule and root conjunction remain unproved.".into()
+                } else {
+                    "No integrated owner evidence is attached for this required root step.".into()
+                },
+                recovery_invariants: invariants_for(step),
+            }
+        })
+        .collect();
+    let result = G0Result {
+        contract: RESULT_CONTRACT.into(),
+        schema_version: SCHEMA_VERSION,
+        manifest_digest,
+        schedule_digest,
+        step_results,
+        evidence_bundle,
+        qualification: Qualification {
+            full_offline_fault_walk: false,
+            ceiling: AUTHORITY_CEILING.into(),
+            disqualifiers: vec![
+                "partial_baseline_only".into(),
+                "fault_matrix_incomplete".into(),
+                "required_root_steps_absent".into(),
+            ],
+        },
+        authority: AUTHORITY_CEILING.into(),
     };
     result.validate()?;
     Ok(result)
@@ -775,6 +978,23 @@ fn invariants_for(step: HarnessStep) -> Vec<RecoveryInvariant> {
     values
 }
 
+const fn intrinsically_blocked(step: HarnessStep) -> bool {
+    matches!(
+        step,
+        HarnessStep::SemanticFact
+            | HarnessStep::PublicationPrepare
+            | HarnessStep::PublicationHead
+            | HarnessStep::PairingExchange
+            | HarnessStep::GlassRead
+            | HarnessStep::MemoryAct
+            | HarnessStep::MemoryEpisode
+            | HarnessStep::Export
+            | HarnessStep::Import
+            | HarnessStep::Backup
+            | HarnessStep::Restore
+    )
+}
+
 fn require_exact_steps(field: &'static str, actual: &[HarnessStep]) -> Result<()> {
     if actual != REQUIRED_STEPS {
         return invalid(
@@ -811,6 +1031,22 @@ fn require_identifier(field: &'static str, value: &str) -> Result<()> {
     }
     Ok(())
 }
+fn require_evidence_identifier(field: &'static str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 255
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.' | b':')
+        })
+    {
+        return invalid(
+            field,
+            "must be 1..=255 lowercase ASCII identity characters including optional colon separators",
+        );
+    }
+    Ok(())
+}
 fn require_digest(field: &'static str, value: &str) -> Result<()> {
     let valid = value.len() == 71
         && value.starts_with("sha256:")
@@ -834,6 +1070,17 @@ fn invalid<T>(field: &'static str, detail: impl Into<String>) -> Result<T> {
 fn hash_length_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_be_bytes());
     hasher.update(bytes);
+}
+fn evidence_digest(items: &[EvidenceItem]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"joshi.g0.evidence_bundle.v1\0");
+    hasher.update((items.len() as u64).to_be_bytes());
+    for item in items {
+        hasher.update((item.role as u8).to_be_bytes());
+        hash_length_prefixed(&mut hasher, item.evidence_id.as_bytes());
+        hash_length_prefixed(&mut hasher, item.content_digest.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 fn domain_digest<'a>(domain: &[u8], chunks: impl IntoIterator<Item = &'a Vec<u8>>) -> String {
     let mut hasher = Sha256::new();
@@ -901,6 +1148,40 @@ mod tests {
             item.disposition,
             StepDisposition::NotImplemented | StepDisposition::Blocked
         )));
+    }
+    #[test]
+    fn partial_evidence_is_exactly_mapped_and_cannot_promote() {
+        let schedule = deterministic_fake_schedule();
+        let mut bundle = EvidenceBundle {
+            contract: EVIDENCE_CONTRACT.into(),
+            items: vec![
+                EvidenceItem {
+                    role: EvidenceRole::OriginSegment,
+                    evidence_id: "segment:g0:0001".into(),
+                    content_digest: digest("a"),
+                },
+                EvidenceItem {
+                    role: EvidenceRole::SemanticFact,
+                    evidence_id: "source-c0:g0:0001".into(),
+                    content_digest: digest("b"),
+                },
+            ],
+            digest: String::new(),
+        };
+        bundle.digest = bundle.recompute_digest().unwrap();
+        let result = run_partial_schedule(&manifest(&schedule), &schedule, bundle).unwrap();
+        assert!(!result.qualification.full_offline_fault_walk);
+        assert_eq!(
+            result.step_results[1].disposition,
+            StepDisposition::ObservedPartial
+        );
+        assert_eq!(
+            result.step_results[5].disposition,
+            StepDisposition::ObservedPartial
+        );
+        let mut hidden = result.clone();
+        hidden.step_results[1].disposition = StepDisposition::Blocked;
+        assert!(hidden.validate().is_err());
     }
     #[test]
     fn evidence_digest_refuses_reordering_or_tampering() {

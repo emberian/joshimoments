@@ -148,6 +148,12 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 `Serve` path still mounts neither exchange nor headed-publication route, and this local join is not
 recorded as Glass use or as a completed root occurrence.
 
+The component report now embeds a strict G0 V1 partial fault result. Nine baseline artifacts are
+bound by exact producer/store digests (origin, receipt, binding, ACK, fact, prepare, head, act, and
+episode), and each maps one-to-one to `observed_partial`. The remaining required roles are absent,
+the full 37-scenario crash matrix is not claimed, and both the embedded and outer
+`fullOfflineFaultWalk` fields remain false.
+
 ## Explicit nonclaims
 
 No Wave 5 code path reads a credential or wallet secret, calls a provider, opens a remote service,

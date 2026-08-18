@@ -1,10 +1,10 @@
 # G0 fault and backup harness
 
-Status: **contract and fake schedule only**. This is not a W5-G0 witness and
-does not change `qualification.fullOfflineFaultWalk:false`. The isolated package
-at `apps/g0-harness` is intentionally a nested workspace, is not in the root
-manifest or lockfile, and has no access to store, collector, spool, publication,
-pairing, Glass, memory, export/import, status, or backup implementations.
+Status: **strict schedule plus non-promoting partial evidence**. This is not a
+W5-G0 witness and does not change `qualification.fullOfflineFaultWalk:false`.
+`apps/g0-harness` is now a root workspace library because Core attaches exact
+artifact evidence from the implemented offline source/publication/memory prefix.
+The harness itself owns no store, route, source, or backup authority.
 
 It freezes the seam shape called for by the Wave 5 G0 matrix. It follows the
 existing spool/supervisor convention of named durable failpoints, but does not
@@ -39,9 +39,12 @@ The paired `joshi.g0.fault_result.v1` must bind the exact manifest and schedule
 digests, include one ordered result for each step, provide typed recovery
 invariants, and validate its exact evidence bundle digest. A missing,
 duplicated, or reordered step is invalid before a result could be considered.
-The current runner emits only `not_implemented` or `blocked`, with a nonempty
-reason and `fullOfflineFaultWalk:false`. Parsing rejects `true`; neither fixture
-labels nor a manually changed result may promote the claim.
+The adapter-free runner emits only `not_implemented` or `blocked`. The partial
+runner may emit `observed_partial` only when exactly one evidence role is present
+for that step; hidden evidence, duplicate roles, or an observed step without its
+artifact is invalid. Both runners emit `fullOfflineFaultWalk:false`, and parsing
+rejects `true`; neither fixture labels nor a manually changed result may promote
+the claim.
 
 The existing Wave 5 acceptance matrix remains authoritative: pre-I/O
 reservation/readback, fsynced origin through store receipt and run-bound catalog
@@ -100,8 +103,13 @@ for the reservation, origin segment, durable store receipt, catalog binding,
 catalog ACK, source/fact artifact, publication prepare/head, pairing and Glass
 read, memory act/episode, export/import, status, backup, restore, and reopen.
 It must bind the corresponding physical bytes or store readback—not booleans.
-This isolated package legitimately emits an empty, correctly digested bundle
-only because no step is represented as passed.
+The adapter-free result legitimately emits an empty, correctly digested bundle.
+The current Core component result carries nine exact roles: origin segment,
+store receipt, catalog binding, catalog ACK, semantic fact, publication prepare,
+publication head, memory act, and memory episode. Their identities may contain
+the colon separators used by actual store/spool contracts. Reservation,
+pairing/Glass fault evidence, export/import, status, backup, restore, and final
+root reopen remain absent and therefore cannot appear `observed_partial`.
 
 ## Backup, restore, and reopen requirements
 
@@ -134,6 +142,6 @@ Adapters may be added only by their owning integration work. They must retain
 the strict step order and evidence rules, replace only their own typed blocker
 with receipts derived from their durable owner, and add a fake crash/restart
 test for their seam. A root-owned integration may evaluate a future positive
-G0 predicate only when all required seams, crash scenarios, recovered evidence,
-and distinct-root backup readback are present. This harness itself remains
-false-only until then.
+G0 predicate only under a new reviewed qualifying boundary, when all required
+seams, crash scenarios, recovered evidence, and distinct-root backup readback
+are present. The present V1 result contract unconditionally remains false.

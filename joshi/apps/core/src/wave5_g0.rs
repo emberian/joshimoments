@@ -7,6 +7,11 @@ use std::path::Path;
 
 use joshi_admission::{Sha256Digest, operational::AUTHORITY};
 use joshi_domain::{StableString, WireStringError};
+use joshi_g0_harness::{
+    AUTHORITY_CEILING as FAULT_AUTHORITY_CEILING, EVIDENCE_CONTRACT, EvidenceBundle, EvidenceItem,
+    EvidenceRole, FakeFaultSchedule, G0Result, G0RunManifest, MANIFEST_CONTRACT, REQUIRED_STEPS,
+    SCHEMA_VERSION as FAULT_SCHEMA_VERSION, run_partial_schedule,
+};
 use joshi_publication::{CockpitPublicationId, CockpitV2MembershipKind};
 use joshi_pump_adapter::prepare_direct_with_offline_fixture_selection;
 use joshi_scientific_memory::{
@@ -77,6 +82,7 @@ pub struct Wave5G0SourcePublicationReport {
     pub memory_episode_id: String,
     pub memory_episode_digest: String,
     pub memory_queue_through: u64,
+    pub partial_fault_result: G0Result,
     pub source_semantics_closed: bool,
     pub publication_prepare_body_head_closed: bool,
     pub partial_memory_chain_closed: bool,
@@ -317,6 +323,9 @@ pub fn run_wave5_g0_source_publication_with_fault(
     drop(store);
 
     let reopened = SqliteStore::open(config(state)?, StoreMode::ReadOnly)?;
+    let reopened_registration = reopened.load_wave5_run_registration_v1(&run_id)?.ok_or(
+        Wave5G0SourcePublicationError::Invariant("run registration was absent after restart"),
+    )?;
     let reopened_source = reopened
         .load_wave5_source_occurrence_v1(&source_receipt.occurrence_id)?
         .ok_or(Wave5G0SourcePublicationError::Invariant(
@@ -357,6 +366,21 @@ pub fn run_wave5_g0_source_publication_with_fault(
         ));
     }
 
+    let partial_fault_result = partial_fault_result(
+        &run_id,
+        &reopened_registration.build_bytes,
+        prepared.exact_batch_bytes(),
+        &circulation,
+        &source,
+        &preparation,
+        &publication_id,
+        &head,
+        act_receipt.occurrence_id(),
+        act_receipt.occurrence_digest(),
+        episode_receipt.occurrence_id(),
+        episode_receipt.occurrence_digest(),
+    )?;
+
     Ok(Wave5G0SourcePublicationReport {
         contract: "joshi.wave5.g0_source_publication_readiness",
         schema_version: 1,
@@ -383,6 +407,7 @@ pub fn run_wave5_g0_source_publication_with_fault(
         memory_episode_id: episode_receipt.occurrence_id().to_string(),
         memory_episode_digest: episode_receipt.occurrence_digest().to_string(),
         memory_queue_through: episode_receipt.queue_generation(),
+        partial_fault_result,
         source_semantics_closed: true,
         publication_prepare_body_head_closed: true,
         partial_memory_chain_closed: true,
@@ -392,6 +417,96 @@ pub fn run_wave5_g0_source_publication_with_fault(
         product_qualified: false,
         live_qualified: false,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn partial_fault_result(
+    run_id: &StableString,
+    build_bytes: &[u8],
+    fixture_bytes: &[u8],
+    circulation: &crate::wave5_circulation::Wave5CirculationClosure,
+    source: &joshi_store::StoredWave5SourceOccurrence,
+    preparation: &joshi_store::StoredCockpitV2Preparation,
+    publication_id: &CockpitPublicationId,
+    head: &joshi_store::StoredCockpitV2Head,
+    act_id: &StableString,
+    act_digest: &joshi_domain::ValueDigest,
+    episode_id: &StableString,
+    episode_digest: &joshi_domain::ValueDigest,
+) -> Result<G0Result, Wave5G0SourcePublicationError> {
+    let schedule: FakeFaultSchedule = serde_json::from_slice(include_bytes!(
+        "../../../fixtures/g0-fault/fake_fault_schedule.json"
+    ))?;
+    let manifest = G0RunManifest {
+        contract: MANIFEST_CONTRACT.into(),
+        schema_version: FAULT_SCHEMA_VERSION,
+        run_id: run_id.to_string(),
+        build_digest: Sha256Digest::of_bytes(build_bytes).to_string(),
+        fixture_digest: Sha256Digest::of_bytes(fixture_bytes).to_string(),
+        schedule_digest: schedule.digest()?,
+        steps: REQUIRED_STEPS.to_vec(),
+        authority: FAULT_AUTHORITY_CEILING.into(),
+        requested_full_offline_fault_walk: false,
+    };
+    let ack_bytes = serde_json::to_vec(&circulation.catalog_ack)?;
+    let mut evidence = EvidenceBundle {
+        contract: EVIDENCE_CONTRACT.into(),
+        items: vec![
+            EvidenceItem {
+                role: EvidenceRole::OriginSegment,
+                evidence_id: circulation.segment.segment_id.to_string(),
+                content_digest: Sha256Digest::of_bytes(&circulation.origin_segment_bytes)
+                    .to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::StoreReceipt,
+                evidence_id: format!(
+                    "store-receipt:{}",
+                    circulation.structural_receipt.admission_digest
+                ),
+                content_digest: Sha256Digest::of_bytes(&circulation.catalog_receipt_bytes)
+                    .to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::CatalogBinding,
+                evidence_id: circulation.binding_receipt.occurrence_id.to_string(),
+                content_digest: Sha256Digest::of_bytes(&circulation.binding_bytes).to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::CatalogAck,
+                evidence_id: format!("catalog-ack:{}", circulation.segment.segment_id),
+                content_digest: Sha256Digest::of_bytes(&ack_bytes).to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::SemanticFact,
+                evidence_id: source.occurrence.source_occurrence_id.to_string(),
+                content_digest: source.descriptor_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::PublicationPrepare,
+                evidence_id: preparation.preparation_id.to_string(),
+                content_digest: preparation.resolved_input_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::PublicationHead,
+                evidence_id: format!("cockpit-v2-head:{}", publication_id.as_str()),
+                content_digest: head.head_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::MemoryAct,
+                evidence_id: act_id.to_string(),
+                content_digest: act_digest.to_string(),
+            },
+            EvidenceItem {
+                role: EvidenceRole::MemoryEpisode,
+                evidence_id: episode_id.to_string(),
+                content_digest: episode_digest.to_string(),
+            },
+        ],
+        digest: String::new(),
+    };
+    evidence.digest = evidence.recompute_digest()?;
+    Ok(run_partial_schedule(&manifest, &schedule, evidence)?)
 }
 
 fn memory_fixture(
@@ -488,6 +603,8 @@ pub enum Wave5G0SourcePublicationError {
     MemoryFixture(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    FaultHarness(#[from] joshi_g0_harness::HarnessError),
     #[error("injected Wave 5 G0 source/publication interruption at {0:?}")]
     Injected(Wave5G0SourcePublicationFaultPoint),
     #[error("Wave 5 G0 source/publication invariant failed: {0}")]
@@ -510,6 +627,24 @@ mod tests {
         assert!(report.publication_prepare_body_head_closed);
         assert!(report.partial_memory_chain_closed);
         assert_eq!(report.memory_queue_through, 2);
+        assert_eq!(report.partial_fault_result.evidence_bundle.items.len(), 9);
+        assert_eq!(
+            report
+                .partial_fault_result
+                .step_results
+                .iter()
+                .filter(|value| {
+                    value.disposition == joshi_g0_harness::StepDisposition::ObservedPartial
+                })
+                .count(),
+            9
+        );
+        assert!(
+            !report
+                .partial_fault_result
+                .qualification
+                .full_offline_fault_walk
+        );
         assert!(report.restart_reverified);
         assert!(!report.full_offline_fault_walk);
         assert!(!report.provider_io);
