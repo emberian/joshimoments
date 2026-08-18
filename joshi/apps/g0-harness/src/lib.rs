@@ -673,30 +673,34 @@ pub fn deterministic_fake_schedule() -> FakeFaultSchedule {
         scenario_id: "baseline_no_fault".into(),
         crash_mode: CrashMode::ProcessKill,
         crash_point: None,
-        expected_invariants: common_invariants(),
+        expected_invariants: vec![RecoveryInvariant::PrefixIsDurableOrAbsent],
     }];
-    for (index, point) in PRE_TRANSITION_CRASH_POINTS.into_iter().enumerate() {
+    for (index, (point, step)) in PRE_TRANSITION_CRASH_POINTS
+        .into_iter()
+        .zip(REQUIRED_STEPS)
+        .enumerate()
+    {
         scenarios.push(FaultScenario {
-            scenario_id: format!("{:02}_before_{point:?}", index + 1).to_lowercase(),
+            scenario_id: format!("{:02}_before_{}", index + 1, step_name(step)),
             crash_mode: match index % 3 {
                 0 => CrashMode::ProcessKill,
                 1 => CrashMode::PowerLoss,
                 _ => CrashMode::Panic,
             },
             crash_point: Some(point),
-            expected_invariants: common_invariants(),
+            expected_invariants: vec![fixture_before_invariant(step)],
         });
     }
-    for (index, point) in KILL_POINTS.into_iter().enumerate() {
+    for (index, (point, step)) in KILL_POINTS.into_iter().zip(REQUIRED_STEPS).enumerate() {
         scenarios.push(FaultScenario {
-            scenario_id: format!("{:02}_after_{:?}", index + 1, point).to_lowercase(),
+            scenario_id: format!("{:02}_after_{}", index + 19, step_name(step)),
             crash_mode: match (index + 18) % 3 {
                 0 => CrashMode::ProcessKill,
                 1 => CrashMode::PowerLoss,
                 _ => CrashMode::Panic,
             },
             crash_point: Some(CrashPoint::After(point)),
-            expected_invariants: invariants_for(point.step()),
+            expected_invariants: vec![fixture_after_invariant(step)],
         });
     }
     FakeFaultSchedule {
@@ -704,6 +708,78 @@ pub fn deterministic_fake_schedule() -> FakeFaultSchedule {
         schema_version: SCHEMA_VERSION,
         schedule_id: "g0_fake_full_boundary_matrix".into(),
         scenarios,
+    }
+}
+
+const fn step_name(step: HarnessStep) -> &'static str {
+    match step {
+        HarnessStep::PreIoReservation => "pre_io_reservation",
+        HarnessStep::OriginFsync => "origin_fsync",
+        HarnessStep::StoreReceipt => "store_receipt",
+        HarnessStep::CatalogBinding => "catalog_binding",
+        HarnessStep::CatalogAck => "catalog_ack",
+        HarnessStep::SemanticFact => "semantic_fact",
+        HarnessStep::PublicationPrepare => "publication_prepare",
+        HarnessStep::PublicationHead => "publication_head",
+        HarnessStep::PairingExchange => "pairing_exchange",
+        HarnessStep::GlassRead => "glass_read",
+        HarnessStep::MemoryAct => "memory_act",
+        HarnessStep::MemoryEpisode => "memory_episode",
+        HarnessStep::Export => "export",
+        HarnessStep::Import => "import",
+        HarnessStep::Status => "status",
+        HarnessStep::Backup => "backup",
+        HarnessStep::Restore => "restore",
+        HarnessStep::Reopen => "reopen",
+    }
+}
+
+const fn fixture_before_invariant(step: HarnessStep) -> RecoveryInvariant {
+    match step {
+        HarnessStep::SemanticFact
+        | HarnessStep::PublicationPrepare
+        | HarnessStep::PublicationHead
+        | HarnessStep::PairingExchange
+        | HarnessStep::GlassRead
+        | HarnessStep::MemoryAct
+        | HarnessStep::MemoryEpisode
+        | HarnessStep::Status => RecoveryInvariant::NoSyntheticFactOrPublication,
+        HarnessStep::Restore | HarnessStep::Reopen => {
+            RecoveryInvariant::BackupReadbackMatchesManifest
+        }
+        HarnessStep::PreIoReservation
+        | HarnessStep::OriginFsync
+        | HarnessStep::StoreReceipt
+        | HarnessStep::CatalogBinding
+        | HarnessStep::CatalogAck
+        | HarnessStep::Export
+        | HarnessStep::Import
+        | HarnessStep::Backup => RecoveryInvariant::PrefixIsDurableOrAbsent,
+    }
+}
+
+const fn fixture_after_invariant(step: HarnessStep) -> RecoveryInvariant {
+    match step {
+        HarnessStep::PreIoReservation => RecoveryInvariant::PrefixIsDurableOrAbsent,
+        HarnessStep::OriginFsync | HarnessStep::CatalogBinding => {
+            RecoveryInvariant::OriginBytesRemainImmutable
+        }
+        HarnessStep::StoreReceipt | HarnessStep::Import => {
+            RecoveryInvariant::NoDuplicateOrConflictingReceipt
+        }
+        HarnessStep::CatalogAck => RecoveryInvariant::CatalogAckNeverAuthorizesDeletion,
+        HarnessStep::SemanticFact
+        | HarnessStep::PublicationPrepare
+        | HarnessStep::PublicationHead
+        | HarnessStep::PairingExchange
+        | HarnessStep::GlassRead
+        | HarnessStep::MemoryAct
+        | HarnessStep::MemoryEpisode => RecoveryInvariant::NoSyntheticFactOrPublication,
+        HarnessStep::Export => RecoveryInvariant::RetryUsesSameIdempotencyIdentity,
+        HarnessStep::Status => RecoveryInvariant::ReopenReadsOnlyCommittedPrefix,
+        HarnessStep::Backup | HarnessStep::Restore | HarnessStep::Reopen => {
+            RecoveryInvariant::BackupReadbackMatchesManifest
+        }
     }
 }
 
@@ -1128,6 +1204,7 @@ mod tests {
         ))
         .unwrap();
         schedule.validate().unwrap();
+        assert_eq!(schedule, deterministic_fake_schedule());
     }
     #[test]
     fn missing_step_cannot_qualify() {
