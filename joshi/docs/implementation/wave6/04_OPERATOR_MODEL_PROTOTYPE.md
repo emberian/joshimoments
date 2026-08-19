@@ -14,10 +14,14 @@ package are references to those owned artifacts.
 `store_input.py` also accepts the artifact-bearing Core V22 operator-evidence report. It enforces
 the exact Rust field order, physical document/memory/browser-claim digests, browser-claim
 self-digest, store binding identity, commit order, act/scene/gap/subject/publication lineage, and
-every negative qualification bit. The returned validated packet is private to the parser rather
-than a caller-constructible qualifying DTO, and it is not a `SceneBinding` or `OperatorAct`: V22
-preserves the act's original presentation gap, while the later browser report is separate evidence
-and contains no recognition response. The parser therefore fixes
+every negative qualification bit. It also validates the complete nested V20 census and source
+occurrence with the market-atlas boundary's strict parser, including the exact eligible
+denominator, hot/cold membership, coverage, omissions, source receipt, binding, and commit lineage;
+the outer document cannot hide a re-signed census relabeling behind a new digest. The returned
+validated packet is private to the parser rather than a caller-constructible qualifying DTO, and it
+is not a `SceneBinding` or `OperatorAct`: V22 preserves the act's original presentation gap, while
+the later browser report is separate evidence and contains no recognition response. The parser
+therefore fixes
 `model_admission_refusal=unrepaired_w5_presentation_gap_and_no_recognition_response` and leaves
 scene binding, replay, human viewing, recognition, and operator-model resolution false.
 
@@ -103,5 +107,6 @@ reveal, replay receipt/scene/material substitution, and same-ID material
 version/content-digest swaps.
 
 The cross-runtime tests additionally reject duplicate/reordered JSON, scalar substitution,
-positive human/model qualification, replacement of the original gap, and omission of the act
-subject from the later browser report.
+positive human/model qualification, replacement of the original gap, omission of the act subject
+from the later browser report, and a fully re-signed mint-to-lifecycle substitution inside the
+embedded V20 census.

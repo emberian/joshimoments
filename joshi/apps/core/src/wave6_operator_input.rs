@@ -6,7 +6,8 @@ use joshi_domain::StableString;
 use joshi_scientific_memory::{MemoryOccurrence, PresentationBinding};
 use joshi_store::{
     IdempotencyStatus, SqliteStore, StoreMode, StoredWave6OperatorEvidenceInput,
-    Wave6OperatorEvidenceInputReceipt, Wave6OperatorEvidenceInputV1,
+    StoredWave6StoreInputCensus, Wave6OperatorEvidenceInputReceipt, Wave6OperatorEvidenceInputV1,
+    Wave6StoreInputCensusV1,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -38,6 +39,7 @@ pub struct Wave6OperatorEvidenceInputReport {
     pub program_registration_digest: String,
     pub input_census_binding_id: String,
     pub input_census_document_digest: String,
+    pub input_census: Wave6StoreInputCensusV1,
     pub source_occurrence_id: String,
     pub publication_id: String,
     pub publication_digest: String,
@@ -101,11 +103,17 @@ pub async fn run_wave6_operator_evidence_input(
                 .ok_or(Wave6OperatorEvidenceInputError::Invariant(
                     "reopened operator input lost its Wave 6 program",
                 ))?;
+            let census = store
+                .load_wave6_store_input_census_v1(&stored.document.input_census_binding_id)?
+                .ok_or(Wave6OperatorEvidenceInputError::Invariant(
+                    "reopened operator input lost its exact input census",
+                ))?;
             return report(
                 program.registration_digest.to_string(),
                 catalog_schema,
                 IdempotencyStatus::Idempotent,
                 &stored,
+                &census,
             );
         }
     }
@@ -196,6 +204,11 @@ pub async fn run_wave6_operator_evidence_input(
         .ok_or(Wave6OperatorEvidenceInputError::Invariant(
             "Wave 6 program did not select its operator input after restart",
         ))?;
+    let stored_census = reopened
+        .load_wave6_store_input_census_v1(&stored.document.input_census_binding_id)?
+        .ok_or(Wave6OperatorEvidenceInputError::Invariant(
+            "operator-evidence input lost its exact census after restart",
+        ))?;
     if stored != selected
         || stored.document_digest != first.document_digest
         || stored.commit_seq != first.commit_seq
@@ -210,6 +223,7 @@ pub async fn run_wave6_operator_evidence_input(
         catalog_schema,
         first.status,
         &stored,
+        &stored_census,
     )
 }
 
@@ -218,6 +232,7 @@ fn report(
     catalog_schema: String,
     first_status: IdempotencyStatus,
     stored: &StoredWave6OperatorEvidenceInput,
+    census: &StoredWave6StoreInputCensus,
 ) -> Result<Wave6OperatorEvidenceInputReport, Wave6OperatorEvidenceInputError> {
     let document = &stored.document;
     let MemoryOccurrence::OperatorAct(act) = &document.memory_occurrence else {
@@ -235,6 +250,10 @@ fn report(
         || document.authority.as_str() != AUTHORITY
         || document.semantic_ceiling.as_str() != SEMANTIC_CEILING
         || document.claim_scope.as_str() != CLAIM_SCOPE
+        || census.document.binding_id != document.input_census_binding_id
+        || census.document_digest != document.input_census_document_digest
+        || census.commit_seq != document.input_census_commit_seq
+        || census.document.source_occurrence.source_occurrence_id != document.source_occurrence_id
     {
         return Err(Wave6OperatorEvidenceInputError::Invariant(
             "operator-evidence input crossed its fixed semantic ceiling",
@@ -252,6 +271,7 @@ fn report(
         program_registration_digest,
         input_census_binding_id: document.input_census_binding_id.to_string(),
         input_census_document_digest: document.input_census_document_digest.to_string(),
+        input_census: census.document.clone(),
         source_occurrence_id: document.source_occurrence_id.to_string(),
         publication_id: document.publication_id.to_string(),
         publication_digest: document.publication_digest.to_string(),

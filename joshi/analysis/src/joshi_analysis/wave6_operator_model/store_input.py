@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from joshi_analysis.canonical import canonical_json_bytes, qualified_sha256_bytes
+from joshi_analysis.wave6_market_atlas.store_input import (
+    StoreInputCensusError,
+    validate_embedded_store_input_census_document,
+)
 
 from .contracts import OperatorModelError
 
@@ -41,6 +45,7 @@ _REPORT_KEYS = (
     "programRegistrationDigest",
     "inputCensusBindingId",
     "inputCensusDocumentDigest",
+    "inputCensus",
     "sourceOccurrenceId",
     "publicationId",
     "publicationDigest",
@@ -656,6 +661,23 @@ def validate_store_operator_evidence_report(
     if qualified_sha256_bytes(document_bytes) != report["documentDigest"]:
         raise StoreOperatorEvidenceError("embedded operator-evidence document digest differs")
     resolved = _validate_document(document, report)
+    try:
+        census = validate_embedded_store_input_census_document(
+            report["inputCensus"], document["inputCensusDocumentDigest"]
+        )
+    except StoreInputCensusError as error:
+        raise StoreOperatorEvidenceError(f"embedded input census is invalid: {error}") from error
+    census_commit = _positive_decimal(document["inputCensusCommitSeq"], "input census commit")
+    if (
+        census.binding_id != document["inputCensusBindingId"]
+        or census.program_id != document["programId"]
+        or census.source_occurrence_id != document["sourceOccurrenceId"]
+        or census.source_created_commit_seq >= census_commit
+        or census_commit >= resolved["accepted_commit"]
+    ):
+        raise StoreOperatorEvidenceError(
+            "embedded input census differs from the operator-evidence lineage"
+        )
 
     exact_pairs = (
         ("programId", "programId"),

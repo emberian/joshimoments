@@ -217,6 +217,22 @@ class _StoreInputCensusAssessment:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _EmbeddedCensusValidation:
+    document_bytes: bytes
+    document_digest: str
+    binding_id: str
+    program_id: str
+    source_occurrence_id: str
+    source_descriptor_digest: str
+    source_created_commit_seq: int
+    source_known_through_commit_seq: int
+    eligible_subjects: tuple[str, ...]
+    hot_subjects: tuple[str, ...]
+    cold_control_subjects: tuple[str, ...]
+    counts: dict[str, int]
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
@@ -492,6 +508,80 @@ def _validate_source(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_embedded_store_input_census_document(
+    document_value: Any,
+    expected_document_digest: Any,
+) -> _EmbeddedCensusValidation:
+    """Validate embedded V20 bytes only; this pure check confers no store authority."""
+
+    expected_digest = _digest(expected_document_digest, "embedded census document digest")
+    document = _object(document_value, "embedded store input census")
+    document_bytes = _wire_bytes(document)
+    if len(document_bytes) > MAX_DOCUMENT_BYTES:
+        raise StoreInputCensusError("embedded store input census is oversized")
+    if qualified_sha256_bytes(document_bytes) != expected_digest:
+        raise StoreInputCensusError("embedded store input census digest differs")
+    _keys(document, _DOCUMENT_KEYS, "store input census document")
+    if (
+        document["contract"] != DOCUMENT_CONTRACT
+        or document["schemaVersion"] != 1
+        or document["authority"] != AUTHORITY
+        or document["claimScope"] != DOCUMENT_CLAIM_SCOPE
+        or document["semanticCeiling"] != DOCUMENT_CEILING
+    ):
+        raise StoreInputCensusError("store input census document contract differs")
+    _exact_bool(document["storeResolvedSource"], True, "storeResolvedSource")
+    _exact_bool(document["marketAtlasResolved"], False, "marketAtlasResolved")
+    source_commit = _positive(document["sourceCreatedCommitSeq"], "source created commit")
+    _digest(document["sourceDescriptorDigest"], "source descriptor digest")
+    for key in ("bindingId", "programId"):
+        _text(document[key], key)
+
+    source = _object(document["sourceOccurrence"], "embedded W5 source occurrence")
+    resolved = _validate_source(source)
+    if resolved["known_through"] > source_commit:
+        raise StoreInputCensusError("source knowledge cutoff exceeds its store commit")
+    counts = {
+        "factCount": len(source["facts"]),
+        "eligibleSubjectCount": len(resolved["eligible"]),
+        "membershipCount": len(source["memberships"]),
+        "coverageCount": len(source["coverage"]),
+        "gapCount": len(source["gaps"]),
+        "hotSubjectCount": len(resolved["hot"]),
+        "coldControlSubjectCount": len(resolved["cold"]),
+    }
+    for key, expected in counts.items():
+        if _nonnegative(document[key], f"document {key}") != expected:
+            raise StoreInputCensusError(f"document {key} differs from exact source")
+    if document["gapCount"] != "0":
+        raise StoreInputCensusError("zero gap count must use canonical string zero")
+
+    identity = [
+        "joshi.store.wave6_input_census_identity.v1",
+        document["programId"],
+        source["sourceOccurrenceId"],
+    ]
+    expected_binding = (
+        "wave6-input-census:" + qualified_sha256_bytes(canonical_json_bytes(identity))[7:]
+    )
+    if document["bindingId"] != expected_binding:
+        raise StoreInputCensusError("store input census binding identity differs")
+    return _EmbeddedCensusValidation(
+        document_bytes=document_bytes,
+        document_digest=expected_digest,
+        binding_id=document["bindingId"],
+        program_id=document["programId"],
+        source_occurrence_id=source["sourceOccurrenceId"],
+        source_descriptor_digest=document["sourceDescriptorDigest"],
+        source_created_commit_seq=source_commit,
+        source_known_through_commit_seq=resolved["known_through"],
+        eligible_subjects=resolved["eligible"],
+        hot_subjects=resolved["hot"],
+        cold_control_subjects=resolved["cold"],
+        counts=counts,
+    )
+
+
 def validate_store_input_census_report(report_path: str | Path) -> _StoreInputCensusAssessment:
     """Validate the exact Core report and return an explicit market-atlas refusal."""
 
@@ -534,48 +624,18 @@ def validate_store_input_census_report(report_path: str | Path) -> _StoreInputCe
     for key in ("programId", "sourceOccurrenceId", "bindingId"):
         _text(report[key], key)
 
-    document = _object(report["storeInputCensus"], "embedded store input census")
-    document_bytes = _wire_bytes(document)
-    if len(document_bytes) > MAX_DOCUMENT_BYTES:
-        raise StoreInputCensusError("embedded store input census is oversized")
-    if qualified_sha256_bytes(document_bytes) != report["documentDigest"]:
-        raise StoreInputCensusError("embedded store input census digest differs")
-    _keys(document, _DOCUMENT_KEYS, "store input census document")
-    if (
-        document["contract"] != DOCUMENT_CONTRACT
-        or document["schemaVersion"] != 1
-        or document["authority"] != AUTHORITY
-        or document["claimScope"] != DOCUMENT_CLAIM_SCOPE
-        or document["semanticCeiling"] != DOCUMENT_CEILING
-    ):
-        raise StoreInputCensusError("store input census document contract differs")
-    _exact_bool(document["storeResolvedSource"], True, "storeResolvedSource")
-    _exact_bool(document["marketAtlasResolved"], False, "marketAtlasResolved")
-    source_commit = _positive(document["sourceCreatedCommitSeq"], "source created commit")
+    embedded = validate_embedded_store_input_census_document(
+        report["storeInputCensus"], report["documentDigest"]
+    )
     accepted_commit = _positive(report["acceptedCommitSeq"], "census accepted commit")
-    if source_commit >= accepted_commit:
+    if embedded.source_created_commit_seq >= accepted_commit:
         raise StoreInputCensusError("source occurrence was not prior to input census")
-    _digest(document["sourceDescriptorDigest"], "source descriptor digest")
-    for key in ("bindingId", "programId"):
-        _text(document[key], key)
-
-    source = _object(document["sourceOccurrence"], "embedded W5 source occurrence")
-    resolved = _validate_source(source)
-    counts = {
-        "factCount": len(source["facts"]),
-        "eligibleSubjectCount": len(resolved["eligible"]),
-        "membershipCount": len(source["memberships"]),
-        "coverageCount": len(source["coverage"]),
-        "gapCount": len(source["gaps"]),
-        "hotSubjectCount": len(resolved["hot"]),
-        "coldControlSubjectCount": len(resolved["cold"]),
-    }
-    for key, expected in counts.items():
-        if _nonnegative(document[key], f"document {key}") != expected:
-            raise StoreInputCensusError(f"document {key} differs from exact source")
+    document = report["storeInputCensus"]
+    source = document["sourceOccurrence"]
+    for key, expected in embedded.counts.items():
         if _nonnegative(report[key], f"report {key}") != expected:
             raise StoreInputCensusError(f"report {key} differs from exact source")
-    if report["gapCount"] != "0" or document["gapCount"] != "0":
+    if report["gapCount"] != "0":
         raise StoreInputCensusError("zero gap count must use canonical string zero")
 
     exact_pairs = (
@@ -596,27 +656,16 @@ def validate_store_input_census_report(report_path: str | Path) -> _StoreInputCe
     if report["sourceKnownThroughCommitSeq"] != source["knownThroughCommitSeq"]:
         raise StoreInputCensusError("Core report source cutoff differs from embedded source")
 
-    identity = [
-        "joshi.store.wave6_input_census_identity.v1",
-        document["programId"],
-        source["sourceOccurrenceId"],
-    ]
-    expected_binding = (
-        "wave6-input-census:" + qualified_sha256_bytes(canonical_json_bytes(identity))[7:]
-    )
-    if document["bindingId"] != expected_binding:
-        raise StoreInputCensusError("store input census binding identity differs")
-
     return _StoreInputCensusAssessment(
         report_digest=qualified_sha256_bytes(raw),
-        document_digest=report["documentDigest"],
-        document_bytes=document_bytes,
-        binding_id=document["bindingId"],
-        program_id=document["programId"],
-        source_occurrence_id=source["sourceOccurrenceId"],
-        source_descriptor_digest=document["sourceDescriptorDigest"],
-        eligible_subjects=resolved["eligible"],
-        hot_subjects=resolved["hot"],
-        cold_control_subjects=resolved["cold"],
+        document_digest=embedded.document_digest,
+        document_bytes=embedded.document_bytes,
+        binding_id=embedded.binding_id,
+        program_id=embedded.program_id,
+        source_occurrence_id=embedded.source_occurrence_id,
+        source_descriptor_digest=embedded.source_descriptor_digest,
+        eligible_subjects=embedded.eligible_subjects,
+        hot_subjects=embedded.hot_subjects,
+        cold_control_subjects=embedded.cold_control_subjects,
         accepted_commit_seq=accepted_commit,
     )

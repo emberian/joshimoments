@@ -28,10 +28,126 @@ def _digest(label: str) -> str:
     return qualified_sha256_bytes(label.encode())
 
 
+def _valid_input_census(
+    program: str,
+    source_occurrence_id: str,
+    receipt: str,
+) -> dict[str, Any]:
+    source_id = "pump.api.product.v1"
+    surface_id = "pump.discovery.public_c0"
+    subjects = ("MintA", "MintB")
+    fact_ids = (
+        "fact:source:mint-a:" + "1" * 64,
+        "fact:source:mint-b:" + "2" * 64,
+    )
+    facts = [
+        {
+            "factId": fact_id,
+            "factDigest": _digest(f"fact-{subject}"),
+            "surfaceId": surface_id,
+            "sourceId": source_id,
+            "subject": subject,
+            "field": "mint",
+            "protection": "public",
+            "observedAt": "2026-08-17T12:00:00.010000Z",
+            "knownAt": "2026-08-17T12:00:00.020000Z",
+            "commitSeq": "8",
+        }
+        for subject, fact_id in zip(subjects, fact_ids, strict=True)
+    ]
+    source = {
+        "contract": "joshi.store.wave5.source_occurrence.v1",
+        "schemaVersion": 1,
+        "sourceOccurrenceId": source_occurrence_id,
+        "runRegistrationId": "wave5-ignition-fixture-0001",
+        "catalogAdmissionId": "catalog-admission:wave5-g0-source-publication-0001",
+        "sourceReceiptDigest": receipt,
+        "sourceId": source_id,
+        "surfaceProfile": {
+            "profileId": "daily-surface:wave5-ignition-fixture-0001",
+            "profileDigest": _digest("surface-profile"),
+            "fieldCells": [{"surfaceId": surface_id, "sourceId": source_id, "field": "mint"}],
+        },
+        "facts": facts,
+        "eligibleSubjects": list(subjects),
+        "memberships": [
+            {
+                "subject": "MintA",
+                "membership": "hot",
+                "observedAt": "2026-08-17T12:00:00.020000Z",
+                "evidenceDigest": _digest("membership-a"),
+            },
+            {
+                "subject": "MintB",
+                "membership": "cold_control",
+                "observedAt": "2026-08-17T12:00:00.020000Z",
+                "evidenceDigest": _digest("membership-b"),
+            },
+        ],
+        "coverage": [
+            {
+                "surfaceId": surface_id,
+                "sourceId": source_id,
+                "subject": subject,
+                "field": "mint",
+                "factIds": [fact_id],
+                "state": "partial",
+                "coverageDigest": _digest(f"coverage-{subject}"),
+            }
+            for subject, fact_id in zip(subjects, fact_ids, strict=True)
+        ],
+        "gaps": [],
+        "renderedSubjects": ["MintA"],
+        "omissions": [
+            {
+                "subject": "MintB",
+                "reason": "cold_control_not_rendered",
+                "membership": "cold_control",
+            }
+        ],
+        "knownThroughCommitSeq": "8",
+        "maximumInputAvailableAt": "2026-08-17T12:00:00.020000Z",
+        "protection": "public",
+        "authority": "read_only_no_execution",
+    }
+    identity = [
+        "joshi.store.wave6_input_census_identity.v1",
+        program,
+        source_occurrence_id,
+    ]
+    binding = "wave6-input-census:" + qualified_sha256_bytes(canonical_json_bytes(identity))[7:]
+    return {
+        "contract": "joshi.store.wave6.input-census.v1",
+        "schemaVersion": 1,
+        "bindingId": binding,
+        "programId": program,
+        "sourceDescriptorDigest": _digest("source-descriptor"),
+        "sourceCreatedCommitSeq": "9",
+        "sourceOccurrence": source,
+        "factCount": "2",
+        "eligibleSubjectCount": "2",
+        "membershipCount": "2",
+        "coverageCount": "2",
+        "gapCount": "0",
+        "hotSubjectCount": "1",
+        "coldControlSubjectCount": "1",
+        "storeResolvedSource": True,
+        "marketAtlasResolved": False,
+        "authority": "read_record_replay_propose_shadow_only",
+        "claimScope": (
+            "mint_discovery_input_census_not_market_atlas_field_release_causal_strategy_or_execution"
+        ),
+        "semanticCeiling": "store_resolved_offline_fixture_input_census_only",
+    }
+
+
 def _valid_report() -> dict[str, Any]:
     program = "w6-program-fixture-001"
-    census = "wave6-input-census:" + "1" * 64
-    source = "source-c0:" + "2" * 64
+    source_receipt = _digest("source-receipt")
+    source = f"source-c0:{source_receipt[7:]}"
+    input_census = _valid_input_census(program, source, source_receipt)
+    census = input_census["bindingId"]
+    census_digest = qualified_sha256_bytes(_bytes(input_census))
     publication_id = "cockpit-v2-wave5-g0-offline-0001"
     publication_digest = _digest("publication")
     publication_bytes_digest = _digest("publication-bytes")
@@ -118,7 +234,7 @@ def _valid_report() -> dict[str, Any]:
         "bindingId": binding,
         "programId": program,
         "inputCensusBindingId": census,
-        "inputCensusDocumentDigest": _digest("input-census"),
+        "inputCensusDocumentDigest": census_digest,
         "inputCensusCommitSeq": "20",
         "sourceOccurrenceId": source,
         "publicationId": publication_id,
@@ -166,6 +282,7 @@ def _valid_report() -> dict[str, Any]:
         "programRegistrationDigest": _digest("program"),
         "inputCensusBindingId": census,
         "inputCensusDocumentDigest": document["inputCensusDocumentDigest"],
+        "inputCensus": input_census,
         "sourceOccurrenceId": source,
         "publicationId": publication_id,
         "publicationDigest": publication_digest,
@@ -208,6 +325,9 @@ def _write(path: Path, report: dict[str, Any]) -> None:
 
 def _resign(report: dict[str, Any]) -> None:
     document = report["operatorEvidenceInput"]
+    census_digest = qualified_sha256_bytes(_bytes(report["inputCensus"]))
+    document["inputCensusDocumentDigest"] = census_digest
+    report["inputCensusDocumentDigest"] = census_digest
     memory = document["memoryOccurrence"]
     document["memoryOccurrenceDigest"] = qualified_sha256_bytes(_bytes(memory))
     report["memoryOccurrenceDigest"] = document["memoryOccurrenceDigest"]
@@ -274,6 +394,31 @@ def test_subject_omission_and_scalar_substitution_are_refused(tmp_path: Path) ->
     path = tmp_path / "substituted.json"
     _write(path, substituted)
     with pytest.raises(StoreOperatorEvidenceError, match="report scalars differ"):
+        validate_store_operator_evidence_report(path)
+
+
+def test_embedded_census_cannot_be_relabeled_behind_resigned_outer_bytes(
+    tmp_path: Path,
+) -> None:
+    relabeled = _valid_report()
+    cell = relabeled["inputCensus"]["sourceOccurrence"]["surfaceProfile"]["fieldCells"][0]
+    cell["field"] = "lifecycle_state"
+    _resign(relabeled)
+    path = tmp_path / "relabeled-census.json"
+    _write(path, relabeled)
+
+    with pytest.raises(StoreOperatorEvidenceError, match="mint-discovery field cell"):
+        validate_store_operator_evidence_report(path)
+
+    future_cut = _valid_report()
+    future_source = future_cut["inputCensus"]["sourceOccurrence"]
+    future_source["knownThroughCommitSeq"] = "10"
+    for fact in future_source["facts"]:
+        fact["commitSeq"] = "10"
+    _resign(future_cut)
+    path = tmp_path / "future-census-cut.json"
+    _write(path, future_cut)
+    with pytest.raises(StoreOperatorEvidenceError, match="knowledge cutoff exceeds"):
         validate_store_operator_evidence_report(path)
 
 

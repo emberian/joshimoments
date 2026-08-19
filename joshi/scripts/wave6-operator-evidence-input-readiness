@@ -30,7 +30,8 @@ cargo test --locked --offline -p joshi-core wave6_operator_input --lib
 cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
 uv --directory analysis run --locked pytest tests/wave6_operator_model -q
 uv --directory analysis run --locked ruff check \
-  src/joshi_analysis/wave6_operator_model tests/wave6_operator_model \
+  src/joshi_analysis/wave6_market_atlas src/joshi_analysis/wave6_operator_model \
+  tests/wave6_market_atlas tests/wave6_operator_model \
   src/joshi_analysis/cli.py
 
 mkdir -p "$JOSHI_W6_OPERATOR_STATE/catalog"
@@ -58,6 +59,11 @@ for report in "$JOSHI_W6_OPERATOR_STATE/first.json" "$JOSHI_W6_OPERATOR_STATE/re
     and (.programRegistrationDigest | test("^sha256:[0-9a-f]{64}$"))
     and (.inputCensusBindingId | test("^wave6-input-census:[0-9a-f]{64}$"))
     and (.inputCensusDocumentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and .inputCensus.contract == "joshi.store.wave6.input-census.v1"
+    and .inputCensus.bindingId == .inputCensusBindingId
+    and .inputCensus.sourceOccurrence.sourceOccurrenceId == .sourceOccurrenceId
+    and .inputCensus.storeResolvedSource == true
+    and .inputCensus.marketAtlasResolved == false
     and (.sourceOccurrenceId | test("^source-c0:[0-9a-f]{64}$"))
     and .publicationId == "cockpit-v2-wave5-g0-offline-0001"
     and (.publicationDigest | test("^sha256:[0-9a-f]{64}$"))
@@ -173,7 +179,7 @@ jq -cn \
       "store_resolved_later_browser_report",
       "exact_retry",
       "read_only_restart",
-      "cross_runtime_exact_document_validation"
+      "cross_runtime_exact_census_and_document_validation"
     ],
     crossRuntimeValidation: {
       status: $validation[0].status,

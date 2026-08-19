@@ -26,11 +26,13 @@ that document from all priors after commit and read-only restart. Exact retry re
 identity and commit. An episode cannot substitute for the act; a missing/foreign presentation
 cannot substitute for the selected claim.
 
-Core embeds that exact store-built document in its JSON report. The locked Python
-`wave6_operator_model.store_input` validator preserves Rust field order, recomputes the physical
-document, memory occurrence, browser claim, and claim-material digests, rederives the binding ID,
-and rechecks the complete scalar and commit closure. Duplicate/reordered JSON and re-signed
-subject/gap/qualification substitutions refuse.
+Core embeds both that exact store-built document and the full store-reloaded V20 census in its JSON
+report. The locked Python `wave6_operator_model.store_input` validator preserves Rust field order,
+recomputes the physical operator document, memory occurrence, browser claim, and claim-material
+digests, then reuses the strict V20 census validator to rederive its source receipt, denominator,
+hot/cold partition, coverage, omissions, binding, and document digest. It cross-closes both embedded
+documents against the same program, source occurrence, and commit lineage. Duplicate/reordered JSON
+and re-signed census-relabelling, subject, gap, or qualification substitutions refuse.
 
 The later browser report does **not** rewrite or repair the act. The two session identifiers remain
 in their distinct memory and pairing domains, with no equivalence claim. The document fixes:
