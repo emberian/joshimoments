@@ -76,9 +76,31 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Panic one child at an exact scheduled G0 panic boundary and recover the same state.
+    Wave5G0PanicScenario {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        scenario_id: String,
+    },
+    /// Execute every frozen panic row with a real child panic and retain a partial ledger.
+    Wave5G0PanicLedger {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Internal parked child used only by the parent process-kill scenario runner.
     #[command(hide = true)]
     Wave5G0FaultKillChild {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        scenario_id: String,
+        #[arg(long)]
+        marker: PathBuf,
+    },
+    /// Internal child used only by the parent literal-panic scenario runner.
+    #[command(hide = true)]
+    Wave5G0FaultPanicChild {
         #[arg(long)]
         state: PathBuf,
         #[arg(long)]
@@ -186,12 +208,34 @@ async fn main() -> Result<(), CliError> {
                 joshi_core::wave5_g0_fault_root::run_wave5_g0_process_kill_ledger(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
+        Some(Command::Wave5G0PanicScenario { state, scenario_id }) => {
+            let report =
+                joshi_core::wave5_g0_fault_root::run_wave5_g0_panic_scenario(&state, &scenario_id)
+                    .await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0PanicLedger { state }) => {
+            let report = joshi_core::wave5_g0_fault_root::run_wave5_g0_panic_ledger(&state).await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
         Some(Command::Wave5G0FaultKillChild {
             state,
             scenario_id,
             marker,
         }) => {
             joshi_core::wave5_g0_fault_root::run_wave5_g0_process_kill_child(
+                &state,
+                &scenario_id,
+                &marker,
+            )
+            .await?;
+        }
+        Some(Command::Wave5G0FaultPanicChild {
+            state,
+            scenario_id,
+            marker,
+        }) => {
+            joshi_core::wave5_g0_fault_root::run_wave5_g0_panic_child(
                 &state,
                 &scenario_id,
                 &marker,

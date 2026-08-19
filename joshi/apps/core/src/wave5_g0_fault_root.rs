@@ -1,15 +1,14 @@
 //! Executed, explicitly non-qualifying G0 fault-matrix ledger.
 //!
-//! Every frozen schedule row is run against a fresh offline state root. The adapter observes one
-//! deterministic in-process interruption and then recovers the same state into the complete
-//! eighteen-role root evidence bundle. This closes the former map-only gap, but deliberately does
-//! not claim that an error injection is an OS process kill, power loss, or panic.
+//! Every frozen schedule row can be run against a fresh offline state root with deterministic
+//! in-process interruption or actual child termination. Separate ledgers preserve the difference
+//! between OS process kill and Rust panic; neither claims power-loss or full-walk qualification.
 
 use crate::{
     g0_inspector_smoke::{
         G0InspectorSmokeError, run_g0_inspector_smoke, run_g0_inspector_smoke_with_fault,
     },
-    g0_process_fault::arm_process_kill_marker,
+    g0_process_fault::{arm_panic_marker, arm_process_kill_marker},
     wave5_circulation::Wave5CirculationError,
     wave5_g0::{
         Wave5G0SourceChainFaultPoint, Wave5G0SourcePublicationError,
@@ -46,9 +45,16 @@ const PROCESS_KILL_AUTHORITY: &str =
 const PROCESS_KILL_LEDGER_AUTHORITY: &str =
     "offline_fixture_actual_process_kill_all_mapped_boundaries_no_mixed_mode_qualification";
 const PROCESS_KILL_EXECUTION_KIND: &str = "os_process_kill_at_exact_armed_fault_boundary";
+const PANIC_CONTRACT: &str = "joshi.wave5.g0_panic_scenario.v1";
+const PANIC_LEDGER_CONTRACT: &str = "joshi.wave5.g0_panic_ledger.v1";
+const PANIC_AUTHORITY: &str =
+    "offline_fixture_actual_rust_panic_single_scenario_no_full_walk_qualification";
+const PANIC_LEDGER_AUTHORITY: &str =
+    "offline_fixture_actual_rust_panic_all_scheduled_panic_rows_no_full_walk_qualification";
+const PANIC_EXECUTION_KIND: &str = "rust_panic_at_exact_durably_marked_fault_boundary";
 const SCHEDULE_BYTES: &[u8] = include_bytes!("../../../fixtures/g0-fault/fake_fault_schedule.json");
 
-/// One actual child-process termination at an exact mapped G0 fault boundary.
+/// One actual child-process kill or panic at an exact mapped G0 fault boundary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
@@ -115,6 +121,87 @@ pub struct G0ProcessKillLedgerV1 {
     pub disqualifiers: Vec<&'static str>,
 }
 
+/// Baseline plus the twelve frozen panic rows executed by actual child panics.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
+pub struct G0PanicLedgerV1 {
+    pub contract: &'static str,
+    pub schema_version: u16,
+    pub authority: &'static str,
+    pub status: &'static str,
+    pub schedule_id: String,
+    pub schedule_digest: String,
+    pub baseline_root_report_digest: String,
+    pub baseline_evidence_bundle: EvidenceBundle,
+    pub scenario_ledger_digest: String,
+    pub scenarios: Vec<G0ProcessKillScenarioV1>,
+    pub schedule_scenario_count: u64,
+    pub scheduled_panic_scenario_count: u64,
+    pub complete_evidence_bundle_count: u64,
+    pub recovery_refusal_count: u64,
+    pub every_scheduled_panic_observed: bool,
+    pub every_panic_recovery_accounted: bool,
+    pub every_panic_recovered_same_state: bool,
+    pub mixed_scheduled_modes_fully_executed: bool,
+    pub full_offline_fault_walk: bool,
+    pub provider_io: bool,
+    pub browser_presented: bool,
+    pub product_qualified: bool,
+    pub live_qualified: bool,
+    pub disqualifiers: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChildTerminationKind {
+    ProcessKill,
+    Panic,
+}
+
+impl ChildTerminationKind {
+    const fn crash_mode(self) -> CrashMode {
+        match self {
+            Self::ProcessKill => CrashMode::ProcessKill,
+            Self::Panic => CrashMode::Panic,
+        }
+    }
+
+    const fn child_command(self) -> &'static str {
+        match self {
+            Self::ProcessKill => "wave5-g0-fault-kill-child",
+            Self::Panic => "wave5-g0-fault-panic-child",
+        }
+    }
+
+    const fn contract(self) -> &'static str {
+        match self {
+            Self::ProcessKill => PROCESS_KILL_CONTRACT,
+            Self::Panic => PANIC_CONTRACT,
+        }
+    }
+
+    const fn authority(self) -> &'static str {
+        match self {
+            Self::ProcessKill => PROCESS_KILL_AUTHORITY,
+            Self::Panic => PANIC_AUTHORITY,
+        }
+    }
+
+    const fn execution_kind(self) -> &'static str {
+        match self {
+            Self::ProcessKill => PROCESS_KILL_EXECUTION_KIND,
+            Self::Panic => PANIC_EXECUTION_KIND,
+        }
+    }
+
+    const fn cross_mode_disqualifier(self) -> &'static str {
+        match self {
+            Self::ProcessKill => "process_kill_does_not_prove_power_loss_or_panic",
+            Self::Panic => "panic_does_not_prove_process_kill_or_power_loss",
+        }
+    }
+}
+
 /// Arm one exact child fault boundary and wait for the parent to terminate this process.
 ///
 /// # Errors
@@ -126,24 +213,60 @@ pub async fn run_wave5_g0_process_kill_child(
     scenario_id: &str,
     marker: &Path,
 ) -> Result<(), G0ExecutedFaultLedgerError> {
+    run_wave5_g0_termination_child(
+        state,
+        scenario_id,
+        marker,
+        ChildTerminationKind::ProcessKill,
+    )
+    .await
+}
+
+/// Arm one exact scheduled panic boundary and enter the root path that must panic there.
+///
+/// # Errors
+///
+/// Refuses a non-panic/unknown scenario, nonempty state, reused marker, or a fault path that
+/// returns instead of panicking at its exact requested boundary.
+pub async fn run_wave5_g0_panic_child(
+    state: &Path,
+    scenario_id: &str,
+    marker: &Path,
+) -> Result<(), G0ExecutedFaultLedgerError> {
+    run_wave5_g0_termination_child(state, scenario_id, marker, ChildTerminationKind::Panic).await
+}
+
+async fn run_wave5_g0_termination_child(
+    state: &Path,
+    scenario_id: &str,
+    marker: &Path,
+    termination: ChildTerminationKind,
+) -> Result<(), G0ExecutedFaultLedgerError> {
     require_empty_root(state)?;
     let expected_marker = state
         .parent()
-        .ok_or(G0ExecutedFaultLedgerError::UnsafeProcessKillMarker)?
+        .ok_or(G0ExecutedFaultLedgerError::UnsafeTerminationMarker)?
         .join("child-ready");
     if marker != expected_marker {
-        return Err(G0ExecutedFaultLedgerError::UnsafeProcessKillMarker);
+        return Err(G0ExecutedFaultLedgerError::UnsafeTerminationMarker);
     }
     let schedule: FakeFaultSchedule = serde_json::from_slice(SCHEDULE_BYTES)?;
     schedule.validate()?;
     let scenario = scheduled_scenario(&schedule, scenario_id)?;
+    if termination == ChildTerminationKind::Panic && scenario.crash_mode != termination.crash_mode()
+    {
+        return Err(G0ExecutedFaultLedgerError::ScheduledCrashModeMismatch);
+    }
     let point = scenario
         .crash_point
-        .ok_or(G0ExecutedFaultLedgerError::BaselineProcessKill)?;
-    arm_process_kill_marker(marker)?;
+        .ok_or(G0ExecutedFaultLedgerError::BaselineTermination)?;
+    match termination {
+        ChildTerminationKind::ProcessKill => arm_process_kill_marker(marker)?,
+        ChildTerminationKind::Panic => arm_panic_marker(marker)?,
+    }
     let adapter = fault_adapter(point);
     let _returned = execute_interruption_and_recoverable_prefix(state, adapter).await?;
-    Err(G0ExecutedFaultLedgerError::MissingProcessKillPause)
+    Err(G0ExecutedFaultLedgerError::MissingTermination)
 }
 
 /// Kill one child parked at an exact G0 boundary, then recover the same state to the root bundle.
@@ -160,14 +283,43 @@ pub async fn run_wave5_g0_process_kill_scenario(
     root: &Path,
     scenario_id: &str,
 ) -> Result<G0ProcessKillScenarioV1, G0ExecutedFaultLedgerError> {
+    run_wave5_g0_termination_scenario(root, scenario_id, ChildTerminationKind::ProcessKill).await
+}
+
+/// Trigger one child panic at an exact frozen panic boundary, then recover the same state.
+///
+/// The result proves only that one scheduled panic occurred at its exact durable marker. It does
+/// not claim process-kill, power-loss, product, browser, live, or full-walk evidence.
+///
+/// # Errors
+///
+/// Refuses a non-panic scenario, nonempty destination, changed schedule, missing/wrong marker,
+/// successful child exit, or invalid same-state recovery evidence.
+pub async fn run_wave5_g0_panic_scenario(
+    root: &Path,
+    scenario_id: &str,
+) -> Result<G0ProcessKillScenarioV1, G0ExecutedFaultLedgerError> {
+    run_wave5_g0_termination_scenario(root, scenario_id, ChildTerminationKind::Panic).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_wave5_g0_termination_scenario(
+    root: &Path,
+    scenario_id: &str,
+    termination: ChildTerminationKind,
+) -> Result<G0ProcessKillScenarioV1, G0ExecutedFaultLedgerError> {
     require_empty_root(root)?;
     let schedule: FakeFaultSchedule = serde_json::from_slice(SCHEDULE_BYTES)?;
     schedule.validate()?;
     let schedule_digest = schedule.digest()?;
     let scenario = scheduled_scenario(&schedule, scenario_id)?;
+    if termination == ChildTerminationKind::Panic && scenario.crash_mode != termination.crash_mode()
+    {
+        return Err(G0ExecutedFaultLedgerError::ScheduledCrashModeMismatch);
+    }
     let point = scenario
         .crash_point
-        .ok_or(G0ExecutedFaultLedgerError::BaselineProcessKill)?;
+        .ok_or(G0ExecutedFaultLedgerError::BaselineTermination)?;
     let adapter = fault_adapter(point);
     let family = adapter_family(adapter);
     let point_name = adapter_point(adapter);
@@ -176,7 +328,7 @@ pub async fn run_wave5_g0_process_kill_scenario(
     let child_binary = std::env::current_exe()?;
     let mut child = KillOnDrop::new(
         Command::new(child_binary)
-            .arg("wave5-g0-fault-kill-child")
+            .arg(termination.child_command())
             .arg("--state")
             .arg(&state)
             .arg("--scenario-id")
@@ -199,16 +351,19 @@ pub async fn run_wave5_g0_process_kill_scenario(
             ));
         }
         if Instant::now() >= deadline {
-            return Err(G0ExecutedFaultLedgerError::ProcessKillBoundaryTimeout);
+            return Err(G0ExecutedFaultLedgerError::TerminationBoundaryTimeout);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let marker_bytes = fs::read(&marker)?;
     let expected_marker = format!("{family}:{point_name}\n");
     if marker_bytes != expected_marker.as_bytes() {
-        return Err(G0ExecutedFaultLedgerError::WrongProcessKillMarker);
+        return Err(G0ExecutedFaultLedgerError::WrongTerminationMarker);
     }
-    let exit = child.kill_and_wait()?;
+    let exit = match termination {
+        ChildTerminationKind::ProcessKill => child.kill_and_wait()?,
+        ChildTerminationKind::Panic => child.wait_after_marker()?,
+    };
     if exit.success() {
         return Err(G0ExecutedFaultLedgerError::ChildExitedSuccessfully);
     }
@@ -231,7 +386,7 @@ pub async fn run_wave5_g0_process_kill_scenario(
                 || recovered.live_qualified
             {
                 return Err(G0ExecutedFaultLedgerError::Invariant(
-                    "process-kill recovery did not retain its exact partial root ceiling",
+                    "abrupt-termination recovery did not retain its exact partial root ceiling",
                 ));
             }
             recovered.evidence_bundle.validate()?;
@@ -253,7 +408,7 @@ pub async fn run_wave5_g0_process_kill_scenario(
     };
     let mut disqualifiers = vec![
         "single_scenario_does_not_close_the_37_row_schedule",
-        "process_kill_does_not_prove_power_loss_or_panic",
+        termination.cross_mode_disqualifier(),
         "no_browser_presentation_occurrence",
         "offline_fixture_only",
     ];
@@ -261,20 +416,20 @@ pub async fn run_wave5_g0_process_kill_scenario(
         disqualifiers.push("same_state_root_recovery_refused");
     }
     let report = G0ProcessKillScenarioV1 {
-        contract: PROCESS_KILL_CONTRACT,
+        contract: termination.contract(),
         schema_version: 1,
-        authority: PROCESS_KILL_AUTHORITY,
+        authority: termination.authority(),
         status: "useful_partial",
         schedule_id: schedule.schedule_id.clone(),
         schedule_digest,
         scenario_id: scenario.scenario_id.clone(),
         scheduled_crash_mode: scenario.crash_mode,
-        actual_crash_mode: CrashMode::ProcessKill,
-        scheduled_mode_matched: scenario.crash_mode == CrashMode::ProcessKill,
+        actual_crash_mode: termination.crash_mode(),
+        scheduled_mode_matched: scenario.crash_mode == termination.crash_mode(),
         crash_point: point,
         adapter_family: family.into(),
         adapter_point: point_name,
-        execution_kind: PROCESS_KILL_EXECUTION_KIND,
+        execution_kind: termination.execution_kind(),
         boundary_marker_digest: Sha256Digest::of_bytes(&marker_bytes).to_string(),
         child_terminated_without_success: true,
         recovered_root_report_digest,
@@ -290,7 +445,7 @@ pub async fn run_wave5_g0_process_kill_scenario(
         live_qualified: false,
         disqualifiers,
     };
-    validate_process_kill_report(&report, &schedule, scenario, &expected_marker)?;
+    validate_termination_report(&report, &schedule, scenario, &expected_marker, termination)?;
     Ok(report)
 }
 
@@ -409,6 +564,121 @@ pub async fn run_wave5_g0_process_kill_ledger(
     Ok(report)
 }
 
+/// Execute the baseline plus all twelve frozen panic rows with actual child panics.
+///
+/// This is a strict partial-mode ledger. It advances the literal panic evidence without treating
+/// a Rust panic as process kill or power loss, and it keeps the full offline fault walk false.
+///
+/// # Errors
+///
+/// Refuses a nonempty root, changed schedule, any missing panic boundary, successful child exit,
+/// unaccounted recovery, or any authority widening.
+#[allow(clippy::too_many_lines)]
+pub async fn run_wave5_g0_panic_ledger(
+    root: &Path,
+) -> Result<G0PanicLedgerV1, G0ExecutedFaultLedgerError> {
+    require_empty_root(root)?;
+    let schedule: FakeFaultSchedule = serde_json::from_slice(SCHEDULE_BYTES)?;
+    schedule.validate()?;
+    let schedule_digest = schedule.digest()?;
+
+    let baseline = run_wave5_g0_root_evidence(&root.join("baseline_no_fault")).await?;
+    if !baseline.partial_root_evidence_closed
+        || baseline.evidence_bundle.items.len() != 18
+        || baseline.full_offline_fault_walk
+        || baseline.browser_presented
+        || baseline.product_qualified
+        || baseline.live_qualified
+    {
+        return Err(G0ExecutedFaultLedgerError::Invariant(
+            "panic baseline did not retain its exact partial root ceiling",
+        ));
+    }
+    baseline.evidence_bundle.validate()?;
+    let baseline_root_report_digest =
+        Sha256Digest::of_bytes(&serde_json::to_vec(&baseline)?).to_string();
+    let baseline_evidence_bundle = baseline.evidence_bundle;
+
+    let scheduled_panics = schedule
+        .scenarios
+        .iter()
+        .filter(|scenario| scenario.crash_mode == CrashMode::Panic)
+        .collect::<Vec<_>>();
+    let mut scenarios = Vec::with_capacity(scheduled_panics.len());
+    for scheduled in &scheduled_panics {
+        scenarios.push(
+            run_wave5_g0_panic_scenario(&root.join(&scheduled.scenario_id), &scheduled.scenario_id)
+                .await?,
+        );
+    }
+    let complete_evidence_bundle_count = u64::try_from(
+        scenarios
+            .iter()
+            .filter(|scenario| scenario.recovered_evidence_bundle.is_some())
+            .count(),
+    )
+    .map_err(|_| G0ExecutedFaultLedgerError::Invariant("panic evidence count overflow"))?;
+    let recovery_refusal_count = u64::try_from(
+        scenarios
+            .iter()
+            .filter(|scenario| scenario.recovery_error_code.is_some())
+            .count(),
+    )
+    .map_err(|_| G0ExecutedFaultLedgerError::Invariant("panic refusal count overflow"))?;
+    let every_scheduled_panic_observed = scenarios
+        .iter()
+        .all(|scenario| scenario.scheduled_mode_matched);
+    let every_panic_recovered_same_state = scenarios
+        .iter()
+        .all(|scenario| scenario.same_state_recovery_closed);
+    let scenario_ledger_digest = Sha256Digest::of_bytes(&serde_json::to_vec(&(
+        &baseline_root_report_digest,
+        &baseline_evidence_bundle,
+        &scenarios,
+    ))?)
+    .to_string();
+    let report = G0PanicLedgerV1 {
+        contract: PANIC_LEDGER_CONTRACT,
+        schema_version: 1,
+        authority: PANIC_LEDGER_AUTHORITY,
+        status: "useful_partial",
+        schedule_id: schedule.schedule_id.clone(),
+        schedule_digest,
+        baseline_root_report_digest,
+        baseline_evidence_bundle,
+        scenario_ledger_digest,
+        scheduled_panic_scenario_count: u64::try_from(scenarios.len())
+            .map_err(|_| G0ExecutedFaultLedgerError::Invariant("panic scenario count overflow"))?,
+        scenarios,
+        schedule_scenario_count: u64::try_from(schedule.scenarios.len())
+            .map_err(|_| G0ExecutedFaultLedgerError::Invariant("schedule count overflow"))?,
+        complete_evidence_bundle_count,
+        recovery_refusal_count,
+        every_scheduled_panic_observed,
+        every_panic_recovery_accounted: true,
+        every_panic_recovered_same_state,
+        mixed_scheduled_modes_fully_executed: false,
+        full_offline_fault_walk: false,
+        provider_io: false,
+        browser_presented: false,
+        product_qualified: false,
+        live_qualified: false,
+        disqualifiers: {
+            let mut values = vec![
+                "panic_rows_do_not_execute_process_kill_or_power_loss",
+                "no_browser_presentation_occurrence",
+                "offline_fixture_only",
+            ];
+            if !every_panic_recovered_same_state {
+                values.push("one_or_more_same_state_root_recoveries_refused");
+            }
+            values
+        },
+    };
+    validate_panic_ledger(&report, &schedule)?;
+    Ok(report)
+}
+
 struct KillOnDrop(Option<Child>);
 
 impl KillOnDrop {
@@ -435,6 +705,13 @@ impl KillOnDrop {
             .ok_or_else(|| std::io::Error::other("G0 child was already reaped"))?;
         child.kill()?;
         child.wait()
+    }
+
+    fn wait_after_marker(&mut self) -> std::io::Result<ExitStatus> {
+        self.0
+            .take()
+            .ok_or_else(|| std::io::Error::other("G0 child was already reaped"))?
+            .wait()
     }
 }
 
@@ -849,33 +1126,34 @@ fn validate_report(
     Ok(())
 }
 
-fn validate_process_kill_report(
+fn validate_termination_report(
     report: &G0ProcessKillScenarioV1,
     schedule: &FakeFaultSchedule,
     scenario: &joshi_g0_harness::FaultScenario,
     marker: &str,
+    termination: ChildTerminationKind,
 ) -> Result<(), G0ExecutedFaultLedgerError> {
     let mut expected_disqualifiers = vec![
         "single_scenario_does_not_close_the_37_row_schedule",
-        "process_kill_does_not_prove_power_loss_or_panic",
+        termination.cross_mode_disqualifier(),
         "no_browser_presentation_occurrence",
         "offline_fixture_only",
     ];
     if !report.same_state_recovery_closed {
         expected_disqualifiers.push("same_state_root_recovery_refused");
     }
-    if report.contract != PROCESS_KILL_CONTRACT
+    if report.contract != termination.contract()
         || report.schema_version != 1
-        || report.authority != PROCESS_KILL_AUTHORITY
+        || report.authority != termination.authority()
         || report.status != "useful_partial"
         || report.schedule_id != schedule.schedule_id
         || report.schedule_digest != schedule.digest()?
         || report.scenario_id != scenario.scenario_id
         || report.scheduled_crash_mode != scenario.crash_mode
-        || report.actual_crash_mode != CrashMode::ProcessKill
-        || report.scheduled_mode_matched != (scenario.crash_mode == CrashMode::ProcessKill)
+        || report.actual_crash_mode != termination.crash_mode()
+        || report.scheduled_mode_matched != (scenario.crash_mode == termination.crash_mode())
         || Some(report.crash_point) != scenario.crash_point
-        || report.execution_kind != PROCESS_KILL_EXECUTION_KIND
+        || report.execution_kind != termination.execution_kind()
         || report.boundary_marker_digest != Sha256Digest::of_bytes(marker.as_bytes()).to_string()
         || !report.child_terminated_without_success
         || report.expected_invariants != scenario.expected_invariants
@@ -887,7 +1165,7 @@ fn validate_process_kill_report(
         || report.disqualifiers != expected_disqualifiers
     {
         return Err(G0ExecutedFaultLedgerError::Invariant(
-            "process-kill scenario report changed or widened its authority",
+            "abrupt-termination scenario report changed or widened its authority",
         ));
     }
     Sha256Digest::parse(report.schedule_digest.clone())?;
@@ -903,7 +1181,7 @@ fn validate_process_kill_report(
             bundle.validate()?;
             if bundle.items.len() != 18 {
                 return Err(G0ExecutedFaultLedgerError::Invariant(
-                    "closed process-kill recovery has incomplete evidence",
+                    "closed abrupt-termination recovery has incomplete evidence",
                 ));
             }
         }
@@ -914,7 +1192,7 @@ fn validate_process_kill_report(
         }
         _ => {
             return Err(G0ExecutedFaultLedgerError::Invariant(
-                "process-kill recovery evidence and refusal do not partition exactly",
+                "abrupt-termination recovery evidence and refusal do not partition exactly",
             ));
         }
     }
@@ -968,7 +1246,13 @@ fn validate_process_kill_ledger(
         .zip(schedule.scenarios.iter().skip(1))
     {
         let marker = format!("{}:{}\n", actual.adapter_family, actual.adapter_point);
-        validate_process_kill_report(actual, schedule, expected, &marker)?;
+        validate_termination_report(
+            actual,
+            schedule,
+            expected,
+            &marker,
+            ChildTerminationKind::ProcessKill,
+        )?;
     }
     let recomputed_matches = u64::try_from(
         report
@@ -1012,6 +1296,104 @@ fn validate_process_kill_ledger(
     {
         return Err(G0ExecutedFaultLedgerError::Invariant(
             "process-kill ledger aggregates differ from exact scenario evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_panic_ledger(
+    report: &G0PanicLedgerV1,
+    schedule: &FakeFaultSchedule,
+) -> Result<(), G0ExecutedFaultLedgerError> {
+    let mut expected_disqualifiers = vec![
+        "panic_rows_do_not_execute_process_kill_or_power_loss",
+        "no_browser_presentation_occurrence",
+        "offline_fixture_only",
+    ];
+    if !report.every_panic_recovered_same_state {
+        expected_disqualifiers.push("one_or_more_same_state_root_recoveries_refused");
+    }
+    let expected = schedule
+        .scenarios
+        .iter()
+        .filter(|scenario| scenario.crash_mode == CrashMode::Panic)
+        .collect::<Vec<_>>();
+    if report.contract != PANIC_LEDGER_CONTRACT
+        || report.schema_version != 1
+        || report.authority != PANIC_LEDGER_AUTHORITY
+        || report.status != "useful_partial"
+        || report.schedule_id != schedule.schedule_id
+        || report.schedule_digest != schedule.digest()?
+        || report.schedule_scenario_count != 37
+        || report.scheduled_panic_scenario_count != 12
+        || report.scenarios.len() != 12
+        || report.complete_evidence_bundle_count + report.recovery_refusal_count != 12
+        || !report.every_scheduled_panic_observed
+        || !report.every_panic_recovery_accounted
+        || report.mixed_scheduled_modes_fully_executed
+        || report.full_offline_fault_walk
+        || report.provider_io
+        || report.browser_presented
+        || report.product_qualified
+        || report.live_qualified
+        || report.disqualifiers != expected_disqualifiers
+        || report.baseline_evidence_bundle.items.len() != 18
+    {
+        return Err(G0ExecutedFaultLedgerError::Invariant(
+            "panic ledger changed or widened its authority",
+        ));
+    }
+    Sha256Digest::parse(report.baseline_root_report_digest.clone())?;
+    Sha256Digest::parse(report.scenario_ledger_digest.clone())?;
+    report.baseline_evidence_bundle.validate()?;
+    for (actual, expected) in report.scenarios.iter().zip(expected) {
+        let marker = format!("{}:{}\n", actual.adapter_family, actual.adapter_point);
+        validate_termination_report(
+            actual,
+            schedule,
+            expected,
+            &marker,
+            ChildTerminationKind::Panic,
+        )?;
+    }
+    let recomputed_complete = u64::try_from(
+        report
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.recovered_evidence_bundle.is_some())
+            .count(),
+    )
+    .map_err(|_| G0ExecutedFaultLedgerError::Invariant("panic evidence count overflow"))?;
+    let recomputed_refused = u64::try_from(
+        report
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.recovery_error_code.is_some())
+            .count(),
+    )
+    .map_err(|_| G0ExecutedFaultLedgerError::Invariant("panic refusal count overflow"))?;
+    let recomputed_all_observed = report
+        .scenarios
+        .iter()
+        .all(|scenario| scenario.scheduled_mode_matched);
+    let recomputed_all_recovered = report
+        .scenarios
+        .iter()
+        .all(|scenario| scenario.same_state_recovery_closed);
+    let recomputed_digest = Sha256Digest::of_bytes(&serde_json::to_vec(&(
+        &report.baseline_root_report_digest,
+        &report.baseline_evidence_bundle,
+        &report.scenarios,
+    ))?)
+    .to_string();
+    if recomputed_complete != report.complete_evidence_bundle_count
+        || recomputed_refused != report.recovery_refusal_count
+        || recomputed_all_observed != report.every_scheduled_panic_observed
+        || recomputed_all_recovered != report.every_panic_recovered_same_state
+        || recomputed_digest != report.scenario_ledger_digest
+    {
+        return Err(G0ExecutedFaultLedgerError::Invariant(
+            "panic ledger aggregates differ from exact scenario evidence",
         ));
     }
     Ok(())
@@ -1080,18 +1462,20 @@ pub enum G0ExecutedFaultLedgerError {
     UnexpectedInterruption(String),
     #[error("unknown frozen G0 fault scenario: {0}")]
     UnknownScenario(String),
-    #[error("the baseline has no process-kill boundary")]
-    BaselineProcessKill,
-    #[error("G0 child returned instead of parking at the process-kill boundary")]
-    MissingProcessKillPause,
+    #[error("the baseline has no abrupt-termination boundary")]
+    BaselineTermination,
+    #[error("G0 child returned instead of terminating at the armed boundary")]
+    MissingTermination,
+    #[error("the selected scenario does not request the chosen crash mode")]
+    ScheduledCrashModeMismatch,
     #[error("G0 child exited before publishing its process-kill boundary: {0}")]
     ChildExitedBeforeBoundary(String),
-    #[error("timed out waiting for the G0 child process-kill boundary")]
-    ProcessKillBoundaryTimeout,
-    #[error("G0 child published a different process-kill boundary")]
-    WrongProcessKillMarker,
+    #[error("timed out waiting for the G0 child abrupt-termination boundary")]
+    TerminationBoundaryTimeout,
+    #[error("G0 child published a different abrupt-termination boundary")]
+    WrongTerminationMarker,
     #[error("G0 child marker must be the fixed sibling of its isolated state root")]
-    UnsafeProcessKillMarker,
+    UnsafeTerminationMarker,
     #[error("G0 child unexpectedly exited successfully after process termination")]
     ChildExitedSuccessfully,
     #[error("G0 executed fault-ledger invariant failed: {0}")]

@@ -114,6 +114,21 @@ ordinary RAII root-restore guard. Recovery now first restores only the six
 known quarantined roots, refuses symlinks/unknown ordinals/conflicts, and is
 idempotent across another interruption; both reopen rows now close fully.
 
+Core now also exposes `wave5-g0-panic-scenario` and the deliberately slow
+`wave5-g0-panic-ledger` command. The hidden child publishes and fsyncs the same
+exact boundary marker, then executes a real Rust panic inside that child rather
+than parking for an external kill. The parent requires an unsuccessful child
+exit and recovers only the same state root. A panic command presented with a
+process-kill or power-loss schedule row refuses before executing the root path.
+
+The first complete panic ledger executed all twelve frozen panic rows. All
+twelve produced complete eighteen-role same-state recovery bundles and no
+refusal; its scenario-ledger digest was
+`sha256:1745ecec839e89141a12f630ccad00084a827afcc006178795c61a2a7aba20f6`.
+It remains `useful_partial` with `mixedScheduledModesFullyExecuted:false` and
+`fullOfflineFaultWalk:false`: it neither relabels a Rust panic as process kill
+or power loss nor supplies a browser presentation occurrence.
+
 ```text
 cargo run --locked --offline -p joshi-core -- \
   wave5-g0-process-kill-scenario \
@@ -126,6 +141,8 @@ cargo test --locked --offline -p joshi-core --test g0_process_kill \
 
 ./scripts/wave5-g0-process-kill-ledger \
   /tmp/joshi-g0-process-kill-ledger.manual
+./scripts/wave5-g0-panic-ledger \
+  /tmp/joshi-g0-panic-ledger.manual
 ```
 
 For every injected crash, the future adapter must prove all of these from

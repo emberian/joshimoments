@@ -195,6 +195,13 @@ processes are killed immediately before/after durable reservation and local-spoo
 then proves respectively empty, explicit-gap, or exact-evidence recovery. The ordinary readiness
 runner does not execute or emit the scenario ledger, so `fullOfflineFaultWalk` remains false.
 
+A separate literal-panic runner now executes the twelve schedule rows whose frozen crash mode is
+`panic`. Each child fsyncs its exact boundary marker and then panics in the root path; all twelve
+same-state recoveries close their eighteen-role bundles. This does not relabel the remaining
+power-loss rows, join a browser presentation occurrence, or change any readiness Boolean. The
+dedicated panic ledger therefore remains `useful_partial` with
+`mixedScheduledModesFullyExecuted:false` and `fullOfflineFaultWalk:false`.
+
 The explicit `wave5-g0-fault-ledger` deep command now removes the map-only part
 of that blocker: it executes all 37 schedule rows against fresh state roots and
 retains per-row interruption and recovery evidence. It remains a nonqualifying
