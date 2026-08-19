@@ -1,8 +1,9 @@
 # Wave 6 known-truth and counterexample lab
 
-Status: generic, first protocol-specific, and first structural `N01/W6-K` batteries implemented at
-fixture-only authority. They test an exact signed-flow probe, frozen Pump/PumpSwap/DLMM arithmetic,
-and synthetic migration/order/identity-revision boundaries; they are not a market estimator,
+Status: generic, first protocol-specific, first structural, and first seven-case domain `N01/W6-K`
+batteries implemented at fixture-only authority. They test an exact signed-flow probe, frozen
+Pump/PumpSwap/DLMM arithmetic, synthetic migration/order/identity-revision boundaries, and bounded
+venue/burst/mechanism/operator/episode/household counterexamples; they are not a market estimator,
 store-resolved release, identity claim, quote service, or completion of all Wave 6 counterexamples.
 
 The implementation lives in
@@ -27,6 +28,7 @@ The current candidate families are deliberately small:
 exact_signed_flow_fixture_probe_v1
 python_protocol_exact_reference
 python_structural_exact_reference
+python_domain_exact_reference
 ```
 
 That scope makes failures legible. It does not imply that signed flow or the frozen protocol
@@ -93,9 +95,37 @@ Every output has a closed carrier (`decimal_integer`, `identifier`, `sha256`, or
 The identity symbols are synthetic fixture labels. They do not claim common control, intent, or a
 real wallet/account mapping.
 
-## Exact evaluation artifacts
+## Seven domain counterexamples
 
-The three evaluated candidates now materialize the complete fields promised by their registered
+The generated domain battery closes the seven missing families named in the first N01 review:
+
+- one quote size produces `90` atoms under the fixture CPMM profile and `99` under the fixture
+  fixed-bin profile, so a venue-specific result cannot silently transfer;
+- two observed burst rows retain their exact `9` atoms while one explicit subject gap refuses a
+  platform-wide total;
+- identical display points retain two content-distinct compatible mechanism traces rather than one
+  chart-shape diagnosis;
+- one raw ambiguous operator fragment retains two compatible labels and no truth label;
+- a six-atom disposal from ten atoms retains a four-atom runner and refuses terminal value without
+  a terminal quote;
+- internal principal plus self-fee counterlegs total twelve atoms but post zero external household
+  flow; and
+- an earlier zero-inventory `watching_flat` cut is byte-invariant to a future re-entry row, while a
+  later cut opens a new seven-atom inventory epoch.
+
+Every case binds sorted fixture identities, typed exact outputs, a negative control, a falsifier,
+fixed fixture-only authority, and a recomputed truth digest. The candidate must return every case
+exactly once with byte-exact outputs and a recomputed result/evaluation digest. The canonical
+evaluation bytes strictly reparse and reject duplicate or reordered JSON.
+
+This fourth evaluation is intentionally **not yet** a registered N00 artifact kind, checked-in
+golden, or store row. Its ceiling is the generated intrinsic fixture battery only. It cannot be
+counted among the three V12/V13/V15 durable evaluation artifacts until a separate registry/schema
+change freezes that boundary.
+
+## Three registered exact evaluation artifacts
+
+The first three evaluated candidates materialize the complete fields promised by their registered
 V12 schemas. Each canonical artifact binds the suite digest, candidate, sorted exact passed-case
 denominator, one ordered result digest per case, its pinned source-fixture digest(s) where
 applicable, fixed fixture authority and a recomputed evaluation self-digest. Exact checked bytes
@@ -145,14 +175,16 @@ uv --directory analysis run --locked pytest -q
 uv --directory analysis run --locked ruff check src tests
 ```
 
-The focused generic, protocol, structural and exact-artifact tests pass. The complete locked
-analysis suite and Ruff also pass.
+The focused generic, protocol, structural, domain, and exact-artifact tests pass. The complete
+locked analysis suite and Ruff also pass.
 
 ## Remaining `N01` work
 
-This is the shared generic spine plus first protocol-arithmetic and structural batteries, not the
-full domain battery. The master plan still requires broader venue profiles, platform-wide burst,
-same-shaped-chart/different-mechanism, operator-label induction, runner mark/liquidation
-divergence, self-routed fee wash, and frozen-future exit/re-entry fixtures. Each later candidate
-must name the subset it actually passed; generic, basic protocol, or synthetic structural success
-cannot promote a venue/mechanics/identity/operator lane.
+The seven named domain gaps now have one deterministic counterexample each, but N01 is not a
+complete empirical or venue-mechanics battery. It still needs materially broader profile vectors,
+multi-window burst and overlap generators, additional mechanism-equivalent charts, open operator
+language cases, effect/quote-supported episode families, multi-asset household accounting, and
+longer correction/re-entry histories. The new evaluation also remains unregistered and
+store-unretained. Each later candidate must name the exact subset it passed; generic, basic
+protocol, structural, or seven-case domain success cannot promote a venue/mechanics/identity/
+operator lane.

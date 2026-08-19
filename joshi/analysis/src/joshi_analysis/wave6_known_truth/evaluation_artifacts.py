@@ -11,6 +11,7 @@ from typing import Any
 
 from ..canonical import canonical_json_bytes
 from ..errors import ManifestError
+from .domain_battery import DomainBatteryEvaluation
 from .lab import KnownTruthEvaluation
 from .protocol_battery import ProtocolBatteryEvaluation
 from .structural_battery import StructuralBatteryEvaluation
@@ -27,6 +28,7 @@ _GENERIC_FIELDS = {
 _PROTOCOL_FIELDS = _GENERIC_FIELDS | {"pump_fixture_digest", "dlmm_fixture_digest"}
 _STRUCTURAL_FIELDS = _GENERIC_FIELDS | {"fixture_digest"}
 
+
 def _pairs_no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -42,7 +44,7 @@ def _document(exact_bytes: bytes, fields: set[str], label: str) -> dict[str, Any
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ManifestError(f"{label} is not strict UTF-8 JSON") from error
     if not isinstance(value, dict) or set(value) != fields:
-        raise ManifestError(f"{label} fields differ from the registered schema")
+        raise ManifestError(f"{label} fields differ from the exact evaluation schema")
     if canonical_json_bytes(value, newline=True) != exact_bytes:
         raise ManifestError(f"{label} bytes are not exact canonical JSON")
     return value
@@ -68,6 +70,23 @@ def parse_known_truth_evaluation_exact(exact_bytes: bytes) -> KnownTruthEvaluati
     return _construct(
         "known-truth evaluation artifact",
         KnownTruthEvaluation,
+        value["suite_id"],
+        value["suite_digest"],
+        value["candidate_id"],
+        _string_tuple(value["passed_case_ids"], "passed_case_ids"),
+        _string_tuple(value["result_digests"], "result_digests"),
+        value["evaluation_digest"],
+        value["authority"],
+    )
+
+
+def parse_domain_evaluation_exact(exact_bytes: bytes) -> DomainBatteryEvaluation:
+    """Reparse one exact, unregistered domain known-truth evaluation artifact."""
+
+    value = _document(exact_bytes, _GENERIC_FIELDS, "domain evaluation artifact")
+    return _construct(
+        "domain evaluation artifact",
+        DomainBatteryEvaluation,
         value["suite_id"],
         value["suite_digest"],
         value["candidate_id"],
