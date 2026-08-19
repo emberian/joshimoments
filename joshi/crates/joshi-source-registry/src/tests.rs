@@ -5,7 +5,8 @@ use crate::{
     CredentialAuthority, FieldAuthority, FieldContract, FieldKind, FinalityPolicy, GapSemantics,
     KillSwitch, MethodContract, MethodKind, ProgressSemantics, ProtectionClass, QuotaReset,
     QuotaSpec, RegistryError, RetentionClass, RetryPolicy, RunBudget, SchemaFingerprint,
-    SourceContract, SourceStatus, ZeroPriceAttestation, pumpportal_contract,
+    SourceContract, SourceStatus, ZeroPriceAttestation, public_solana_mainnet_contract,
+    pumpportal_contract,
 };
 
 fn stable(value: &str) -> StableString {
@@ -108,6 +109,16 @@ fn canonical_fixture_is_a_valid_registry() {
     ))
     .expect("registry fixture");
     registry.validate().expect("registry validates");
+    assert_eq!(registry.sources.len(), 2);
+    assert_eq!(
+        registry.sources[1],
+        public_solana_mainnet_contract().expect("canonical public Solana source")
+    );
+    let checked = include_bytes!("../../../fixtures/source-registry/canonical_registry.v1.json");
+    assert_eq!(
+        registry.canonical_bytes().expect("canonical registry"),
+        checked.strip_suffix(b"\n").unwrap_or(checked)
+    );
 }
 
 #[test]
@@ -145,6 +156,29 @@ fn wallet_bearing_pumpportal_is_fail_closed_even_zero_priced() {
         pumpportal_contract(),
         Err(RegistryError::WalletBearingCredential)
     );
+}
+
+#[test]
+fn public_solana_contract_is_bounded_credential_free_and_never_proves_absence() {
+    let source = public_solana_mainnet_contract().expect("public Solana contract");
+    source.admit().expect("bounded public source is admitted");
+    assert_eq!(source.access, AccessClass::UnauthenticatedPublic);
+    assert_eq!(source.credential, CredentialAuthority::None);
+    assert_eq!(source.methods.len(), 1);
+    assert_eq!(source.methods[0].commitment, Commitment::Finalized);
+    assert_eq!(
+        source.methods[0].absence,
+        AbsenceSemantics::NeverProvesAbsence
+    );
+    assert_eq!(source.fields[0].authority, FieldAuthority::ChainEvidence);
+    assert_eq!(
+        source.fields[0].absence,
+        AbsenceSemantics::NeverProvesAbsence
+    );
+    assert_eq!(source.progress, ProgressSemantics::ReplayCursor);
+    assert_eq!(source.protection, ProtectionClass::Public);
+    assert_eq!(source.retention, RetentionClass::Public);
+    assert!(!source.kill_switch.enabled);
 }
 
 #[test]

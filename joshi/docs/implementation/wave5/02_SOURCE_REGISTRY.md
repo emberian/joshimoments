@@ -3,6 +3,14 @@
 Status: pure Rust contracts and offline validation complete; no provider I/O, credential loading,
 store writer, or collector runtime lives here.
 
+The canonical V1 registry now also contains one credential-free public-Solana C1 declaration for
+`getSignaturesForAddress` on mainnet. The declaration is exact-byte/fingerprint bound, finalized,
+newest-first, public-retained, rate-limited, and explicitly `never_proves_absence`; it is not a
+live runner, production backend, quota observation, wallet-activity conclusion, or `W5-G1`
+witness. Solana's official public endpoint is documented as rate-limited and unsuitable for
+production applications, so this source may support only the separately registered bounded C1
+conformance occurrence.
+
 Owned paths:
 
 - `crates/joshi-source-registry`;

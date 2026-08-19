@@ -16,10 +16,11 @@ pub use budget::{
 pub use contract::{
     AbsenceSemantics, AccessClass, BillingPolicy, BillingUnit, Commitment, CredentialAuthority,
     CredentialDescriptor, FieldAuthority, FieldContract, FieldKind, FinalityPolicy, GapSemantics,
-    KillSwitch, MethodContract, MethodKind, ProgressSemantics, ProtectionClass, QuotaReset,
-    QuotaSpec, RetentionClass, RetryPolicy, SchemaFingerprint, SourceContract,
-    SourceContractBuilder, SourceRegistry, SourceRegistryBuilder, SourceStatus,
-    ZeroPriceAttestation, pumpportal_contract,
+    KillSwitch, MethodContract, MethodKind, PUBLIC_SOLANA_MAINNET_SOURCE_ID,
+    PUBLIC_SOLANA_SIGNATURES_METHOD_KEY, ProgressSemantics, ProtectionClass, QuotaReset, QuotaSpec,
+    RetentionClass, RetryPolicy, SchemaFingerprint, SourceContract, SourceContractBuilder,
+    SourceRegistry, SourceRegistryBuilder, SourceStatus, ZeroPriceAttestation,
+    public_solana_mainnet_contract, pumpportal_contract,
 };
 pub use error::RegistryError;
 pub use profiles::{CanaryProfile, PlanningProfile, planning_profiles};

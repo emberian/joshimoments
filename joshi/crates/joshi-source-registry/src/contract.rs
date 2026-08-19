@@ -6,6 +6,13 @@ use sha2::{Digest, Sha256};
 
 use crate::{REGISTRY_CONTRACT, REGISTRY_SCHEMA_VERSION, error::RegistryError};
 
+/// Canonical non-secret source identity for the bounded public Solana mainnet reader.
+pub const PUBLIC_SOLANA_MAINNET_SOURCE_ID: &str = "solana.public.mainnet";
+/// Canonical method key for one finalized, newest-first signature page.
+pub const PUBLIC_SOLANA_SIGNATURES_METHOD_KEY: &str = "get_signatures_for_address";
+const PUBLIC_SOLANA_SIGNATURES_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/source-registry/solana_get_signatures_for_address.v1.json");
+
 fn stable(value: &str) -> Result<StableString, RegistryError> {
     StableString::new(value).map_err(|_| RegistryError::InvalidValue("unstable string"))
 }
@@ -674,6 +681,84 @@ impl SourceRegistryBuilder {
         registry.validate()?;
         Ok(registry)
     }
+}
+
+/// Built-in declaration for one bounded, credential-free Solana mainnet signature page.
+///
+/// The official public endpoint is rate-limited and explicitly unsuitable as a production
+/// backend. This contract therefore supplies only a C1 conformance source declaration. It does
+/// not open a socket, prove availability or remaining quota, or authorize a sustained collector.
+/// Empty results never prove wallet inactivity or historical absence.
+///
+/// # Errors
+///
+/// Returns a structural or fingerprint refusal if the frozen source policy is inconsistent.
+pub fn public_solana_mainnet_contract() -> Result<SourceContract, RegistryError> {
+    let method_key = stable(PUBLIC_SOLANA_SIGNATURES_METHOD_KEY)?;
+    let method_schema_digest = ValueDigest::new(format!(
+        "sha256:{:x}",
+        Sha256::digest(PUBLIC_SOLANA_SIGNATURES_SCHEMA)
+    ))
+    .map_err(|_| RegistryError::InvalidValue("schema digest"))?;
+    SourceContract {
+        source_id: SourceId::new(PUBLIC_SOLANA_MAINNET_SOURCE_ID)
+            .map_err(|_| RegistryError::InvalidValue("source id"))?,
+        provider: stable("solana-public-rpc")?,
+        contract_version: stable("solana-json-rpc/mainnet/v1")?,
+        status: SourceStatus::Enabled,
+        access: AccessClass::UnauthenticatedPublic,
+        credential: CredentialAuthority::None,
+        credential_descriptor: None,
+        methods: vec![MethodContract {
+            key: method_key.clone(),
+            kind: MethodKind::HttpPostReadOnly,
+            schema_fingerprint: SchemaFingerprint {
+                algorithm: stable("sha256")?,
+                digest: method_schema_digest,
+            },
+            billing: BillingPolicy {
+                unit: BillingUnit::Request,
+                minor_units_per_unit: 0,
+                currency: None,
+                asset_id: None,
+                zero_price_attestation: ZeroPriceAttestation::DocumentedPublicSurface,
+            },
+            quota: QuotaSpec {
+                unit: BillingUnit::Request,
+                hard_limit: None,
+                reset: QuotaReset::Unknown,
+                window_seconds: None,
+                remaining_observable: false,
+            },
+            commitment: Commitment::Finalized,
+            finality: FinalityPolicy::RequireFinalized,
+            absence: AbsenceSemantics::NeverProvesAbsence,
+            max_request_bytes: 4 * 1_024,
+            max_response_bytes: 64 * 1_024 * 1_024,
+        }],
+        fields: vec![FieldContract {
+            field: FieldKind::Wallet,
+            authority: FieldAuthority::ChainEvidence,
+            method_keys: vec![method_key],
+            absence: AbsenceSemantics::NeverProvesAbsence,
+        }],
+        progress: ProgressSemantics::ReplayCursor,
+        retry: RetryPolicy {
+            max_attempts: 3,
+            max_delay_ms: 10_000,
+            retryable_statuses: vec![429, 500, 502, 503, 504],
+            gap: GapSemantics::RecoverableWithBoundedRead,
+        },
+        protection: ProtectionClass::Public,
+        retention: RetentionClass::Public,
+        kill_switch: KillSwitch {
+            enabled: false,
+            reason: stable("bounded_c1_conformance_only")?,
+            requires_operator_reenable: false,
+        },
+        schema_fingerprint: None,
+    }
+    .fingerprinted()
 }
 
 /// Built-in declaration for `PumpPortal`'s provider contract. It is deliberately disabled: the
