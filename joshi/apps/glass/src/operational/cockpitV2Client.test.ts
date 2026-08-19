@@ -73,7 +73,7 @@ describe("same-origin Cockpit V2 inspector client", () => {
       contract: "joshi.core.cockpit_v2_browser_presentation_receipt",
       schemaVersion: 1,
       catalogId: "glass-presentation-test",
-      catalogSchema: "joshi.sqlite.v21",
+      catalogSchema: "joshi.sqlite.v22",
       clientPresentationId: claim.clientPresentationId,
       claimDigest: claim.claimDigest,
       claimBytesDigest: digestCanonicalJson(claim),

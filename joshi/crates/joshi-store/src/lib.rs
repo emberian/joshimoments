@@ -18,6 +18,7 @@ mod wave6;
 mod wave6_campaign;
 mod wave6_input;
 mod wave6_market;
+mod wave6_operator;
 mod wave6_research;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
@@ -69,6 +70,10 @@ pub use wave6_input::{
     StoredWave6StoreInputCensus, Wave6StoreInputCensusReceipt, Wave6StoreInputCensusV1,
 };
 pub use wave6_market::{StoredWave6MarketAtlasFixture, Wave6MarketAtlasFixtureReceipt};
+pub use wave6_operator::{
+    StoredWave6OperatorEvidenceInput, Wave6OperatorEvidenceInputReceipt,
+    Wave6OperatorEvidenceInputV1,
+};
 pub use wave6_research::{
     ResearchDispositionAuthorityV1, StoredWave6FixtureResearchDisposition,
     StoredWave6FixtureResearchProposal, StoredWave6ResearchArtifactBinding,

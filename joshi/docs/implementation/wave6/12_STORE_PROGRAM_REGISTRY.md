@@ -36,8 +36,8 @@ providerUnits           0
 externalMutationUnits   0
 ```
 
-The program row is introduced by V11; the ordinary/latest store now migrates through the additive
-V16 exact campaign-bundle table. V15 retains the fixture-decision ledger; V16 atomically retains
+The program row is introduced by V11; the ordinary/latest store now migrates through V22. V15
+retains the fixture-decision ledger; V16 atomically retains
 the five exact N03 campaign documents after resolving the prior program and campaign schema. The
 Wave 5 G0 root path uses the explicit forward-only V10 migration boundary, so its frozen V10 export
 contract does not silently change when Wave 6 tables exist.
@@ -49,7 +49,7 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one latest V21 catalog, commits the checked fixture, all six registered
+It creates or reopens one latest V22 catalog, commits the checked fixture, all six registered
 schema documents, three exact evaluation outputs, their exact fixture DAG and three fixture
 dispositions, plus the atomic five-document campaign bundle. It makes exact idempotent retries,
 drops the writer, and independently loads the full chain through a read-only store. Its V6 JSON
@@ -81,5 +81,5 @@ cargo test --locked --offline -p joshi-core \
 cargo test --locked --offline -p joshi-core wave6_registration --lib
 ```
 
-These gates cover V4-to-V21 upgrade, V9/V10 frozen migration boundaries, exact registration,
+These gates cover V4-to-V22 upgrade, V9/V10 frozen migration boundaries, exact registration,
 conflict refusal, idempotent retry, read-only reopen and continued V10 G0 isolation.

@@ -118,6 +118,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Join the exact gapped W5 act and later browser report as non-promoting W6 input.
+    Wave6OperatorEvidenceInput {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Serve bounded local admission and immutable query endpoints on loopback only.
     Serve {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -248,6 +253,11 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Wave6StoreInputCensus { state }) => {
             let report = joshi_core::wave6_store_input::run_wave6_store_input_census(&state)?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave6OperatorEvidenceInput { state }) => {
+            let report =
+                joshi_core::wave6_operator_input::run_wave6_operator_evidence_input(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -486,6 +496,8 @@ enum CliError {
     #[error(transparent)]
     Wave6StoreInput(#[from] joshi_core::wave6_store_input::Wave6StoreInputCensusError),
     #[error(transparent)]
+    Wave6OperatorInput(#[from] joshi_core::wave6_operator_input::Wave6OperatorEvidenceInputError),
+    #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]
     Service(#[from] joshi_core::service::ServiceError),
@@ -529,14 +541,14 @@ mod tests {
             .expect("frozen V10 G0 component");
         let first = joshi_core::wave5_g0::prepare_g0_browser_inspector_store(root.path(), &report)
             .expect("first browser-inspector overlay");
-        assert_eq!(first.catalog_schema().unwrap().as_str(), "joshi.sqlite.v21");
+        assert_eq!(first.catalog_schema().unwrap().as_str(), "joshi.sqlite.v22");
         drop(first);
 
         let second = joshi_core::wave5_g0::prepare_g0_browser_inspector_store(root.path(), &report)
             .expect("restart browser-inspector overlay");
         assert_eq!(
             second.catalog_schema().unwrap().as_str(),
-            "joshi.sqlite.v21"
+            "joshi.sqlite.v22"
         );
         drop(second);
 

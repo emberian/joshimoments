@@ -46,7 +46,7 @@ for report in "$JOSHI_W6_INPUT_STATE/first.json" "$JOSHI_W6_INPUT_STATE/retry.js
     and .authority == "read_record_replay_propose_shadow_only"
     and .semanticCeiling == "store_resolved_offline_fixture_input_census_only"
     and .claimScope == "mint_discovery_input_census_not_market_atlas_field_release_causal_strategy_or_execution"
-    and .catalogSchema == "joshi.sqlite.v20"
+    and .catalogSchema == "joshi.sqlite.v22"
     and .programId == "w6-program-fixture-001"
     and (.programRegistrationDigest | test("^sha256:[0-9a-f]{64}$"))
     and (.sourceOccurrenceId | test("^source-c0:[0-9a-f]{64}$"))

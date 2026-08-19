@@ -212,7 +212,7 @@ the V10 export; it does not invent a second import commit. This does not add a h
 the separate 37-scenario root matrix true.
 The one-shot paired route has its own six exact component-local interruptions: before/after
 exchange, before/after exact Cockpit read, and before/after pairing reopen. Each injected run is
-followed by a fresh-session recovery over the same V10 truth and its V21 evidence overlay, an
+followed by a fresh-session recovery over the same V10 truth and its latest V22 evidence overlay, an
 identical response-body check, and an exact scripted-claim retry/readback.
 Together with the thirty-two source/publication/memory/export points this is 38 package-local fault
 checks. A separate exact adapter map covers all 36 frozen transitions: four supervisor

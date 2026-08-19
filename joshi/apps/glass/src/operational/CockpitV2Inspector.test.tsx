@@ -183,7 +183,7 @@ describe("Cockpit V2 inspector shell", () => {
           contract: "joshi.core.cockpit_v2_browser_presentation_receipt",
           schemaVersion: 1,
           catalogId: "cockpit-v2-component-test",
-          catalogSchema: "joshi.sqlite.v21",
+          catalogSchema: "joshi.sqlite.v22",
           clientPresentationId: claim.clientPresentationId,
           claimDigest: claim.claimDigest,
           claimBytesDigest: digestCanonicalJson(claim),

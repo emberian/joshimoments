@@ -1,0 +1,145 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_W6_OPERATOR_CREATED_STATE=0
+if [ "${JOSHI_W6_OPERATOR_STATE:-}" = "" ]; then
+  JOSHI_W6_OPERATOR_STATE=$(mktemp -d /tmp/joshi-wave6-operator-input.XXXXXX)
+  JOSHI_W6_OPERATOR_CREATED_STATE=1
+fi
+case "$JOSHI_W6_OPERATOR_STATE" in
+  /tmp/joshi-wave6-operator-input.*) ;;
+  *)
+    echo "JOSHI_W6_OPERATOR_STATE must be an explicit /tmp/joshi-wave6-operator-input.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_W6_OPERATOR_STATE
+
+cleanup() {
+  if [ "$JOSHI_W6_OPERATOR_CREATED_STATE" -eq 1 ]; then
+    echo "Wave 6 operator-input witness retained at $JOSHI_W6_OPERATOR_STATE/witness.json" >&2
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+./schema/validate.sh
+cargo test --locked --offline -p joshi-core wave6_operator_input --lib
+cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
+
+mkdir -p "$JOSHI_W6_OPERATOR_STATE/catalog"
+cargo run --locked --offline -q -p joshi-core -- wave6-operator-evidence-input \
+  --state "$JOSHI_W6_OPERATOR_STATE/catalog" > "$JOSHI_W6_OPERATOR_STATE/first.json"
+cargo run --locked --offline -q -p joshi-core -- wave6-operator-evidence-input \
+  --state "$JOSHI_W6_OPERATOR_STATE/catalog" > "$JOSHI_W6_OPERATOR_STATE/retry.json"
+
+for report in "$JOSHI_W6_OPERATOR_STATE/first.json" "$JOSHI_W6_OPERATOR_STATE/retry.json"; do
+  jq -e '
+    .contract == "joshi.core.wave6_operator_evidence_input_report.v1"
+    and .schemaVersion == 1
+    and .status == "useful_partial"
+    and .authority == "read_record_replay_propose_shadow_only"
+    and .semanticCeiling == "store_resolved_operator_evidence_input_only"
+    and .claimScope == "store_resolved_act_gap_and_later_browser_report_not_human_recognition_or_operator_model"
+    and .catalogSchema == "joshi.sqlite.v22"
+    and .programId == "w6-program-fixture-001"
+    and (.programRegistrationDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.inputCensusBindingId | test("^wave6-input-census:[0-9a-f]{64}$"))
+    and (.inputCensusDocumentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.sourceOccurrenceId | test("^source-c0:[0-9a-f]{64}$"))
+    and .publicationId == "cockpit-v2-wave5-g0-offline-0001"
+    and (.publicationDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.headDigest | test("^sha256:[0-9a-f]{64}$"))
+    and .memoryOccurrenceId == "act:g0-act-0001"
+    and (.memoryOccurrenceDigest | test("^sha256:[0-9a-f]{64}$"))
+    and .memorySessionId == "g0-session-0001"
+    and .memorySubjectId == "MintA"
+    and (.presentationClaimId | test("^scripted-presentation-"))
+    and (.presentationClaimDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.pairingSessionId | length > 0)
+    and (.bindingId | test("^wave6-operator-input:[0-9a-f]{64}$"))
+    and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.acceptedCommitSeq | test("^[1-9][0-9]*$"))
+    and (.firstStatus == "accepted" or .firstStatus == "idempotent")
+    and .retryStatus == "idempotent"
+    and .storeResolvedInputCensus == true
+    and .storeResolvedMemoryAct == true
+    and .storeResolvedBrowserReport == true
+    and .scriptedPresentationPath == true
+    and .exactRetryClosed == true
+    and .restartReverified == true
+    and .actPresentationGapRetained == true
+    and .presentationRepairsActGap == false
+    and .sessionEquivalenceClaimed == false
+    and .humanViewingVerified == false
+    and .recognitionObserved == false
+    and .operatorModelResolved == false
+    and .providerIo == false
+    and .externalMutation == false
+    and .productQualified == false
+    and .liveQualified == false
+  ' "$report" >/dev/null
+done
+
+jq -en --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" \
+  --slurpfile retry "$JOSHI_W6_OPERATOR_STATE/retry.json" '
+  $first[0].bindingId == $retry[0].bindingId
+  and $first[0].documentDigest == $retry[0].documentDigest
+  and $first[0].acceptedCommitSeq == $retry[0].acceptedCommitSeq
+  and $first[0].presentationClaimId == $retry[0].presentationClaimId
+  and $retry[0].firstStatus == "idempotent"
+' >/dev/null
+
+JOSHI_W6_OPERATOR_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0022_wave6_operator_evidence_input.sql | awk '{print $1}')
+JOSHI_W6_OPERATOR_REPORT_SHA=$(shasum -a 256 \
+  "$JOSHI_W6_OPERATOR_STATE/first.json" | awk '{print $1}')
+
+jq -cn \
+  --arg migration "sha256:$JOSHI_W6_OPERATOR_MIGRATION_SHA" \
+  --arg report "sha256:$JOSHI_W6_OPERATOR_REPORT_SHA" \
+  --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" '
+  {
+    contract: "joshi.wave6.operator_evidence_input_witness.v1",
+    schemaVersion: 1,
+    status: "useful_partial",
+    authority: "read_record_replay_propose_shadow_only",
+    semanticCeiling: "store_resolved_operator_evidence_input_only",
+    migrationDigest: $migration,
+    reportDigest: $report,
+    catalogSchema: $first[0].catalogSchema,
+    programId: $first[0].programId,
+    inputCensusBindingId: $first[0].inputCensusBindingId,
+    sourceOccurrenceId: $first[0].sourceOccurrenceId,
+    publicationId: $first[0].publicationId,
+    memoryOccurrenceId: $first[0].memoryOccurrenceId,
+    presentationClaimId: $first[0].presentationClaimId,
+    bindingId: $first[0].bindingId,
+    documentDigest: $first[0].documentDigest,
+    acceptedCommitSeq: $first[0].acceptedCommitSeq,
+    attainedCapabilities: [
+      "store_resolved_w5_input_census",
+      "store_resolved_gapped_operator_act",
+      "store_resolved_later_browser_report",
+      "exact_retry",
+      "read_only_restart"
+    ],
+    qualification: {
+      scriptedPresentationPath: true,
+      actPresentationGapRetained: true,
+      presentationRepairsActGap: false,
+      sessionEquivalenceClaimed: false,
+      humanViewingVerified: false,
+      recognitionObserved: false,
+      operatorModelResolved: false,
+      providerIo: false,
+      externalMutation: false,
+      productQualified: false,
+      liveQualified: false
+    }
+  }
+' > "$JOSHI_W6_OPERATOR_STATE/witness.json"
+
+cat "$JOSHI_W6_OPERATOR_STATE/witness.json"

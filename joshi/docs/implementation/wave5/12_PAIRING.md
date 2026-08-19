@@ -52,7 +52,7 @@ between them. Pairing material stays in page memory.
 
 The explicit `wave5-g0-inspect` developer command remains the narrower fixture inspector: it first
 exact-retries the frozen V10 G0 component, refuses impossible positive qualification bits, creates
-or reuses a separate V21 browser-inspector overlay, binds a caller-declared loopback Glass origin,
+or reuses a separate latest V22 browser-inspector overlay, binds a caller-declared loopback Glass origin,
 generates the unrelated legacy handler guard from OS entropy without a file, and prints one
 OS-random code only after the listener is bound. That code carries `CockpitRead` plus the dedicated
 `PresentationEvidenceWrite` scope; it carries no operator, wallet, signing, transaction, or

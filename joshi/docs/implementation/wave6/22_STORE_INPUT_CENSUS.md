@@ -29,8 +29,9 @@ cargo run --locked --offline -q -p joshi-core -- \
   wave6-store-input-census --state /tmp/joshi-wave6-input.manual/catalog
 ```
 
-On a fresh state it first executes the real offline W5 G0 component, migrates that same catalog to
-V20, commits the frozen zero-provider/zero-mutation W6 program, commits the store-built input
+On a fresh state it first executes the real offline W5 G0 component, migrates that same catalog
+through latest V22, commits the frozen zero-provider/zero-mutation W6 program, commits the V20
+store-built input
 census, retries it exactly, and reopens it read-only. A whole-command retry reuses the same binding,
 digest, and commit sequence.
 

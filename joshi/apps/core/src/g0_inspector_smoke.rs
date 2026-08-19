@@ -343,7 +343,7 @@ pub async fn run_g0_inspector_smoke_with_fault(
     if presentation_receipt.contract != "joshi.core.cockpit_v2_browser_presentation_receipt"
         || presentation_receipt.schema_version != 1
         || presentation_receipt.catalog_id != "catalog-publication-test"
-        || presentation_receipt.catalog_schema != "joshi.sqlite.v21"
+        || presentation_receipt.catalog_schema != "joshi.sqlite.v22"
         || presentation_receipt.client_presentation_id != claim.client_presentation_id.as_str()
         || presentation_receipt.claim_digest != claim.claim_digest.as_str()
         || presentation_receipt.claim_bytes_digest != claim_bytes_digest

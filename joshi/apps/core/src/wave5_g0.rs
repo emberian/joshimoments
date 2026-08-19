@@ -1867,7 +1867,7 @@ pub(crate) fn browser_inspector_store_config(
     Ok(value)
 }
 
-/// Creates or reopens the mutable V21 browser-evidence overlay for one frozen V10 component.
+/// Creates or reopens the latest browser-evidence overlay for one frozen V10 component.
 ///
 /// The source catalog is copied through `SQLite`'s consistent backup API and never migrated in
 /// place. Every reopen resolves the exact source/publication/head named by the immutable V10
@@ -1913,9 +1913,9 @@ pub(crate) fn prepare_g0_browser_inspector_store_for_coordinates(
         Err(error) => return Err(error.into()),
     }
     let mut store = SqliteStore::open(inspector_config, StoreMode::SingleWriter)?;
-    if store.migrate(crate::wave5_readiness::now()?)?.current != 21 {
+    if store.migrate(crate::wave5_readiness::now()?)?.current != 22 {
         return Err(Wave5G0SourcePublicationError::Invariant(
-            "browser inspector overlay did not reach V21",
+            "browser inspector overlay did not reach V22",
         ));
     }
     let publication_id = CockpitPublicationId::new(publication_id.to_owned())?;

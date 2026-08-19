@@ -114,6 +114,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0021_cockpit_v2_browser_presentation.sql",
         sql: include_str!("../../../schema/migrations/0021_cockpit_v2_browser_presentation.sql"),
     },
+    Migration {
+        id: 22,
+        name: "0022_wave6_operator_evidence_input.sql",
+        sql: include_str!("../../../schema/migrations/0022_wave6_operator_evidence_input.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -367,15 +372,15 @@ mod tests {
         assert_eq!(g0.current, 10);
         assert_eq!(g0.applied, vec![10]);
 
-        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V21");
-        assert_eq!(current.current, 21);
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V22");
+        assert_eq!(current.current, 22);
         assert_eq!(
             current.applied,
-            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
         );
 
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
-            .expect_err("G0 migration cannot downgrade V21");
+            .expect_err("G0 migration cannot downgrade V22");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
     }
 }

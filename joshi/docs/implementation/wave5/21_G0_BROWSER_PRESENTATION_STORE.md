@@ -30,7 +30,7 @@ transaction, execution, or product authority.
 The explicit G0 inspector keeps the frozen component catalog at V10. It creates a consistent,
 separate `browser-inspector/catalog.sqlite` backup overlay, forward-migrates only that mutable
 overlay to V21, and verifies its exact publication/source/head against the V10 report. Restart
-reuses the V21 overlay while the evidence source remains V10, avoiding a downgrade trap or silent
+reuses the latest V22 overlay containing the V21 row while the evidence source remains V10, avoiding a downgrade trap or silent
 mutation of the frozen G0 truth.
 
 Glass builds a page-local random ID, increments one sequence per explicit publication open, and
@@ -44,7 +44,7 @@ remeasures the mount or reuses the idempotency key for changed content.
 
 The V2 root-evidence smoke also exercises the route with an explicitly scripted client. It
 exact-retries the retained bytes, restarts pairing, reopens the claim, then backs up and restores
-the V21 evidence overlay separately from the frozen V10 component catalog. Final recovery hides
+the latest V22 evidence overlay separately from the frozen V10 component catalog. Final recovery hides
 both original catalogs and validates the pairing session, publication, claim bytes, claim digest,
 and store commit only from the two restored stores. Its fields deliberately say
 `scriptedPresentationEvidenceStored:true` and `browserPresented:false`; this closes storage and
@@ -56,7 +56,7 @@ The integration regression executes a real V10 G0 source/publication fixture, fo
 catalog to V21, exchanges a one-time pairing code, opens the exact headed publication, and then:
 
 1. refuses a canonical claim whose mount predates pairing consumption;
-2. accepts a current canonical claim and returns the V21 store receipt;
+2. accepts a current canonical claim and returns the V21 presentation receipt from the V22 catalog;
 3. returns the same commit as `idempotent` for an exact retry;
 4. returns conflict for a self-consistent same-key byte mutation;
 5. refuses the capability after durable revocation; and

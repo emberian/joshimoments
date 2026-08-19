@@ -8,19 +8,19 @@ claim.**
 [`scripts/wave6-foundation-readiness`](../../../scripts/wave6-foundation-readiness) is the first
 root runner for the Wave 6 foundation. It runs:
 
-- all schema migrations and the V4-to-V21 upgrade check;
+- all schema migrations and the V4-to-V22 upgrade check;
 - the exact `joshi-wave6-registry` and `joshi-wave6-campaign` suites;
 - the store's Wave 6 program/schema/artifact-content/DAG/decision/campaign-bundle/proposal/review
   byte tests;
 - the Core program/schema/artifact-content/DAG/decision/campaign-bundle/proposal/review byte restart
   test; and
 - the focused Python market-atlas reducer/Ruff gates; and
-- two invocations of the real `wave6-program-registration` command over the same V21 catalog.
+- two invocations of the real `wave6-program-registration` command over the same V22 catalog.
 
 The second invocation must reproduce the original program, six schemas, three evaluation-content
 artifacts, the exact six-row market-atlas document, one fixture-DAG, one decision-ledger, one atomic
 campaign-bundle, one proposal, and one caller-fed `hold` byte commit identities. The script emits
-`joshi.wave6.fixture_foundation_witness.v9` with the exact report and V11-V21 migration digests. It
+`joshi.wave6.fixture_foundation_witness.v10` with the exact report and V11-V22 migration digests. It
 separately fixes store-resolved market authority, authenticated human review, approval/execution,
 and result authority to false.
 
@@ -49,7 +49,9 @@ The only attained capability names are:
 - `exact_fixture_market_atlas_bytes_restart`; and
 - `exact_fixture_artifact_dag_restart`; and
 - `exact_fixture_decision_ledger_restart`; and
-- `exact_fixture_campaign_bundle_restart`.
+- `exact_fixture_campaign_bundle_restart`; and
+- `exact_fixture_research_proposal_restart`; and
+- `exact_fixture_research_disposition_bytes_restart`.
 
 The witness sets `fixtureMarketAtlasBytesOccurrence`, `fixtureArtifactDagOccurrence`,
 `fixtureDispositionOccurrence`, and `fixtureCampaignBundleOccurrence` true. It explicitly fixes

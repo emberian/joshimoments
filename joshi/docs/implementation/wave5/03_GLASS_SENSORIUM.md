@@ -117,7 +117,7 @@ cd apps/glass
 npm run dev:g0-inspect
 ```
 
-Core exact-retries the frozen V10 component, creates/reuses a distinct V21 browser-inspector
+Core exact-retries the frozen V10 component, creates/reuses a distinct latest V22 browser-inspector
 overlay, mounts `CockpitRead` plus `PresentationEvidenceWrite`, prints one short-lived code after
 the API listener is bound, and exposes a bounded exact head index, explicit-ID open, and exact
 presentation-receipt POST. Vite preserves the browser's `127.0.0.1:4173` Host through its
@@ -213,7 +213,7 @@ status above.
   mirror its exact golden and show independent status, field truth, freshness, and gaps for every
   declared critical surface. Fixture booleans or vacuous zero-session witnesses must never promote
   the UI.
-- Execute the strict Cockpit V2 open -> React mount -> V21 receipt -> read-only reopen chain in an
+- Execute the strict Cockpit V2 open -> React mount -> V21 presentation receipt in V22 -> read-only reopen chain in an
   attached browser and retain visual/accessibility evidence separately. The fixture inspector must
   never be treated as the root attention universe or product-use proof.
 - Cross-review and freeze `joshi-scientific-memory`, then extend the existing authoritative command

@@ -125,7 +125,7 @@ mechanics-capability tests, and strict focused Clippy gates pass at this handoff
 `./scripts/wave5-readiness` run now passes the preserved workspace gate and executes the C0
 ignition component plus one joined partial G0 root-evidence command. The latter runs the durable
 component and one-shot paired route/restart smoke over the same frozen V10 truth. Pairing and the
-scripted presentation receipt live in a separately migrated V21 evidence overlay; the join
+scripted V21 presentation receipt lives in a separately migrated latest V22 evidence overlay; the join
 exact-matches run, source, publication, head, response, claim and receipt bytes. Its schema-V5
 witness binds the nested component and V2 inspector/root reports, their consolidated eighteen-role
 evidence bundle, V10 snapshot and V9/V10 migration digests while

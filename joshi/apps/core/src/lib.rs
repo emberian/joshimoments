@@ -12,6 +12,7 @@ mod wave5_g0_fault_map;
 pub mod wave5_g0_fault_root;
 pub mod wave5_g0_root_evidence;
 pub mod wave5_readiness;
+pub mod wave6_operator_input;
 pub mod wave6_registration;
 pub mod wave6_store_input;
 

@@ -46,7 +46,7 @@ jq -e '
   and .status == "fixture_only"
   and .authority == "read_record_replay_propose_shadow_only"
   and .semanticCeiling == "unverified_semantic_fixture_only"
-  and .catalogSchema == "joshi.sqlite.v20"
+  and .catalogSchema == "joshi.sqlite.v22"
   and .programId == "w6-program-fixture-001"
   and (.registrationDigest | test("^sha256:[0-9a-f]{64}$"))
   and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
@@ -237,6 +237,10 @@ JOSHI_W6_MARKET_ATLAS_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0019_wave6_market_atlas_fixture.sql | awk '{print $1}')
 JOSHI_W6_INPUT_CENSUS_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0020_wave6_store_input_census.sql | awk '{print $1}')
+JOSHI_W6_BROWSER_PRESENTATION_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0021_cockpit_v2_browser_presentation.sql | awk '{print $1}')
+JOSHI_W6_OPERATOR_INPUT_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0022_wave6_operator_evidence_input.sql | awk '{print $1}')
 
 jq -cn \
   --arg report "sha256:$JOSHI_W6_PROGRAM_SHA" \
@@ -250,10 +254,12 @@ jq -cn \
   --arg review_migration "sha256:$JOSHI_W6_REVIEW_MIGRATION_SHA" \
   --arg market_atlas_migration "sha256:$JOSHI_W6_MARKET_ATLAS_MIGRATION_SHA" \
   --arg input_census_migration "sha256:$JOSHI_W6_INPUT_CENSUS_MIGRATION_SHA" \
+  --arg browser_presentation_migration "sha256:$JOSHI_W6_BROWSER_PRESENTATION_MIGRATION_SHA" \
+  --arg operator_input_migration "sha256:$JOSHI_W6_OPERATOR_INPUT_MIGRATION_SHA" \
   --slurpfile program "$JOSHI_W6_STATE/program-first.json" '
   {
-    contract: "joshi.wave6.fixture_foundation_witness.v9",
-    schemaVersion: 9,
+    contract: "joshi.wave6.fixture_foundation_witness.v10",
+    schemaVersion: 10,
     authority: "read_record_replay_propose_shadow_only",
     status: "fixture_only",
     semanticCeiling: "unverified_semantic_fixture_only",
@@ -271,6 +277,8 @@ jq -cn \
     reviewMigrationDigest: $review_migration,
     marketAtlasMigrationDigest: $market_atlas_migration,
     inputCensusMigrationDigest: $input_census_migration,
+    browserPresentationMigrationDigest: $browser_presentation_migration,
+    operatorEvidenceInputMigrationDigest: $operator_input_migration,
     registeredSchemaCount: $program[0].registeredSchemaCount,
     schemas: $program[0].schemas,
     fixtureArtifactContentCount: $program[0].fixtureArtifactContentCount,
