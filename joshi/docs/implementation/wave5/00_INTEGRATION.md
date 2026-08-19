@@ -208,7 +208,9 @@ SQLite-backed pairing. A `CockpitRead` capability receives the byte-exact headed
 wrong-scope capability, revoked session, and pre-restart capability are refused. `Serve` remains
 unmounted without flags, but can deliberately select the sealed adapter for one exact loopback
 browser origin. That normal opt-in issues read/replay scopes by default; a second explicit switch
-adds only operator/presentation evidence writes, and no signing or execution scope exists. The
+adds only operator/presentation evidence writes, and no signing or execution scope exists. Glass's
+separate `dev:paired` opt-in consumes that normal seam and refuses the full operational surface
+unless both evidence-write scopes were actually returned. The
 explicit `wave5-g0-inspect` command mounts a still narrower bounded store-rederived index and exact
 open route only for the offline component fixture with a read-only one-time code. An explicit Glass build now consumes
 that exact V2 inspection contract, independently recomputes the Rust digest domains, and exposes no

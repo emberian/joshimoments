@@ -44,6 +44,11 @@ one-time code. Its default scopes are `CockpitRead` and `ReplayRead`; the separa
 The write switch is rejected unless the origin option is present, and neither option changes the
 no-network/provider policy or establishes product qualification.
 
+Glass selects the normal-server client only when built with `VITE_JOSHI_ORDINARY_PAIRING=1` (the
+`npm run dev:paired` script). Its full operational surface requires both evidence-write scopes and
+clears/refuses a read-only session before listing or opening a publication. The separate fixture
+inspector remains the bounded read-only UI. Pairing material stays in page memory in both cases.
+
 The explicit `wave5-g0-inspect` developer command remains the narrower fixture inspector: it first
 exact-retries the offline G0 component, refuses impossible positive qualification bits, reopens its
 fixture catalog, binds a caller-declared loopback Glass origin, generates the unrelated legacy

@@ -134,6 +134,39 @@ exact identities under an `unverified_semantic` banner. It has no action afforda
 offline cross-runtime inspection seam, not default mount, product use, accessibility, presentation,
 or live qualification.
 
+## Deliberate normal-server pairing
+
+The default Glass build and default Core server both remain visibly unmounted. For local testing,
+the normal pair may be selected explicitly on both sides:
+
+```text
+# once: create the unrelated legacy route guard as an owner-only local file
+umask 077
+openssl rand -hex 32 > /tmp/joshi-core-legacy-token
+
+# terminal 1
+cargo run --locked --offline -p joshi-core -- serve \
+  --state /tmp/joshi-local-core \
+  --companion-installation-id local-glass \
+  --pairing-token-file /tmp/joshi-core-legacy-token \
+  --ordinary-pairing-origin http://127.0.0.1:4173 \
+  --ordinary-pairing-evidence-write
+
+# terminal 2
+cd apps/glass
+npm run dev:paired
+```
+
+Core prints one short-lived code only after the loopback listener binds. Glass consumes it once,
+keeps the resulting `jpc1_` capability only in page memory, lists immutable publication IDs, and
+opens only an explicitly selected publication. The full operational shell requires both operator
+and presentation evidence-write scopes because it stages presentation evidence and exposes
+evidence controls. If Core grants only its default read/replay scopes, Glass clears the transient
+session and refuses before listing or opening; the separate G0 inspector is the read-only path.
+Neither side has a signing, wallet, transaction, execution, or provider-query capability. This
+opt-in is a locally testable mount, not an attached-browser, accessibility, daily-use, or live-data
+qualification.
+
 ## Verification
 
 Executed from `apps/glass`:

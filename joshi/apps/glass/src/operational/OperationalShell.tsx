@@ -47,16 +47,17 @@ export function OperationalGlassShell({
   client,
   runtimeFactory,
   mode = "browse",
+  ordinaryPairingEnabled = false,
 }: {
   session?: MemoryOnlyPairingSession;
   client?: OperationalClient;
   runtimeFactory?: (client: OperationalClient, publication: CockpitLaunchEnvelopeV1, session: MemoryOnlyPairingSession) => OperationalRuntime;
   mode?: "browse" | "prospective";
+  ordinaryPairingEnabled?: boolean;
 }) {
-  // The core deliberately does not mount ordinary pairing in this settle.  A supplied client is
-  // a test-only/integration seam; the production entrypoint passes none, so Glass must show an
-  // honest unavailable state rather than collect a code for a route that does not exist.
-  const ordinaryPairingRouteReviewed = client !== undefined;
+  // The production entrypoint opts in only through an explicit build flag paired with Core's
+  // explicit loopback mount. Tests may still inject the same exact client contract directly.
+  const ordinaryPairingRouteReviewed = ordinaryPairingEnabled || client !== undefined;
   const resolvedClient = useMemo<OperationalClient>(() => client ?? new SameOriginOperationalClient(session), [client, session]);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [oneTimeCode, setOneTimeCode] = useState("");
@@ -122,7 +123,11 @@ export function OperationalGlassShell({
     setStatus("pairing");
     setError(null);
     try {
-      await resolvedClient.exchange(submittedCode);
+      const pairedDescriptor = await resolvedClient.exchange(submittedCode);
+      if (!pairedDescriptor.scopes.includes("operator_evidence_write")
+        || !pairedDescriptor.scopes.includes("presentation_evidence_write")) {
+        throw new Error("Full operational Glass requires explicit operator and presentation evidence-write scopes. Restart local Core with --ordinary-pairing-evidence-write, or use the read-only inspector.");
+      }
       if (mode === "prospective") await loadProspectiveSession();
       else await loadIndex();
     } catch (cause) {

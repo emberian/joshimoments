@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:paired": "VITE_JOSHI_ORDINARY_PAIRING=1 vite --host 127.0.0.1",
     "dev:g0-inspect": "VITE_JOSHI_G0_INSPECTOR=1 vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
