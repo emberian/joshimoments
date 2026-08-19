@@ -304,8 +304,94 @@ impl Supervisor {
         self.transport.spool()
     }
 
+    /// The exact local spool configuration this supervisor was opened with.
+    ///
+    /// A physical byte bound derived from a compile-time constant says nothing about the ceiling
+    /// a running spool actually enforces, and a caller-supplied copy of the configuration proves
+    /// nothing either: it can simply disagree with the live one. Reading it from the supervisor is
+    /// what lets the C1 runtime refuse a spool that cannot host the segment its single page would
+    /// produce, before any socket is prepared.
+    pub(crate) const fn spool_config(&self) -> &joshi_spool::SpoolConfig {
+        &self.config.spool
+    }
+
     pub(crate) fn journal_records(&self) -> &[crate::JournalRecord] {
         self.journal.records()
+    }
+
+    /// Append one C1-family lifecycle event that carries no owned segment or reservation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses any event outside the C1 pre-durability lifecycle family.
+    pub(crate) fn append_c1_event(&mut self, at: UtcTimestamp, event: JournalEvent) -> Result<()> {
+        if !matches!(
+            event,
+            JournalEvent::C1ActivationBound { .. }
+                | JournalEvent::C1RequestPrepared { .. }
+                | JournalEvent::C1IoStarted { .. }
+                | JournalEvent::C1BudgetSettled { .. }
+        ) {
+            return Err(SupervisorError::InvalidValue(
+                "C1 journal port accepts only C1 lifecycle events".into(),
+            ));
+        }
+        let record = self.journal.append(at, event)?;
+        self.state.apply(&record.event);
+        self.persist_health()
+    }
+
+    /// Resolve one C1 attempt as a durable scoped gap and stop its one-shot generation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unknown, queued, or already-resolved work; both appends are terminal on failure.
+    pub(crate) fn c1_abandon_and_stop(
+        &mut self,
+        reservation: &AttemptReservation,
+        reason: OpenVariant,
+        at: UtcTimestamp,
+    ) -> Result<LocalSpoolReceiptV1> {
+        let (closure, outcome) =
+            self.abandon_closure_in_family(reservation, reason.clone(), at, ReservationFamily::C1)?;
+        let record = self.journal.append(
+            at,
+            JournalEvent::C1Stopped {
+                source_key: reservation.source_key.clone(),
+                operation_key: reservation.operation_key.clone(),
+                generation: reservation.generation,
+                reason,
+                gap_segment: Some(closure.clone()),
+            },
+        )?;
+        self.state.apply(&record.event);
+        self.persist_health()?;
+        local_receipt(&closure, outcome)
+    }
+
+    /// Stop the one-shot C1 generation without inventing a coverage gap.
+    ///
+    /// # Errors
+    ///
+    /// Fails only when the journal or health snapshot cannot be made durable.
+    pub(crate) fn c1_stop_without_gap(
+        &mut self,
+        reservation: &AttemptReservation,
+        reason: OpenVariant,
+        at: UtcTimestamp,
+    ) -> Result<()> {
+        let record = self.journal.append(
+            at,
+            JournalEvent::C1Stopped {
+                source_key: reservation.source_key.clone(),
+                operation_key: reservation.operation_key.clone(),
+                generation: reservation.generation,
+                reason,
+                gap_segment: None,
+            },
+        )?;
+        self.state.apply(&record.event);
+        self.persist_health()
     }
 
     pub(crate) fn append_runtime_event(
@@ -338,6 +424,32 @@ impl Supervisor {
         &mut self,
         request: ReservationRequest,
         at: UtcTimestamp,
+    ) -> Result<AttemptReservation> {
+        self.reserve_in_family(request, at, ReservationFamily::C0)
+    }
+
+    /// Reserve one bounded C1 attempt under the dedicated C1 journal family.
+    ///
+    /// The reservation is identical machinery to [`Supervisor::reserve`], but records
+    /// `C1AttemptReserved` so the C0 runtime scanner never observes C1 work and C1 replay never
+    /// observes C0 work.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the same conditions as [`Supervisor::reserve`].
+    pub(crate) fn reserve_c1(
+        &mut self,
+        request: ReservationRequest,
+        at: UtcTimestamp,
+    ) -> Result<AttemptReservation> {
+        self.reserve_in_family(request, at, ReservationFamily::C1)
+    }
+
+    fn reserve_in_family(
+        &mut self,
+        request: ReservationRequest,
+        at: UtcTimestamp,
+        family: ReservationFamily,
     ) -> Result<AttemptReservation> {
         self.require_running()?;
         request.protection.validate()?;
@@ -399,7 +511,7 @@ impl Supervisor {
         };
         let record = self
             .journal
-            .append(at, JournalEvent::AttemptReserved(reservation.clone()))?;
+            .append(at, family.reserved_event(reservation.clone()))?;
         self.state.apply(&record.event);
         self.persist_health()?;
         self.journal
@@ -574,6 +686,23 @@ impl Supervisor {
     ///
     /// Leaves the exact item queued on any encoding, spool, journal, or health failure.
     pub fn drain_one(&mut self, at: UtcTimestamp) -> Result<Option<LocalSpoolReceiptV1>> {
+        self.drain_one_in_family(at, ReservationFamily::C0)
+    }
+
+    /// Drain the oldest queued item under the C1 journal family.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly like [`Supervisor::drain_one`]; only the recorded event family differs.
+    pub(crate) fn drain_one_c1(&mut self, at: UtcTimestamp) -> Result<Option<LocalSpoolReceiptV1>> {
+        self.drain_one_in_family(at, ReservationFamily::C1)
+    }
+
+    fn drain_one_in_family(
+        &mut self,
+        at: UtcTimestamp,
+        family: ReservationFamily,
+    ) -> Result<Option<LocalSpoolReceiptV1>> {
         let Some(item) = self.queue.front().cloned() else {
             return Ok(None);
         };
@@ -582,11 +711,11 @@ impl Supervisor {
             .append_attempt(&item.reservation, &item.entry)?;
         let record = self.journal.append(
             at,
-            JournalEvent::LocalDurabilityRecorded {
-                reservation_id: item.reservation.reservation_id.clone(),
-                segment: closure.clone(),
+            family.durability_event(
+                item.reservation.reservation_id.clone(),
+                closure.clone(),
                 outcome,
-            },
+            ),
         )?;
         self.state.apply(&record.event);
         let released = self.queue.pop_front().ok_or_else(|| {
@@ -751,6 +880,16 @@ impl Supervisor {
         reason: OpenVariant,
         at: UtcTimestamp,
     ) -> Result<(SegmentClosure, DurableOutcome)> {
+        self.abandon_closure_in_family(reservation, reason, at, ReservationFamily::C0)
+    }
+
+    fn abandon_closure_in_family(
+        &mut self,
+        reservation: &AttemptReservation,
+        reason: OpenVariant,
+        at: UtcTimestamp,
+        family: ReservationFamily,
+    ) -> Result<(SegmentClosure, DurableOutcome)> {
         let pending = self
             .state
             .pending
@@ -767,11 +906,7 @@ impl Supervisor {
             .append_attempt(reservation, &SpoolEntry::Gap(gap))?;
         let record = self.journal.append(
             at,
-            JournalEvent::AttemptAbandoned {
-                reservation_id: reservation.reservation_id.clone(),
-                gap_segment: closure.clone(),
-                reason,
-            },
+            family.abandoned_event(reservation.reservation_id.clone(), closure.clone(), reason),
         )?;
         self.state.apply(&record.event);
         self.persist_health()?;
@@ -788,21 +923,29 @@ impl Supervisor {
         let pending: Vec<_> = self.state.pending.values().cloned().collect();
         let mut resolved = Vec::new();
         for reservation in pending {
+            // A pending attempt is resolved in the family that reserved it. Recording a C0 event
+            // for C1 work would make C1 replay observe a foreign record and would let C0 replay
+            // observe C1 work; both families would then read a journal they do not own.
+            let family = if self.state.pending_c1.contains(&reservation.reservation_id) {
+                ReservationFamily::C1
+            } else {
+                ReservationFamily::C0
+            };
             if let Some((closure, kinds)) =
                 self.transport.find_attempt(&reservation.reservation_id)?
             {
                 let event = if kinds.iter().all(|kind| kind == "evidence_batch") {
-                    JournalEvent::LocalDurabilityRecorded {
-                        reservation_id: reservation.reservation_id.clone(),
-                        segment: closure.clone(),
-                        outcome: DurableOutcome::Idempotent,
-                    }
+                    family.durability_event(
+                        reservation.reservation_id.clone(),
+                        closure.clone(),
+                        DurableOutcome::Idempotent,
+                    )
                 } else if kinds.iter().all(|kind| kind == "gap") {
-                    JournalEvent::AttemptAbandoned {
-                        reservation_id: reservation.reservation_id.clone(),
-                        gap_segment: closure.clone(),
-                        reason: OpenVariant::known("restart_recovered_gap")?,
-                    }
+                    family.abandoned_event(
+                        reservation.reservation_id.clone(),
+                        closure.clone(),
+                        OpenVariant::known("restart_recovered_gap")?,
+                    )
                 } else {
                     return Err(SupervisorError::InvalidState(
                         "attempt segment contains mixed or unsupported entry kinds".into(),
@@ -812,11 +955,13 @@ impl Supervisor {
                 self.state.apply(&record.event);
                 resolved.push(local_receipt(&closure, DurableOutcome::Idempotent)?);
             } else {
-                resolved.push(self.abandon(
+                let (closure, outcome) = self.abandon_closure_in_family(
                     &reservation,
                     OpenVariant::known("abandoned_attempt_after_restart")?,
                     at,
-                )?);
+                    family,
+                )?;
+                resolved.push(local_receipt(&closure, outcome)?);
             }
         }
         self.persist_health()?;
@@ -1096,6 +1241,65 @@ impl Supervisor {
             (&left.source_key, &left.operation_key).cmp(&(&right.source_key, &right.operation_key))
         });
         Ok(health)
+    }
+}
+
+/// Which durable journal family one supervised attempt belongs to.
+///
+/// The two families share every durability mechanism and share nothing semantically: a C0 replay
+/// scan never observes C1 records, and C1 replay never observes C0 records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReservationFamily {
+    C0,
+    C1,
+}
+
+impl ReservationFamily {
+    fn reserved_event(self, reservation: AttemptReservation) -> JournalEvent {
+        match self {
+            Self::C0 => JournalEvent::AttemptReserved(reservation),
+            Self::C1 => JournalEvent::C1AttemptReserved(reservation),
+        }
+    }
+
+    fn durability_event(
+        self,
+        reservation_id: crate::ReservationId,
+        segment: SegmentClosure,
+        outcome: DurableOutcome,
+    ) -> JournalEvent {
+        match self {
+            Self::C0 => JournalEvent::LocalDurabilityRecorded {
+                reservation_id,
+                segment,
+                outcome,
+            },
+            Self::C1 => JournalEvent::C1RawDurabilityRecorded {
+                reservation_id,
+                segment,
+                outcome,
+            },
+        }
+    }
+
+    fn abandoned_event(
+        self,
+        reservation_id: crate::ReservationId,
+        gap_segment: SegmentClosure,
+        reason: OpenVariant,
+    ) -> JournalEvent {
+        match self {
+            Self::C0 => JournalEvent::AttemptAbandoned {
+                reservation_id,
+                gap_segment,
+                reason,
+            },
+            Self::C1 => JournalEvent::C1AttemptAbandoned {
+                reservation_id,
+                gap_segment,
+                reason,
+            },
+        }
     }
 }
 

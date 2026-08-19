@@ -5,6 +5,7 @@
 //! listener, catalog write handle, wallet authority, or transaction capability.
 
 mod budget;
+pub mod c1;
 mod c1_activation;
 mod error;
 mod harness;

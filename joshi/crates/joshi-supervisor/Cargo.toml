@@ -15,11 +15,13 @@ joshi-sources = { path = "../joshi-sources" }
 joshi-spool = { path = "../joshi-spool" }
 joshi-store = { path = "../joshi-store" }
 joshi-wave5-c1-activation = { path = "../joshi-wave5-c1-activation" }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
