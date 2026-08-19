@@ -529,7 +529,6 @@ pub enum ProviderRunnerError {
     ActualUsageExceeded,
     #[error("started bounded page attempt must report exactly one request and one page")]
     InexactStartedUsage,
-    #[cfg(test)]
     #[error("public Solana C1 conformance boundary failed")]
     PublicSolanaC1Execution,
     #[error("captured progress requires at least one exact source frame")]

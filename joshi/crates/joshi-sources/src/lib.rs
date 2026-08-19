@@ -14,8 +14,7 @@ pub mod health;
 pub mod helius;
 pub mod ingress;
 pub mod provider_plan;
-#[cfg(test)]
-mod public_solana_c1;
+pub mod public_solana_c1;
 pub mod pumpportal;
 pub mod runner_port;
 pub mod scope;
@@ -51,6 +50,15 @@ pub use provider_plan::{
     SEALED_C0_METHOD_SCHEMA_FINGERPRINT, SEALED_C0_SOURCE_CONTRACT_FINGERPRINT,
     ValidatedProviderOperation, ValidatedProviderRunPlan, parse_provider_run_plan_exact,
     validate_provider_run_plan,
+};
+pub use public_solana_c1::{
+    CanonicalC1Request, JsonRpcRefusal, PUBLIC_SOLANA_C1_COMMITMENT, PUBLIC_SOLANA_C1_JSON_RPC_ID,
+    PUBLIC_SOLANA_C1_JSON_RPC_VERSION, PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES,
+    PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES, PUBLIC_SOLANA_C1_MAX_ROWS, PUBLIC_SOLANA_C1_METHOD,
+    PUBLIC_SOLANA_C1_MIN_ROWS, PublicSolanaC1ConformanceError, PublicSolanaC1Outcome,
+    PublicSolanaC1RequestError, RawSignaturePage, RawSignatureRow,
+    canonical_public_solana_c1_request, public_solana_c1_safe_headers_are_bounded,
+    read_public_solana_c1_body, read_public_solana_c1_frame,
 };
 pub use pumpportal::{
     PumpPortalCommand, PumpPortalControl, PumpPortalFrameKind, PumpPortalFrameMetadata,
