@@ -1508,6 +1508,7 @@ dependencies = [
  "futures-util",
  "joshi-domain",
  "joshi-evidence",
+ "joshi-source-registry",
  "reqwest",
  "secrecy",
  "serde",

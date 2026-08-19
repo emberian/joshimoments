@@ -10,13 +10,25 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{SourceId, contract_port::admit_sealed_c0};
+use crate::{SourceId, contract_port::admit_runtime_method};
 
-pub const PROVIDER_RUN_PLAN_PORT_VERSION: &str = "joshi.provider_run_plan_port.v1";
+pub const PROVIDER_RUN_PLAN_PORT_VERSION: &str = "joshi.provider_run_plan_port.v2";
 /// SHA-256 domain for a plan template which excludes only the registered-run binding.
-pub const PROVIDER_RUN_PLAN_TEMPLATE_DIGEST_DOMAIN: &str = "joshi.provider_run_plan_template.v1";
+pub const PROVIDER_RUN_PLAN_TEMPLATE_DIGEST_DOMAIN: &str = "joshi.provider_run_plan_template.v2";
 /// SHA-256 domain for the final, run-bound provider plan.
-pub const PROVIDER_RUN_PLAN_DIGEST_DOMAIN: &str = "joshi.provider_run_plan.final.v1";
+pub const PROVIDER_RUN_PLAN_DIGEST_DOMAIN: &str = "joshi.provider_run_plan.final.v2";
+/// Exact source-contract digest for the sealed local C0 operation.
+pub const SEALED_C0_SOURCE_CONTRACT_FINGERPRINT: &str =
+    "sha256:9225070e38e092e3c4cdd48744c36f61a32fee85c1170d0edcdbdc278428a6ed";
+/// Exact method-schema digest for the sealed local C0 operation.
+pub const SEALED_C0_METHOD_SCHEMA_FINGERPRINT: &str =
+    "sha256:b9620e8e7e33a4886382709f8e1bb6a744c65b111d68efce284d900e7b48fdb5";
+/// Exact canonical source-contract digest for the bounded public Solana declaration.
+pub const PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT: &str =
+    "sha256:91f2d69db741edbef943e729cd65a0941de856badcd9d35cb153b5006ae6d247";
+/// Exact method-schema digest for the bounded `getSignaturesForAddress` declaration.
+pub const PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT: &str =
+    "sha256:b3bafc833d9b859fb0dc475d62fac353d5862994bdb01fe184a6b1dd85aea715";
 
 const MIB: u64 = 1_024 * 1_024;
 const C1_MAX_REQUESTS: u64 = 25;
@@ -185,6 +197,8 @@ pub enum ProviderScopePort {
 pub struct ProviderOperationPlan {
     pub source_key: String,
     pub method_key: String,
+    pub source_contract_fingerprint: String,
+    pub method_schema_fingerprint: String,
     pub operation: ProviderOperation,
     pub generation: u64,
     pub max_attempts: u64,
@@ -373,6 +387,8 @@ pub fn validate_provider_run_plan(
         }
         stable_identifier(&operation.source_key)?;
         stable_identifier(&operation.method_key)?;
+        stable_digest(&operation.source_contract_fingerprint)?;
+        stable_digest(&operation.method_schema_fingerprint)?;
         if operation.attempt_cost.worst_case.requests != 1
             || operation.attempt_cost.max_overshoot.requests != 0
         {
@@ -420,25 +436,30 @@ pub fn validate_provider_run_plan(
         return Err(ProviderPlanError::AggregateBudgetExceeded);
     }
     validate_profile_shape(&plan)?;
-    if plan.profile != CanaryProfilePort::C0 {
-        return Err(ProviderPlanError::ProviderDisabledPendingCanonicalAdmission);
-    }
     for operation in &plan.operations {
-        let contract = admit_sealed_c0(&operation.source_key, &operation.method_key)
+        let contract = admit_runtime_method(&operation.source_key, &operation.method_key)
             .map_err(|_| ProviderPlanError::ProviderDisabledPendingCanonicalAdmission)?;
+        if operation.source_contract_fingerprint != contract.canonical_contract_fingerprint {
+            return Err(ProviderPlanError::SourceContractFingerprintMismatch);
+        }
+        if operation.method_schema_fingerprint != contract.method.schema_fingerprint {
+            return Err(ProviderPlanError::MethodSchemaFingerprintMismatch);
+        }
+        let reserved = operation.attempt_cost.reserved_total()?;
         if contract.method.operation != operation.operation
-            || operation.attempt_cost.reserved_total()?.ingress_bytes
-                > contract.method.max_response_bytes
+            || operation.max_attempts > contract.method.max_attempts
+            || reserved.ingress_bytes > contract.method.max_response_bytes
+            || reserved.provider_credits > contract.method.max_provider_credits_per_request
         {
-            return Err(ProviderPlanError::MethodByteBoundExceeded);
+            return Err(ProviderPlanError::MethodContractBoundExceeded);
         }
         operations.push(ValidatedProviderOperation {
             plan: operation.clone(),
             source_id: contract.source_id,
-            canonical_contract_fingerprint: contract.canonical_contract_fingerprint.to_owned(),
-            method_schema_fingerprint: contract.method.schema_fingerprint.to_owned(),
-            coverage_family: contract.coverage_family.to_owned(),
-            protection_domain: contract.protection_domain.to_owned(),
+            canonical_contract_fingerprint: contract.canonical_contract_fingerprint.clone(),
+            method_schema_fingerprint: contract.method.schema_fingerprint.clone(),
+            coverage_family: contract.coverage_family.clone(),
+            protection_domain: contract.protection_domain.clone(),
         });
     }
     let plan_template_digest = plan.plan_template_digest()?;
@@ -584,7 +605,13 @@ fn validate_c1_shape(operations: &[ProviderOperationPlan]) -> Result<(), Provide
     }
     let wallet_pages: Vec<_> = operations
         .iter()
-        .filter(|operation| operation.operation == ProviderOperation::HeliusWalletTransactionsPage)
+        .filter(|operation| {
+            matches!(
+                operation.operation,
+                ProviderOperation::HeliusWalletTransactionsPage
+                    | ProviderOperation::SolanaSignaturesForAddress
+            )
+        })
         .collect();
     if wallet_pages.len() != 1 || wallet_pages[0].max_attempts != 1 {
         return Err(ProviderPlanError::C1RequiresOneWalletPage);
@@ -749,6 +776,8 @@ pub enum ProviderPlanError {
     UnboundedAttempt,
     #[error("attempt exceeds the admitted method byte bound")]
     MethodByteBoundExceeded,
+    #[error("attempt exceeds the canonical method's operation, retry, byte, or cost bound")]
+    MethodContractBoundExceeded,
     #[error("operation scope does not match its admitted method")]
     ScopeOperationMismatch,
     #[error("wallet page is outside the one-to-100-row C1 envelope")]
@@ -767,7 +796,7 @@ pub enum ProviderPlanError {
     C0RequiresSingleSyntheticOperation,
     #[error("provider operation is not admitted by this canary profile")]
     ProfileOperationMismatch,
-    #[error("C1 requires exactly one Helius public-wallet page attempt")]
+    #[error("C1 requires exactly one registered public-wallet page attempt")]
     C1RequiresOneWalletPage,
     #[error("C1 public-wallet page operations disagree on wallet")]
     C1WalletMismatch,
@@ -777,6 +806,10 @@ pub enum ProviderPlanError {
     C2ReferenceShape,
     #[error("provider plan arithmetic overflow")]
     ArithmeticOverflow,
+    #[error("provider plan source-contract fingerprint differs from the canonical registry")]
+    SourceContractFingerprintMismatch,
+    #[error("provider plan method-schema fingerprint differs from the canonical registry")]
+    MethodSchemaFingerprintMismatch,
     #[error("provider plan could not be encoded")]
     Encode,
 }
@@ -842,6 +875,8 @@ mod tests {
             vec![ProviderOperationPlan {
                 source_key: "synthetic.local".to_owned(),
                 method_key: "emit".to_owned(),
+                source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
                 operation: ProviderOperation::SyntheticEmit,
                 generation: 1,
                 max_attempts: 1,
@@ -860,25 +895,124 @@ mod tests {
     }
 
     #[test]
-    fn c1_valid_shape_still_refuses_without_canonical_admission() {
+    fn v1_plan_wire_refuses_after_fingerprint_binding_upgrade() {
+        let mut plan = run(
+            CanaryProfilePort::C0,
+            vec![ProviderOperationPlan {
+                source_key: "synthetic.local".to_owned(),
+                method_key: "emit".to_owned(),
+                source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
+                operation: ProviderOperation::SyntheticEmit,
+                generation: 1,
+                max_attempts: 1,
+                scope: ProviderScopePort::SyntheticScenario {
+                    scenario_id: "v1-refusal".to_owned(),
+                },
+                attempt_cost: attempt_cost(0, 1_000),
+            }],
+        );
+        plan.port_version = "joshi.provider_run_plan_port.v1".to_owned();
+        assert_eq!(
+            validate_provider_run_plan(plan).unwrap_err(),
+            ProviderPlanError::WrongPortVersion
+        );
+    }
+
+    #[test]
+    fn c1_public_solana_shape_is_canonically_bound_but_has_no_builtin_io() {
         let plan = run(
             CanaryProfilePort::C1,
             vec![ProviderOperationPlan {
-                source_key: "helius.wallet".to_owned(),
-                method_key: "read".to_owned(),
-                operation: ProviderOperation::HeliusWalletTransactionsPage,
+                source_key: "solana.public.mainnet".to_owned(),
+                method_key: "get_signatures_for_address".to_owned(),
+                source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
+                    .to_owned(),
+                operation: ProviderOperation::SolanaSignaturesForAddress,
                 generation: 1,
                 max_attempts: 1,
                 scope: ProviderScopePort::PublicWalletPage {
                     address: WALLET.to_owned(),
                     max_rows: 100,
                 },
-                attempt_cost: attempt_cost(100, 10_000),
+                attempt_cost: attempt_cost(0, 10_000),
             }],
         );
+        let validated = validate_provider_run_plan(plan).unwrap();
         assert_eq!(
-            validate_provider_run_plan(plan).unwrap_err(),
-            ProviderPlanError::ProviderDisabledPendingCanonicalAdmission
+            validated.built_in_execution(),
+            BuiltInExecutionDisposition::ValidationOnlyNoProviderIo
+        );
+        assert_eq!(
+            validated.operations()[0].source_id,
+            SourceId::SolanaPublicHttp
+        );
+    }
+
+    #[test]
+    fn c1_refuses_source_or_method_fingerprint_substitution() {
+        let operation = ProviderOperationPlan {
+            source_key: "solana.public.mainnet".to_owned(),
+            method_key: "get_signatures_for_address".to_owned(),
+            source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
+                .to_owned(),
+            operation: ProviderOperation::SolanaSignaturesForAddress,
+            generation: 1,
+            max_attempts: 1,
+            scope: ProviderScopePort::PublicWalletPage {
+                address: WALLET.to_owned(),
+                max_rows: 100,
+            },
+            attempt_cost: attempt_cost(0, 10_000),
+        };
+        let mut source_substitution = run(CanaryProfilePort::C1, vec![operation.clone()]);
+        source_substitution.operations[0].source_contract_fingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
+        assert_eq!(
+            validate_provider_run_plan(source_substitution).unwrap_err(),
+            ProviderPlanError::SourceContractFingerprintMismatch
+        );
+
+        let mut method_substitution = run(CanaryProfilePort::C1, vec![operation]);
+        method_substitution.operations[0].method_schema_fingerprint =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
+        assert_eq!(
+            validate_provider_run_plan(method_substitution).unwrap_err(),
+            ProviderPlanError::MethodSchemaFingerprintMismatch
+        );
+    }
+
+    #[test]
+    fn c1_public_solana_refuses_provider_credit_or_retry_laundering() {
+        let operation = ProviderOperationPlan {
+            source_key: "solana.public.mainnet".to_owned(),
+            method_key: "get_signatures_for_address".to_owned(),
+            source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
+                .to_owned(),
+            operation: ProviderOperation::SolanaSignaturesForAddress,
+            generation: 1,
+            max_attempts: 1,
+            scope: ProviderScopePort::PublicWalletPage {
+                address: WALLET.to_owned(),
+                max_rows: 100,
+            },
+            attempt_cost: attempt_cost(1, 10_000),
+        };
+        assert_eq!(
+            validate_provider_run_plan(run(CanaryProfilePort::C1, vec![operation.clone()]))
+                .unwrap_err(),
+            ProviderPlanError::MethodContractBoundExceeded
+        );
+
+        let mut retry = operation;
+        retry.attempt_cost = attempt_cost(0, 10_000);
+        retry.max_attempts = 2;
+        assert_eq!(
+            validate_provider_run_plan(run(CanaryProfilePort::C1, vec![retry])).unwrap_err(),
+            ProviderPlanError::C1RequiresOneWalletPage
         );
     }
 
@@ -892,6 +1026,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.compact".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusCompactTransactionSubscription,
                 generation: 1,
                 max_attempts: 3,
@@ -901,6 +1041,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.logs".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusProgramLogsReference,
                 generation: 1,
                 max_attempts: 1,
@@ -910,6 +1056,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.hydrate".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusFinalizedTransactionHydration,
                 generation: 1,
                 max_attempts: 10,
@@ -931,6 +1083,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.compact".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusCompactTransactionSubscription,
                 generation: 1,
                 max_attempts: 1,
@@ -943,6 +1101,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.logs".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusProgramLogsReference,
                 generation: 1,
                 max_attempts: 1,
@@ -955,6 +1119,12 @@ mod tests {
             ProviderOperationPlan {
                 source_key: "helius.hydrate".to_owned(),
                 method_key: "read".to_owned(),
+                source_contract_fingerprint:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                method_schema_fingerprint:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                 operation: ProviderOperation::HeliusFinalizedTransactionHydration,
                 generation: 1,
                 max_attempts: 1,
@@ -975,6 +1145,8 @@ mod tests {
         let operation = ProviderOperationPlan {
             source_key: "synthetic.local".to_owned(),
             method_key: "emit".to_owned(),
+            source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
             operation: ProviderOperation::SyntheticEmit,
             generation: 1,
             max_attempts: 1,
@@ -1000,6 +1172,8 @@ mod tests {
         let operation = ProviderOperationPlan {
             source_key: "synthetic.local".to_owned(),
             method_key: "emit".to_owned(),
+            source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
             operation: ProviderOperation::SyntheticEmit,
             generation: 1,
             max_attempts: 1,
@@ -1019,6 +1193,22 @@ mod tests {
         method.operations[0].method_key = "substituted".to_owned();
         assert_ne!(base_digest, method.plan_template_digest().unwrap());
 
+        let mut source_fingerprint = base.clone();
+        source_fingerprint.operations[0].source_contract_fingerprint =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
+        assert_ne!(
+            base_digest,
+            source_fingerprint.plan_template_digest().unwrap()
+        );
+
+        let mut method_fingerprint = base.clone();
+        method_fingerprint.operations[0].method_schema_fingerprint =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
+        assert_ne!(
+            base_digest,
+            method_fingerprint.plan_template_digest().unwrap()
+        );
+
         let mut operation = base.clone();
         operation.operations[0].operation = ProviderOperation::SolanaTransaction;
         assert_ne!(base_digest, operation.plan_template_digest().unwrap());
@@ -1033,6 +1223,8 @@ mod tests {
         let operation = ProviderOperationPlan {
             source_key: "synthetic.local".to_owned(),
             method_key: "emit".to_owned(),
+            source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
             operation: ProviderOperation::SyntheticEmit,
             generation: 1,
             max_attempts: 1,

@@ -330,6 +330,10 @@ fn fixture_provider_plan_template() -> ProviderRunPlanTemplate {
         operations: vec![ProviderOperationPlan {
             source_key: "synthetic.local".into(),
             method_key: "emit".into(),
+            source_contract_fingerprint:
+                joshi_sources::provider_plan::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.into(),
+            method_schema_fingerprint:
+                joshi_sources::provider_plan::SEALED_C0_METHOD_SCHEMA_FINGERPRINT.into(),
             operation: ProviderOperation::SyntheticEmit,
             generation: 1,
             max_attempts: 1,

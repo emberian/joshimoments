@@ -592,6 +592,10 @@ mod tests {
             operations: vec![ProviderOperationPlan {
                 source_key: "synthetic.local".to_owned(),
                 method_key: "emit".to_owned(),
+                source_contract_fingerprint:
+                    crate::provider_plan::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint:
+                    crate::provider_plan::SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
                 operation: ProviderOperation::SyntheticEmit,
                 generation: 1,
                 max_attempts: 1,

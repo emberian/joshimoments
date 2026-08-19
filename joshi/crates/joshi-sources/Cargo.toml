@@ -12,6 +12,7 @@ bytes = { version = "1.12.1", features = ["serde"] }
 futures-util = { version = "0.3.34", features = ["sink"] }
 joshi-domain = { path = "../joshi-domain" }
 joshi-evidence = { path = "../joshi-evidence" }
+joshi-source-registry = { path = "../joshi-source-registry" }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 secrecy = "0.10.3"
 serde.workspace = true

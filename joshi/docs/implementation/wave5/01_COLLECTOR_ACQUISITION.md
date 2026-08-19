@@ -11,7 +11,10 @@ Glass client, wallet reader, transaction builder, signer, submitter, or economic
 provider runner that performs no network I/O and exercises the same plan, reservation, budget,
 generation, queue, durability, gap, shutdown, and replay boundaries intended for later adapters.
 `C1` and `C2` can be parsed and checked against their frozen ceilings, but remain provider-disabled.
-A valid configuration, source declaration, or budget is never permission to contact a provider.
+The C1 validator now rederives the one credential-free public-Solana source and method from the
+canonical source registry and accepts an exact one-page plan only as
+`ValidationOnlyNoProviderIo`. C2 has no admitted source projection. A valid configuration, source
+declaration, budget, or validation-only plan is never permission to contact a provider.
 
 Live promotion additionally requires all of the following to close outside this lane:
 
@@ -40,12 +43,14 @@ substitution, unbounded operations, unsafe protection/retention combinations, an
 the selected canary profile refuse before source execution. C0 contains no credential reference;
 secret bytes never enter arguments, output, logs, evidence metadata, digests, or error messages.
 
-The registered configuration closes a domain-separated `planTemplateDigest` computed over every
-provider-plan field except the run occurrence. After registration, the final plan adds the exact
-run ID and registration digest and receives a separate final digest. Each attempt reservation
-carries the complete run reference and both plan digests. This breaks the otherwise cyclic
-configuration/registration/plan digest graph without allowing a source, method, operation, cap,
-or cross-run substitution.
+The V2 registered configuration closes a domain-separated `planTemplateDigest` computed over every
+provider-plan field except the run occurrence. Each operation contains both the exact canonical
+source-contract fingerprint and exact method-schema fingerprint; validation rederives and compares
+both before admitting the operation. After registration, the final plan adds the exact run ID and
+registration digest and receives a separate final digest. Each attempt reservation carries the
+complete run reference and both plan digests. This breaks the otherwise cyclic
+configuration/registration/plan digest graph without allowing a same-name contract, source,
+method, operation, cap, or cross-run substitution.
 
 Each provider step is deliberately two phase:
 
@@ -85,7 +90,7 @@ source-specific contract that would make it so.
 | Profile | Scope | Requests | Provider credits | Ingress | Durable | Time | Rate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | C0 | one sealed deterministic no-network source operation | bounded by exact local plan | 0 | at most 64 MiB | at most 64 MiB | at most 1 h | local only |
-| C1 | one public-wallet conformance page | 25 | 250 | 64 MiB | 64 MiB | 60 s | bounded per attempt |
+| C1 | one exact public-wallet conformance page; currently validation-only public Solana | 25 | profile ceiling 250; admitted public method 0 | 64 MiB | 64 MiB | 60 s | bounded per attempt |
 | C2 | at most three compact windows and 60 raw-log seconds | 10,000 | 10,000 | 256 MiB | 128 MiB | bounded registered run | 8 MiB/s |
 
 Every dimension is independent; unused bytes cannot pay for requests or credits. Work terminates at

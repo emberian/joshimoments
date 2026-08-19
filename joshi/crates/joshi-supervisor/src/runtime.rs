@@ -1675,8 +1675,8 @@ mod tests {
         }
     }
 
-    fn runtime_fixture() -> (ExactRuntimeDocuments, ValidatedProviderRunPlan) {
-        let hard_cap = RuntimeBudgetPort {
+    fn runtime_hard_cap() -> RuntimeBudgetPort {
+        RuntimeBudgetPort {
             requests: 1,
             pages: 1,
             ingress_bytes: 1024 * 1024,
@@ -1685,7 +1685,11 @@ mod tests {
             wall_millis: 1_000,
             provider_currency_minor: BTreeMap::new(),
             chain_native_atoms: BTreeMap::new(),
-        };
+        }
+    }
+
+    fn runtime_fixture() -> (ExactRuntimeDocuments, ValidatedProviderRunPlan) {
+        let hard_cap = runtime_hard_cap();
         let template = ProviderRunPlanTemplate {
             port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
             plan_id: "runtime-c0-fixture".to_owned(),
@@ -1697,6 +1701,10 @@ mod tests {
             operations: vec![ProviderOperationPlan {
                 source_key: "synthetic.local".to_owned(),
                 method_key: "emit".to_owned(),
+                source_contract_fingerprint:
+                    joshi_sources::provider_plan::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint:
+                    joshi_sources::provider_plan::SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
                 operation: ProviderOperation::SyntheticEmit,
                 generation: 1,
                 max_attempts: 1,

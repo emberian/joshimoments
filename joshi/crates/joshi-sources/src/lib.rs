@@ -41,9 +41,11 @@ pub use helius::{
 pub use ingress::{BoundedIngress, IngressError};
 pub use provider_plan::{
     BuiltInExecutionDisposition, CanaryProfilePort, PROVIDER_RUN_PLAN_DIGEST_DOMAIN,
-    PROVIDER_RUN_PLAN_PORT_VERSION, PROVIDER_RUN_PLAN_TEMPLATE_DIGEST_DOMAIN, ProviderOperation,
-    ProviderOperationPlan, ProviderPlanError, ProviderRunPlan, ProviderRunPlanTemplate,
-    ProviderScopePort, RegisteredRunPort, RuntimeAttemptCostPort, RuntimeBudgetPort,
+    PROVIDER_RUN_PLAN_PORT_VERSION, PROVIDER_RUN_PLAN_TEMPLATE_DIGEST_DOMAIN,
+    PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT, PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT,
+    ProviderOperation, ProviderOperationPlan, ProviderPlanError, ProviderRunPlan,
+    ProviderRunPlanTemplate, ProviderScopePort, RegisteredRunPort, RuntimeAttemptCostPort,
+    RuntimeBudgetPort, SEALED_C0_METHOD_SCHEMA_FINGERPRINT, SEALED_C0_SOURCE_CONTRACT_FINGERPRINT,
     ValidatedProviderOperation, ValidatedProviderRunPlan, validate_provider_run_plan,
 };
 pub use pumpportal::{

@@ -11,6 +11,12 @@ witness. Solana's official public endpoint is documented as rate-limited and uns
 production applications, so this source may support only the separately registered bounded C1
 conformance occurrence.
 
+`joshi-sources` consumes this declaration through a closed runtime projection. Provider-plan V2
+commits the declaration's exact source fingerprint and method-schema fingerprint in both its
+template and final run-bound digests. The validator rederives both from this registry; a same-name
+source or method with changed contract bytes refuses. The admitted result remains explicitly
+validation-only and exposes no socket entry point.
+
 Owned paths:
 
 - `crates/joshi-source-registry`;
