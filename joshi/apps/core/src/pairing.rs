@@ -340,7 +340,7 @@ pub(crate) trait PairingAuthorizer: Send + Sync {
         capability_text: &str,
         origin_text: &str,
         scope: PairingScope,
-    ) -> Result<(), OrdinaryPairingError>;
+    ) -> Result<PairingSessionDescriptor, OrdinaryPairingError>;
 }
 
 impl OrdinaryPairingService {
@@ -578,7 +578,7 @@ impl PairingAuthorizer for OrdinaryPairingService {
         capability_text: &str,
         origin_text: &str,
         scope: PairingScope,
-    ) -> Result<(), OrdinaryPairingError> {
+    ) -> Result<PairingSessionDescriptor, OrdinaryPairingError> {
         let capability = SecretCapability::parse(capability_text)?;
         let origin = PairingOrigin::new(origin_text)?;
         let mut runtime = self
@@ -604,7 +604,7 @@ impl PairingAuthorizer for OrdinaryPairingService {
             return Err(OrdinaryPairingError::Journal(PairingJournalError));
         }
         match outcome {
-            PairingAuthorizationOutcome::Authorized { .. } => Ok(()),
+            PairingAuthorizationOutcome::Authorized { descriptor, .. } => Ok(descriptor),
             PairingAuthorizationOutcome::Rejected { error, .. } => Err(error.into()),
         }
     }
@@ -941,6 +941,7 @@ mod tests {
     use http_body_util::BodyExt as _;
     use joshi_domain::UtcTimestamp;
     use joshi_pairing::pairing_epoch_occurrence_id;
+    use joshi_publication::CockpitV2BrowserPresentationClaimV1;
     use joshi_store::{SqliteStore, StoreConfig, StoreMode};
     use std::{path::Path, time::Duration};
     use tower::ServiceExt as _;
@@ -1183,6 +1184,28 @@ mod tests {
             .header("sec-fetch-mode", "cors")
             .header("sec-fetch-dest", "empty")
             .body(Body::from(body))
+            .unwrap()
+    }
+
+    fn presentation_request(capability: &str, body: Vec<u8>) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/cockpit-v2/presentations")
+            .header("content-type", "application/json")
+            .header("host", "127.0.0.1:8787")
+            .header("origin", "http://127.0.0.1:8787")
+            .header("sec-fetch-site", "same-origin")
+            .header("sec-fetch-mode", "cors")
+            .header("sec-fetch-dest", "empty")
+            .header("x-joshi-pairing-token", capability)
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    fn aligned_now() -> UtcTimestamp {
+        let nanos = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+        let aligned = nanos.div_euclid(1_000) * 1_000;
+        UtcTimestamp::new(time::OffsetDateTime::from_unix_timestamp_nanos(aligned).unwrap())
             .unwrap()
     }
 
@@ -1735,6 +1758,205 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn paired_browser_presentation_is_exact_idempotent_and_store_reopenable() {
+        let root = tempfile::tempdir().unwrap();
+        let report = crate::wave5_g0::run_wave5_g0_source_publication(root.path()).unwrap();
+        let publication_id =
+            joshi_publication::CockpitPublicationId::new(report.publication_id).unwrap();
+        let config = crate::wave5_g0::offline_fixture_store_config(root.path()).unwrap();
+        let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
+        let migration = store.migrate(aligned_now()).unwrap();
+        assert_eq!(migration.runtime.user_version, 21);
+        let publication = store
+            .load_cockpit_v2_publication_v1(&publication_id)
+            .unwrap()
+            .unwrap();
+        let head = store
+            .load_cockpit_v2_head_v1(&publication_id)
+            .unwrap()
+            .unwrap();
+        drop(store);
+
+        let origin = PairingOrigin::new("http://127.0.0.1:8787").unwrap();
+        let (core, ordinary) = CoreService::with_sqlite_pairing(
+            SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap(),
+            None,
+            PairingCapability::from_hex(&"e".repeat(64)).unwrap(),
+            origin,
+            PairingConfig::default(),
+        )
+        .unwrap();
+        let issued = ordinary
+            .issue_code(vec![
+                PairingScope::CockpitRead,
+                PairingScope::PresentationEvidenceWrite,
+            ])
+            .unwrap();
+        let app = core.router();
+        let exchanged = app
+            .clone()
+            .oneshot(request(format!(
+                "{{\"contract\":\"joshi.pairing.exchange\",\"schemaVersion\":1,\"oneTimeCode\":\"{}\"}}",
+                issued.code.as_str()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(exchanged.status(), StatusCode::OK);
+        let exchanged: serde_json::Value =
+            serde_json::from_slice(&exchanged.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let capability = exchanged["capability"].as_str().unwrap().to_owned();
+        let session_id = exchanged["sessionId"].as_str().unwrap().to_owned();
+
+        let opened = app
+            .clone()
+            .oneshot(authorized_request(
+                "GET",
+                &format!(
+                    "/api/v1/cockpit-v2/publications/{}",
+                    publication_id.as_str()
+                ),
+                &capability,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(opened.status(), StatusCode::OK);
+
+        let mut claim: CockpitV2BrowserPresentationClaimV1 =
+            serde_json::from_value(serde_json::json!({
+                "contract": "joshi.cockpit.v2.browser_presentation_claim",
+                "schemaVersion": 1,
+                "idempotencyKey": "browser-presentation:paired-browser-page-1:1",
+                "clientPresentationId": "paired-browser-presentation-1",
+                "browserPageId": "paired-browser-page-1",
+                "presentationSeq": "1",
+                "publication": {
+                    "publicationId": publication_id.as_str(),
+                    "publicationDigest": publication.publication.publication_digest.as_str(),
+                    "publicationBytesDigest": publication.publication_bytes_digest.as_str(),
+                    "publicationCommitSeq": publication.commit_seq.get().to_string(),
+                },
+                "head": {
+                    "headDigest": head.head.head_digest.as_str(),
+                    "headBytesDigest": head.head_digest.as_str(),
+                    "headCommitSeq": head.commit_seq.get().to_string(),
+                },
+                "sourceOccurrenceId": publication.source_occurrence_id.as_str(),
+                "renderedSubjects": publication.publication.manifest.rendered_subjects,
+                "renderedSubjectCount": publication
+                    .publication
+                    .manifest
+                    .rendered_subjects
+                    .len()
+                    .to_string(),
+                "mountedAt": aligned_now().to_string(),
+                "clientClockId": "paired-browser-page-1-performance",
+                "monotonicNs": "1000",
+                "viewport": {
+                    "widthCssPx": "1280",
+                    "heightCssPx": "800",
+                    "devicePixelRatioMilli": "2000",
+                },
+                "documentVisibility": "visible",
+                "documentHasFocus": true,
+                "authority": "read_only_no_execution",
+                "ceiling": "browser_reported_not_pixel_verified",
+                "claimDigest": format!("sha256:{}", "0".repeat(64)),
+            }))
+            .unwrap();
+        claim.claim_digest = claim.computed_digest().unwrap();
+        let claim_bytes = claim.canonical_bytes().unwrap();
+
+        let mut prepair_mount = claim.clone();
+        prepair_mount.idempotency_key =
+            StableString::new("browser-presentation:paired-browser-page-1:2").unwrap();
+        prepair_mount.client_presentation_id =
+            StableString::new("paired-browser-presentation-prepair").unwrap();
+        prepair_mount.presentation_seq = joshi_domain::WireU64::new(2);
+        prepair_mount.mounted_at = publication.publication.manifest.cutoff.knowledge_at;
+        prepair_mount.claim_digest = prepair_mount.computed_digest().unwrap();
+        let prepair_refused = app
+            .clone()
+            .oneshot(presentation_request(
+                &capability,
+                prepair_mount.canonical_bytes().unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(prepair_refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let accepted = app
+            .clone()
+            .oneshot(presentation_request(&capability, claim_bytes.clone()))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let accepted: serde_json::Value =
+            serde_json::from_slice(&accepted.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            accepted["contract"],
+            "joshi.core.cockpit_v2_browser_presentation_receipt"
+        );
+        assert_eq!(accepted["catalogSchema"], "joshi.sqlite.v21");
+        assert_eq!(accepted["status"], "accepted");
+        assert_eq!(
+            accepted["ceiling"],
+            "durable_browser_report_only_not_pixel_verified"
+        );
+        assert_eq!(accepted["claimDigest"], claim.claim_digest.as_str());
+        assert_eq!(accepted["pairingSessionId"], session_id);
+
+        let retry = app
+            .clone()
+            .oneshot(presentation_request(&capability, claim_bytes.clone()))
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::OK);
+        let retry: serde_json::Value =
+            serde_json::from_slice(&retry.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(retry["status"], "idempotent");
+        assert_eq!(retry["storeCommitSeq"], accepted["storeCommitSeq"]);
+
+        let mut conflicting = claim.clone();
+        conflicting.document_has_focus = false;
+        conflicting.claim_digest = conflicting.computed_digest().unwrap();
+        let conflict = app
+            .clone()
+            .oneshot(presentation_request(
+                &capability,
+                conflicting.canonical_bytes().unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+        ordinary
+            .revoke_session(&session_id, "operator_revoked")
+            .unwrap();
+        let revoked_retry = app
+            .clone()
+            .oneshot(presentation_request(&capability, claim_bytes.clone()))
+            .await
+            .unwrap();
+        assert_eq!(revoked_retry.status(), StatusCode::UNAUTHORIZED);
+        drop(app);
+        drop(ordinary);
+
+        let reopened = SqliteStore::open(config, StoreMode::ReadOnly)
+            .unwrap()
+            .load_cockpit_v2_browser_presentation_v1(&claim.client_presentation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reopened.claim, claim);
+        assert_eq!(reopened.claim_bytes, claim_bytes);
+        assert_eq!(reopened.pairing_session_id.as_str(), session_id);
+        assert!(reopened.commit_seq.get() > head.commit_seq.get());
     }
 
     #[tokio::test]

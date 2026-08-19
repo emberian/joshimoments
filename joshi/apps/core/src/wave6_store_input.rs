@@ -82,7 +82,7 @@ pub fn run_wave6_store_input_census(
     let program_id = StableString::new(PROGRAM_ID)?;
     let existing = if config.catalog_path.exists() {
         let store = SqliteStore::open(config.clone(), StoreMode::ReadOnly)?;
-        if store.catalog_schema()?.as_str() == "joshi.sqlite.v20" {
+        if store.catalog_schema()?.as_str() == "joshi.sqlite.v21" {
             store.load_wave6_store_input_census_for_program_v1(&program_id)?
         } else {
             None
@@ -125,9 +125,9 @@ pub fn run_wave6_store_input_census(
 
     let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
-    if migration.current != 20 {
+    if migration.current != 21 {
         return Err(Wave6StoreInputCensusError::Invariant(
-            "Wave 6 input census did not reach V20",
+            "Wave 6 input census did not reach latest V21",
         ));
     }
     let writer_build = StableString::new(format!("joshi-core-{}", env!("CARGO_PKG_VERSION")))?;
@@ -155,7 +155,7 @@ pub fn run_wave6_store_input_census(
     )?;
     if retry.status != IdempotencyStatus::Idempotent
         || !same_receipt(&first, &retry)
-        || first.catalog_schema.as_str() != "joshi.sqlite.v20"
+        || first.catalog_schema.as_str() != "joshi.sqlite.v21"
     {
         return Err(Wave6StoreInputCensusError::Invariant(
             "Wave 6 input census exact retry changed durable identity",
@@ -295,7 +295,7 @@ mod tests {
     fn genuine_w5_source_retries_and_reopens_without_market_atlas_promotion() {
         let state = tempfile::tempdir().expect("temporary input-census state");
         let first = run_wave6_store_input_census(state.path()).expect("first bridge witness");
-        assert_eq!(first.catalog_schema, "joshi.sqlite.v20");
+        assert_eq!(first.catalog_schema, "joshi.sqlite.v21");
         assert_eq!(first.first_status, IdempotencyStatus::Accepted);
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert_eq!(first.fact_count, "2");

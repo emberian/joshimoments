@@ -5,6 +5,7 @@
 //! or an exact idempotent batch is read back.
 
 mod blob;
+mod browser_presentation;
 mod error;
 mod g0;
 mod migration;
@@ -20,6 +21,9 @@ mod wave6_market;
 mod wave6_research;
 
 pub use blob::{BlobStore, PreparedBlob, PreparedExport};
+pub use browser_presentation::{
+    CockpitV2BrowserPresentationCommitReceipt, StoredCockpitV2BrowserPresentation,
+};
 pub use error::{Result, StoreError};
 pub use g0::{
     CockpitV2CommitReceipt, PairingEpochReceipt, PairingJournalReceipt, PairingOccurrenceKind,

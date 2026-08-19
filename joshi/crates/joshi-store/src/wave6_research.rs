@@ -1234,7 +1234,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 20);
+        assert_eq!(migration.current, 21);
         let build = StableString::new("wave6-research-store-test").expect("build ID");
         let program = store
             .commit_wave6_program_registration_v1(
@@ -1289,7 +1289,7 @@ mod tests {
                 build.clone(),
             )
             .expect("proposal");
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v20");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v21");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
         assert_eq!(accepted.descriptor_count, 3);
         assert_eq!(accepted.counterexample_count, 18);
@@ -1400,7 +1400,7 @@ mod tests {
                 build.clone(),
             )
             .expect("disposition");
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v20");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v21");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
         assert_eq!(accepted.disposition, ResearchDispositionKindV1::Hold);
         assert!(!accepted.authority_boundary.human_review_verified());

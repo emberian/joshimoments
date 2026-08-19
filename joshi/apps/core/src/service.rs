@@ -18,8 +18,8 @@ use joshi_domain::{SceneId, StableString, UtcTimestamp, WireU64};
 use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
 use joshi_publication::CockpitPublicationId;
 use joshi_store::{
-    OperatorCaptureMetadata, SceneMode, SceneSourceMode, SqliteStore, StoredCockpitV2Head,
-    StoredCockpitV2Publication,
+    IdempotencyStatus, OperatorCaptureMetadata, SceneMode, SceneSourceMode, SqliteStore,
+    StoredCockpitV2Head, StoredCockpitV2Publication,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -45,6 +45,7 @@ const SEC_FETCH_SITE_HEADER: &str = "sec-fetch-site";
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_COMPANION_BYTES: usize = 512 * 1024;
 const MAX_GLASS_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PRESENTATION_CLAIM_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct CoreService {
@@ -240,6 +241,10 @@ impl CoreService {
                 .route(
                     "/api/v1/cockpit-v2/publications/{publication_id}",
                     get(cockpit_v2_publication),
+                )
+                .route(
+                    "/api/v1/cockpit-v2/presentations",
+                    post(cockpit_v2_browser_presentation),
                 );
         }
         let router = router
@@ -301,7 +306,7 @@ async fn cockpit_v2_publication_index(
     headers: HeaderMap,
 ) -> Response {
     match authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead) {
-        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::Authorized(_) => {}
         OrdinaryAuthorization::Rejected(response) => return response,
         OrdinaryAuthorization::NotConfigured => {
             return problem(
@@ -382,7 +387,7 @@ async fn cockpit_v2_publication(
     Path(publication_id): Path<String>,
 ) -> Response {
     match authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead) {
-        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::Authorized(_) => {}
         OrdinaryAuthorization::Rejected(response) => return response,
         OrdinaryAuthorization::NotConfigured => {
             return problem(
@@ -491,6 +496,138 @@ fn exact_cockpit_v2_response(
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CockpitV2BrowserPresentationReceipt<'a> {
+    contract: &'static str,
+    schema_version: u16,
+    catalog_id: &'a str,
+    catalog_schema: &'a str,
+    client_presentation_id: &'a str,
+    claim_digest: &'a str,
+    claim_bytes_digest: &'a str,
+    pairing_session_id: &'a str,
+    publication_id: &'a str,
+    store_commit_seq: WireU64,
+    status: &'static str,
+    authority: &'static str,
+    ceiling: &'static str,
+}
+
+#[allow(clippy::too_many_lines)]
+async fn cockpit_v2_browser_presentation(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if body.is_empty() || body.len() > MAX_PRESENTATION_CLAIM_BYTES {
+        return problem(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "presentation_claim_too_large",
+            "Cockpit V2 browser presentation claim exceeds 64 KiB",
+        );
+    }
+    if single_header_text(&headers, header::CONTENT_TYPE.as_str()).as_deref()
+        != Some("application/json")
+    {
+        return problem(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_content_type",
+            "Cockpit V2 browser presentation requires application/json",
+        );
+    }
+    let Some(authorizer) = &service.inner.ordinary_pairing else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "route_not_mounted",
+            "ordinary Cockpit V2 presentation evidence is not mounted",
+        );
+    };
+    if single_header_text(&headers, header::ORIGIN.as_str()).as_deref()
+        != Some(authorizer.configured_origin().as_str())
+    {
+        return problem(
+            StatusCode::FORBIDDEN,
+            "origin_rejected",
+            "presentation evidence requires the configured exact loopback Origin",
+        );
+    }
+    let session = match authorize_ordinary_if_configured(
+        &service,
+        &headers,
+        PairingScope::PresentationEvidenceWrite,
+    ) {
+        OrdinaryAuthorization::Authorized(descriptor) => descriptor,
+        OrdinaryAuthorization::Rejected(response) => return response,
+        OrdinaryAuthorization::NotConfigured => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "route_not_mounted",
+                "ordinary Cockpit V2 presentation evidence is not mounted",
+            );
+        }
+    };
+    let Ok(mut store) = service.inner.store.lock() else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "presentation_writer_unavailable",
+            "catalog writer lock is unavailable",
+        );
+    };
+    let receipt = match store.commit_cockpit_v2_browser_presentation_v1(
+        &body,
+        &session,
+        StableString::new(env!("CARGO_PKG_VERSION")).expect("package version is stable"),
+    ) {
+        Ok(receipt) => receipt,
+        Err(joshi_store::StoreError::IdentityConflict { .. }) => {
+            return problem(
+                StatusCode::CONFLICT,
+                "presentation_identity_conflict",
+                "presentation idempotency identity already closes different exact bytes",
+            );
+        }
+        Err(
+            joshi_store::StoreError::InvalidBatch(_)
+            | joshi_store::StoreError::MissingIdentity { .. },
+        ) => {
+            return problem(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_presentation_claim",
+                "presentation claim does not close the exact paired headed publication",
+            );
+        }
+        Err(_) => {
+            return problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "presentation_commit_unavailable",
+                "presentation evidence was not acknowledged because exact store readback failed",
+            );
+        }
+    };
+    json_response(
+        StatusCode::OK,
+        &CockpitV2BrowserPresentationReceipt {
+            contract: "joshi.core.cockpit_v2_browser_presentation_receipt",
+            schema_version: 1,
+            catalog_id: receipt.catalog_id().as_str(),
+            catalog_schema: receipt.catalog_schema().as_str(),
+            client_presentation_id: receipt.client_presentation_id().as_str(),
+            claim_digest: receipt.claim_digest().as_str(),
+            claim_bytes_digest: receipt.claim_bytes_digest().as_str(),
+            pairing_session_id: receipt.pairing_session_id().as_str(),
+            publication_id: receipt.publication_id().as_str(),
+            store_commit_seq: WireU64::new(receipt.commit_seq().get()),
+            status: match receipt.status() {
+                IdempotencyStatus::Accepted => "accepted",
+                IdempotencyStatus::Idempotent => "idempotent",
+            },
+            authority: "read_only_no_execution",
+            ceiling: "durable_browser_report_only_not_pixel_verified",
+        },
+    )
 }
 
 async fn prospective_session_launch(
@@ -603,7 +740,7 @@ fn prospective_pairing_failure(
     scope: PairingScope,
 ) -> Option<Response> {
     match authorize_ordinary_if_configured(service, headers, scope) {
-        OrdinaryAuthorization::Authorized => return None,
+        OrdinaryAuthorization::Authorized(_) => return None,
         OrdinaryAuthorization::NotConfigured => {}
         OrdinaryAuthorization::Rejected(response) => return Some(response),
     }
@@ -645,7 +782,7 @@ fn prospective_pairing_failure(
 
 enum OrdinaryAuthorization {
     NotConfigured,
-    Authorized,
+    Authorized(joshi_pairing::PairingSessionDescriptor),
     Rejected(Response),
 }
 
@@ -689,7 +826,7 @@ fn authorize_ordinary_if_configured(
         ));
     };
     match authorizer.authorize(&capability, configured_origin, scope) {
-        Ok(()) => OrdinaryAuthorization::Authorized,
+        Ok(descriptor) => OrdinaryAuthorization::Authorized(descriptor),
         Err(OrdinaryPairingError::Journal(_) | OrdinaryPairingError::Unavailable) => {
             OrdinaryAuthorization::Rejected(problem(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1031,7 +1168,7 @@ async fn operator_command(
     }
     match authorize_ordinary_if_configured(&service, &headers, PairingScope::OperatorEvidenceWrite)
     {
-        OrdinaryAuthorization::Authorized => {}
+        OrdinaryAuthorization::Authorized(_) => {}
         OrdinaryAuthorization::NotConfigured => {
             if !headers
                 .get(PAIRING_TOKEN_HEADER)

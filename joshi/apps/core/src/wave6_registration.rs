@@ -257,9 +257,9 @@ pub fn run_wave6_program_registration(
     let store_config = config(state)?;
     let mut store = SqliteStore::open(store_config.clone(), StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
-    if migration.current != 20 {
+    if migration.current != 21 {
         return Err(Wave6RegistrationError::Invariant(
-            "Wave 6 registration did not reach V20",
+            "Wave 6 registration did not reach latest V21",
         ));
     }
     let batch_id = StableString::new(BATCH_ID)?;
@@ -272,7 +272,7 @@ pub fn run_wave6_program_registration(
     if !matches!(
         accepted.status,
         IdempotencyStatus::Accepted | IdempotencyStatus::Idempotent
-    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v20"
+    ) || accepted.catalog_schema.as_str() != "joshi.sqlite.v21"
         || accepted.semantic_ceiling != SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     {
         return Err(Wave6RegistrationError::Invariant(
@@ -1287,7 +1287,7 @@ mod tests {
         let first =
             run_wave6_program_registration(state.path()).expect("first registration witness");
         assert_eq!(first.status, "fixture_only");
-        assert_eq!(first.catalog_schema, "joshi.sqlite.v20");
+        assert_eq!(first.catalog_schema, "joshi.sqlite.v21");
         assert_eq!(first.first_status, IdempotencyStatus::Accepted);
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);

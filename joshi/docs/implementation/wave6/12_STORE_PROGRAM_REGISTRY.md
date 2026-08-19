@@ -49,7 +49,7 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one latest V20 catalog, commits the checked fixture, all six registered
+It creates or reopens one latest V21 catalog, commits the checked fixture, all six registered
 schema documents, three exact evaluation outputs, their exact fixture DAG and three fixture
 dispositions, plus the atomic five-document campaign bundle. It makes exact idempotent retries,
 drops the writer, and independently loads the full chain through a read-only store. Its V6 JSON
@@ -81,5 +81,5 @@ cargo test --locked --offline -p joshi-core \
 cargo test --locked --offline -p joshi-core wave6_registration --lib
 ```
 
-These gates cover V4-to-V20 upgrade, V9/V10 frozen migration boundaries, exact registration,
+These gates cover V4-to-V21 upgrade, V9/V10 frozen migration boundaries, exact registration,
 conflict refusal, idempotent retry, read-only reopen and continued V10 G0 isolation.
