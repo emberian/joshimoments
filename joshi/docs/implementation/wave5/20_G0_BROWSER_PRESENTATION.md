@@ -31,9 +31,9 @@ the publication knowledge cutoff.
 The V21 sole-store adapter now strictly parses the claim, resolves the headed publication, source,
 and pairing session inside the write transaction, enforces exact-byte idempotency, and returns an
 opaque receipt only after exact readback. The mounted Core route requires the same ordinary pairing
-authority and a dedicated presentation-evidence scope. The React post-mount callback is not yet
-wired to that route, so the checked adapter witness remains synthetic HTTP rather than an attached
-browser occurrence.
+authority and a dedicated presentation-evidence scope. The React inspector now submits the claim
+from a post-mount effect and independently validates the receipt. This is covered by DOM/transport
+tests, but no attached browser has executed the chain, so it remains below browser/product evidence.
 
 Actual attached-browser QA was attempted against the loopback G0 inspector on 2026-08-18, but the
 in-app browser runtime reported no connected browser instance after the required discovery checks.

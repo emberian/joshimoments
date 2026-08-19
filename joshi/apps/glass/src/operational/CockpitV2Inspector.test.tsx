@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -5,7 +6,14 @@ import { describe, expect, it } from "vitest";
 import { MemoryOnlyPairingSession, canonicalPairingSessionId } from "../security/pairing";
 import { CockpitV2InspectorShell } from "./CockpitV2Inspector";
 import type { CockpitV2InspectorTransport } from "./cockpitV2Client";
-import type { CockpitV2Index, CockpitV2IndexEntry, CockpitV2Open } from "./cockpitV2";
+import {
+  digestCanonicalJson,
+  type CockpitV2BrowserPresentationClaim,
+  type CockpitV2Index,
+  type CockpitV2IndexEntry,
+  type CockpitV2Open,
+} from "./cockpitV2";
+import { fixture, sealCockpitV2 } from "./cockpitV2TestSupport";
 
 const d = `sha256:${"1".repeat(64)}`;
 const entry: CockpitV2IndexEntry = {
@@ -108,11 +116,13 @@ describe("Cockpit V2 inspector shell", () => {
         exchange: async () => { throw new Error("not exercised"); },
         list: async () => index,
         open: async () => opened,
+        present: async () => { throw new Error("not exercised"); },
       }}
     />);
     expect(screen.getByText("Local store inspection", { selector: ".eyebrow" })).toBeInTheDocument();
     expect(screen.getByText(/opt-in local core server/i)).toBeInTheDocument();
-    expect(screen.getByText(/no operator command, presentation witness, signer, wallet/i)).toBeInTheDocument();
+    expect(screen.getByText(/browser-report receipt may record an exact mount/i)).toBeInTheDocument();
+    expect(screen.getByText(/no signer, wallet, transaction builder/i)).toBeInTheDocument();
   });
 
   it("pairs explicitly, selects one exact head, and renders only descriptive fixture evidence", async () => {
@@ -132,6 +142,7 @@ describe("Cockpit V2 inspector shell", () => {
       },
       list: async () => index,
       open: async () => opened,
+      present: async () => { throw new Error("presentation scope is absent"); },
     };
     const user = userEvent.setup();
     render(<CockpitV2InspectorShell session={session} client={client} />);
@@ -142,7 +153,64 @@ describe("Cockpit V2 inspector shell", () => {
     await user.click(screen.getByRole("button", { name: /inspect exact bytes/i }));
     expect(await screen.findByRole("heading", { name: entry.publicationId })).toBeInTheDocument();
     expect(screen.getByText(/unverified semantic ceiling/i)).toBeInTheDocument();
+    expect(screen.getByText(/no presentation-evidence scope/i)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /store-resolved public facts/i })).toBeInTheDocument();
     expect(screen.queryByText(/submit|trade|execute/i)).not.toBeInTheDocument();
+  });
+
+  it("submits one exact post-mount report when the durable pairing scope is present", async () => {
+    const exact = sealCockpitV2(fixture("cockpit_v2_manifest_v1.json"));
+    const session = new MemoryOnlyPairingSession();
+    const descriptor = {
+      sessionId: canonicalPairingSessionId(window.location.origin, "1", "1"),
+      origin: window.location.origin,
+      epoch: "1",
+      expiresAt: "2099-08-18T00:00:00.000000Z",
+      scopes: ["cockpit_read" as const, "presentation_evidence_write" as const],
+      authority: "read_only_no_execution" as const,
+    };
+    session.establish(`jpc1_${"b".repeat(64)}`, descriptor);
+    const presented: CockpitV2BrowserPresentationClaim[] = [];
+    const client: CockpitV2InspectorTransport = {
+      exchange: async () => descriptor,
+      list: async () => exact.index,
+      open: async () => exact.opened,
+      present: async (claim) => {
+        expect(screen.getByRole("heading", { name: exact.opened.publication.publicationId })).toBeInTheDocument();
+        presented.push(claim);
+        if (presented.length === 1) throw new Error("synthetic presentation transport outage");
+        return {
+          contract: "joshi.core.cockpit_v2_browser_presentation_receipt",
+          schemaVersion: 1,
+          catalogId: "cockpit-v2-component-test",
+          catalogSchema: "joshi.sqlite.v21",
+          clientPresentationId: claim.clientPresentationId,
+          claimDigest: claim.claimDigest,
+          claimBytesDigest: digestCanonicalJson(claim),
+          pairingSessionId: descriptor.sessionId,
+          publicationId: claim.publication.publicationId,
+          storeCommitSeq: "13",
+          status: "accepted",
+          authority: "read_only_no_execution",
+          ceiling: "durable_browser_report_only_not_pixel_verified",
+        };
+      },
+    };
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <CockpitV2InspectorShell sourceKind="local_store" session={session} client={client} />
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole("button", { name: /load exact index/i }));
+    await user.click(await screen.findByRole("button", { name: /inspect exact bytes/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/synthetic presentation transport outage/i);
+    await user.click(screen.getByRole("button", { name: /retry exact browser report/i }));
+    expect(await screen.findByText(/durable browser report stored at commit 13/i)).toBeInTheDocument();
+    expect(presented).toHaveLength(2);
+    expect(JSON.stringify(presented[1])).toBe(JSON.stringify(presented[0]));
+    expect(presented[1]!.publication.publicationId).toBe(exact.opened.publication.publicationId);
+    expect(presented[1]!.renderedSubjects).toEqual(exact.opened.publication.manifest.renderedSubjects);
+    expect(presented[1]!.ceiling).toBe("browser_reported_not_pixel_verified");
   });
 });

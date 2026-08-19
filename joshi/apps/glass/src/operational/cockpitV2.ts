@@ -202,11 +202,28 @@ export const cockpitV2BrowserPresentationClaimSchema = z.object({
   claimDigest: digest,
 }).strict();
 
+export const cockpitV2BrowserPresentationReceiptSchema = z.object({
+  contract: z.literal("joshi.core.cockpit_v2_browser_presentation_receipt"),
+  schemaVersion: z.literal(1),
+  catalogId: identity,
+  catalogSchema: z.string().regex(/^joshi\.sqlite\.v[1-9][0-9]*$/),
+  clientPresentationId: identity,
+  claimDigest: digest,
+  claimBytesDigest: digest,
+  pairingSessionId: identity,
+  publicationId: identity,
+  storeCommitSeq: positiveU64,
+  status: z.enum(["accepted", "idempotent"]),
+  authority,
+  ceiling: z.literal("durable_browser_report_only_not_pixel_verified"),
+}).strict();
+
 export type CockpitV2Manifest = z.infer<typeof cockpitV2ManifestSchema>;
 export type CockpitV2Index = z.infer<typeof cockpitV2IndexSchema>;
 export type CockpitV2IndexEntry = z.infer<typeof cockpitV2IndexEntrySchema>;
 export type CockpitV2Open = z.infer<typeof cockpitV2OpenSchema>;
 export type CockpitV2BrowserPresentationClaim = z.infer<typeof cockpitV2BrowserPresentationClaimSchema>;
+export type CockpitV2BrowserPresentationReceipt = z.infer<typeof cockpitV2BrowserPresentationReceiptSchema>;
 export type CockpitV2BrowserPresentationInput = Omit<CockpitV2BrowserPresentationClaim,
   "contract" | "schemaVersion" | "idempotencyKey" | "publication" | "head" | "sourceOccurrenceId"
   | "renderedSubjects" | "renderedSubjectCount" | "authority" | "ceiling" | "claimDigest">;
@@ -471,6 +488,26 @@ export function parseCockpitV2BrowserPresentationClaim(
   const claim = cockpitV2BrowserPresentationClaimSchema.parse(input);
   assertBrowserPresentationClaim(claim, opened);
   return claim;
+}
+
+export function parseCockpitV2BrowserPresentationReceipt(
+  input: unknown,
+  claimInput: CockpitV2BrowserPresentationClaim,
+  pairingSessionId: string,
+): CockpitV2BrowserPresentationReceipt {
+  const claim = parseCockpitV2BrowserPresentationClaim(claimInput);
+  const receipt = cockpitV2BrowserPresentationReceiptSchema.parse(input);
+  const catalogVersion = BigInt(receipt.catalogSchema.slice("joshi.sqlite.v".length));
+  if (catalogVersion < 21n
+    || receipt.clientPresentationId !== claim.clientPresentationId
+    || receipt.claimDigest !== claim.claimDigest
+    || receipt.claimBytesDigest !== digestCanonicalJson(claim)
+    || receipt.pairingSessionId !== pairingSessionId
+    || receipt.publicationId !== claim.publication.publicationId
+    || BigInt(receipt.storeCommitSeq) <= BigInt(claim.head.headCommitSeq)) {
+    throw new Error("Cockpit V2 browser presentation receipt does not close the exact paired claim");
+  }
+  return receipt;
 }
 
 export function buildCockpitV2BrowserPresentationClaim(

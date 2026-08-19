@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { KeyRound, LockKeyhole, RotateCcw, ShieldCheck } from "lucide-react";
 
 import {
@@ -7,10 +7,29 @@ import {
   PairingSessionRejectedError,
 } from "../security/pairing";
 import {
+  buildCockpitV2BrowserPresentationClaim,
+  type CockpitV2BrowserPresentationClaim,
+  type CockpitV2BrowserPresentationReceipt,
+  type CockpitV2Index,
+  type CockpitV2IndexEntry,
+  type CockpitV2Open,
+} from "./cockpitV2";
+import {
   SameOriginCockpitV2InspectorClient,
   type CockpitV2InspectorTransport,
 } from "./cockpitV2Client";
-import type { CockpitV2Index, CockpitV2IndexEntry, CockpitV2Open } from "./cockpitV2";
+
+type PresentationStatus = "idle" | "scope_absent" | "submitting" | "stored" | "failed";
+
+function pageIdentity(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `browser-page-${[...bytes].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function exactBrowserNow(): string {
+  return new Date().toISOString().replace("Z", "000Z");
+}
 
 export function CockpitV2InspectorShell({
   session = glassPairingSession,
@@ -26,8 +45,17 @@ export function CockpitV2InspectorShell({
   const [oneTimeCode, setOneTimeCode] = useState("");
   const [index, setIndex] = useState<CockpitV2Index | null>(null);
   const [opened, setOpened] = useState<CockpitV2Open | null>(null);
+  const [presentationOrdinal, setPresentationOrdinal] = useState(0);
+  const [presentationStatus, setPresentationStatus] = useState<PresentationStatus>("idle");
+  const [presentationReceipt, setPresentationReceipt] = useState<CockpitV2BrowserPresentationReceipt | null>(null);
+  const [presentationError, setPresentationError] = useState<string | null>(null);
   const [status, setStatus] = useState<"unpaired" | "pairing" | "loading" | "selecting" | "opening" | "open">("unpaired");
   const [error, setError] = useState<string | null>(null);
+  const browserPageId = useRef("");
+  if (browserPageId.current === "") browserPageId.current = pageIdentity();
+  const nextPresentationOrdinal = useRef(0);
+  const activePresentationOrdinal = useRef(0);
+  const presentationAttempt = useRef<{ ordinal: number; claim: CockpitV2BrowserPresentationClaim } | null>(null);
   const fixtureOnly = sourceKind === "offline_fixture";
 
   useEffect(() => session.subscribe(() => setSessionVersion((value) => value + 1)), [session]);
@@ -38,6 +66,10 @@ export function CockpitV2InspectorShell({
     if (paired) return;
     setIndex(null);
     setOpened(null);
+    activePresentationOrdinal.current = 0;
+    setPresentationStatus("idle");
+    setPresentationReceipt(null);
+    setPresentationError(null);
     setStatus("unpaired");
   }, [paired, sessionVersion]);
 
@@ -51,6 +83,58 @@ export function CockpitV2InspectorShell({
     const timer = window.setTimeout(() => session.clear(), Math.min(remaining, 2_147_483_647));
     return () => window.clearTimeout(timer);
   }, [descriptor?.expiresAt, session]);
+
+  const canWritePresentation = descriptor?.scopes.includes("presentation_evidence_write") ?? false;
+
+  const submitPresentation = (
+    ordinal: number,
+    claim: CockpitV2BrowserPresentationClaim,
+  ) => {
+    setPresentationStatus("submitting");
+    setPresentationError(null);
+    void resolvedClient.present(claim).then((receipt) => {
+      if (activePresentationOrdinal.current !== ordinal) return;
+      setPresentationReceipt(receipt);
+      setPresentationStatus("stored");
+    }).catch((cause: unknown) => {
+      if (activePresentationOrdinal.current !== ordinal) return;
+      setPresentationStatus("failed");
+      setPresentationError(cause instanceof Error ? cause.message : "Durable browser report was refused.");
+    });
+  };
+
+  useEffect(() => {
+    if (!opened || presentationOrdinal === 0) return;
+    if (!canWritePresentation) {
+      setPresentationStatus("scope_absent");
+      return;
+    }
+    if (presentationAttempt.current?.ordinal === presentationOrdinal) return;
+    try {
+      const devicePixelRatioMilli = Math.round(window.devicePixelRatio * 1_000);
+      const monotonicNs = BigInt(Math.floor(performance.now() * 1_000_000)).toString();
+      const claim = buildCockpitV2BrowserPresentationClaim(opened, {
+        clientPresentationId: `browser-presentation-${browserPageId.current}-${presentationOrdinal}`,
+        browserPageId: browserPageId.current,
+        presentationSeq: String(presentationOrdinal),
+        mountedAt: exactBrowserNow(),
+        clientClockId: `${browserPageId.current}-performance`,
+        monotonicNs,
+        viewport: {
+          widthCssPx: String(window.innerWidth),
+          heightCssPx: String(window.innerHeight),
+          devicePixelRatioMilli: String(devicePixelRatioMilli),
+        },
+        documentVisibility: document.visibilityState === "hidden" ? "hidden" : "visible",
+        documentHasFocus: document.hasFocus(),
+      });
+      presentationAttempt.current = { ordinal: presentationOrdinal, claim };
+      submitPresentation(presentationOrdinal, claim);
+    } catch (cause) {
+      setPresentationStatus("failed");
+      setPresentationError(cause instanceof Error ? cause.message : "Browser mount measurement was invalid.");
+    }
+  }, [canWritePresentation, opened, presentationOrdinal, resolvedClient]);
 
   const loadIndex = async () => {
     setStatus("loading");
@@ -85,7 +169,16 @@ export function CockpitV2InspectorShell({
     setStatus("opening");
     setError(null);
     try {
-      setOpened(await resolvedClient.open(entry));
+      const selected = await resolvedClient.open(entry);
+      const ordinal = nextPresentationOrdinal.current + 1;
+      nextPresentationOrdinal.current = ordinal;
+      activePresentationOrdinal.current = ordinal;
+      presentationAttempt.current = null;
+      setPresentationReceipt(null);
+      setPresentationError(null);
+      setPresentationStatus("idle");
+      setPresentationOrdinal(ordinal);
+      setOpened(selected);
       setStatus("open");
     } catch (cause) {
       if (cause instanceof PairingSessionRejectedError) setStatus("unpaired");
@@ -95,6 +188,7 @@ export function CockpitV2InspectorShell({
   };
 
   const end = () => {
+    activePresentationOrdinal.current = 0;
     setOneTimeCode("");
     setError(null);
     session.clear();
@@ -127,7 +221,7 @@ export function CockpitV2InspectorShell({
               <KeyRound aria-hidden="true" /> {status === "pairing" ? "Pairing…" : "Pair locally"}
             </button>
           </form>
-          <p className="safety-ceiling"><ShieldCheck aria-hidden="true" /> {fixtureOnly ? "Offline fixture" : "Local store"} inspection only. No operator command, presentation witness, signer, wallet, transaction builder, provider I/O, or trading authority is mounted.</p>
+          <p className="safety-ceiling"><ShieldCheck aria-hidden="true" /> {fixtureOnly ? "Offline fixture" : "Local store"} inspection only. A separately scoped browser-report receipt may record an exact mount; no signer, wallet, transaction builder, provider I/O, trading authority, or pixel verification is mounted.</p>
           {error && <p role="alert" className="operational-error">{error}</p>}
         </section>
       </main>
@@ -143,6 +237,26 @@ export function CockpitV2InspectorShell({
           <p className="eyebrow">Exact Cockpit V2 · unverified semantic ceiling</p>
           <h1 id="v2-open-title">{opened.publication.publicationId}</h1>
           <p>The browser independently reparsed the strict body and head, recomputed their semantic and exact-byte digests, and closed the selected durable index entry. This is descriptive {fixtureOnly ? "offline-fixture" : "local-store"} evidence, not a recommendation, quote, or live-data qualification.</p>
+          {presentationStatus === "submitting" && <p role="status">Recording the exact browser-reported mount…</p>}
+          {presentationStatus === "stored" && presentationReceipt && (
+            <p role="status" className="safety-ceiling">
+              <ShieldCheck aria-hidden="true" /> Durable browser report stored at commit {presentationReceipt.storeCommitSeq}. This is not pixel verification or product qualification.
+            </p>
+          )}
+          {presentationStatus === "scope_absent" && (
+            <p className="safety-ceiling">This pairing session has no presentation-evidence scope, so no browser report was sent.</p>
+          )}
+          {presentationStatus === "failed" && presentationError && (
+            <div>
+              <p role="alert" className="operational-error">{presentationError}</p>
+              <button type="button" onClick={() => {
+                const attempt = presentationAttempt.current;
+                if (attempt && attempt.ordinal === activePresentationOrdinal.current) {
+                  submitPresentation(attempt.ordinal, attempt.claim);
+                }
+              }}>Retry exact browser report</button>
+            </div>
+          )}
           <dl className="session-summary">
             <div><dt>Publication commit</dt><dd>{opened.publicationCommitSeq}</dd></div>
             <div><dt>Head commit</dt><dd>{opened.headCommitSeq}</dd></div>
@@ -200,7 +314,14 @@ export function CockpitV2InspectorShell({
             </dl>
           </details>
           <div className="operational-actions">
-            <button type="button" onClick={() => { setOpened(null); setStatus("selecting"); }}><RotateCcw aria-hidden="true" /> Choose publication</button>
+            <button type="button" onClick={() => {
+              activePresentationOrdinal.current = 0;
+              setOpened(null);
+              setPresentationStatus("idle");
+              setPresentationReceipt(null);
+              setPresentationError(null);
+              setStatus("selecting");
+            }}><RotateCcw aria-hidden="true" /> Choose publication</button>
             <button type="button" onClick={end}>End session</button>
           </div>
           {error && <p role="alert" className="operational-error">{error}</p>}
@@ -212,7 +333,7 @@ export function CockpitV2InspectorShell({
   return (
     <main className="operational-gate operational-selection">
       <section className="operational-card wide" aria-labelledby="v2-index-title">
-        <p className="eyebrow">Paired · Cockpit-read only · {fixtureOnly ? "offline fixture" : "local store"}</p>
+        <p className="eyebrow">Paired · Cockpit read{canWritePresentation ? " + browser-report evidence" : " only"} · {fixtureOnly ? "offline fixture" : "local store"}</p>
         <h1 id="v2-index-title">Choose an exact Cockpit V2 head</h1>
         <p>The list is the complete bounded set rederived by the store. Nothing opens automatically, and no “latest” pointer is inferred.</p>
         <dl className="session-summary">

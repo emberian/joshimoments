@@ -1,7 +1,7 @@
 # G0 paired browser-presentation store receipt
 
-Status: **PASS for a synthetic paired HTTP -> sole-store -> read-only-reopen adapter walk**;
-**BLOCKED for attached-browser and product qualification**.
+Status: **PASS for paired HTTP -> sole-store -> read-only-reopen and Glass post-mount transport
+tests**; **BLOCKED for an attached-browser occurrence and product qualification**.
 
 Migration V21 adds the append-only `cockpit_v2_browser_presentation_v1` occurrence. Its only
 production writer accepts the exact canonical
@@ -27,6 +27,21 @@ is mounted. The route requires exact loopback Origin, same-origin Fetch Metadata
 limited to `durable_browser_report_only_not_pixel_verified`; it carries no wallet, signing,
 transaction, execution, or product authority.
 
+The explicit G0 inspector keeps the frozen component catalog at V10. It creates a consistent,
+separate `browser-inspector/catalog.sqlite` backup overlay, forward-migrates only that mutable
+overlay to V21, and verifies its exact publication/source/head against the V10 report. Restart
+reuses the V21 overlay while the evidence source remains V10, avoiding a downgrade trap or silent
+mutation of the frozen G0 truth.
+
+Glass builds a page-local random ID, increments one sequence per explicit publication open, and
+creates the exact claim only from the already validated open response inside a post-mount React
+effect. The first Strict Mode effect owns the stable claim; a repeated effect cannot mint changed
+bytes under the same key. The same-origin client requires the dedicated scope, sends no cookies,
+bounds and duplicate-key-checks the receipt, recomputes the exact claim-byte digest, and verifies
+the session, publication, and later store commit before displaying success.
+A visible transport-failure action retries the retained claim object byte-for-byte; it never
+remeasures the mount or reuses the idempotency key for changed content.
+
 ## Executed witness
 
 The integration regression executes a real V10 G0 source/publication fixture, forward-migrates its
@@ -39,9 +54,10 @@ catalog to V21, exchanges a one-time pairing code, opens the exact headed public
 5. refuses the capability after durable revocation; and
 6. reopens the exact claim bytes and pairing/publication lineage through read-only SQLite.
 
-This is synthetic in-process HTTP. It does not assert that React mounted the page, that pixels were
-visible, or that a human used or understood the surface. Attached-browser QA remains not run
-because no browser instance was connected during the prior required discovery attempt.
+The Core portion is synthetic in-process HTTP. The Glass portion is a jsdom React mount and mocked
+same-origin transport. It proves the callback/claim/receipt logic, not that a real browser rendered
+pixels or that a human used or understood the surface. Attached-browser QA remains not run because
+no browser instance was connected during the prior required discovery attempt.
 
 ## Verification
 
@@ -53,4 +69,8 @@ cargo test --locked --offline -p joshi-core \
 cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline \
   -p joshi-store -p joshi-core --no-deps
+cd apps/glass
+npm run typecheck
+npm test -- --run
+npm run build
 ```

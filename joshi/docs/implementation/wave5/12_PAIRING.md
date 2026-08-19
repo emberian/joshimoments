@@ -51,11 +51,13 @@ launch envelope is not the mounted V2 body/head wire; no client or Core route si
 between them. Pairing material stays in page memory.
 
 The explicit `wave5-g0-inspect` developer command remains the narrower fixture inspector: it first
-exact-retries the offline G0 component, refuses impossible positive qualification bits, reopens its
-fixture catalog, binds a caller-declared loopback Glass origin, generates the unrelated legacy
-handler guard from OS entropy without a file, and prints one OS-random `CockpitRead` code only after
-the listener is bound. It does not enable write scopes. This is an isolated durable
-protocol/publication inspection seam, not a product mount, daily-use witness, or root G0 pass.
+exact-retries the frozen V10 G0 component, refuses impossible positive qualification bits, creates
+or reuses a separate V21 browser-inspector overlay, binds a caller-declared loopback Glass origin,
+generates the unrelated legacy handler guard from OS entropy without a file, and prints one
+OS-random code only after the listener is bound. That code carries `CockpitRead` plus the dedicated
+`PresentationEvidenceWrite` scope; it carries no operator, wallet, signing, transaction, or
+execution scope. This is an isolated durable protocol/publication/browser-report seam, not a
+product mount, daily-use witness, attached-browser occurrence, or root G0 pass.
 
 `wave5-g0-inspector-smoke` is a finite, socket-free execution of that mounted route over an already
 completed fixture catalog. It performs a durable one-time exchange, opens the exact headed bytes,
@@ -64,9 +66,10 @@ under a fresh session. Its report retains only nonsecret occurrence/session IDs 
 is paired API/restart evidence, not a default mount, browser presentation, or product-use witness.
 
 Glass's explicit `VITE_JOSHI_G0_INSPECTOR=1` build now consumes this seam and only this seam. It
-independently verifies the bounded index plus exact V2 body/head and renders descriptive fixture
-facts without operator/presentation controls. The default build does not select it, and attached
-browser QA remains not run because no browser instance was connected.
+independently verifies the bounded index plus exact V2 body/head, renders descriptive fixture facts,
+and submits one exact browser report from its post-mount effect. It has no operator/execution
+controls. The default build does not select it, and attached-browser QA remains not run because no
+browser instance was connected.
 
 Production adapters provide an OS-backed `Entropy` implementation and a monotonic `MonotonicClock`;
 the crate performs no wall-clock or device I/O. Public transitions use the monotonic-clock

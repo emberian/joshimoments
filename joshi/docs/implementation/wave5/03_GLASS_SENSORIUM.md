@@ -1,9 +1,9 @@
 # Wave 5 — Glass sensorium
 
-Status: daily shell, bounded pending transport, and an explicit offline Cockpit V2 inspector are
-implemented. Live surface, scientific-memory, and product-use qualification remain deliberately
-disabled until their complete durable contracts and attached-browser witnesses pass cross-seam
-review.
+Status: daily shell, bounded pending transport, an explicit offline Cockpit V2 inspector, and its
+paired browser-report receipt path are implemented. Live surface, scientific-memory, attached-
+browser, and product-use qualification remain deliberately disabled until their complete durable
+contracts and real witnesses pass cross-seam review.
 
 The reviewed scientific-memory seam now also has a fail-closed browser transport primitive. It
 mirrors the canonical `MemoryOccurrence::OperatorAct` bytes from
@@ -102,9 +102,10 @@ critical-task accessibility, or scientific-memory research admission.
 ## Explicit Cockpit V2 fixture inspector
 
 The default production build still renders the honest unavailable operational shell. Setting
-`VITE_JOSHI_G0_INSPECTOR=1` selects a separate read-only inspector; it never constructs `GlassApp`,
-an operator sink, a presentation sink, or a V1 launch envelope. Its same-origin client consumes
-only the explicit `wave5-g0-inspect` launcher:
+`VITE_JOSHI_G0_INSPECTOR=1` selects a separate read-only/no-execution inspector; it never
+constructs `GlassApp`, an operator sink, or a V1 launch envelope. Its only write is the exact
+browser-report receipt described in `21_G0_BROWSER_PRESENTATION_STORE.md`. Its same-origin client
+consumes only the explicit `wave5-g0-inspect` launcher:
 
 ```text
 # terminal 1, from the repository root
@@ -116,9 +117,10 @@ cd apps/glass
 npm run dev:g0-inspect
 ```
 
-Core exact-retries the offline component before it binds, mounts only a `CockpitRead` ordinary
-session, prints one short-lived code after the API listener is bound, and exposes a bounded exact
-head index plus explicit-ID open. Vite preserves the browser's `127.0.0.1:4173` Host through its
+Core exact-retries the frozen V10 component, creates/reuses a distinct V21 browser-inspector
+overlay, mounts `CockpitRead` plus `PresentationEvidenceWrite`, prints one short-lived code after
+the API listener is bound, and exposes a bounded exact head index, explicit-ID open, and exact
+presentation-receipt POST. Vite preserves the browser's `127.0.0.1:4173` Host through its
 loopback-only `/api` proxy to Core on `127.0.0.1:43119`.
 
 The browser strictly parses every manifest/body/head field, rejects duplicate/prototype keys,
@@ -130,9 +132,11 @@ Self-consistent private facts, future knowledge, denominator narrowing, index/by
 unknown fields, and unstable order all refuse.
 
 The inspector shows denominator, membership, presentation partition, facts, coverage, cutoffs, and
-exact identities under an `unverified_semantic` banner. It has no action affordance. This raises the
-offline cross-runtime inspection seam, not default mount, product use, accessibility, presentation,
-or live qualification.
+exact identities under an `unverified_semantic` banner. After React mounts the chosen exact body,
+it automatically submits one page-local/idempotent browser report when its dedicated scope exists
+and labels the resulting durable commit as not pixel verified. It has no operator/execution
+affordance. This raises the tested DOM/transport/store seam, not default mount, attached-browser,
+product use, accessibility, pixel, or live qualification.
 
 ## Deliberate normal-server pairing
 
@@ -149,7 +153,8 @@ cargo run --locked --offline -p joshi-core -- serve \
   --state /tmp/joshi-local-core \
   --companion-installation-id local-glass \
   --pairing-token-file /tmp/joshi-core-legacy-token \
-  --ordinary-pairing-origin http://127.0.0.1:4173
+  --ordinary-pairing-origin http://127.0.0.1:4173 \
+  --ordinary-pairing-evidence-write
 
 # terminal 2
 cd apps/glass
@@ -158,12 +163,12 @@ npm run dev:paired-inspect
 
 Core prints one short-lived code only after the loopback listener binds. Glass consumes it once,
 keeps the resulting `jpc1_` capability only in page memory, lists exact Cockpit V2 heads, and opens
-only an explicitly selected body/head. This normal-server mode deliberately reuses the strict
-read-only V2 inspector. The full operational Glass remains fail closed because its older launch
-envelope is not the mounted V2 wire, and no reviewed V2-to-scene/presentation adapter exists.
-Neither side has a signing, wallet, transaction, execution, evidence-write, or provider-query
-capability in this path. This opt-in is a locally testable read-only mount, not an attached-browser,
-accessibility, daily-use, or live-data qualification.
+only an explicitly selected body/head. With the explicit evidence-write switch, it also records the
+same bounded browser report; without that switch Glass visibly reports the absent scope and sends
+nothing. The full operational Glass remains fail closed because its older launch envelope is not
+the mounted V2 wire. Neither side has a signing, wallet, transaction, execution, or provider-query
+capability in this path. This opt-in is a locally testable evidence-only mount, not an attached-
+browser, accessibility, daily-use, or live-data qualification.
 
 ## Verification
 
@@ -175,7 +180,7 @@ npm test -- --run
 npm run build
 ```
 
-Current result: TypeScript passed, 23 test files / 158 tests passed, the default production Vite
+Current result: TypeScript passed, 23 test files / 161 tests passed, the default production Vite
 build passed, and the explicit normal-server inspector build passed. The default build reports one non-fatal
 main-chunk size warning (>500 KiB); code splitting remains a performance follow-up rather than an
 authority or correctness claim.
@@ -208,10 +213,9 @@ status above.
   mirror its exact golden and show independent status, field truth, freshness, and gaps for every
   declared critical surface. Fixture booleans or vacuous zero-session witnesses must never promote
   the UI.
-- Extend the strict Cockpit V2 inspection contract into a separately reviewed presentation/scene
-  launch only after the default product can retain the exact broad manifest and a real browser
-  presentation occurrence. The fixture inspector must never be treated as the root attention
-  universe.
+- Execute the strict Cockpit V2 open -> React mount -> V21 receipt -> read-only reopen chain in an
+  attached browser and retain visual/accessibility evidence separately. The fixture inspector must
+  never be treated as the root attention universe or product-use proof.
 - Cross-review and freeze `joshi-scientific-memory`, then extend the existing authoritative command
   family and pending transport with its exact act, scene/presentation gap, optional assertion,
   correction, episode, and two-pass replay bytes. Do not create another client-owned action truth.
