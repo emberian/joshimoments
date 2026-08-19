@@ -79,6 +79,12 @@ enum Command {
         companion_installation_id: String,
         #[arg(long)]
         pairing_token_file: PathBuf,
+        /// Opt in to durable ordinary browser pairing for this exact loopback origin.
+        #[arg(long)]
+        ordinary_pairing_origin: Option<String>,
+        /// Add operator and presentation evidence-write scopes to the one-time code.
+        #[arg(long, requires = "ordinary_pairing_origin")]
+        ordinary_pairing_evidence_write: bool,
     },
     /// Serve the exact offline G0 fixture through durable ordinary pairing for local inspection.
     Wave5G0Inspect {
@@ -149,7 +155,12 @@ async fn main() -> Result<(), CliError> {
             state,
             companion_installation_id,
             pairing_token_file,
+            ordinary_pairing_origin,
+            ordinary_pairing_evidence_write,
         }) => {
+            if !listen.ip().is_loopback() {
+                return Err(CliError::NonLoopback(listen));
+            }
             let mut store = SqliteStore::open(
                 store_config(&state, "joshi-local-core")?,
                 StoreMode::SingleWriter,
@@ -157,9 +168,32 @@ async fn main() -> Result<(), CliError> {
             store.migrate(now()?)?;
             let pairing_token = read_pairing_token(&pairing_token_file)?;
             let pairing = PairingCapability::from_hex(&pairing_token)?;
-            CoreService::new(store, Some(companion_installation_id), pairing)
-                .serve(listen)
-                .await?;
+            if let Some(origin) = ordinary_pairing_origin {
+                let origin = loopback_pairing_origin(origin)?;
+                let origin_label = origin.as_str().to_owned();
+                let listener = tokio::net::TcpListener::bind(listen).await?;
+                let (core, launcher) = CoreService::with_sqlite_pairing(
+                    store,
+                    Some(companion_installation_id),
+                    pairing,
+                    origin,
+                    PairingConfig::default(),
+                )?;
+                let scopes = ordinary_pairing_scopes(ordinary_pairing_evidence_write);
+                let scope_names = pairing_scope_names(&scopes);
+                let issued = launcher.issue_code(scopes)?;
+                eprintln!(
+                    "ordinary pairing enabled for {}; one-time code (scopes: {}; no signing or execution): {}",
+                    origin_label,
+                    scope_names,
+                    issued.code.as_str()
+                );
+                axum::serve(listener, core.router()).await?;
+            } else {
+                CoreService::new(store, Some(companion_installation_id), pairing)
+                    .serve(listen)
+                    .await?;
+            }
         }
         Some(Command::Wave5G0Inspect {
             listen,
@@ -251,6 +285,58 @@ fn now() -> Result<UtcTimestamp, CliError> {
     .map_err(|_| CliError::Clock)
 }
 
+fn loopback_pairing_origin(value: String) -> Result<PairingOrigin, CliError> {
+    let origin = PairingOrigin::new(value)?;
+    if !origin.as_str().starts_with("http://") {
+        return Err(CliError::NonLoopbackPairingOrigin);
+    }
+    let authority = origin
+        .as_str()
+        .split_once("://")
+        .map(|(_, authority)| authority)
+        .ok_or(CliError::NonLoopbackPairingOrigin)?;
+    if is_exact_loopback_authority(authority) {
+        Ok(origin)
+    } else {
+        Err(CliError::NonLoopbackPairingOrigin)
+    }
+}
+
+fn is_exact_loopback_authority(authority: &str) -> bool {
+    ["localhost", "127.0.0.1", "[::1]"].iter().any(|host| {
+        authority == *host
+            || authority
+                .strip_prefix(&format!("{host}:"))
+                .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+    })
+}
+
+fn ordinary_pairing_scopes(evidence_write: bool) -> Vec<PairingScope> {
+    if evidence_write {
+        vec![
+            PairingScope::CockpitRead,
+            PairingScope::OperatorEvidenceWrite,
+            PairingScope::PresentationEvidenceWrite,
+            PairingScope::ReplayRead,
+        ]
+    } else {
+        vec![PairingScope::CockpitRead, PairingScope::ReplayRead]
+    }
+}
+
+fn pairing_scope_names(scopes: &[PairingScope]) -> String {
+    scopes
+        .iter()
+        .map(|scope| match scope {
+            PairingScope::CockpitRead => "cockpit_read",
+            PairingScope::OperatorEvidenceWrite => "operator_evidence_write",
+            PairingScope::PresentationEvidenceWrite => "presentation_evidence_write",
+            PairingScope::ReplayRead => "replay_read",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn read_pairing_token(path: &Path) -> Result<Zeroizing<String>, CliError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 {
@@ -315,8 +401,12 @@ enum CliError {
     Clock,
     #[error("pairing token file must be a regular, non-symlink, owner-only file of bounded size")]
     UnsafePairingFile,
-    #[error("fixture inspector must bind an explicit loopback address, got {0}")]
+    #[error("local Core service must bind an explicit loopback address, got {0}")]
     NonLoopback(SocketAddr),
+    #[error(
+        "ordinary pairing origin must use plain HTTP and exact loopback host localhost, 127.0.0.1, or [::1]"
+    )]
+    NonLoopbackPairingOrigin,
     #[error("offline fixture inspector encountered an impossible positive qualification bit")]
     FixtureInspectorQualification,
     #[error("fixture exceeds {MAX_FIXTURE_DOCUMENT_BYTES} bytes: {0}")]
@@ -351,5 +441,116 @@ mod tests {
             read_pairing_token(&link),
             Err(CliError::UnsafePairingFile)
         ));
+    }
+
+    #[test]
+    fn serve_defaults_to_unmounted_ordinary_pairing() {
+        let arguments = Arguments::try_parse_from([
+            "joshi-core",
+            "serve",
+            "--state",
+            "/tmp/joshi-state",
+            "--companion-installation-id",
+            "installation-1",
+            "--pairing-token-file",
+            "/tmp/joshi-token",
+        ])
+        .expect("default serve arguments");
+        let Some(Command::Serve {
+            ordinary_pairing_origin,
+            ordinary_pairing_evidence_write,
+            ..
+        }) = arguments.command
+        else {
+            panic!("serve command");
+        };
+        assert!(ordinary_pairing_origin.is_none());
+        assert!(!ordinary_pairing_evidence_write);
+    }
+
+    #[test]
+    fn evidence_write_requires_explicit_ordinary_pairing_origin() {
+        let parsed = Arguments::try_parse_from([
+            "joshi-core",
+            "serve",
+            "--state",
+            "/tmp/joshi-state",
+            "--companion-installation-id",
+            "installation-1",
+            "--pairing-token-file",
+            "/tmp/joshi-token",
+            "--ordinary-pairing-evidence-write",
+        ]);
+        assert!(parsed.is_err());
+
+        let arguments = Arguments::try_parse_from([
+            "joshi-core",
+            "serve",
+            "--state",
+            "/tmp/joshi-state",
+            "--companion-installation-id",
+            "installation-1",
+            "--pairing-token-file",
+            "/tmp/joshi-token",
+            "--ordinary-pairing-origin",
+            "http://127.0.0.1:4173",
+            "--ordinary-pairing-evidence-write",
+        ])
+        .expect("explicit origin and evidence write");
+        let Some(Command::Serve {
+            ordinary_pairing_origin,
+            ordinary_pairing_evidence_write,
+            ..
+        }) = arguments.command
+        else {
+            panic!("serve command");
+        };
+        assert_eq!(
+            ordinary_pairing_origin.as_deref(),
+            Some("http://127.0.0.1:4173")
+        );
+        assert!(ordinary_pairing_evidence_write);
+    }
+
+    #[test]
+    fn ordinary_pairing_origin_is_exactly_loopback_and_scopes_are_bounded() {
+        for value in [
+            "http://localhost:4173",
+            "http://127.0.0.1:8443",
+            "http://[::1]:4173",
+        ] {
+            assert_eq!(
+                loopback_pairing_origin(value.to_owned())
+                    .expect("loopback origin")
+                    .as_str(),
+                value
+            );
+        }
+        for value in [
+            "https://127.0.0.1:8443",
+            "https://example.com",
+            "http://localhost.evil:4173",
+            "http://127.0.0.2:4173",
+            "http://localhost:0",
+        ] {
+            assert!(matches!(
+                loopback_pairing_origin(value.to_owned()),
+                Err(CliError::NonLoopbackPairingOrigin)
+            ));
+        }
+
+        assert_eq!(
+            ordinary_pairing_scopes(false),
+            vec![PairingScope::CockpitRead, PairingScope::ReplayRead]
+        );
+        assert_eq!(
+            ordinary_pairing_scopes(true),
+            vec![
+                PairingScope::CockpitRead,
+                PairingScope::OperatorEvidenceWrite,
+                PairingScope::PresentationEvidenceWrite,
+                PairingScope::ReplayRead,
+            ]
+        );
     }
 }

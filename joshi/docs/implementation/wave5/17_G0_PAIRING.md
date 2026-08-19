@@ -152,9 +152,10 @@ production journal binding is sealed and has no public constructor. The private
 single-writer-lease `SqliteStore` mutex, obtains opaque store-clock commit contexts, submits exact
 canonical occurrence bytes, and converts only store-owned post-commit readback receipts. A caller
 implementation or mock echo of the neutral trait cannot construct a production service.
-`CoreService::new` therefore
-still returns 404 for `/api/v1/pairing/exchange`; the crate-private honest-store constructor must be
-selected explicitly to install the exchange route and ordinary authorizer.
+`CoreService::new` therefore still returns 404 for `/api/v1/pairing/exchange`; the sealed
+honest-store constructor must be selected explicitly to install the exchange route and ordinary
+authorizer. Normal `serve` selects it only when given an exact loopback
+`--ordinary-pairing-origin`; without that flag its router is unchanged.
 
 Core also has a sealed ordinary-session authorizer for the `jpc1_` namespace. When an ordinary
 service is configured, cockpit reads require `cockpit_read`, operator writes require
@@ -167,8 +168,9 @@ the ordinary authorizer is configured; the companion installation route retains 
 legacy pairing seam. An end-to-end SQLite test covers exchange, scoped read/write admission,
 durable revocation, live-session restart invalidation, seeded post-restart ordinals, and refusal of
 the old capability by a reopened service. A separate SQLite reopen adversary proves that the
-single sampled authorization boundary persists expiry before refusal. The constructor that joins
-this authorizer to Core remains crate-private and unused by the default product router.
+single sampled authorization boundary persists expiry before refusal. The normal-server opt-in
+issues only Cockpit/replay read scopes unless the operator separately enables the two evidence-write
+scopes. It cannot issue a signing, wallet, transaction, or execution scope.
 
 No production presentation-mutation route exists in the current Core router. The authorizer
 supports `presentation_evidence_write` and refuses a session lacking it, but the ordinary route
@@ -176,5 +178,5 @@ must remain unmounted until any future presentation handler invokes that scope c
 own durable append.
 
 Glass mirrors that ceiling: the production shell shows pairing unavailable unless an operational
-client is explicitly supplied. Its test client exercises UI behavior only and is not evidence that
-the route or product is live.
+client and the matching deliberate loopback Core opt-in are explicitly supplied. Its test client
+exercises UI behavior only and is not evidence that the route or product is live.

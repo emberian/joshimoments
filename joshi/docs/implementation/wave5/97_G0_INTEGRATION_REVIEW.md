@@ -42,7 +42,8 @@ joshi-scientific-memory -> (no internal package dependency)
 
 These new edges provide only compile-time reachability. Pairing now has a private SQLite journal
 adapter and an opt-in Core authorization/router constructor with passing durable tests. The
-explicit offline-fixture inspector selects it, while default `Serve` still does not;
+explicit offline-fixture inspector and the normal server's exact-loopback option select it, while
+default `Serve` still does not;
 export now uses its parser dependencies, and Core exercises the private store wrapper against an
 exact input backup and registered CAS import through the 24-table commit/reopen path. The root
 cannot infer persistence or semantic verification from a public port, import or package edge. The
@@ -61,8 +62,8 @@ artifact index rather than a completed root occurrence and keeps every qualifica
 | Origin + catalog | Fsynced immutable origin, exact store ingest receipt, run-bound catalog binding, ACK, reopen | **PASS only as joined durable-offline component** | The supervisor's exact local receipt and physical segment must equal the canonical precommit Pump batch; the sole store consumes those bytes, the run binding commits, and only then does the same spool record its ACK. Receipt substitution and a second/regenerated origin refuse. It is still fixture-only and not a complete G0 pass. |
 | Denominator + hot/control | Nonempty store-derived eligible identities/count/digest at one cutoff; independently derived hot and cold-control membership | **PASS only as an isolated durable offline-fixture component; BLOCKED root/live** | The exact selection is retained separately from the exact provider body, its subjects must equal the parsed fact denominator, and the private resolver/reopen derives one hot plus one cold-control subject. This is fixture membership, not product parity or a live acquisition-policy result. |
 | Semantic fact | Exact source/fact bytes, provenance, clocks, commit and readback derived from the store | **PASS only as a joined durable offline-fixture component; BLOCKED root/live** | `wave5-g0-source-publication` derives the source occurrence from the receipt over the supervisor-owned Pump segment and decoded provider bytes, then fully rederives it after read-only reopen and exact retry. A nonfixture source and the remaining root components are absent. |
-| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The explicit inspector returns a bounded, store-rederived head index and those exact body/head bytes under a durable scoped session, but default `Serve` and the product remain unmounted and the other root seams are absent. |
-| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication API + Glass inspection protocol; BLOCKED default-product/root G0** | The SQLite exchange opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. Root readiness now runs a finite in-process exchange/open, restarts the epoch, refuses the old capability, and verifies a byte-identical fresh-session open. The explicit Glass inspector independently parses the V2 closure without action sinks. Default `Serve`/Glass remain unavailable, no browser instance was connected for UI QA, and no product presentation occurrence or complete root fault bundle exists. |
+| Cockpit V2 publication | Store resolves inputs at one cutoff; atomic prepare/body/checkpoint/head; immutable exact-byte reopen | **PASS only as an isolated durable offline-fixture component with opt-in paired read; BLOCKED root/default mount** | The component command commits strict prepare → immutable body → append-only head and reopens all exact bytes/digests. Eight before/after semantic/prepare/body/head interruptions converge to the identical chain. The explicit inspector returns a bounded, store-rederived head index and those exact body/head bytes under a durable scoped session. Normal `Serve` exposes the same routes only under its deliberate exact-loopback ordinary-pairing option; its default and the product remain unmounted, and the other root seams are absent. |
+| Pairing + Glass | OS entropy; trusted origin and time; bounded rate/expiry; one-time durable consume/revoke/restart; same-origin open of exact publication | **PASS only as isolated durable paired-publication API + Glass inspection protocol; BLOCKED default-product/root G0** | The SQLite exchange opens the exact headed offline-fixture publication only for `CockpitRead`; wrong scope, revoke, and restart refuse. Root readiness now runs a finite in-process exchange/open, restarts the epoch, refuses the old capability, and verifies a byte-identical fresh-session open. The explicit Glass inspector independently parses the V2 closure without action sinks. Normal `Serve` has a loopback-only opt-in with read/replay scopes by default and separately gated evidence writes, but no browser instance was connected for UI QA and no product presentation occurrence or complete root fault bundle exists. |
 | Scientific memory | One scene-bound presentation-or-gap/act/session/outcome-or-censor/reveal/interview chain with store-owned occurrence/commit order, ACK and restart | **PASS only for an isolated durable censored fixture chain; BLOCKED qualified presentation/outcome/root** | The component commits and reopens one exact headed-scene act with a typed presentation gap, a partial unresolved/no-trade episode, hidden replay, incomplete close, explicitly gapped partial knowledge, missing outcome, retrospective replay, and interview in strict queue/commit order. Complete session, closed knowledge, and available outcome are adversarially refused. The chain remains `unverified_semantic`: no actual product presentation or qualified outcome exists. |
 | Nonempty V10 export/import | Lower-cutoff store query; every required nonempty relation; store-resolved metadata; independent offline validation; CAS import and reopen | **PASS as a joined durable offline-fixture component; BLOCKED complete root/live** | Core copies the checked V8 catalog and exact referenced files, regenerates and independently validates its fourteen-table snapshot, commits the V9 export and same-run binding, advances to V10, and admits/reopens the restricted manifest plus Parquet CAS. It then creates an immutable input backup, runs the private backup-bound 24-table V10 wrapper, independently validates Rust/Python readback, commits the exact snapshot, and captures it in the final backup. This remains fixture-only and does not imply status recovery, product use, or root completion. |
 | Status | Store-derived status over the exact occurrence, with typed gaps and recovery readback | **PASS as a joined durable offline-fixture export recovery; BLOCKED root/live** | Core commits `export_stale`, starts recovery before the immutable input backup, commits the V10 snapshot, and adds a canonical same-run export binding. `RecoveryVerified/Ready` cites only that binding's exact commit sequence and commit digest; store semantics reject a production receipt or unrelated commit. The full chain reopens exactly but does not imply product, live, or root readiness. |
@@ -315,8 +316,10 @@ capability. A separate adapter test passes exact expiry persistence and readback
 The later paired-publication test opens the store-revalidated G0 Cockpit body/head under
 `CockpitRead`, rejects a write-only scope, then proves revoke and restart refusal. This raises
 pairing to an **isolated durable paired-publication pass**. The explicit `wave5-g0-inspect` command
-now selects the sealed constructor for that offline fixture and exposes a bounded exact head index;
-default CLI `Serve` still calls `CoreService::new`, which leaves ordinary pairing absent.
+selects the sealed constructor for that offline fixture and exposes a bounded exact head index.
+Normal CLI `Serve` remains unmounted by default, but now has a deliberate exact-loopback-origin
+opt-in. That path prints a short-lived read/replay code after binding; evidence writes require a
+second explicit switch, and no signing or execution scope exists.
 
 The first mount draft exposed an actual protocol incompatibility, not merely a missing router
 merge. Ordinary exchange returns `jpc1_<64 lowercase hex>` and Glass forwards it in
@@ -325,9 +328,10 @@ merge. Ordinary exchange returns `jpc1_<64 lowercase hex>` and Glass forwards it
 origin/browser posture and required read/write scope, and does not fall back to legacy auth while
 configured. The end-to-end unit exercises refusal across the restart boundary and now also reads
 the exact headed G0 publication. This repairs the intrinsic
-namespace/scope mismatch, but the
-constructor is crate-private, the default service still configures no ordinary coordinator, the
-exchange route therefore remains 404 in production, and no launch path selects the SQLite seal.
+namespace/scope mismatch. The default service still configures no ordinary coordinator and returns
+404 for exchange, while the explicit loopback CLI option is the only normal-server path that
+selects the SQLite seal. This is a deliberate local mount, not evidence of browser use or a
+completed root occurrence.
 
 The first scoped-authorization implementation also sampled the clock twice. It first called
 `expire_now`, persisted those occurrences, then called `authorize_now`, which sampled again and
@@ -487,8 +491,8 @@ than that statement:
 - **Pairing: isolated durable paired-publication + Glass inspection protocol PASS; default/product/root G0 BLOCKED.**
   Exact SQLite lifecycle, expiry/reopen, origin, rate-window, restart-count and ordinal tests pass,
   and a scoped capability opens the exact G0 Cockpit V2 body/head. The explicit CLI/Glass inspector
-  is mounted only by deliberate developer selection; default `Serve` and production Glass remain
-  deliberately unmounted.
+  and normal server's loopback-only ordinary-pairing flags mount the seam only by deliberate
+  operator selection; default `Serve` and production Glass remain deliberately unmounted.
 - **Export store boundary: joined durable offline-fixture V10 PASS; complete root/live BLOCKED.** Core exercises
   the store-owned fourteen-table V8/V9 commit branch, same-run export binding, forward V10
   migration, and exact restricted manifest/Parquet CAS readback. The private V10 wrapper loads an exact backup and import,
