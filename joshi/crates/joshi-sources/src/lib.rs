@@ -14,6 +14,8 @@ pub mod health;
 pub mod helius;
 pub mod ingress;
 pub mod provider_plan;
+#[cfg(test)]
+mod public_solana_c1;
 pub mod pumpportal;
 pub mod runner_port;
 pub mod scope;

@@ -398,7 +398,7 @@ impl ProviderRunner for SyntheticProviderRunner {
     }
 }
 
-fn validate_outcome(
+pub(crate) fn validate_outcome(
     source_id: &SourceId,
     operation: ProviderOperation,
     actual: &RuntimeBudgetPort,
@@ -408,13 +408,15 @@ fn validate_outcome(
     if !actual.within(&maximum.reserved_total()?) {
         return Err(ProviderRunnerError::ActualUsageExceeded);
     }
-    if operation == ProviderOperation::SyntheticEmit
-        && (maximum.worst_case.requests != 1
-            || maximum.max_overshoot.requests != 0
-            || actual.requests != 1
-            || maximum.worst_case.pages != 1
-            || maximum.max_overshoot.pages != 0
-            || actual.pages != 1)
+    if matches!(
+        operation,
+        ProviderOperation::SyntheticEmit | ProviderOperation::SolanaSignaturesForAddress
+    ) && (maximum.worst_case.requests != 1
+        || maximum.max_overshoot.requests != 0
+        || actual.requests != 1
+        || maximum.worst_case.pages != 1
+        || maximum.max_overshoot.pages != 0
+        || actual.pages != 1)
     {
         return Err(ProviderRunnerError::InexactStartedUsage);
     }
@@ -525,8 +527,11 @@ pub enum ProviderRunnerError {
     PermitMismatch,
     #[error("actual provider usage exceeds its reserved maximum")]
     ActualUsageExceeded,
-    #[error("started C0 attempt must report exactly one request and one fixture page")]
+    #[error("started bounded page attempt must report exactly one request and one page")]
     InexactStartedUsage,
+    #[cfg(test)]
+    #[error("public Solana C1 conformance boundary failed")]
+    PublicSolanaC1Execution,
     #[error("captured progress requires at least one exact source frame")]
     CapturedRequiresFrame,
     #[error("sealed C0 captured output admits frames only")]

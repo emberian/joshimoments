@@ -16,6 +16,14 @@ canonical source registry and accepts an exact one-page plan only as
 `ValidationOnlyNoProviderIo`. C2 has no admitted source projection. A valid configuration, source
 declaration, budget, or validation-only plan is never permission to contact a provider.
 
+`joshi-sources` now contains a package-test-only C1 contract harness. It accepts a scripted
+executor, requires an exact one-attempt plan plus matching unverified permit, strictly validates
+the bounded JSON-RPC and frame envelopes, and retains an empty result only as a captured raw
+response. The module is compiled only for the crate's tests: there is no public feature, exported
+runner, endpoint, HTTP client, supervisor registration, spool/store adapter, application flag, or
+qualification path. The existing V1 collector configuration remains C0-only; C1 registration and
+runtime mounting require a new reviewed wire version rather than widening that persisted contract.
+
 Live promotion additionally requires all of the following to close outside this lane:
 
 - one exact `Wave5RunRegistrationV1` committed through the sole store before provider I/O, with a
@@ -43,7 +51,7 @@ substitution, unbounded operations, unsafe protection/retention combinations, an
 the selected canary profile refuse before source execution. C0 contains no credential reference;
 secret bytes never enter arguments, output, logs, evidence metadata, digests, or error messages.
 
-The V2 registered configuration closes a domain-separated `planTemplateDigest` computed over every
+The V2 provider-plan contract closes a domain-separated `planTemplateDigest` computed over every
 provider-plan field except the run occurrence. Each operation contains both the exact canonical
 source-contract fingerprint and exact method-schema fingerprint; validation rederives and compares
 both before admitting the operation. After registration, the final plan adds the exact run ID and
