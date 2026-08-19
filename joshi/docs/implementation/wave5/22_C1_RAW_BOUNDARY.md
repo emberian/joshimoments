@@ -1,8 +1,9 @@
 # C1 raw truth boundary
 
-Status: **SPECIFICATION IN PROGRESS**. This document defines the one bounded live read that Wave 5
-C1 admits. It is written ahead of the implementation and marks each part as specified, landed, or
-open. Nothing here is evidence that a request has ever been issued.
+Status: **LANDED AND GREEN THROUGH STEP 6; NO REQUEST HAS EVER BEEN ISSUED.** Steps 1 to 6 of the
+handoff implementation order are implemented, mutation-audited and committed. Step 7, the one
+deliberate nonfixture read, remains unauthorized and undone. Nothing in this document is evidence
+that a socket has ever opened.
 
 The prior authority chain is described in `docs/implementation/CLAUDE_HANDOFF_2026-08-19.md` and is
 inert by construction: it ends at `Supervisor::admit_claimed_wave5_c1_disabled`, which returns a
@@ -33,12 +34,13 @@ note used the older `api.mainnet-beta.solana.com`; that host is not what the cur
 | Exact activation and one-shot store claim | `joshi-wave5-c1-activation`, `joshi-store::wave5_c1`, migration V23 | landed |
 | Disabled report-only admission | `joshi-supervisor::c1_activation` | landed |
 | C1 journal event family and supervisor seam | `joshi-supervisor::model`, `joshi-supervisor::supervisor` | landed, unconsumed |
-| Physical-size proof | `joshi-supervisor::c1::physical_size` | in progress |
-| Pure wire contract, no I/O | `joshi-sources::public_solana_c1` | in progress |
-| Raw evidence adapter | `joshi-supervisor::c1::evidence` | open |
-| C1 state machine and replay | `joshi-supervisor::c1::runtime` | open |
-| Fixed transport | `joshi-supervisor::c1::transport` | open |
-| Local-only adversarial tests | in-crate, loopback | open |
+| Physical-size proof | `joshi-supervisor::c1::physical_size` | landed |
+| Pure wire contract, no I/O | `joshi-sources::public_solana_c1` | landed |
+| Raw evidence adapter | `joshi-supervisor::c1::evidence` | landed |
+| C1 state machine and replay | `joshi-supervisor::c1::runtime` | landed |
+| Fixed transport | `joshi-supervisor::c1::transport` (crate-private) | landed |
+| Local-only adversarial tests | in-crate, private loopback | landed |
+| One deliberate nonfixture read | none | **not authorized, not done** |
 
 ## Where the authority comes from, and where it does not
 
@@ -183,6 +185,35 @@ The derived bound holds only for the C1 shape. Two of its preconditions are not 
   C1 runtime must compare its *actual* configured `SpoolConfig::max_segment_bytes` against
   `C1PhysicalBoundV1::max_segment_bytes()` and refuse to open when it does not fit, before any
   socket can be prepared.
+
+## Residual findings, carried openly
+
+Four adversarial waves ran, each auditing the previous. The last two lanes were rated sound after
+90 and about 126 single-guard mutations respectively. What remains is recorded rather than closed:
+
+- Roughly eight minor findings survive, all of the form "this branch is unpinned and the file does
+  not say so". None is a live defect. The largest cluster is in `c1::runtime`: the operation-kind
+  clause of the plan-shape gate, the settlement-violation escalation, and the restart stop reason.
+- The production `C1Transport::open` call is shadowed by the `cfg(test)` loopback branch, so its
+  arguments are structurally unexercised by any test. Only a real read would exercise them.
+- `MAX_REFUSAL_DATA_BYTES` is the one sanitation constant whose value is not pinned downward; it
+  could be narrowed sixteenfold with the suite green.
+- `C1PhysicalBoundV1` documents that a future reader must re-run the derivation rather than adding
+  a `Deserialize` derive. Nothing enforces that instruction.
+- Several guards are genuinely unreachable through the only public path and are documented as
+  restated defensively rather than tested into a false green. `admit_claimed_wave5_c1_disabled` is
+  the clearest case: five of its six refusals cannot fire, because `ClaimedWave5C1Activation` has
+  exactly one constructor and it sets the activation field to the parse of the same bytes the
+  accessors return.
+
+One unreproduced test failure is worth recording rather than burying. During a heavily loaded gate
+run, `joshi-store`'s `derived_import_preserves_occurrences_and_reverifies_part_after_restart` failed
+once. Eighteen subsequent runs passed, including under deliberately comparable concurrent load, and
+the failure text was not captured because the gate script grepped only summary lines. The most
+plausible mechanism is that `fullfsync`, added in this tranche, makes every SQLite commit
+substantially slower on Darwin, and that this test does many commits plus a restart under a 5,000 ms
+`busy_timeout`. That mechanism is a hypothesis and was **not** demonstrated. It is not treated as
+fixed.
 
 ## The one deliberate nonfixture read
 
