@@ -89,10 +89,15 @@ V22 browser/operator-evidence overlays continue to migrate through their explici
 boundaries rather than silently changing schema identity.
 
 The store claim compares that identifier exactly and burns the activation before returning, but
-the string is not authentication by itself. C1 remains inert until the future supervisor-owned
-entry point obtains the actual durable journal installation identity, compares it to the claimed
-activation, and consumes the opaque claim by value. A caller-supplied `inst-` string, public commit
-receipt, stored activation, or plan digest is never sufficient runtime authority.
+the string is not authentication by itself. The supervisor now owns a deliberately disabled
+admission boundary: it obtains the actual durable journal installation identity, consumes the
+opaque claim by value, re-parses both exact documents, and exact-matches the run, plan, activation,
+claim receipt, and commit ordering. The admitted value privately retains the non-cloneable claim
+and exposes only a structural audit report. It has no journal append, attempt reservation,
+executor, transport, provider client, network call, spool write, or application/CLI mount. A
+foreign-installation refusal leaves the store claim durably burned, including after reopen. A
+caller-supplied `inst-` string, public commit receipt, stored activation, report, or plan digest is
+never sufficient runtime authority.
 
 Each provider step is deliberately two phase:
 
