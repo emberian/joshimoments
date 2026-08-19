@@ -67,7 +67,7 @@ execution or durability authority; it exists so a future store-owned C1 activati
 re-read the actual plan document rather than blessing an unaccompanied digest.
 
 `joshi-wave5-c1-activation` now defines that activation document's inert semantic layer. It binds
-one installation and registered run to the exact final-plan bytes, their raw SHA-256 and byte
+one exact supervisor `inst-` identity and registered run to the exact final-plan bytes, their raw SHA-256 and byte
 length, the template and final plan digests, the canonical public-Solana source/method
 fingerprints, the public wallet page, finalized commitment, and every independent budget bound.
 It accepts only one generation-one C1 `SolanaSignaturesForAddress` operation with one attempt and

@@ -198,7 +198,7 @@ fn validate_activation(
         return Err(C1ActivationError::Contract);
     }
     stable_identifier(&activation.activation_id)?;
-    stable_identifier(&activation.installation_id)?;
+    stable_installation_id(&activation.installation_id)?;
     stable_identifier(&activation.run.run_id)?;
     stable_digest(&activation.run.registration_digest)?;
     stable_identifier(&activation.exact_plan.plan_id)?;
@@ -306,6 +306,20 @@ fn stable_identifier(value: &str) -> Result<(), C1ActivationError> {
     Ok(())
 }
 
+fn stable_installation_id(value: &str) -> Result<(), C1ActivationError> {
+    let Some(hex) = value.strip_prefix("inst-") else {
+        return Err(C1ActivationError::Identifier);
+    };
+    if hex.len() != 32
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(C1ActivationError::Identifier);
+    }
+    Ok(())
+}
+
 fn stable_digest(value: &str) -> Result<(), C1ActivationError> {
     let valid = value.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
@@ -397,7 +411,7 @@ mod tests {
                 contract: WAVE5_C1_ACTIVATION_CONTRACT.to_owned(),
                 schema_version: WAVE5_C1_ACTIVATION_SCHEMA_VERSION,
                 activation_id: "activation-1".to_owned(),
-                installation_id: "installation-1".to_owned(),
+                installation_id: "inst-00000000000000000000000000000000".to_owned(),
                 run: validated.plan().run.clone(),
                 exact_plan: ExactPlanClosureV1 {
                     plan_id: validated.plan().plan_id.clone(),
@@ -493,6 +507,10 @@ mod tests {
         let (activation, plan_bytes) = bundle();
         let mutations: Vec<ActivationMutation> = vec![
             Box::new(|value| value.run.run_id = "other-run".to_owned()),
+            Box::new(|value| value.installation_id = "installation-1".to_owned()),
+            Box::new(|value| {
+                value.installation_id = "inst-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
+            }),
             Box::new(|value| value.run.registration_digest = format!("sha256:{}", "b".repeat(64))),
             Box::new(|value| value.exact_plan.plan_id = "other-plan".to_owned()),
             Box::new(|value| value.exact_plan.port_version = "other-port".to_owned()),
