@@ -111,9 +111,9 @@ bytes with all four authority flags structurally false.
 3. requires zero consumed Wave 5 gates, zero provider/external-mutation budgets, the fixed fixture
    data policy, desk operation list, claim/source/output/side-effect prohibitions, artifact claim
    boundaries, and sorted local symbols;
-4. rehashes all six registered artifact schema documents: campaign registration, generic
-   known-truth evaluation, Arrow-derived market atlas, protocol known-truth evaluation, and the
-   research-proposal and structural known-truth contracts;
+4. rehashes all seven registered artifact schema documents: campaign registration, domain and
+   generic known-truth evaluations, Arrow-derived market atlas, protocol known-truth evaluation,
+   and the research-proposal and structural known-truth contracts;
 5. rebuilds and evaluates the exact eight-case generic `N01` known-truth suite and seven-case
    Pump/PumpSwap/DLMM protocol battery from their pinned raw fixture bytes, plus the three-case
    migration/same-slot/identity-revision structural battery;

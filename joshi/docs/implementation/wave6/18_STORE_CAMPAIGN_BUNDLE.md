@@ -33,8 +33,8 @@ and alleged commit numbers remain caller-fed fixture content. The fixed ceiling 
 Frozen identifiers:
 
 ```text
-bundleId       wave6-campaign:802a4946da63cf548389e0b20f10210369d11988507fc5e78fdf0a76a09a3df0
-bundleDigest   sha256:e61f247eae51a1c644960ec3624dc251f6544b90644753c4c8a4917bb0f29461
+bundleId       wave6-campaign:86e1bc6b7ae07e53d8cec7d14c4186718b31d68302f6c1f0af2566b86013aa2b
+bundleDigest   sha256:9b4bdf7b4643bb2832f7e41bc7e8e22166c129648c87b88ca9a7b3dfbb9f7011
 V16 migration  sha256:537dceffc27402e24cdff8fcb1eb9afcb3b8d9b5ec184260bb021f2a01673a0b
 ```
 

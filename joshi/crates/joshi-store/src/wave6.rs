@@ -2185,11 +2185,17 @@ mod tests {
     const DECISION_LEDGER: &[u8] =
         include_bytes!("../../../fixtures/wave6/decision_ledger_v1.json");
 
-    fn schemas() -> [(&'static str, &'static [u8]); 6] {
+    fn schemas() -> [(&'static str, &'static [u8]); 7] {
         [
             (
                 "campaign_registration_fixture",
                 include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json"),
+            ),
+            (
+                "domain_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/schemas/domain_known_truth_evaluation_v1.json"
+                ),
             ),
             (
                 "known_truth_evaluation_fixture",
@@ -2218,7 +2224,7 @@ mod tests {
         ]
     }
 
-    fn artifacts() -> [(&'static str, &'static [u8]); 3] {
+    fn artifacts() -> [(&'static str, &'static [u8]); 4] {
         [
             (
                 "known_truth_evaluation_fixture",
@@ -2234,6 +2240,12 @@ mod tests {
                 "structural_known_truth_evaluation_fixture",
                 include_bytes!(
                     "../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json"
+                ),
+            ),
+            (
+                "domain_known_truth_evaluation_fixture",
+                include_bytes!(
+                    "../../../fixtures/wave6/artifacts/domain_known_truth_evaluation_v1.json"
                 ),
             ),
         ]
@@ -2300,7 +2312,7 @@ mod tests {
         store: &mut SqliteStore,
         writer_build: &StableString,
     ) -> (StableString, Wave6FixtureArtifactDagReceipt) {
-        let (program_id, _) = prepare_fixture_content(store, writer_build, 3);
+        let (program_id, _) = prepare_fixture_content(store, writer_build, 4);
         let accepted = store
             .commit_wave6_fixture_artifact_dag_v1(
                 &program_id,
@@ -2672,7 +2684,7 @@ mod tests {
             .expect("latest migration");
         assert_eq!(migration.current, 22);
         let writer_build = StableString::new("wave6-store-test").expect("writer build");
-        let (program_id, artifacts) = prepare_fixture_content(&mut store, &writer_build, 3);
+        let (program_id, artifacts) = prepare_fixture_content(&mut store, &writer_build, 4);
         let batch_id = StableString::new("wave6:artifact-dag:fixture-001").expect("DAG batch");
         let accepted = store
             .commit_wave6_fixture_artifact_dag_v1(
@@ -2684,7 +2696,7 @@ mod tests {
             .expect("accepted artifact DAG");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
         assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v22");
-        assert_eq!(accepted.artifact_count, 3);
+        assert_eq!(accepted.artifact_count, 4);
         assert_eq!(
             accepted.maximum_information_cutoff,
             "2026-08-18T00:10:00.000000Z"
@@ -2693,7 +2705,7 @@ mod tests {
         );
         assert_eq!(
             accepted.maximum_produced_at,
-            "2026-08-18T00:32:00.000000Z"
+            "2026-08-18T00:32:30.000000Z"
                 .parse()
                 .expect("production time")
         );
@@ -2777,7 +2789,7 @@ mod tests {
             )
             .expect("latest migration");
         let writer_build = StableString::new("wave6-store-test").expect("writer build");
-        let (program_id, _) = prepare_fixture_content(&mut incomplete, &writer_build, 2);
+        let (program_id, _) = prepare_fixture_content(&mut incomplete, &writer_build, 3);
         assert!(matches!(
             incomplete.commit_wave6_fixture_artifact_dag_v1(
                 &program_id,
@@ -2820,14 +2832,14 @@ mod tests {
         assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v22");
         assert_eq!(accepted.program_id, program_id);
         assert_eq!(accepted.dag_id, dag.dag_id);
-        assert_eq!(accepted.decision_count, 3);
+        assert_eq!(accepted.decision_count, 4);
         assert_eq!(
             accepted.ledger_digest.as_str(),
-            "sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09"
+            "sha256:11370f62b82621f66018688cbb3549a9f257eabea10ae7031ea7148755c0c5f6"
         );
         assert_eq!(
             accepted.maximum_decided_at,
-            "2026-08-18T00:35:00.000000Z"
+            "2026-08-18T00:36:00.000000Z"
                 .parse()
                 .expect("decision time")
         );

@@ -81,7 +81,7 @@ def parse_known_truth_evaluation_exact(exact_bytes: bytes) -> KnownTruthEvaluati
 
 
 def parse_domain_evaluation_exact(exact_bytes: bytes) -> DomainBatteryEvaluation:
-    """Reparse one exact, unregistered domain known-truth evaluation artifact."""
+    """Reparse one exact, registered-but-fixture-only domain evaluation artifact."""
 
     value = _document(exact_bytes, _GENERIC_FIELDS, "domain evaluation artifact")
     return _construct(

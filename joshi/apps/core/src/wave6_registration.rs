@@ -1183,11 +1183,17 @@ fn verify_campaign_bundle(
     Ok(())
 }
 
-fn schemas() -> [SchemaFixture; 6] {
+fn schemas() -> [SchemaFixture; 7] {
     [
         SchemaFixture {
             kind_id: "campaign_registration_fixture",
             bytes: include_bytes!("../../../fixtures/wave6/schemas/campaign_registration_v1.json"),
+        },
+        SchemaFixture {
+            kind_id: "domain_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/schemas/domain_known_truth_evaluation_v1.json"
+            ),
         },
         SchemaFixture {
             kind_id: "known_truth_evaluation_fixture",
@@ -1216,7 +1222,7 @@ fn schemas() -> [SchemaFixture; 6] {
     ]
 }
 
-fn artifacts() -> [ArtifactFixture; 3] {
+fn artifacts() -> [ArtifactFixture; 4] {
     [
         ArtifactFixture {
             kind_id: "known_truth_evaluation_fixture",
@@ -1234,6 +1240,12 @@ fn artifacts() -> [ArtifactFixture; 3] {
             kind_id: "structural_known_truth_evaluation_fixture",
             bytes: include_bytes!(
                 "../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json"
+            ),
+        },
+        ArtifactFixture {
+            kind_id: "domain_known_truth_evaluation_fixture",
+            bytes: include_bytes!(
+                "../../../fixtures/wave6/artifacts/domain_known_truth_evaluation_v1.json"
             ),
         },
     ]
@@ -1292,22 +1304,22 @@ mod tests {
         assert_eq!(first.retry_status, IdempotencyStatus::Idempotent);
         assert!(first.registration_persisted);
         assert!(first.restart_reverified);
-        assert_eq!(first.registered_schema_count, "6");
-        assert_eq!(first.schemas.len(), 6);
+        assert_eq!(first.registered_schema_count, "7");
+        assert_eq!(first.schemas.len(), 7);
         assert!(first.schema_catalog_persisted);
         assert!(first.schema_catalog_restart_reverified);
-        assert_eq!(first.fixture_artifact_content_count, "3");
-        assert_eq!(first.fixture_artifacts.len(), 3);
+        assert_eq!(first.fixture_artifact_content_count, "4");
+        assert_eq!(first.fixture_artifacts.len(), 4);
         assert!(first.fixture_artifact_content_persisted);
         assert!(first.fixture_artifact_content_restart_reverified);
         assert_eq!(first.fixture_market_atlas.row_count, "6");
         assert_eq!(first.fixture_market_atlas.input_as_of_commit_seq, "4");
         assert!(first.fixture_market_atlas_persisted);
         assert!(first.fixture_market_atlas_restart_reverified);
-        assert_eq!(first.fixture_artifact_dag.artifact_count, "3");
+        assert_eq!(first.fixture_artifact_dag.artifact_count, "4");
         assert!(first.fixture_artifact_dag_persisted);
         assert!(first.fixture_artifact_dag_restart_reverified);
-        assert_eq!(first.fixture_decision_ledger.decision_count, "3");
+        assert_eq!(first.fixture_decision_ledger.decision_count, "4");
         assert!(first.fixture_decision_ledger_persisted);
         assert!(first.fixture_decision_ledger_restart_reverified);
         assert_eq!(first.fixture_campaign_bundle.eligible_subject_count, "3");

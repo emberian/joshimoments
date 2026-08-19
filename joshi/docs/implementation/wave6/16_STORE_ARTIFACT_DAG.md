@@ -4,8 +4,8 @@ Status: **PASS for one durable exact fixture DAG over prior exact content; BLOCK
 operational, product, causal or economic authority.**
 
 Migration V14 adds `wave6_fixture_artifact_dag_v1` and its normalized member table. The sole store
-accepts the checked `artifact_dag_v1.json` only after the exact N00 registration, six schemas and
-all three V13 evaluation-content rows already exist.
+accepts the checked `artifact_dag_v1.json` only after the exact N00 registration, seven schemas and
+all four V13 evaluation-content rows already exist.
 
 ## Exact closure
 
@@ -21,10 +21,10 @@ and normalized member, then reloads each content object and rechecks its program
 strictly earlier commit. Exact retry returns the original commit. Missing content, changed member
 content, invalid topology and a second batch for the same DAG refuse.
 
-The frozen DAG has three parentless checked evaluation members, semantic digest
-`sha256:54c1773c3c0c29a9663bb5ad53b2d9b203a9dc8a1c7723935cabed74bc65ce09`, maximum information
+The frozen DAG has four parentless checked evaluation members, semantic digest
+`sha256:50cbbb3dc66b6e4b8fe98559a4fea7726e15cdb2c7572aae542675cc7354a8a8`, maximum information
 cutoff `2026-08-18T00:10:00.000000Z`, and maximum production time
-`2026-08-18T00:32:00.000000Z`.
+`2026-08-18T00:32:30.000000Z`.
 
 ## Authority boundary
 

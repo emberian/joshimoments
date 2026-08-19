@@ -55,6 +55,8 @@ FIXTURE_PACKET_AUTHORITY = "fixture_inspection_proposal_only_no_query_no_action_
 FIXTURE_PACKET_CLAIM_SCOPE = "protocol_draft_not_result_release_or_live_decision"
 RESEARCH_KIND_ID = "research_proposal_fixture"
 RESEARCH_SCHEMA_ID = "joshi.analysis.wave6-research-desk/v1"
+DOMAIN_TRUTH_KIND_ID = "domain_known_truth_evaluation_fixture"
+DOMAIN_TRUTH_SCHEMA_ID = "joshi.analysis.wave6-domain-known-truth/v1"
 KNOWN_TRUTH_KIND_ID = "known_truth_evaluation_fixture"
 KNOWN_TRUTH_SCHEMA_ID = "joshi.analysis.wave6-known-truth/v1"
 PROTOCOL_TRUTH_KIND_ID = "protocol_known_truth_evaluation_fixture"
@@ -136,6 +138,12 @@ _EXPECTED_ARTIFACT_KIND_BOUNDARIES = {
         "h5_policy",
         "fixture_campaign_protocol_only",
         "prospective_result_or_operational_campaign",
+    ),
+    DOMAIN_TRUTH_KIND_ID: (
+        DOMAIN_TRUTH_SCHEMA_ID,
+        "h1_protocol_kinematics",
+        "fixture_domain_counterexample_recovery_or_refusal",
+        "market_identity_causal_policy_or_economic_claim",
     ),
     "market_atlas_fixture": (
         "joshi.analysis.wave6-market-atlas-snapshot/v1",
@@ -647,7 +655,10 @@ class FixtureResearchPacket:
         if research_kind["schemaId"] != RESEARCH_SCHEMA_ID:
             raise ManifestError("research proposal kind does not match the registered schema")
         if (
-            registration.artifact_kind(KNOWN_TRUTH_KIND_ID)["schemaId"] != KNOWN_TRUTH_SCHEMA_ID
+            registration.artifact_kind(DOMAIN_TRUTH_KIND_ID)["schemaId"]
+            != DOMAIN_TRUTH_SCHEMA_ID
+            or registration.artifact_kind(KNOWN_TRUTH_KIND_ID)["schemaId"]
+            != KNOWN_TRUTH_SCHEMA_ID
             or registration.artifact_kind(PROTOCOL_TRUTH_KIND_ID)["schemaId"]
             != PROTOCOL_TRUTH_SCHEMA_ID
             or registration.artifact_kind(STRUCTURAL_TRUTH_KIND_ID)["schemaId"]

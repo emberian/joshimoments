@@ -121,15 +121,14 @@ regenerates byte-for-byte in Python, and strictly cross-parses in Rust. Missing 
 kind/schema mappings, duplicate or reordered JSON, authority changes, and self-digest substitution
 refuse.
 
-This fourth evaluation is intentionally **not yet** a registered N00 artifact kind or store row.
-Its checked golden and strict cross-runtime parser freeze only the intrinsic fixture boundary; the
-kind remains absent from the N00 artifact denominator. It cannot be counted among the three
-V12/V13/V15 durable evaluation artifacts until a separate registry/schema/store change freezes
-that boundary.
+This fourth evaluation is now a registered N00 artifact kind and exact V12/V13/V14/V15 store row.
+The sole store rehashes its schema and content, joins it to the four-member artifact DAG, records a
+fixture-roundtrip disposition, and exact-reopens the chain. That closes only durable fixture
+lineage: it does not turn generated inputs or expected outputs into observations or claims.
 
-## Three registered exact evaluation artifacts
+## Four registered exact evaluation artifacts
 
-The first three evaluated candidates materialize the complete fields promised by their registered
+The four evaluated candidates materialize the complete fields promised by their registered
 V12 schemas. Each canonical artifact binds the suite digest, candidate, sorted exact passed-case
 denominator, one ordered result digest per case, its pinned source-fixture digest(s) where
 applicable, fixed fixture authority and a recomputed evaluation self-digest. Exact checked bytes
@@ -137,10 +136,10 @@ live under [`fixtures/wave6/artifacts`](../../../fixtures/wave6/artifacts).
 
 Strict parsers reject unknown or duplicate fields, noncanonical JSON, malformed digests, changed
 source-fixture identities, missing results, changed authority and self-digest substitution. The
-tests regenerate all three outputs from their exact case batteries, require byte equality with the
-checked fixtures, and independently reparse them. These are real evaluated fixture outputs, but
-they remain caller-fed checked artifacts: they have not yet been admitted by the sole store and
-carry no durable receipt, market observation or estimator-performance authority.
+tests regenerate all four outputs from their exact case batteries, require byte equality with the
+checked fixtures, and independently reparse them. These are real evaluated fixture outputs and the
+sole store now retains their exact bytes and fixture lineage. Their durable receipts still confer
+no market observation, human truth, or estimator-performance authority.
 
 ## Executable leakage rule
 
@@ -165,7 +164,7 @@ performed. Multiple compatible fixture worlds produce a sorted identified set. G
 unit mismatch, empty selection, invalid selected payload, result substitution, missing suite cases,
 duplicate cases, cut changes, authority changes, and digest changes refuse.
 
-Passing either suite says only that a named candidate reproduced its registered generated cases.
+Passing any battery says only that a named candidate reproduced its registered generated cases.
 It cannot waive later source, coverage, mechanics, topology, measurement-error, store,
 prospective, quote, route, economic, or operator gates.
 
@@ -188,7 +187,7 @@ The seven named domain gaps now have one deterministic counterexample each, but 
 complete empirical or venue-mechanics battery. It still needs materially broader profile vectors,
 multi-window burst and overlap generators, additional mechanism-equivalent charts, open operator
 language cases, effect/quote-supported episode families, multi-asset household accounting, and
-longer correction/re-entry histories. The new evaluation also remains unregistered and
-store-unretained. Each later candidate must name the exact subset it passed; generic, basic
+longer correction/re-entry histories. Each later candidate must name the exact subset it passed;
+generic, basic
 protocol, structural, or seven-case domain success cannot promote a venue/mechanics/identity/
 operator lane.

@@ -17,7 +17,7 @@ root runner for the Wave 6 foundation. It runs:
 - the focused Python market-atlas reducer/Ruff gates; and
 - two invocations of the real `wave6-program-registration` command over the same V22 catalog.
 
-The second invocation must reproduce the original program, six schemas, three evaluation-content
+The second invocation must reproduce the original program, seven schemas, four evaluation-content
 artifacts, the exact six-row market-atlas document, one fixture-DAG, one decision-ledger, one atomic
 campaign-bundle, one proposal, and one caller-fed `hold` byte commit identities. The script emits
 `joshi.wave6.fixture_foundation_witness.v10` with the exact report and V11-V22 migration digests. It

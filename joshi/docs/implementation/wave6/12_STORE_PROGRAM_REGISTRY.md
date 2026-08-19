@@ -29,8 +29,8 @@ The frozen fixture has:
 
 ```text
 programId              w6-program-fixture-001
-registrationDigest     sha256:d176471cc0796d302880711d30bc94069f484082896cdf4287abc2cfe0148e8f
-documentDigest         sha256:f698341092e28d3e79ceac24fbe7dd332298d1996d0718a49cbbc5682037001f
+registrationDigest     sha256:a1db58245f6eb429b20630bdefb74c5e95d91e56294688ad787129a3654903af
+documentDigest         sha256:036ec1a42154edc304b608cd4bf95c7263208e638a6fca55d7ae047dd901c7ab
 consumedWave5Gates      0
 providerUnits           0
 externalMutationUnits   0
@@ -49,8 +49,8 @@ cargo run --locked --offline -p joshi-core -- \
   wave6-program-registration --state /tmp/joshi-wave6-program
 ```
 
-It creates or reopens one latest V22 catalog, commits the checked fixture, all six registered
-schema documents, three exact evaluation outputs, their exact fixture DAG and three fixture
+It creates or reopens one latest V22 catalog, commits the checked fixture, all seven registered
+schema documents, four exact evaluation outputs, their exact fixture DAG and four fixture
 dispositions, plus the atomic five-document campaign bundle. It makes exact idempotent retries,
 drops the writer, and independently loads the full chain through a read-only store. Its V6 JSON
 report fixes

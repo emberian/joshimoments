@@ -21,10 +21,10 @@ and normalized decision/evidence row, and requires the DAG commit to precede the
 Exact retry returns the original commit. Missing DAGs, target/content substitutions, invalid
 branching or clocks and second-batch identity changes refuse.
 
-The frozen ledger records three `promote_fixture_roundtrip` dispositions—one for each checked
+The frozen ledger records four `promote_fixture_roundtrip` dispositions—one for each checked
 evaluation content—with semantic digest
-`sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09` and document digest
-`sha256:d11988aeac754fdb2417147e9edbc06a775055f0cf07b389bd616b82587fd432`.
+`sha256:11370f62b82621f66018688cbb3549a9f257eabea10ae7031ea7148755c0c5f6` and document digest
+`sha256:ba9261617c7d29839b8c257afb6ff47518e43a0ced775c9d4a7a0a46e9fa4602`.
 
 ## Authority boundary
 

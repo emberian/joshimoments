@@ -235,29 +235,33 @@ fn exact_fixture_roundtrips_at_unverified_ceiling() {
         SemanticCeilingV1::UnverifiedSemanticFixtureOnly
     );
     assert_eq!(parsed.value().consumed_wave5_gates.len(), 0);
-    assert_eq!(parsed.value().artifact_kinds.len(), 6);
+    assert_eq!(parsed.value().artifact_kinds.len(), 7);
     assert_eq!(
         parsed.value().artifact_kinds[0].schema_digest,
         digest_bytes(CAMPAIGN_SCHEMA).expect("campaign schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[1].schema_digest,
-        digest_bytes(KNOWN_TRUTH_SCHEMA).expect("known-truth schema digest")
+        digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain-truth schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[2].schema_digest,
-        digest_bytes(MARKET_SCHEMA).expect("market schema digest")
+        digest_bytes(KNOWN_TRUTH_SCHEMA).expect("known-truth schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[3].schema_digest,
-        digest_bytes(PROTOCOL_TRUTH_SCHEMA).expect("protocol-truth schema digest")
+        digest_bytes(MARKET_SCHEMA).expect("market schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[4].schema_digest,
-        digest_bytes(RESEARCH_SCHEMA).expect("research schema digest")
+        digest_bytes(PROTOCOL_TRUTH_SCHEMA).expect("protocol-truth schema digest")
     );
     assert_eq!(
         parsed.value().artifact_kinds[5].schema_digest,
+        digest_bytes(RESEARCH_SCHEMA).expect("research schema digest")
+    );
+    assert_eq!(
+        parsed.value().artifact_kinds[6].schema_digest,
         digest_bytes(STRUCTURAL_TRUTH_SCHEMA).expect("structural-truth schema digest")
     );
     assert_eq!(parsed.value().budgets.provider_units, WireU64::new(0));
@@ -576,18 +580,16 @@ fn exact_python_evaluation_artifacts_cross_parse_without_promotion() {
         domain_schema["contract"],
         serde_json::Value::String(DOMAIN_EVALUATION_SCHEMA.to_owned())
     );
+    let domain_kind = registration
+        .value()
+        .artifact_kinds
+        .iter()
+        .find(|kind| kind.kind_id.as_str() == DOMAIN_EVALUATION_KIND)
+        .expect("registered domain kind");
+    assert_eq!(domain_kind.schema_id.as_str(), DOMAIN_EVALUATION_SCHEMA);
     assert_eq!(
-        digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain schema digest"),
-        ValueDigest::new("sha256:b077caa5d835ca35bf4323be3808f2f50ef1be4f8717953fef9de1f7aa4daa09")
-            .expect("domain schema digest literal")
-    );
-    assert!(
-        registration.value().artifact_kinds.iter().all(|kind| {
-            kind.kind_id.as_str() != DOMAIN_EVALUATION_KIND
-                && kind.schema_digest
-                    != digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain schema digest")
-        }),
-        "cross-runtime parsing must not silently register the domain artifact kind"
+        domain_kind.schema_digest,
+        digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain schema digest")
     );
 }
 
@@ -596,7 +598,7 @@ fn checked_evaluation_dag_parses_at_fixture_only_ceiling() {
     let registration = parse_program_registration_exact(FIXTURE).expect("registration");
     let dag = parse_artifact_dag_exact(EVALUATION_DAG, &registration).expect("evaluation DAG");
     assert_eq!(dag.exact_bytes(), EVALUATION_DAG);
-    assert_eq!(dag.value().artifacts.len(), 3);
+    assert_eq!(dag.value().artifacts.len(), 4);
     assert!(
         dag.value()
             .artifacts
@@ -618,11 +620,11 @@ fn checked_evaluation_decisions_bind_every_exact_dag_member() {
     assert_eq!(ledger.value().decisions.len(), dag.value().artifacts.len());
     assert_eq!(
         ledger.value().ledger_digest.as_str(),
-        "sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09"
+        "sha256:11370f62b82621f66018688cbb3549a9f257eabea10ae7031ea7148755c0c5f6"
     );
     assert_eq!(
         ledger.document_digest().as_str(),
-        "sha256:d11988aeac754fdb2417147e9edbc06a775055f0cf07b389bd616b82587fd432"
+        "sha256:ba9261617c7d29839b8c257afb6ff47518e43a0ced775c9d4a7a0a46e9fa4602"
     );
     assert!(
         ledger

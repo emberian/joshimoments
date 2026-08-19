@@ -504,23 +504,23 @@ fn checked_campaign_chain_exactly_matches_the_fixture_builders() {
     for (parsed, expected) in [
         (
             parsed_registration.document_digest().as_str(),
-            "sha256:031aaf113ba5f9040c5a93a7676d270d560ee9292e4b4999fcc9794f77eda758",
+            "sha256:d623051d67a6e80c4260ad8881aee824155c8adae2fbd4850ae7ff7787750831",
         ),
         (
             parsed_enrollment.document_digest().as_str(),
-            "sha256:9148f4f55b50547522e51630f4adac9ea87fa56de108673daa5c94d76957d328",
+            "sha256:fdaa17509b11ff9ef5e9a1ba685431800535044f4262a4ff4d0ce81b00e385a1",
         ),
         (
             parsed_assignment.document_digest().as_str(),
-            "sha256:83531d5e40452fe6ef66f178f53282cbaf245e3a4fa740671d5449487ebe5f11",
+            "sha256:76d52077bba4f8335895d147ae411426e1ef147e0f9cd60605e96566d9480c73",
         ),
         (
             parsed_seal.document_digest().as_str(),
-            "sha256:350aa570de39c56b60ad1a4561f7cbfcb25f87794e2ca63c0f7c9fa03771dabe",
+            "sha256:d92f517575434c8fd8c21297f13ec679cdc73134b2b4799434d3e5ac24ea33b9",
         ),
         (
             parsed_adjudication.document_digest().as_str(),
-            "sha256:6f4f10f7f6329e350d65ce1af13ffa2521f2496973bcf8ed6b56adc0c49f220b",
+            "sha256:37ece572a5ca8723c2de12018d9c7d223478b3c74c9f7177b9e92419ff5dad75",
         ),
     ] {
         assert_eq!(parsed, expected);

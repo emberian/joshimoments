@@ -21,6 +21,7 @@ from joshi_analysis.wave6_research_desk.fixture_packet import research_proposal_
 ROOT = Path(__file__).resolve().parents[3]
 REGISTRATION = ROOT / "fixtures/wave6/program_registration_v1.json"
 CAMPAIGN_SCHEMA = ROOT / "fixtures/wave6/schemas/campaign_registration_v1.json"
+DOMAIN_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/domain_known_truth_evaluation_v1.json"
 KNOWN_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/known_truth_evaluation_v1.json"
 MARKET_SCHEMA = ROOT / "fixtures/wave6/schemas/market_atlas_snapshot_v1.json"
 PROTOCOL_TRUTH_SCHEMA = ROOT / "fixtures/wave6/schemas/protocol_known_truth_evaluation_v1.json"
@@ -36,6 +37,7 @@ STRUCTURAL_FIXTURE = ROOT / "fixtures/wave6/structural_known_truth_v1.json"
 def _schemas() -> dict[str, bytes]:
     return {
         "campaign_registration_fixture": CAMPAIGN_SCHEMA.read_bytes(),
+        "domain_known_truth_evaluation_fixture": DOMAIN_TRUTH_SCHEMA.read_bytes(),
         "known_truth_evaluation_fixture": KNOWN_TRUTH_SCHEMA.read_bytes(),
         "market_atlas_fixture": MARKET_SCHEMA.read_bytes(),
         "protocol_known_truth_evaluation_fixture": PROTOCOL_TRUTH_SCHEMA.read_bytes(),

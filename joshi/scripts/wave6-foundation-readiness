@@ -55,9 +55,10 @@ jq -e '
   and .retryStatus == "idempotent"
   and .registrationPersisted == true
   and .restartReverified == true
-  and .registeredSchemaCount == "6"
+  and .registeredSchemaCount == "7"
   and [.schemas[].kindId] == [
     "campaign_registration_fixture",
+    "domain_known_truth_evaluation_fixture",
     "known_truth_evaluation_fixture",
     "market_atlas_fixture",
     "protocol_known_truth_evaluation_fixture",
@@ -70,13 +71,14 @@ jq -e '
     | all(test("^[1-9][0-9]*$")))
   and .schemaCatalogPersisted == true
   and .schemaCatalogRestartReverified == true
-  and .fixtureArtifactContentCount == "3"
+  and .fixtureArtifactContentCount == "4"
   and [.fixtureArtifacts[].kindId] == [
     "known_truth_evaluation_fixture",
     "protocol_known_truth_evaluation_fixture",
-    "structural_known_truth_evaluation_fixture"
+    "structural_known_truth_evaluation_fixture",
+    "domain_known_truth_evaluation_fixture"
   ]
-  and [.fixtureArtifacts[].resultCount] == ["8", "7", "3"]
+  and [.fixtureArtifacts[].resultCount] == ["8", "7", "3", "7"]
   and ([.fixtureArtifacts[].artifactId]
     | all(test("^wave6-artifact:[0-9a-f]{64}$")))
   and ([.fixtureArtifacts[].contentDigest,
@@ -103,30 +105,30 @@ jq -e '
   and .fixtureMarketAtlasPersisted == true
   and .fixtureMarketAtlasRestartReverified == true
   and (.fixtureArtifactDag.dagId | test("^wave6-dag:[0-9a-f]{64}$"))
-  and .fixtureArtifactDag.dagDigest == "sha256:54c1773c3c0c29a9663bb5ad53b2d9b203a9dc8a1c7723935cabed74bc65ce09"
+  and .fixtureArtifactDag.dagDigest == "sha256:50cbbb3dc66b6e4b8fe98559a4fea7726e15cdb2c7572aae542675cc7354a8a8"
   and (.fixtureArtifactDag.documentDigest | test("^sha256:[0-9a-f]{64}$"))
-  and .fixtureArtifactDag.artifactCount == "3"
+  and .fixtureArtifactDag.artifactCount == "4"
   and .fixtureArtifactDag.maximumInformationCutoff == "2026-08-18T00:10:00.000000Z"
-  and .fixtureArtifactDag.maximumProducedAt == "2026-08-18T00:32:00.000000Z"
+  and .fixtureArtifactDag.maximumProducedAt == "2026-08-18T00:32:30.000000Z"
   and (.fixtureArtifactDag.commitSeq | test("^[1-9][0-9]*$"))
   and .fixtureArtifactDagPersisted == true
   and .fixtureArtifactDagRestartReverified == true
   and (.fixtureDecisionLedger.ledgerId | test("^wave6-decisions:[0-9a-f]{64}$"))
-  and .fixtureDecisionLedger.ledgerDigest == "sha256:9ed8f03224c75246e4ab34dee9cea8a939c4dc873faa8d7ff01afb0258813d09"
-  and .fixtureDecisionLedger.documentDigest == "sha256:d11988aeac754fdb2417147e9edbc06a775055f0cf07b389bd616b82587fd432"
-  and .fixtureDecisionLedger.decisionCount == "3"
-  and .fixtureDecisionLedger.maximumDecidedAt == "2026-08-18T00:35:00.000000Z"
+  and .fixtureDecisionLedger.ledgerDigest == "sha256:11370f62b82621f66018688cbb3549a9f257eabea10ae7031ea7148755c0c5f6"
+  and .fixtureDecisionLedger.documentDigest == "sha256:ba9261617c7d29839b8c257afb6ff47518e43a0ced775c9d4a7a0a46e9fa4602"
+  and .fixtureDecisionLedger.decisionCount == "4"
+  and .fixtureDecisionLedger.maximumDecidedAt == "2026-08-18T00:36:00.000000Z"
   and (.fixtureDecisionLedger.commitSeq | test("^[1-9][0-9]*$"))
   and .fixtureDecisionLedgerPersisted == true
   and .fixtureDecisionLedgerRestartReverified == true
   and (.fixtureCampaignBundle.bundleId | test("^wave6-campaign:[0-9a-f]{64}$"))
   and .fixtureCampaignBundle.campaignId == "campaign-fixture-001"
-  and .fixtureCampaignBundle.registrationDigest == "sha256:bbda37eac723a4c3e50a4cff0e81a3c6793f1fe7d2bd6b2016e67bd6ad1b4303"
-  and .fixtureCampaignBundle.enrollmentDigest == "sha256:b248e906cd3b979ec832958a41af31653c2a35539af90d3dd36ae0815904c95f"
-  and .fixtureCampaignBundle.assignmentDigest == "sha256:88c6308ce02cf6efe73990379b43d13800e750085b468bb41f01878d07923a16"
-  and .fixtureCampaignBundle.sealDigest == "sha256:80037edbb452a2226a95e71bd03d00a4cc92c418ecf5d6a06524b58df22cef4c"
-  and .fixtureCampaignBundle.adjudicationDigest == "sha256:34029b56fdc3de042c8211b568e5effcb3f1f18fcde18c23577f08c1203985eb"
-  and .fixtureCampaignBundle.bundleDigest == "sha256:e61f247eae51a1c644960ec3624dc251f6544b90644753c4c8a4917bb0f29461"
+  and .fixtureCampaignBundle.registrationDigest == "sha256:ec3d986404fc9f0fc3419bac35c061e070c231338015623d9dfab9e5b9d058b8"
+  and .fixtureCampaignBundle.enrollmentDigest == "sha256:ecabfb5d8cc8e26f850216548ba2d8d28d98e8398494363e58ff2df9c6f9cfa5"
+  and .fixtureCampaignBundle.assignmentDigest == "sha256:686855c34554ae075ce6b77cc82b88dbdfc0fda6f0819c3f6e7e65f94a1c8e46"
+  and .fixtureCampaignBundle.sealDigest == "sha256:b5c1f5484100ab2585c8555a958fe6b004b5e469d982ad10a5e72c9b11635ec8"
+  and .fixtureCampaignBundle.adjudicationDigest == "sha256:1c96e1e623a56c36bb05cc09965697987656eb3146a626cdaf54cbe4a2a7990f"
+  and .fixtureCampaignBundle.bundleDigest == "sha256:9b4bdf7b4643bb2832f7e41bc7e8e22166c129648c87b88ca9a7b3dfbb9f7011"
   and .fixtureCampaignBundle.eligibleSubjectCount == "3"
   and .fixtureCampaignBundle.includedSubjectCount == "2"
   and .fixtureCampaignBundle.assignmentCount == "2"

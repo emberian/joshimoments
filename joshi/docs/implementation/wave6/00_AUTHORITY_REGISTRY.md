@@ -33,20 +33,21 @@ missing prohibitions, and a reclosed nonzero provider budget all refuse.
 The checked-in registration deliberately consumes no Wave 5 gates. Adding a caller-authored gate
 reference cannot raise its ceiling.
 
-The six registered fixture kinds cover the checked campaign-registration, generic known-truth
-evaluation, market-atlas, Pump/PumpSwap/DLMM protocol known-truth evaluation, research-proposal,
-and migration/order/identity structural known-truth schemas. All three evaluation kinds are
+The seven registered fixture kinds cover the checked campaign-registration, domain-counterexample
+evaluation, generic known-truth evaluation, market-atlas, Pump/PumpSwap/DLMM protocol known-truth
+evaluation, research-proposal, and migration/order/identity structural known-truth schemas. All
+four evaluation kinds are
 limited to H1 deterministic fixture results, ambiguity sets, or refusals: none permits a market,
 estimator-performance, quote, route, identity, causal, or economic claim. Registering the campaign
 schema grants only `fixture_campaign_protocol_only`; it explicitly prohibits any prospective
 result or operational campaign inference. The independently bounded N03 contract is documented in
 [11_PROSPECTIVE_CAMPAIGN_CONTRACT.md](11_PROSPECTIVE_CAMPAIGN_CONTRACT.md).
 
-The registry package can also strictly cross-parse the checked seven-case domain-counterexample
-evaluation and pins its canonical schema bytes and digest. That parser support is not registration:
-the domain kind and schema digest remain absent from the exact N00 `artifactKinds` denominator and
-therefore cannot enter its artifact DAG, decision ledger, store adapter, or claim grammar. Adding it
-to N00 is a separate digest-changing registration tranche.
+The domain kind is now part of the exact N00 `artifactKinds` denominator. Its canonical schema and
+seven-case evaluation bytes are cross-runtime checked, then durably joined to the other three N01
+evaluation artifacts in the exact store DAG and fixture disposition ledger. That registration and
+durability preserve the same fixture-only ceiling; they do not make the generated labels, clocks,
+mechanisms, operator language, effects, or expected truths empirical.
 
 ## Artifact lineage and claim grammar
 
@@ -121,7 +122,7 @@ shape with an empty Wave 5 gate set and zero provider/external-mutation budgets.
 storage of an unverified fixture contract, not resolution of the gates it deliberately omits. See
 [12_STORE_PROGRAM_REGISTRY.md](12_STORE_PROGRAM_REGISTRY.md).
 
-V12 additionally retains and rehashes the exact six schema documents named by the N00 artifact
+V12 additionally retains and rehashes the exact seven schema documents named by the N00 artifact
 kind registry. Each kind/schema/digest triple must be present in the exact stored registration.
 That closes the schema catalog, not an artifact occurrence. See
 [13_STORE_ARTIFACT_SCHEMAS.md](13_STORE_ARTIFACT_SCHEMAS.md).
