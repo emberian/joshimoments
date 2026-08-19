@@ -107,3 +107,13 @@ caller resolved it from retained source evidence. This is not an operational Wav
 adapter. A later store-resolved release must provide the plan's campaign-local topology, coverage,
 source-manifest, and Wave 5 gate closure through a new authority-bearing contract rather than
 relabel these fixture bytes.
+
+V20 is now separately assessed by `wave6_market_atlas.store_input`. Core exposes the exact
+sole-store-built discovery-census document; locked Python checks its ordered bytes, binding,
+source-receipt identity, two-subject denominator, hot/cold-control partition, partial mint
+coverage, omissions, clocks, counts, retry, and negative qualifications. The result intentionally
+admits **zero** atlas strata. A `mint` discovery presence is not a lifecycle state/version, and the
+source contract supplies no registered coverage for venue, liquidity, wallet, caller attention, or
+portfolio/watch state. The receipt therefore fixes
+`atlasAdmissionRefusal=mint_discovery_is_not_mint_lifecycle_and_other_atlas_strata_are_uncovered`
+instead of manufacturing six `unknown` rows.

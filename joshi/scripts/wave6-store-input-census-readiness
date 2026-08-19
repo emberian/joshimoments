@@ -31,12 +31,22 @@ cargo test --locked --offline -p joshi-core \
   wave6_store_input::tests::genuine_w5_source_retries_and_reopens_without_market_atlas_promotion \
   -- --exact
 cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
+uv --directory analysis run --locked pytest tests/wave6_market_atlas -q
+uv --directory analysis run --locked ruff check \
+  src/joshi_analysis/wave6_market_atlas tests/wave6_market_atlas \
+  src/joshi_analysis/cli.py
 
 mkdir -p "$JOSHI_W6_INPUT_STATE/catalog"
 cargo run --locked --offline -q -p joshi-core -- wave6-store-input-census \
   --state "$JOSHI_W6_INPUT_STATE/catalog" > "$JOSHI_W6_INPUT_STATE/first.json"
 cargo run --locked --offline -q -p joshi-core -- wave6-store-input-census \
   --state "$JOSHI_W6_INPUT_STATE/catalog" > "$JOSHI_W6_INPUT_STATE/retry.json"
+uv --directory analysis run --locked joshi-analysis assess-market-atlas-input \
+  --report "$JOSHI_W6_INPUT_STATE/first.json" \
+  > "$JOSHI_W6_INPUT_STATE/analysis-first.json"
+uv --directory analysis run --locked joshi-analysis assess-market-atlas-input \
+  --report "$JOSHI_W6_INPUT_STATE/retry.json" \
+  > "$JOSHI_W6_INPUT_STATE/analysis-retry.json"
 
 for report in "$JOSHI_W6_INPUT_STATE/first.json" "$JOSHI_W6_INPUT_STATE/retry.json"; do
   jq -e '
@@ -55,6 +65,11 @@ for report in "$JOSHI_W6_INPUT_STATE/first.json" "$JOSHI_W6_INPUT_STATE/retry.js
     and (.sourceKnownThroughCommitSeq | test("^[1-9][0-9]*$"))
     and (.bindingId | test("^wave6-input-census:[0-9a-f]{64}$"))
     and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and .storeInputCensus.contract == "joshi.store.wave6.input-census.v1"
+    and .storeInputCensus.bindingId == .bindingId
+    and .storeInputCensus.sourceOccurrence.sourceOccurrenceId == .sourceOccurrenceId
+    and .storeInputCensus.storeResolvedSource == true
+    and .storeInputCensus.marketAtlasResolved == false
     and (.acceptedCommitSeq | test("^[1-9][0-9]*$"))
     and (.firstStatus == "accepted" or .firstStatus == "idempotent")
     and .retryStatus == "idempotent"
@@ -80,6 +95,34 @@ for report in "$JOSHI_W6_INPUT_STATE/first.json" "$JOSHI_W6_INPUT_STATE/retry.js
   ' "$report" >/dev/null
 done
 
+for assessment in \
+  "$JOSHI_W6_INPUT_STATE/analysis-first.json" \
+  "$JOSHI_W6_INPUT_STATE/analysis-retry.json"; do
+  jq -e '
+    .contract == "joshi.analysis.wave6-market-atlas-input-assessment/v1"
+    and .schemaVersion == 1
+    and .status == "valid_refused_atlas_admission"
+    and .authority == "read_record_replay_propose_shadow_only"
+    and .semanticCeiling == "cross_runtime_store_census_validated_not_market_atlas"
+    and .availableEvidenceKinds == ["mint_discovery_presence"]
+    and .admittedAtlasStrata == []
+    and .missingAtlasStrata == [
+      "mint_lifecycle",
+      "canonical_venue_state",
+      "liquidity_topology",
+      "wallet_cluster_flow",
+      "caller_attention",
+      "portfolio_watch"
+    ]
+    and .atlasAdmissionRefusal == "mint_discovery_is_not_mint_lifecycle_and_other_atlas_strata_are_uncovered"
+    and .marketAtlasMaterialized == false
+    and .fieldRelease == false
+    and .empiricalClaim == false
+    and .causalClaim == false
+    and .strategyClaim == false
+  ' "$assessment" >/dev/null
+done
+
 jq -en --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" \
   --slurpfile retry "$JOSHI_W6_INPUT_STATE/retry.json" '
   $first[0].bindingId == $retry[0].bindingId
@@ -87,16 +130,26 @@ jq -en --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" \
   and $first[0].acceptedCommitSeq == $retry[0].acceptedCommitSeq
   and $retry[0].firstStatus == "idempotent"
 ' >/dev/null
+jq -en --slurpfile first "$JOSHI_W6_INPUT_STATE/analysis-first.json" \
+  --slurpfile retry "$JOSHI_W6_INPUT_STATE/analysis-retry.json" '
+  $first[0].bindingId == $retry[0].bindingId
+  and $first[0].documentDigest == $retry[0].documentDigest
+  and $first[0].acceptedCommitSeq == $retry[0].acceptedCommitSeq
+' >/dev/null
 
 JOSHI_W6_INPUT_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0020_wave6_store_input_census.sql | awk '{print $1}')
 JOSHI_W6_INPUT_REPORT_SHA=$(shasum -a 256 \
   "$JOSHI_W6_INPUT_STATE/first.json" | awk '{print $1}')
+JOSHI_W6_INPUT_ASSESSMENT_SHA=$(shasum -a 256 \
+  "$JOSHI_W6_INPUT_STATE/analysis-first.json" | awk '{print $1}')
 
 jq -cn \
   --arg migration "sha256:$JOSHI_W6_INPUT_MIGRATION_SHA" \
   --arg report "sha256:$JOSHI_W6_INPUT_REPORT_SHA" \
-  --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" '
+  --arg assessment "sha256:$JOSHI_W6_INPUT_ASSESSMENT_SHA" \
+  --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" \
+  --slurpfile atlas "$JOSHI_W6_INPUT_STATE/analysis-first.json" '
   {
     contract: "joshi.wave6.store_input_census_witness.v1",
     schemaVersion: 1,
@@ -105,6 +158,7 @@ jq -cn \
     semanticCeiling: "store_resolved_offline_fixture_input_census_only",
     migrationDigest: $migration,
     reportDigest: $report,
+    crossRuntimeAssessmentDigest: $assessment,
     catalogSchema: $first[0].catalogSchema,
     programId: $first[0].programId,
     sourceOccurrenceId: $first[0].sourceOccurrenceId,
@@ -124,8 +178,18 @@ jq -cn \
     attainedCapabilities: [
       "store_resolved_w5_input_census",
       "exact_retry",
-      "read_only_restart"
+      "read_only_restart",
+      "cross_runtime_market_atlas_admission_assessment"
     ],
+    atlasAdmission: {
+      status: $atlas[0].status,
+      semanticCeiling: $atlas[0].semanticCeiling,
+      availableEvidenceKinds: $atlas[0].availableEvidenceKinds,
+      admittedAtlasStrata: [],
+      missingAtlasStrata: $atlas[0].missingAtlasStrata,
+      refusal: $atlas[0].atlasAdmissionRefusal,
+      marketAtlasMaterialized: false
+    },
     qualification: {
       storeResolvedSource: true,
       storeResolvedMarketAtlas: false,

@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 use joshi_domain::StableString;
 use joshi_store::{
     IdempotencyStatus, SqliteStore, StoreMode, StoredWave6StoreInputCensus,
-    Wave6StoreInputCensusReceipt,
+    Wave6StoreInputCensusReceipt, Wave6StoreInputCensusV1,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -39,6 +39,7 @@ pub struct Wave6StoreInputCensusReport {
     pub source_known_through_commit_seq: String,
     pub binding_id: String,
     pub document_digest: String,
+    pub store_input_census: Wave6StoreInputCensusV1,
     pub accepted_commit_seq: String,
     pub first_status: IdempotencyStatus,
     pub retry_status: IdempotencyStatus,
@@ -220,6 +221,7 @@ fn report(
             .to_string(),
         binding_id: document.binding_id.to_string(),
         document_digest: stored.document_digest.to_string(),
+        store_input_census: document.clone(),
         accepted_commit_seq: stored.commit_seq.to_string(),
         first_status: receipt.status,
         retry_status: IdempotencyStatus::Idempotent,

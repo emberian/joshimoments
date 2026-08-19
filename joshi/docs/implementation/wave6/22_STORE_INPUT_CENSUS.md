@@ -22,6 +22,12 @@ for the program. A later catalog migration does not invalidate the immutable V10
 readback validates that frozen receipt version instead of incorrectly comparing it to the latest
 catalog version.
 
+Core includes the exact V20 document in its report. The locked Python market-atlas adapter
+independently checks ordered JSON, the physical document digest, binding identity, source receipt
+identity, source/profile/fact/coverage/membership/omission closure, clocks, counts, retry, and every
+negative qualification. Duplicate/reordered JSON, descriptor substitution, membership narrowing,
+mint-to-lifecycle relabeling, and positive atlas promotion refuse.
+
 The Core command is:
 
 ```bash
@@ -43,6 +49,15 @@ The bounded runner is:
 
 It retains a versioned witness under `/tmp/joshi-wave6-input.*`.
 
+The same runner feeds both first and retry reports through:
+
+```bash
+uv --directory analysis run --locked joshi-analysis assess-market-atlas-input \
+  --report /tmp/joshi-wave6-input.example/first.json
+```
+
+The expected status is `valid_refused_atlas_admission`, not a market-atlas artifact.
+
 ## Hard ceiling
 
 The exact semantic ceiling is
@@ -55,3 +70,8 @@ state, typed prices, or source-native provenance required by the six-stratum W6 
 contract. V19's market-atlas artifact remains a separate caller-fed fixture. Accordingly every
 report and witness fixes `storeResolvedMarketAtlas`, field release, empirical/causal/strategy
 claims, provider I/O, external mutation, product qualification, and live qualification to false.
+
+The cross-runtime assessment raises only exact input validation. Its ceiling is
+`cross_runtime_store_census_validated_not_market_atlas`; `availableEvidenceKinds` contains only
+`mint_discovery_presence`, `admittedAtlasStrata` is empty, and all six required atlas strata remain
+listed as missing. It does not call `build_market_atlas`.

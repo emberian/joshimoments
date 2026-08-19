@@ -14,6 +14,7 @@ from .field_models import run_field_prototype_job
 from .job import run_descriptive_chart_job
 from .response_kernels import run_kernel_prototype_job
 from .snapshot import validate_snapshot
+from .wave6_market_atlas import validate_store_input_census_report
 from .wave6_operator_model import validate_store_operator_evidence_report
 
 
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="validate an exact V22 operator-evidence report without model promotion",
     )
     validate_operator_evidence.add_argument("--report", required=True, type=Path)
+    assess_market_atlas_input = commands.add_parser(
+        "assess-market-atlas-input",
+        help="validate a V20 discovery census and refuse unsupported market-atlas admission",
+    )
+    assess_market_atlas_input.add_argument("--report", required=True, type=Path)
     return parser
 
 
@@ -118,9 +124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "artifact_id": artifact.artifact_id,
             "row_count": artifact.table.num_rows,
         }
-    else:
+    elif args.command == "validate-operator-evidence":
         operator_input = validate_store_operator_evidence_report(args.report)
         payload = operator_input.validation_receipt()
+    else:
+        census = validate_store_input_census_report(args.report)
+        payload = census.validation_receipt()
     print(canonical_json_bytes(payload).decode("utf-8"))
     return 0
 
