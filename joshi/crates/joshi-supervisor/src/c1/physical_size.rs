@@ -59,15 +59,15 @@
 //! not tight even here; and a page of a given length is costliest with the fewest rows, which is
 //! why the fixture carries one.
 //!
-//! At the chosen 256 KiB ingress ceiling that page reaches disk at **2,498,092 bytes, a 9.529x
+//! At the chosen 256 KiB ingress ceiling that page reaches disk at **2,498,126 bytes, a 9.529x
 //! expansion**, against a derived bound of 2,751,948 (90.7% of the bound consumed). A realistic
-//! 100-row page of 20,135 bytes reaches disk at 177,389 bytes, an 8.809x expansion. Both numbers
+//! 100-row page of 20,135 bytes reaches disk at 177,427 bytes, an 8.811x expansion. Both numbers
 //! are pinned by unit tests.
 //!
 //! The fixed allowances are measured against that same path rather than asserted. At the ceiling
 //! the real per-stage overheads are 2,441 bytes of retained envelope against a 64 KiB allowance,
-//! 1,980 of observation metadata against 32 KiB, 328 of batch envelope against 8 KiB, 1,028 of
-//! spool entry against 16 KiB, and 1,588 of segment header against 16 KiB (1,694 when sealed) —
+//! 1,995 of observation metadata against 32 KiB, 328 of batch envelope against 8 KiB, 1,031 of
+//! spool entry against 16 KiB, and 1,594 of segment header against 16 KiB (1,700 when sealed) —
 //! between about 9x and 27x of margin, which is where the remaining slack in the bound lives.
 //! Shrinking any allowance below what the admissible worst case costs fails
 //! `every_fixed_allowance_covers_the_overhead_the_real_path_measures`.
@@ -115,9 +115,17 @@
 //!
 //! These allowances are **preconditions, not proofs**. The bound holds for the C1 shape: exactly
 //! one retained observation in exactly one batch in exactly one entry in one segment, one bounded
-//! non-secret header allowlist, and the fixed C1 policy document. A caller that retains many
-//! observations per batch, an unbounded header allowlist, or a policy document larger than the
-//! entry allowance is outside this bound.
+//! non-secret header allowlist, the fixed C1 policy document, and identifiers of ordinary length.
+//! A caller that retains many observations per batch, an unbounded header allowlist, or a policy
+//! document larger than the entry allowance is outside this bound.
+//!
+//! The identifier precondition is worth naming, because nothing enforces it: the observation
+//! metadata allowance covers the occurrence identifiers, and those carry the reservation's
+//! `installation_id` verbatim — a plain `String` on [`crate::AttemptReservation`] that no
+//! constructor validates or bounds. Every identifier this path has ever been handed is tens of
+//! bytes; an installation ID of tens of kilobytes would exceed the observation metadata allowance
+//! on its own. That is a precondition on the caller, not something this derivation checks, and it
+//! is stated here rather than left for a reader to discover from the measurements.
 //!
 //! # The obligation a compile-time constant cannot discharge
 //!
@@ -164,6 +172,13 @@ use crate::{Result, SupervisorError};
 /// and an audit showed the sources-side ceiling could then be changed 16x with every test on both
 /// sides still green.
 ///
+/// The coupling is now structural rather than checked: there is exactly one definition of this
+/// ceiling in this crate, the `as u64` widening on the line below, and no second literal for it
+/// to drift from. A test that compared the two names would compare a value with its own
+/// definition and could not fail, so this module does not carry one. What the tests here do pin
+/// is the *value* — every golden number below is derived from 262,144 — so a change on the
+/// `joshi-sources` side arrives as a set of failing measurements rather than as silence.
+///
 /// Why 256 KiB is the chosen operational value is documented on the `joshi-sources` constant. In
 /// short: a `getSignaturesForAddress` page is at most 100 rows, a realistic full page measures
 /// about 20 KiB, and the source registry's 64 MiB `max_response_bytes` is a *contract* ceiling on
@@ -184,23 +199,38 @@ pub const C1_MAX_RESPONSE_BODY_BYTES: u64 =
 /// anchored to 16 MiB and described it as the smallest durable configuration; that number is a
 /// `cfg(test)` fixture and was never a durable configuration at all.
 ///
-/// Every `SpoolConfig::max_segment_bytes` in the tree, so the next reader can check the anchor
-/// without re-deriving it:
+/// A snapshot of every `SpoolConfig::max_segment_bytes` in the tree, so the next reader can check
+/// the anchor without re-deriving it.
+///
+/// **Nothing enforces this table.** No test reads the source tree, so it is a snapshot rather
+/// than a guarantee, and it has already gone stale once: the C1 runtime added sites of its own
+/// after it was written. A reader who needs certainty should re-run
+/// `rg --glob '*.rs' 'max_segment_bytes:' apps crates` and check the result against the argument
+/// below, which is the part that actually has to hold. Line numbers are deliberately omitted:
+/// they drift on every edit and made the table look more authoritative than it is.
 ///
 /// | site | value | status |
 /// | --- | --- | --- |
-/// | `apps/collector/src/main.rs:206` | 32 MiB | non-test: the collector application |
-/// | `apps/core/src/wave5_g0.rs:1831` | 4 MiB | non-test: `joshi-core`, `wave5_g0::supervisor_config` |
-/// | `apps/core/src/wave5_readiness.rs:215` | 4 MiB | non-test: `joshi-core`, `wave5_readiness::spool_config` |
-/// | `crates/joshi-supervisor/src/bin/joshi-supervisor-kill-child.rs:67` | 1 MiB | not `cfg(test)`, but a fault-injection child binary |
-/// | `crates/joshi-supervisor/src/runtime.rs:1793` | 16 MiB | `cfg(test)` fixture (`mod tests` opens at line 1613) |
-/// | `crates/joshi-supervisor/tests/support/mod.rs:21` | 1 MiB | integration-test support |
-/// | `crates/joshi-spool/tests/protocol.rs:105` | 1,000,000 | integration test in `joshi-spool` |
+/// | `apps/collector/src/main.rs` | 32 MiB | non-test: the collector application |
+/// | `apps/core/src/wave5_g0.rs` | 4 MiB | non-test: `joshi-core`, `wave5_g0::supervisor_config` |
+/// | `apps/core/src/wave5_readiness.rs` | 4 MiB | non-test: `joshi-core`, `wave5_readiness::spool_config` |
+/// | `crates/joshi-supervisor/src/bin/joshi-supervisor-kill-child.rs` | 1 MiB | not `cfg(test)`, but a fault-injection child binary |
+/// | `crates/joshi-supervisor/src/runtime.rs` | 16 MiB | `cfg(test)` fixture |
+/// | `crates/joshi-supervisor/src/c1/runtime.rs` | derived | `cfg(test)` fixture: this module's own segment bound, rounded up to a power of two |
+/// | `crates/joshi-supervisor/src/c1/runtime.rs` | derived | `cfg(test)`: one byte under this module's segment bound, to exercise the runtime refusal |
+/// | `crates/joshi-supervisor/tests/support/mod.rs` | 1 MiB | integration-test support |
+/// | `crates/joshi-spool/tests/protocol.rs` | 1,000,000 | integration test in `joshi-spool` |
+///
+/// The two C1 runtime sites are the ones this table originally missed. Both are `cfg(test)` and
+/// both are *derived from this module's own bound* rather than chosen independently — one rounds
+/// [`C1PhysicalBoundV1::max_segment_bytes`] up to a power of two, the other sits one byte below it
+/// so the runtime configuration refusal has something to refuse — so neither can contradict the
+/// anchor, whatever the ingress ceiling becomes.
 ///
 /// Two further `max_segment_bytes` values in the tree belong to `joshi_spool::ReplicaConfig`, a
 /// different type bounding remote replica ingest rather than the local spool this bound targets:
-/// `crates/joshi-supervisor/tests/continuity.rs:211` (1 MiB) and
-/// `crates/joshi-spool/tests/protocol.rs:118` (1,000,000). Both are integration tests.
+/// `crates/joshi-supervisor/tests/continuity.rs` (1 MiB) and `crates/joshi-spool/tests/protocol.rs`
+/// (1,000,000). Both are integration tests.
 ///
 /// **Why 4 MiB and not the 1 MiB minimum.** The two 1 MiB `SpoolConfig` sites are the kill-fault
 /// child binary and one integration-test support fixture. The child binary is not `cfg(test)`, but
@@ -401,6 +431,15 @@ const fn derive(
 /// `3 * count + (count - 1) + 2 = 4 * count + 1`, and adds one spare byte so the same expression
 /// also covers the empty `[]` case. It over-estimates strictly for every `count >= 1`: by exactly
 /// 1 byte when every element is at least 100, and by more for any smaller element.
+///
+/// The `checked_add(2)` here is the **one** unreachable check in this module, and it is written
+/// as unreachable rather than pretended otherwise: a successful `checked_mul(4)` leaves a multiple
+/// of four, so the product is at most `u64::MAX - 3` and adding 2 always fits. Nothing can reach
+/// its `None`, and replacing it with wrapping arithmetic would change no observable behaviour. It
+/// stays because it keeps the function total at a glance, without a reader having to reconstruct
+/// that argument to convince themselves. `the_array_of_integers_add_cannot_overflow_after_its_multiply`
+/// pins the argument; every *other* checked step in this module is driven to its own overflow by
+/// `every_checked_step_refuses_at_its_own_stage`.
 const fn json_integer_array_bytes(count: u64) -> Option<u64> {
     match count.checked_mul(4) {
         Some(value) => value.checked_add(2),
@@ -476,10 +515,13 @@ mod tests {
     /// domain, pinned exactly by `every_fixed_allowance_covers_the_overhead_the_real_path_measures`
     /// so the margins quoted in the module documentation cannot drift unnoticed.
     const OVERHEAD_RETAINED_ENVELOPE: u64 = 2_441;
-    const OVERHEAD_OBSERVATION: u64 = 1_980;
+    const OVERHEAD_OBSERVATION: u64 = 1_995;
     const OVERHEAD_BATCH: u64 = 328;
-    const OVERHEAD_ENTRY: u64 = 1_028;
-    const OVERHEAD_SEGMENT: u64 = 1_588;
+    const OVERHEAD_ENTRY: u64 = 1_031;
+    const OVERHEAD_SEGMENT: u64 = 1_594;
+    /// The same segment overhead on an authenticated-private domain, whose sealed body carries a
+    /// 16-byte Poly1305 tag the public-integrity domain does not have.
+    const OVERHEAD_SEGMENT_SEALED: u64 = 1_700;
 
     /// Physical byte lengths actually produced by the real chain functions.
     #[derive(Clone, Copy, Debug)]
@@ -860,20 +902,6 @@ mod tests {
         );
     }
 
-    /// The ingress ceiling is not an independent literal: it is the `joshi-sources` ceiling widened
-    /// to `u64`. This fails the moment the two diverge, which is what a re-hardcoded copy on either
-    /// side would do.
-    #[test]
-    fn the_ingress_ceiling_is_the_sources_ceiling_widened() {
-        assert_eq!(
-            C1_MAX_RESPONSE_BODY_BYTES,
-            u64::try_from(joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES).unwrap(),
-            "the supervisor ceiling must be the joshi-sources ceiling, not a second literal"
-        );
-        // The value both sides ship today. Every golden number in this module is derived from it.
-        assert_eq!(C1_MAX_RESPONSE_BODY_BYTES, 256 * 1024);
-    }
-
     /// Every body and envelope measured here has to be one the C1 wire contract actually admits,
     /// or the measurement is of a shape that can never reach disk. This asks the contract reader
     /// itself rather than asserting the property.
@@ -993,6 +1021,28 @@ mod tests {
         assert_eq!(at_ceiling.batch, OVERHEAD_BATCH);
         assert_eq!(at_ceiling.entry, OVERHEAD_ENTRY);
         assert_eq!(at_ceiling.segment, OVERHEAD_SEGMENT);
+
+        // The authenticated-private domain, pinned exactly for the same reason. It differs from
+        // the public-integrity one at exactly one stage: its sealed body carries a 16-byte
+        // Poly1305 tag, which the segment overhead pays for once base64 has expanded the framing.
+        // With only the public-integrity domain pinned above, the sealed branch of `overhead`'s
+        // framing was unverified — flattening its 24 bytes to the public domain's 8 changed
+        // nothing any test measured, so the sealed segment's overhead was being computed against
+        // a framing it does not have.
+        let at_ceiling_sealed = overhead(&costliest_admissible_page(), Some([3_u8; 12]));
+        assert_eq!(
+            at_ceiling_sealed.retained_envelope,
+            OVERHEAD_RETAINED_ENVELOPE
+        );
+        assert_eq!(at_ceiling_sealed.observation, OVERHEAD_OBSERVATION);
+        assert_eq!(at_ceiling_sealed.batch, OVERHEAD_BATCH);
+        assert_eq!(at_ceiling_sealed.entry, OVERHEAD_ENTRY);
+        assert_eq!(at_ceiling_sealed.segment, OVERHEAD_SEGMENT_SEALED);
+        assert_eq!(
+            OVERHEAD_SEGMENT_SEALED - OVERHEAD_SEGMENT,
+            106,
+            "the sealed domain pays for its Poly1305 tag and the header fields the seal adds"
+        );
     }
 
     #[test]
@@ -1060,13 +1110,13 @@ mod tests {
         );
         let realistic = measure(body, worst_case_admissible_headers(), None);
         assert_within_bound(u64::try_from(length).unwrap(), realistic);
-        // The second headline measurement: 20_135 ingress bytes reach disk at 177_389, an 8.809x
+        // The second headline measurement: 20_135 ingress bytes reach disk at 177_427, an 8.811x
         // expansion, under the 9.529x the memo-padded page at the ceiling pays.
         assert_eq!(length, 20_135);
-        assert_eq!(realistic.segment, 177_389);
+        assert_eq!(realistic.segment, 177_427);
         assert_eq!(
             realistic.segment * 1000 / u64::try_from(length).unwrap(),
-            8_809
+            8_811
         );
     }
 
@@ -1122,6 +1172,110 @@ mod tests {
         }
     }
 
+    /// Every checked step in the derivation, driven to the exact ingress ceiling that overflows
+    /// **that** step and no earlier one.
+    ///
+    /// `the_derivation_errors_rather_than_wrapping` above asks only that a huge input is refused,
+    /// which the first few steps satisfy on their own: replacing any of the later ones with
+    /// wrapping arithmetic left it green, because a wrapped value simply carried on to a step that
+    /// still refused. What distinguishes them is the *stage* the refusal names, so each input here
+    /// is paired with the stage it must reach. A step that wrapped instead of refusing would carry
+    /// its input to a later stage — a different name — or all the way to an `Ok` holding a budget
+    /// nothing computed.
+    ///
+    /// The inputs were found by walking the derivation over the whole `u64` domain: the failing
+    /// stage is monotone in the ingress ceiling, so each stage owns one contiguous interval and
+    /// these are points inside each.
+    #[test]
+    fn every_checked_step_refuses_at_its_own_stage() {
+        // The largest ingress ceiling the whole derivation survives. Every input below is above
+        // it, and this one is not, so the chain is total underneath the first refusal.
+        let largest_derivable = 1_945_555_039_024_026_171_u64;
+        assert!(c1_physical_bound(largest_derivable).is_ok());
+        assert!(c1_physical_bound(largest_derivable + 1).is_err());
+
+        for (input, stage, step) in [
+            (
+                4_611_686_018_427_387_904_u64,
+                "retained frame envelope body array",
+                "json_integer_array_bytes: checked_mul(4)",
+            ),
+            (
+                4_611_686_018_427_371_520,
+                "retained frame envelope",
+                "checked_add(RETAINED_ENVELOPE_FIXED_BYTES)",
+            ),
+            (
+                4_611_686_018_427_371_519,
+                "observation payload base64",
+                "base64_bytes: checked_add(2)",
+            ),
+            (
+                3_458_764_513_820_524_543,
+                "observation payload base64",
+                "base64_bytes: checked_mul(4)",
+            ),
+            (
+                3_458_764_513_820_518_399,
+                "observation draft",
+                "checked_add(OBSERVATION_METADATA_FIXED_BYTES)",
+            ),
+            (
+                3_458_764_513_820_516_863,
+                "durable ingest batch",
+                "checked_add(BATCH_FIXED_BYTES)",
+            ),
+            (
+                2_594_073_385_365_381_631,
+                "exact batch bytes base64",
+                "base64_bytes: checked_mul(4)",
+            ),
+            (
+                2_594_073_385_365_379_327,
+                "spool entry",
+                "checked_add(ENTRY_FIXED_BYTES)",
+            ),
+            (
+                2_594_073_385_365_379_324,
+                "segment body framing",
+                "checked_add(SEGMENT_FRAMING_BYTES)",
+            ),
+            (
+                1_945_555_039_024_027_900,
+                "sealed segment body base64",
+                "base64_bytes: checked_mul(4)",
+            ),
+            (
+                1_945_555_039_024_026_172,
+                "disk segment",
+                "checked_add(SEGMENT_FIXED_BYTES)",
+            ),
+        ] {
+            let error = c1_physical_bound(input)
+                .expect_err(&format!("{step} must refuse at ingress ceiling {input}"));
+            let message = error.to_string();
+            assert!(
+                message.ends_with(&format!("at the {stage} stage")),
+                "{step} was expected to refuse at the {stage} stage, and said: {message}"
+            );
+        }
+    }
+
+    /// The one check in this module that nothing can reach, stated as such rather than tested as
+    /// if it were reachable. A successful `checked_mul(4)` leaves a multiple of four, so its
+    /// product is at most `u64::MAX - 3` and the `checked_add(2)` that follows always fits.
+    #[test]
+    fn the_array_of_integers_add_cannot_overflow_after_its_multiply() {
+        let widest = u64::MAX / 4;
+        assert_eq!(widest * 4, u64::MAX - 3);
+        assert_eq!(json_integer_array_bytes(widest), Some(u64::MAX - 1));
+        assert_eq!(
+            json_integer_array_bytes(widest + 1),
+            None,
+            "the multiply is the only step here that can refuse"
+        );
+    }
+
     /// The smallest `SpoolConfig::max_segment_bytes` configured anywhere in the tree, which the
     /// anchor deliberately excludes: the kill-fault child binary and two integration fixtures.
     const SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES: u64 = 1024 * 1024;
@@ -1130,6 +1284,12 @@ mod tests {
     /// here with the numbers in hand rather than only as a `const` assertion.
     #[test]
     fn the_chosen_ceiling_stays_strictly_under_the_hosting_anchor() {
+        // The value the ceiling ships today. Every golden number in this module is derived from
+        // it, so this is where a change on the `joshi-sources` side first says so by name. There
+        // is only one definition of the ceiling in this crate, so nothing here can usefully
+        // compare it against `joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES`: that
+        // comparison would be a value against its own definition.
+        assert_eq!(C1_MAX_RESPONSE_BODY_BYTES, 256 * 1024);
         let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
         assert!(
             bound.max_segment_bytes() < SMALLEST_HOSTING_SEGMENT_CEILING_BYTES,
@@ -1225,10 +1385,10 @@ mod tests {
             measured.segment
         );
         let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
-        // The headline measurement the module documentation quotes: 2_498_092 physical segment
+        // The headline measurement the module documentation quotes: 2_498_126 physical segment
         // bytes for the costliest admissible 262_144 byte page, a 9.529x expansion that consumes
         // 90.7% of the derived bound.
-        assert_eq!(measured.segment, 2_498_092);
+        assert_eq!(measured.segment, 2_498_126);
         assert_eq!(measured.segment * 1000 / C1_MAX_RESPONSE_BODY_BYTES, 9_529);
         assert_eq!(measured.segment * 1000 / bound.max_segment_bytes(), 907);
         assert!(measured.segment <= bound.max_segment_bytes());

@@ -36,13 +36,25 @@
 //! reading taken immediately before the request and sets `requested_at` to `None`; the durable
 //! reservation instant is used as the justified acquisition start. It observes no monotonic clock
 //! either, so both monotonic readings are zero in a clock domain named
-//! `c1-no-monotonic-clock:<installation>:<reservation>` — the zero elapsed that follows is a
-//! placeholder in a domain that declares itself absent, never a latency measurement.
-//! `persisted_at` carries the frame's provider-receipt instant forward. That is a lower bound on
-//! the instant this record is actually persisted rather than a measurement of it, and it is a
-//! lower bound only because the two wall instants this adapter is handed are checked against each
-//! other: a frame whose receipt instant precedes its reservation instant is refused, because the
-//! acquisition interval it would record runs backwards.
+//! `c1-no-monotonic-clock:<namespace>` — the zero elapsed that follows is a placeholder in a
+//! domain that declares itself absent, never a latency measurement. That `<namespace>` is the
+//! occurrence namespace, which is length-prefixed rather than plainly joined; the private
+//! `occurrence_namespace` function says why.
+//!
+//! `persisted_at` carries the frame's provider-receipt instant forward, and that is all it is.
+//! It is not a measurement of when this record is persisted: nothing here reads a clock at the
+//! moment of persistence, and persistence happens later and in another layer. The check this
+//! adapter does perform does not make it one either. That check compares the receipt instant
+//! against the *reservation* instant and refuses a frame received before its own reservation was
+//! taken — it bounds `received_at` from **below**, by an earlier instant, which says nothing
+//! about the persist instant. What it buys is that the recorded acquisition interval
+//! `started_at ..= persisted_at` does not run backwards.
+//!
+//! Reading the field as a lower bound on the true persist instant rests on two things this
+//! adapter cannot check: that the wall reading the transport took for `received_at` is not after
+//! the moment the bytes arrived, and that no clock stepped backwards between then and the
+//! durability result. Those are assumptions about other layers' clocks, not facts established
+//! here.
 //!
 //! Every claim in this section is pinned by the tests
 //! `clocks_this_adapter_does_not_have_are_recorded_as_absent_not_as_readings` and
@@ -140,8 +152,9 @@ const C1_ABSENT_MONOTONIC_CLOCK_DOMAIN: &str = "c1-no-monotonic-clock";
 ///
 /// Each entry is load bearing on its own: the test
 /// `every_endpoint_shaped_needle_refuses_material_that_contains_it` probes the guard once per
-/// needle, in both ASCII cases, so deleting any one of the four fails a test rather than silently
-/// widening what may be hashed.
+/// needle in every ASCII case that needle has, so deleting any one of the four fails a test rather
+/// than silently widening what may be hashed. Three of the four have two spellings; `://` has no
+/// cased character, so its two spellings are the same bytes and it is probed once.
 const ENDPOINT_SHAPED_NEEDLES: [&str; 4] = ["http", "://", "api.", "solana.com"];
 
 /// Turns one exact C1 HTTP response into one queued raw observation under a prior reservation.
@@ -354,9 +367,12 @@ fn admit_reservation(reservation: &AttemptReservation) -> Result<()> {
 /// `acquisition_started_at` is the durable reservation instant and `persisted_at` carries the
 /// frame's receipt instant. Nothing relates those two clocks by construction — they are two wall
 /// readings taken by different layers — so a frame stamped before its own reservation would record
-/// an acquisition that finished before it started, and a `persisted_at` that bounds nothing. Equal
-/// instants are admitted: the receipt stamp has millisecond resolution and the reservation instant
-/// is microsecond-aligned, so a genuinely simultaneous pair can compare equal.
+/// an acquisition that finished before it started. That, and only that, is what this refusal
+/// closes: it makes the recorded interval non-negative. It does not make `persisted_at` a bound on
+/// anything, because it constrains the receipt instant from *below*, against an earlier instant;
+/// see the module documentation for what `persisted_at` is and is not. Equal instants are
+/// admitted: the receipt stamp has millisecond resolution and the reservation instant is
+/// microsecond-aligned, so a genuinely simultaneous pair can compare equal.
 fn refuse_inverted_acquisition_interval(
     reserved_at: UtcTimestamp,
     received_at: UtcTimestamp,
@@ -364,7 +380,7 @@ fn refuse_inverted_acquisition_interval(
     if received_at < reserved_at {
         return Err(SupervisorError::InvalidValue(
             "the C1 frame was received before its reservation was taken; the acquisition interval \
-             would run backwards and persisted_at would bound nothing"
+             would run backwards"
                 .into(),
         ));
     }
@@ -373,18 +389,36 @@ fn refuse_inverted_acquisition_interval(
 
 /// Builds the occurrence namespace that keeps two retained C1 pages distinct records.
 ///
-/// [`joshi_sources::observation_draft`] derives both the acquisition ID and the observation ID from
-/// exactly `(namespace, connection_epoch, sequence)`, and the observation ID is a store primary
-/// key; that function documents the uniqueness precondition as its caller's to discharge. The
-/// admitted C1 frame shape fixes `connection_epoch` and `sequence` at 1, so the namespace is the
-/// only part of that triple that can vary at all. The installation ID alone is constant across
-/// every reservation on one installation, so two reservations retaining two pages would have
-/// collided on one primary key. The reservation ID is the per-attempt identity the supervisor
-/// journal already mints uniquely, so it is what discharges the precondition here.
+/// [`joshi_sources::observation_draft`] derives both the acquisition ID and the observation ID
+/// from `(source slug, namespace, connection_epoch, sequence)` — the slug is part of it, and this
+/// adapter fixes that at one value — and the observation ID is a store primary key. That
+/// function's own documentation states no precondition for a caller to discharge; it says only
+/// that equal bytes acquired twice retain distinct occurrence IDs through a stable namespace plus
+/// epoch and sequence. Uniqueness of the namespace is therefore this caller's problem by default
+/// rather than by delegation, and the admitted C1 frame shape fixes `connection_epoch` and
+/// `sequence` at 1, so the namespace is the only part of the tuple that can vary at all.
+///
+/// The installation ID alone is constant across every reservation on one installation, so two
+/// reservations retaining two pages would have collided on one primary key. The reservation ID is
+/// the per-attempt identity the supervisor journal already mints uniquely, so it is what
+/// separates them.
+///
+/// **The join is length-prefixed because it has to be injective.** Neither component excludes the
+/// separator: `installation_id` is a plain `String` field on [`AttemptReservation`] that nothing
+/// validates, and [`crate::ReservationId`] refuses `/` and `\` but admits `:`. A bare
+/// `installation:reservation` join therefore sends the distinct pairs `("i", "a:b")` and
+/// `("i:a", "b")` to the same string `i:a:b`, which is two distinct reservations deriving one
+/// observation ID on a store primary key. Writing the installation ID's byte length first makes
+/// the decode unambiguous — the digits before the first `:` say how many bytes the installation
+/// ID occupies — so distinct pairs cannot share a namespace.
+/// `two_distinct_reservations_never_collide_on_one_observation_id` builds exactly that pair and
+/// measures both derived IDs.
 fn occurrence_namespace(reservation: &AttemptReservation) -> String {
     format!(
-        "{}:{}",
-        reservation.installation_id, reservation.reservation_id
+        "{}:{}:{}",
+        reservation.installation_id.len(),
+        reservation.installation_id,
+        reservation.reservation_id
     )
 }
 
@@ -620,10 +654,14 @@ mod tests {
         let received_at = unix_millis_to_utc(UnixMillis(RECEIVED_AT_MILLIS)).expect("receipt");
 
         // Spelled out rather than built from the constant under test: a domain named for a clock
-        // this adapter does not read is the claim, so renaming the constant must fail here.
+        // this adapter does not read is the claim, so renaming the constant must fail here. The
+        // installation ID's byte length leads the namespace, which is what makes the join
+        // injective; `two_distinct_reservations_never_collide_on_one_observation_id` is where that
+        // matters.
         assert_eq!(C1_ABSENT_MONOTONIC_CLOCK_DOMAIN, "c1-no-monotonic-clock");
+        assert_eq!(reservation.installation_id.len(), 37);
         let domain = format!(
-            "c1-no-monotonic-clock:{}:{}",
+            "c1-no-monotonic-clock:37:{}:{}",
             reservation.installation_id, reservation.reservation_id
         );
         assert_eq!(
@@ -702,27 +740,24 @@ mod tests {
             .expect("equal instants are admitted");
     }
 
+    /// The one observation this adapter builds for a reservation, for tests that compare two.
+    fn observation_for(reservation: &AttemptReservation) -> ObservationDraft {
+        only_observation(
+            &adapter()
+                .prepare_raw_page(reservation, frame(&page()))
+                .expect("prepared page"),
+        )
+    }
+
     #[test]
-    fn two_reservations_never_collide_on_one_observation_id() {
+    fn two_reservations_on_one_installation_never_collide_on_one_observation_id() {
         let first = reservation();
         let mut second = reservation();
         second.reservation_id = ReservationId::new("resv-c1-000002").expect("reservation ID");
-        assert_eq!(
-            first.installation_id, second.installation_id,
-            "the installation ID is constant across reservations, so it cannot separate them"
-        );
+        let installation = first.installation_id.clone();
 
-        let adapter = adapter();
-        let first = only_observation(
-            &adapter
-                .prepare_raw_page(&first, frame(&page()))
-                .expect("first page"),
-        );
-        let second = only_observation(
-            &adapter
-                .prepare_raw_page(&second, frame(&page()))
-                .expect("second page"),
-        );
+        let first = observation_for(&first);
+        let second = observation_for(&second);
 
         assert_ne!(
             first.observation.observation_id.as_str(),
@@ -733,14 +768,77 @@ mod tests {
             first.acquisition.acquisition_id.as_str(),
             second.acquisition.acquisition_id.as_str()
         );
+        // The installation ID is carried by both derived IDs, so it is exactly the part that
+        // cannot have separated them; the reservation identity is what did.
+        for observed in [&first, &second] {
+            assert!(
+                observed
+                    .observation
+                    .observation_id
+                    .as_str()
+                    .contains(installation.as_str()),
+                "the installation ID is common to both IDs: {}",
+                observed.observation.observation_id
+            );
+        }
         assert!(
             first
                 .observation
                 .observation_id
                 .as_str()
-                .contains("resv-c1-000001"),
-            "the reservation identity is what makes the occurrence unique: {}",
-            first.observation.observation_id
+                .contains("resv-c1-000001")
+                && second
+                    .observation
+                    .observation_id
+                    .as_str()
+                    .contains("resv-c1-000002"),
+            "the reservation identity is what makes the occurrence unique"
+        );
+    }
+
+    /// The occurrence namespace has to be an *injective* encoding of the pair it is built from,
+    /// because the observation ID derived from it is a store primary key. Nothing validates the
+    /// separator out of either component: `installation_id` is an unvalidated `String` and
+    /// `ReservationId` admits `:`. These two reservations are distinct in both components and a
+    /// bare `installation:reservation` join sends both to the same string, so with that join they
+    /// derive one observation ID between them.
+    #[test]
+    fn two_distinct_reservations_never_collide_on_one_observation_id() {
+        let mut left = reservation();
+        left.installation_id = "inst-c1".to_owned();
+        left.reservation_id = ReservationId::new("resv:1").expect("reservation ID");
+
+        let mut right = reservation();
+        right.installation_id = "inst-c1:resv".to_owned();
+        right.reservation_id = ReservationId::new("1").expect("reservation ID");
+
+        assert_ne!(left.installation_id, right.installation_id);
+        assert_ne!(left.reservation_id, right.reservation_id);
+        assert_eq!(
+            format!("{}:{}", left.installation_id, left.reservation_id),
+            format!("{}:{}", right.installation_id, right.reservation_id),
+            "the two reservations must be exactly the pair an unprefixed join collapses"
+        );
+
+        // The length prefix is what separates them, and it separates them everywhere the
+        // namespace is used.
+        assert_eq!(occurrence_namespace(&left), "7:inst-c1:resv:1");
+        assert_eq!(occurrence_namespace(&right), "12:inst-c1:resv:1");
+
+        let left = observation_for(&left);
+        let right = observation_for(&right);
+        assert_ne!(
+            left.observation.observation_id.as_str(),
+            right.observation.observation_id.as_str(),
+            "two distinct reservations must not collide on one observation primary key"
+        );
+        assert_ne!(
+            left.acquisition.acquisition_id.as_str(),
+            right.acquisition.acquisition_id.as_str()
+        );
+        assert_ne!(
+            left.acquisition.clocks.monotonic_domain,
+            right.acquisition.clocks.monotonic_domain
         );
     }
 
@@ -829,7 +927,24 @@ mod tests {
             "the refused needle set is fixed; a change belongs in this test too"
         );
         for needle in REQUIRED_NEEDLES {
-            for spelling in [needle.to_owned(), needle.to_ascii_uppercase()] {
+            // Distinct spellings only. `://` has no cased character, so its upper-case spelling is
+            // byte-identical to its lower-case one and probing both would be one probe written
+            // twice; the count is asserted so that stays a stated fact rather than an accident.
+            let mut spellings = vec![needle.to_ascii_lowercase()];
+            let upper = needle.to_ascii_uppercase();
+            if upper != spellings[0] {
+                spellings.push(upper);
+            }
+            assert_eq!(
+                spellings.len(),
+                usize::from(
+                    needle
+                        .chars()
+                        .any(|character| character.is_ascii_alphabetic())
+                ) + 1,
+                "needle {needle} has one spelling per ASCII case it can be written in"
+            );
+            for spelling in spellings {
                 let source_key = format!("solana.public.mainnet{spelling}");
                 let error = redacted_fingerprint_material(&source_key, C1_OPERATION_KEY)
                     .expect_err("endpoint-shaped material is refused rather than hashed");
@@ -839,6 +954,8 @@ mod tests {
                 );
             }
         }
+        // The one needle with no ASCII case, stated rather than left implicit.
+        assert_eq!("://".to_ascii_uppercase(), "://");
         redacted_fingerprint_material(C1_SOURCE_KEY, C1_OPERATION_KEY)
             .expect("the shipped C1 keys carry no needle");
     }
