@@ -13,7 +13,6 @@ mod model;
 mod operational;
 mod store;
 mod wave5;
-mod wave5_c1;
 mod wave5_status;
 mod wave6;
 mod wave6_campaign;
@@ -56,10 +55,6 @@ pub use wave5::{
     Wave5ExportValidationBindingV1, Wave5OperationalRecordKind, Wave5OperationalRecordV1,
     Wave5OperationalState, Wave5RestrictedArtifactRegistrationV1, Wave5RunRegistrationByteBundle,
     Wave5SpoolCatalogBindingV1,
-};
-pub use wave5_c1::{
-    ClaimedWave5C1Activation, StoredWave5C1Activation, Wave5C1ActivationClaimReceipt,
-    Wave5C1ActivationReceipt,
 };
 pub use wave6::{
     StoredWave6ArtifactSchema, StoredWave6FixtureArtifact, StoredWave6FixtureArtifactDag,

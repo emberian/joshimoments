@@ -1,14 +1,47 @@
 # C1 raw truth boundary
 
-Status: **LANDED AND GREEN THROUGH STEP 6; NO REQUEST HAS EVER BEEN ISSUED.** Steps 1 to 6 of the
-handoff implementation order are implemented, mutation-audited and committed. Step 7, the one
-deliberate nonfixture read, remains unauthorized and undone. Nothing in this document is evidence
-that a socket has ever opened.
+Status: **RETIRED 2026-08-19. NO REQUEST WAS EVER ISSUED, AND THE MACHINERY DESCRIBED BELOW NO
+LONGER EXISTS.** This document is kept as the record of what was built and why it was removed. Do
+not read anything below the next section as a description of the current tree.
 
-The prior authority chain is described in `docs/implementation/CLAUDE_HANDOFF_2026-08-19.md` and is
-inert by construction: it ends at `Supervisor::admit_claimed_wave5_c1_disabled`, which returns a
-report-only `DisabledC1RuntimeAdmission` and exposes no executor, transport, reservation, or I/O
-entry point.
+## Why it was retired
+
+C0, C1 and C2 were canary *budget* profiles: a staged ceiling ladder from one three-row table in
+`docs/planning/WAVE5_LIVING_INSTRUMENT.md` section A4, captioned "planning ceilings, not permission
+for an uncapped run".
+
+That table became a type, then frozen ceiling constants, then source-registry fingerprints, then an
+exact activation-document contract in its own crate, then SQLite migration V23 with two append-only
+tables, then a burnable one-shot capability, then a nine-variant journal event family, then a
+dedicated supervisor state machine — roughly 14,000 lines, all guarding one HTTP POST to the free
+public Solana endpoint, which the ceiling table itself records as costing 0 provider credits. A
+guardrail invented to stop overspending money was built around the one operation that cannot cost
+money, while the *paid* Helius path had no such protection at all.
+
+### What was kept, and where it went
+
+| Was | Is now |
+| --- | --- |
+| The hardened bounded read in `joshi-supervisor::c1::transport` | ported into **both** HTTP clients in `joshi-sources::helius`, so the paid Helius path and the free public path share one incremental, ceiling-abandoning body reader |
+| `joshi-supervisor::c1::physical_size` | `joshi-supervisor::ingest::physical_size`, with C1 stripped from its names and prose; every measurement and test kept, re-measured against the general ingest chain |
+| `joshi-sources::public_solana_c1` wire contract | `joshi-sources::solana_json_rpc` — canonical request construction and strict hostile-body validation, usable by any Solana JSON-RPC path |
+| `PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES` | `joshi_sources::INGEST_MAX_RESPONSE_BYTES`, still the single definition the physical-size derivation is computed from |
+| `CanaryProfilePort::C0` | unchanged; it is load-bearing for the working fixture collector runtime |
+
+### What was deleted
+
+The `joshi-wave5-c1-activation` crate, `joshi-store::wave5_c1`, `joshi-supervisor::c1_activation`,
+`joshi-supervisor::c1::runtime`, `joshi-supervisor::c1::transport`, `joshi-supervisor::c1::evidence`,
+the eight C1 `JournalEvent` variants and the `ReservationFamily` enum that existed only to serve
+them, the `pending_c1` restart-reconciliation tracking, the `cfg(test)` `PublicSolanaC1Runner`
+scaffolding, and `CanaryProfilePort::C1` / `::C2` with their frozen ceilings.
+
+Migration `0023_wave5_c1_activation.sql` is applied and was **not** rewritten. Migration
+`0024_retire_wave5_c1_activation.sql` drops its two tables and their triggers.
+
+---
+
+*Everything below this line describes the retired design and is preserved for the record.*
 
 ## What C1 is, and what it is not
 

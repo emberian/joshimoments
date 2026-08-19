@@ -235,7 +235,8 @@ async fn run_probe() -> Result<PathBuf, ProbeError> {
 
     let helius_config = HeliusConfig::mainnet(CredentialFile(PathBuf::from(HELIUS_KEY_PATH)));
     let client =
-        HeliusHttpClient::at_startup(&helius_config).map_err(|_| ProbeError::HeliusStartup)?;
+        HeliusHttpClient::at_startup(&helius_config, joshi_sources::DEFAULT_MAX_RESPONSE_BYTES)
+            .map_err(|_| ProbeError::HeliusStartup)?;
     let mut http = HttpStats::default();
     let mut all_signatures = BTreeSet::new();
     let mut requested_transactions = Vec::new();

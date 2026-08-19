@@ -5,11 +5,7 @@ use joshi_domain::{OpenVariant, UtcTimestamp};
 use joshi_evidence::{Boundary, CoverageScope};
 use joshi_spool::{ProtectionClass, ProtectionDomainId, SegmentClosure, SpoolEntry, SpoolStatus};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 macro_rules! stable_key {
     ($name:ident, $label:literal) => {
@@ -455,70 +451,6 @@ pub enum JournalEvent {
         downtime_gaps: u64,
         deadline_exceeded: bool,
     },
-    /// One consumed C1 activation claim durably bound to this journal installation, carrying the
-    /// physically proven maxima that later bound the single page. This is the only event that may
-    /// precede a C1 reservation; it is not itself permission to open a socket.
-    C1ActivationBound {
-        activation_id: String,
-        installation_id: String,
-        run_registration_id: String,
-        run_registration_digest: String,
-        activation_digest: String,
-        exact_plan_digest: String,
-        plan_id: String,
-        plan_template_digest: String,
-        final_plan_digest: String,
-        activation_commit_sequence: u64,
-        claim_commit_sequence: u64,
-        claim_commit_digest: String,
-        /// Admitted maximum response-entity bytes for the single page.
-        maximum_response_bytes: u64,
-        /// Proven maximum physical local-segment bytes implied by that response ceiling.
-        maximum_segment_bytes: u64,
-    },
-    /// One C1 attempt reservation. The deliberately separate family leaves C0 replay unchanged.
-    C1AttemptReserved(AttemptReservation),
-    /// The exact request closed before any socket may open. Digests only: never a URL, body,
-    /// header value, or credential.
-    C1RequestPrepared {
-        reservation_id: ReservationId,
-        endpoint_digest: String,
-        request_body_digest: String,
-        request_body_byte_length: u64,
-        method_key: String,
-        maximum_response_bytes: u64,
-        deadline_ms: u64,
-    },
-    /// The irreversible I/O boundary. Every later failure is terminal for this generation.
-    C1IoStarted {
-        reservation_id: ReservationId,
-    },
-    /// One exact raw page durably appended to the local spool.
-    C1RawDurabilityRecorded {
-        reservation_id: ReservationId,
-        segment: SegmentClosure,
-        outcome: DurableOutcome,
-    },
-    /// A post-I/O attempt resolved as an explicit durable gap instead of raw evidence.
-    C1AttemptAbandoned {
-        reservation_id: ReservationId,
-        gap_segment: SegmentClosure,
-        reason: OpenVariant,
-    },
-    /// Conservative settlement of the single reserved attempt.
-    C1BudgetSettled {
-        reservation_id: ReservationId,
-        usage: AttemptBudgetUsage,
-        disposition: RuntimeSettlementDisposition,
-    },
-    /// The one-shot C1 generation is stopped; no further request may ever be issued.
-    C1Stopped {
-        source_key: SourceKey,
-        operation_key: OperationKey,
-        generation: GenerationId,
-        reason: OpenVariant,
-        gap_segment: Option<SegmentClosure>,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -644,10 +576,6 @@ pub struct ShutdownReport {
 pub(crate) struct RuntimeState {
     pub lifecycle: Option<CollectorLifecycle>,
     pub pending: BTreeMap<ReservationId, AttemptReservation>,
-    /// Which pending reservations belong to the C1 family. Restart reconciliation must resolve a
-    /// pending attempt in the family that reserved it; emitting a C0 record for C1 work would make
-    /// C1 replay observe a foreign event and C0 replay observe C1 work.
-    pub pending_c1: BTreeSet<ReservationId>,
     pub generations: BTreeMap<(SourceKey, OperationKey), GenerationState>,
     pub retries: BTreeMap<(SourceKey, OperationKey, GenerationId), u64>,
     pub abandoned_attempts: u64,
@@ -665,18 +593,6 @@ pub(crate) struct GenerationState {
 }
 
 impl RuntimeState {
-    /// Record which durable family owns one pending reservation.
-    ///
-    /// Restart reconciliation resolves a pending attempt in the family that reserved it, so this
-    /// membership is state, not decoration: losing it would let a C0 record close C1 work.
-    fn track_reservation_family(&mut self, event: &JournalEvent, reservation: &AttemptReservation) {
-        if matches!(event, JournalEvent::C1AttemptReserved(_)) {
-            self.pending_c1.insert(reservation.reservation_id.clone());
-        } else {
-            self.pending_c1.remove(&reservation.reservation_id);
-        }
-    }
-
     pub(crate) fn apply(&mut self, event: &JournalEvent) {
         match event {
             JournalEvent::SupervisorStarted { .. } => {
@@ -684,14 +600,8 @@ impl RuntimeState {
             }
             JournalEvent::RuntimeRunAttached { .. }
             | JournalEvent::RuntimeIoStarted { .. }
-            | JournalEvent::RuntimeBudgetSettled { .. }
-            | JournalEvent::C1ActivationBound { .. }
-            | JournalEvent::C1RequestPrepared { .. }
-            | JournalEvent::C1IoStarted { .. }
-            | JournalEvent::C1BudgetSettled { .. } => {}
-            JournalEvent::AttemptReserved(reservation)
-            | JournalEvent::C1AttemptReserved(reservation) => {
-                self.track_reservation_family(event, reservation);
+            | JournalEvent::RuntimeBudgetSettled { .. } => {}
+            JournalEvent::AttemptReserved(reservation) => {
                 let key = (
                     reservation.source_key.clone(),
                     reservation.operation_key.clone(),
@@ -719,15 +629,11 @@ impl RuntimeState {
                     .insert(reservation.reservation_id.clone(), reservation.clone());
             }
             JournalEvent::AttemptCancelledBeforeIo { reservation_id }
-            | JournalEvent::LocalDurabilityRecorded { reservation_id, .. }
-            | JournalEvent::C1RawDurabilityRecorded { reservation_id, .. } => {
+            | JournalEvent::LocalDurabilityRecorded { reservation_id, .. } => {
                 self.pending.remove(reservation_id);
-                self.pending_c1.remove(reservation_id);
             }
-            JournalEvent::AttemptAbandoned { reservation_id, .. }
-            | JournalEvent::C1AttemptAbandoned { reservation_id, .. } => {
+            JournalEvent::AttemptAbandoned { reservation_id, .. } => {
                 self.pending.remove(reservation_id);
-                self.pending_c1.remove(reservation_id);
                 self.abandoned_attempts = self.abandoned_attempts.saturating_add(1);
             }
             JournalEvent::RetryDecided {
@@ -747,13 +653,6 @@ impl RuntimeState {
                 }
             }
             JournalEvent::GenerationStopped {
-                source_key,
-                operation_key,
-                generation,
-                reason,
-                ..
-            }
-            | JournalEvent::C1Stopped {
                 source_key,
                 operation_key,
                 generation,

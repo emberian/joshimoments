@@ -1,13 +1,16 @@
-//! The deterministic physical byte bound for the one admitted C1 page.
+//! The deterministic physical byte bound from an ingress response body to a local spool segment.
 //!
-//! A committed C1 authority chain admits exactly one bounded, credential-free public
-//! `getSignaturesForAddress` request for exactly one page. Before any socket may open, the runtime
-//! must durably reserve a worst-case byte budget, so an ingress ceiling on the HTTP response entity
-//! body has to be carried all the way to the physical spool segment that lands on disk.
+//! Before a bounded read may open a socket, a runtime has to know the worst-case number of bytes
+//! that read can put on disk, so an ingress ceiling on the HTTP response entity body has to be
+//! carried all the way to the physical spool segment that lands there.
 //!
 //! The response body is **not** the segment size. It is nested inside four serializers that expand
 //! it multiplicatively, and the largest of those expansions is not a compression-style constant:
-//! it is a 4x blow-up from a `Vec<u8>` that carries no serde attribute at all.
+//! it is a 4x blow-up from a `Vec<u8>` that carries no serde attribute at all. A previously
+//! believed "body plus 16 KiB" bound was wrong by an order of magnitude.
+//!
+//! Nothing here is specific to one source, endpoint, method, or profile. It is a property of the
+//! encoders every retained-frame ingest path in this tree runs through.
 //!
 //! # The chain, stage by stage
 //!
@@ -27,11 +30,11 @@
 //!    output bytes for `P` input bytes.
 //! 4. **Batch, x1.** [`joshi_evidence::DurableIngestBatch`] carries the observation verbatim; its
 //!    JSON adds only the batch contract version, batch ID, expected digest and, of its ten fields,
-//!    the six a C1 page leaves as empty collections: `source_events`, `assertions`,
+//!    the six a single retained page leaves as empty collections: `source_events`, `assertions`,
 //!    `coverage_windows`, `coverage_gaps`, `coverage_recoveries` and `cursor_advances`.
 //! 5. **Entry, x4/3.** `joshi_spool::EvidenceBatchEntry::exact_batch_bytes` is base64 **again**, so
 //!    the batch JSON of stage 4 is re-encoded at `4 * ceil(B / 3)`. `exact_policy_bytes` is a
-//!    second base64 field over the fixed C1 policy document.
+//!    second base64 field over the retention policy document.
 //! 6. **Segment, x4/3.** `joshi_spool::encode_segment` frames the entry with an 8-byte big-endian
 //!    length prefix, optionally seals it under ChaCha20-Poly1305 (which appends a 16-byte tag), and
 //!    then writes the sealed body into `joshi_spool::DiskSegment::sealed_body_bytes`, which is
@@ -44,31 +47,43 @@
 //!
 //! # Measured against the real chain
 //!
-//! The unit tests below push real frames through the real chain: the frame goes to the real C1
-//! evidence adapter, [`crate::c1::evidence::C1RawObservationAdapter`], so the measured record
-//! carries the policy contract, policy document, observation source variant, missing-provider-clock
-//! reason and absent-monotonic-clock domain that path actually retains, rather than a local copy of
-//! them. The retained header set is the largest one
-//! [`joshi_sources::public_solana_c1_safe_headers_are_bounded`] admits: all four allowlisted names
-//! at the full 256-byte value length, valued with the byte `serde_json` expands most.
+//! The unit tests below push real frames through the real chain: the same
+//! [`joshi_sources::observation_draft`] adapter every ingest path in this tree uses, the real
+//! [`joshi_store::SqliteStore::canonical_batch_digest`], the real
+//! [`crate::prepare_evidence_batch`] seam, and the real `joshi_spool::encode_segment`. No stage is
+//! reimplemented locally; only the *inputs* are a fixture.
 //!
-//! The measured body is the costliest one the C1 contract admits at the ceiling: a single-row page
+//! Those inputs are chosen to be the costliest admissible shape rather than a typical one, and
+//! they are a fixture rather than one production adapter's vocabulary — this derivation is not
+//! owned by any single adapter. What that costs is stated plainly: the exact byte counts pinned
+//! below are the cost of *this* fixture's identifiers, locator, policy document and clock
+//! reasons, so an adapter whose vocabulary is longer measures higher. What protects the bound
+//! against that is not the pinned numbers but
+//! `every_fixed_allowance_covers_the_overhead_the_real_path_measures`, which compares each
+//! measured overhead against the allowance that has to pay for it, and the "identifiers of
+//! ordinary length" precondition stated below.
+//!
+//! The retained header set is the largest one [`joshi_sources::solana_safe_headers_are_bounded`]
+//! admits: all four allowlisted names at the full 256-byte value length, valued with the byte
+//! `serde_json` expands most.
+//!
+//! The measured body is the costliest one the wire contract admits at the ceiling: a single-row page
 //! padded with `z` memo text, byte 122, which the array-of-integers stage writes as three decimal
 //! digits — the most any byte costs there. A page cannot be made entirely of such bytes, because
 //! its structural JSON characters include bytes below 100 that cost two, so the `4N + 2` bound is
 //! not tight even here; and a page of a given length is costliest with the fewest rows, which is
 //! why the fixture carries one.
 //!
-//! At the chosen 256 KiB ingress ceiling that page reaches disk at **2,498,126 bytes, a 9.529x
+//! At the chosen 256 KiB ingress ceiling that page reaches disk at **2,497,701 bytes, a 9.527x
 //! expansion**, against a derived bound of 2,751,948 (90.7% of the bound consumed). A realistic
-//! 100-row page of 20,135 bytes reaches disk at 177,427 bytes, an 8.811x expansion. Both numbers
+//! 100-row page of 20,135 bytes reaches disk at 176,998 bytes, an 8.790x expansion. Both numbers
 //! are pinned by unit tests.
 //!
 //! The fixed allowances are measured against that same path rather than asserted. At the ceiling
 //! the real per-stage overheads are 2,441 bytes of retained envelope against a 64 KiB allowance,
-//! 1,995 of observation metadata against 32 KiB, 328 of batch envelope against 8 KiB, 1,031 of
-//! spool entry against 16 KiB, and 1,594 of segment header against 16 KiB (1,700 when sealed) —
-//! between about 9x and 27x of margin, which is where the remaining slack in the bound lives.
+//! 1,839 of observation metadata against 32 KiB, 329 of batch envelope against 8 KiB, 946 of
+//! spool entry against 16 KiB, and 1,557 of segment header against 16 KiB (1,667 when sealed) —
+//! between about 10x and 26x of margin, which is where the remaining slack in the bound lives.
 //! Shrinking any allowance below what the admissible worst case costs fails
 //! `every_fixed_allowance_covers_the_overhead_the_real_path_measures`.
 //!
@@ -113,9 +128,10 @@
 //!   are what the real path costs at the admissible worst case, and a test compares each allowance
 //!   against them.
 //!
-//! These allowances are **preconditions, not proofs**. The bound holds for the C1 shape: exactly
+//! These allowances are **preconditions, not proofs**. The bound holds for one shape: exactly
 //! one retained observation in exactly one batch in exactly one entry in one segment, one bounded
-//! non-secret header allowlist, the fixed C1 policy document, and identifiers of ordinary length.
+//! non-secret header allowlist, a retention policy document of ordinary length, and identifiers of
+//! ordinary length.
 //! A caller that retains many observations per batch, an unbounded header allowlist, or a policy
 //! document larger than the entry allowance is outside this bound.
 //!
@@ -136,17 +152,21 @@
 //! configuration a process actually runs under. `SpoolConfig` is built at runtime from application
 //! code, and a `max_segment_bytes` smaller than the anchor is a legal `SpoolConfig`.
 //!
-//! So the C1 runtime **must** compare its *actual* configured `SpoolConfig::max_segment_bytes`
-//! against [`C1PhysicalBoundV1::max_segment_bytes`] and refuse the activation when the derived
-//! bound does not fit, **before any socket can be prepared**. That check is not implemented in this
-//! module and nothing here can stand in for it. This is the "Configured ceiling" obligation in
-//! `docs/implementation/wave5/22_C1_RAW_BOUNDARY.md`; the anchor narrows the window in which a
-//! misconfiguration is possible, it does not close it.
+//! So a runtime that mounts this bound **must** compare its *actual* configured
+//! `SpoolConfig::max_segment_bytes` against [`IngestPhysicalBoundV1::max_segment_bytes`] and refuse
+//! the read when the derived bound does not fit, **before any socket can be prepared**.
+//! [`crate::Supervisor::spool_config`] is what makes that comparison possible: it hands back the
+//! configuration the live spool was actually opened with rather than a caller-supplied copy.
+//!
+//! **Nothing in this tree performs that comparison today.** The one runtime that did was the C1
+//! canary runtime, and it has been removed along with the rest of that ceremony; the obligation
+//! outlived it and is stated here rather than left implicit. The anchor below narrows the window
+//! in which a misconfiguration is possible; it does not close it.
 //!
 //! The anchor itself is the private `SMALLEST_HOSTING_SEGMENT_CEILING_BYTES` constant in this
 //! file. Its doc comment carries the full inventory of every `SpoolConfig::max_segment_bytes`
 //! configured in this tree, with file, line and test status, and the argument for which of them a
-//! C1 read could actually be hosted under.
+//! bounded read could actually be hosted under.
 //!
 //! # What this is not
 //!
@@ -161,10 +181,10 @@ use serde::Serialize;
 
 use crate::{Result, SupervisorError};
 
-/// The one-page C1 ingress ceiling, in bytes of HTTP response entity body.
+/// The shared ingress ceiling, in bytes of HTTP response entity body.
 ///
 /// This is **not** an independent number. It is the same ceiling
-/// [`joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES`] declares, widened to `u64`. That
+/// [`joshi_sources::INGEST_MAX_RESPONSE_BYTES`] declares, widened to `u64`. That
 /// constant is the single source of truth, and it has to be: `joshi-supervisor` depends on
 /// `joshi-sources` and not the reverse, so the reader that refuses an oversized body and the
 /// derivation that budgets for one must both reach the same value through the dependency edge
@@ -188,11 +208,10 @@ use crate::{Result, SupervisorError};
 /// carried by the private `SMALLEST_HOSTING_SEGMENT_CEILING_BYTES` constant in this file, leaving
 /// 1,442,356 bytes of headroom.
 ///
-/// See [`c1_physical_bound`] for what this expands to on disk.
-pub const C1_MAX_RESPONSE_BODY_BYTES: u64 =
-    joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES as u64;
+/// See [`ingest_physical_bound`] for what this expands to on disk.
+pub const INGEST_MAX_RESPONSE_BODY_BYTES: u64 = joshi_sources::INGEST_MAX_RESPONSE_BYTES as u64;
 
-/// The smallest `SpoolConfig::max_segment_bytes` a C1 read could actually be hosted under: the
+/// The smallest `SpoolConfig::max_segment_bytes` a bounded read could actually be hosted under: the
 /// 4 MiB the `joshi-core` application configures.
 ///
 /// This is the anchor the compile-time guard at the bottom of this module uses. A prior revision
@@ -203,8 +222,9 @@ pub const C1_MAX_RESPONSE_BODY_BYTES: u64 =
 /// the anchor without re-deriving it.
 ///
 /// **Nothing enforces this table.** No test reads the source tree, so it is a snapshot rather
-/// than a guarantee, and it has already gone stale once: the C1 runtime added sites of its own
-/// after it was written. A reader who needs certainty should re-run
+/// than a guarantee, and it has already gone stale twice: a since-deleted runtime added sites of
+/// its own after it was written, and then took them away again. A reader who needs certainty
+/// should re-run
 /// `rg --glob '*.rs' 'max_segment_bytes:' apps crates` and check the result against the argument
 /// below, which is the part that actually has to hold. Line numbers are deliberately omitted:
 /// they drift on every edit and made the table look more authoritative than it is.
@@ -216,16 +236,8 @@ pub const C1_MAX_RESPONSE_BODY_BYTES: u64 =
 /// | `apps/core/src/wave5_readiness.rs` | 4 MiB | non-test: `joshi-core`, `wave5_readiness::spool_config` |
 /// | `crates/joshi-supervisor/src/bin/joshi-supervisor-kill-child.rs` | 1 MiB | not `cfg(test)`, but a fault-injection child binary |
 /// | `crates/joshi-supervisor/src/runtime.rs` | 16 MiB | `cfg(test)` fixture |
-/// | `crates/joshi-supervisor/src/c1/runtime.rs` | derived | `cfg(test)` fixture: this module's own segment bound, rounded up to a power of two |
-/// | `crates/joshi-supervisor/src/c1/runtime.rs` | derived | `cfg(test)`: one byte under this module's segment bound, to exercise the runtime refusal |
 /// | `crates/joshi-supervisor/tests/support/mod.rs` | 1 MiB | integration-test support |
 /// | `crates/joshi-spool/tests/protocol.rs` | 1,000,000 | integration test in `joshi-spool` |
-///
-/// The two C1 runtime sites are the ones this table originally missed. Both are `cfg(test)` and
-/// both are *derived from this module's own bound* rather than chosen independently — one rounds
-/// [`C1PhysicalBoundV1::max_segment_bytes`] up to a power of two, the other sits one byte below it
-/// so the runtime configuration refusal has something to refuse — so neither can contradict the
-/// anchor, whatever the ingress ceiling becomes.
 ///
 /// Two further `max_segment_bytes` values in the tree belong to `joshi_spool::ReplicaConfig`, a
 /// different type bounding remote replica ingest rather than the local spool this bound targets:
@@ -236,14 +248,14 @@ pub const C1_MAX_RESPONSE_BODY_BYTES: u64 =
 /// child binary and one integration-test support fixture. The child binary is not `cfg(test)`, but
 /// it exists only to be spawned and killed by `crates/joshi-supervisor/tests/continuity.rs`: it
 /// hardcodes a `kill-source`/`kill-poll` reservation and panics if it survives its fault point, so
-/// no C1 read runs under it. That exclusion is load-bearing, so its consequence is stated plainly
+/// no bounded read runs under it. That exclusion is load-bearing, so its consequence is stated plainly
 /// rather than left implicit: **the bound derived here does not fit a 1 MiB segment ceiling**
-/// (2,751,948 > 1,048,576), and no C1 ingress ceiling worth shipping would. The fixed allowances
+/// (2,751,948 > 1,048,576), and no ingress ceiling worth shipping would. The fixed allowances
 /// alone derive 266,432 physical bytes from a zero-length body, and a 1 MiB ceiling admits at most
 /// 82,491 bytes of ingress. Both numbers are pinned by a unit test. That 82,491 is well under the
 /// 256 KiB this module ships, and under what a 100-row page carrying memo text is expected to
 /// need — that expectation is a judgment about the source, not a measurement of it. A 1 MiB spool
-/// is therefore not treated as a C1 host, and the runtime check described in the module
+/// is therefore not treated as a host for a bounded read, and the runtime check described in the module
 /// documentation is what has to enforce that.
 const SMALLEST_HOSTING_SEGMENT_CEILING_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -258,12 +270,12 @@ const RETAINED_ENVELOPE_FIXED_BYTES: u64 = 64 * 1024;
 const OBSERVATION_METADATA_FIXED_BYTES: u64 = 32 * 1024;
 
 /// Conservative allowance for the durable ingest batch envelope around its one observation: batch
-/// contract version, batch ID, expected digest and the six collections a C1 page leaves empty.
+/// contract version, batch ID, expected digest and the six collections a single retained page leaves empty.
 const BATCH_FIXED_BYTES: u64 = 8 * 1024;
 
 /// Conservative allowance for the spool entry around the base64 batch: the `SpoolEntry` tag and
 /// wrapper, the batch closure with its digests and expected counts, the acquisition ID list, and
-/// the base64 of the fixed C1 policy document.
+/// the base64 of the retention policy document.
 const ENTRY_FIXED_BYTES: u64 = 16 * 1024;
 
 /// Conservative allowance for the disk segment header around the base64 sealed body: contract,
@@ -276,13 +288,13 @@ const SEGMENT_FIXED_BYTES: u64 = 16 * 1024;
 /// Poly1305 tag. A public-integrity domain uses only the 8 bytes; 24 covers both.
 const SEGMENT_FRAMING_BYTES: u64 = 24;
 
-/// Worst-case physical byte sizes for one C1 page, from ingress body to local spool segment.
+/// Worst-case physical byte sizes for one retained page, from ingress body to local spool segment.
 ///
 /// Every field is an upper bound, not a measurement of any particular response. The fields are
 /// nested: each stage contains the one above it.
 ///
 /// The whole contract of this type is that the last five fields *are* the derivation of the first
-/// one, so the only way to obtain a value is [`c1_physical_bound`]. It is deliberately
+/// one, so the only way to obtain a value is [`ingest_physical_bound`]. It is deliberately
 /// `Serialize`-only: it can be recorded as evidence, and it cannot be reconstituted from JSON.
 /// Deriving `Deserialize` would admit a value whose fields do not derive from its
 /// `maxResponseBodyBytes` and whose accessors would then hand a caller a budget nothing computed —
@@ -295,7 +307,7 @@ const SEGMENT_FRAMING_BYTES: u64 = 24;
 // Every field is a maximum, and the shared `max` prefix is what makes that readable on the wire
 // and at each accessor. Dropping it would make `segment_bytes` read like a measurement.
 #[allow(clippy::struct_field_names)]
-pub struct C1PhysicalBoundV1 {
+pub struct IngestPhysicalBoundV1 {
     max_response_body_bytes: u64,
     max_retained_envelope_bytes: u64,
     max_observation_payload_bytes: u64,
@@ -304,7 +316,7 @@ pub struct C1PhysicalBoundV1 {
     max_segment_bytes: u64,
 }
 
-impl C1PhysicalBoundV1 {
+impl IngestPhysicalBoundV1 {
     /// The ingress ceiling this bound was derived from: the HTTP response entity body length.
     #[must_use]
     pub const fn max_response_body_bytes(&self) -> u64 {
@@ -348,7 +360,7 @@ impl C1PhysicalBoundV1 {
     }
 }
 
-/// Derives the worst-case physical byte sizes for one C1 page from an ingress body ceiling.
+/// Derives the worst-case physical byte sizes for one retained page from an ingress body ceiling.
 ///
 /// The derivation applies the exact encoder expansions described in the module documentation and
 /// adds a conservative fixed allowance at each stage. Every step is checked arithmetic; nothing
@@ -359,10 +371,10 @@ impl C1PhysicalBoundV1 {
 /// # Errors
 ///
 /// Returns [`SupervisorError::InvalidValue`] when any step would overflow `u64`.
-pub fn c1_physical_bound(max_response_body_bytes: u64) -> Result<C1PhysicalBoundV1> {
+pub fn ingest_physical_bound(max_response_body_bytes: u64) -> Result<IngestPhysicalBoundV1> {
     derive(max_response_body_bytes).map_err(|stage| {
         SupervisorError::InvalidValue(format!(
-            "C1 physical size overflowed u64 at the {stage} stage"
+            "ingest physical size overflowed u64 at the {stage} stage"
         ))
     })
 }
@@ -373,7 +385,7 @@ pub fn c1_physical_bound(max_response_body_bytes: u64) -> Result<C1PhysicalBound
 /// [`SupervisorError`] allocates and cannot run in a const context.
 const fn derive(
     max_response_body_bytes: u64,
-) -> core::result::Result<C1PhysicalBoundV1, &'static str> {
+) -> core::result::Result<IngestPhysicalBoundV1, &'static str> {
     let Some(body_array_bytes) = json_integer_array_bytes(max_response_body_bytes) else {
         return Err("retained frame envelope body array");
     };
@@ -413,7 +425,7 @@ const fn derive(
         return Err("disk segment");
     };
 
-    Ok(C1PhysicalBoundV1 {
+    Ok(IngestPhysicalBoundV1 {
         max_response_body_bytes,
         max_retained_envelope_bytes,
         max_observation_payload_bytes,
@@ -462,9 +474,9 @@ const fn base64_bytes(count: u64) -> Option<u64> {
 /// This guard is about the two constants in this file and nothing else. It cannot see the
 /// `SpoolConfig` a process is actually opened with; see the module documentation for the runtime
 /// check that obligation requires.
-const _: () = match derive(C1_MAX_RESPONSE_BODY_BYTES) {
+const _: () = match derive(INGEST_MAX_RESPONSE_BODY_BYTES) {
     Ok(bound) => assert!(bound.max_segment_bytes < SMALLEST_HOSTING_SEGMENT_CEILING_BYTES),
-    Err(_) => panic!("the chosen C1 ingress ceiling must derive a physical bound"),
+    Err(_) => panic!("the chosen ingress ceiling must derive a physical bound"),
 };
 
 #[cfg(test)]
@@ -472,11 +484,16 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use joshi_domain::{OpenVariant, SourceId as DomainSourceId, StableString, UtcTimestamp};
-    use joshi_evidence::{Boundary, CoverageScope, DurableIngestBatch, ObservationDraft};
+    use joshi_domain::{
+        BatchDigest, OpenVariant, SourceId as DomainSourceId, StableString, UtcTimestamp,
+    };
+    use joshi_evidence::{
+        Boundary, CoverageScope, DurableIngestBatch, EvidenceDraft, ObservationDraft,
+    };
     use joshi_sources::{
-        ADAPTER_CONTRACT_VERSION, ContentType, FrameDirection, RawSourceFrame, SafeHeader,
-        SourceId, StreamClass, Transport, UnixMillis, public_solana_c1_safe_headers_are_bounded,
+        ADAPTER_CONTRACT_VERSION, ContentType, EvidenceContext, FrameDirection,
+        LogicalSourceLocator, ProviderEventTime, RawSourceFrame, SafeHeader, SourceId, StreamClass,
+        Transport, UnixMillis, solana_safe_headers_are_bounded,
     };
     use joshi_spool::{
         EvidenceBatchEntry, KeyMaterial, ProtectionDomainId, ProtectionRequest, SegmentId,
@@ -485,9 +502,25 @@ mod tests {
 
     use crate::{
         AttemptKind, AttemptReservation, GenerationId, OperationKey, PendingSegment,
-        ProtectionProfile, ReservationId, SourceKey,
-        c1::{C1_OPERATION_KEY, C1_SOURCE_KEY, evidence::C1RawObservationAdapter},
+        ProtectionProfile, ReservationId, SourceKey, prepare_evidence_batch,
     };
+
+    /// The supervisor source and operation keys the measured reservation carries.
+    ///
+    /// They are ordinary-length identifiers of the shape a public-Solana read would use. The
+    /// derivation charges every identifier against a fixed allowance rather than deriving a
+    /// per-identifier cost, so what matters is that they are of ordinary length; see the
+    /// identifier precondition in the module documentation.
+    const MEASURED_SOURCE_KEY: &str = "solana.public.mainnet";
+    const MEASURED_OPERATION_KEY: &str = "get_signatures_for_address";
+
+    /// The retention policy contract and document the measured spool entry carries.
+    ///
+    /// `ENTRY_FIXED_BYTES` pays for the base64 of this document, so it is a fixture of ordinary
+    /// length rather than any particular store policy.
+    const MEASURED_POLICY_CONTRACT: &str = "joshi.store.policy.public_source_raw.v1";
+    const MEASURED_POLICY_DOCUMENT: &[u8] =
+        br#"{"observationStorage":{"public_source":"inline"},"coverageGapSeverity":{}}"#;
 
     /// One deterministic body-byte pattern: the byte this generator places at each position.
     type BytePattern = fn(usize) -> u8;
@@ -495,8 +528,8 @@ mod tests {
     /// Bitcoin/Solana base58 alphabet: no `0`, `O`, `I` or `l`.
     const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-    /// The only four response header names the C1 contract retains, per
-    /// `joshi_sources::public_solana_c1_safe_headers_are_bounded`. The list is duplicated here
+    /// The only four response header names the wire contract retains, per
+    /// `joshi_sources::solana_safe_headers_are_bounded`. The list is duplicated here
     /// because the one in `joshi-sources` is a private `const` inside that function; the duplicate
     /// is not trusted, it is checked against the real predicate by
     /// `the_header_fixture_is_the_largest_admissible_safe_header_set`.
@@ -515,13 +548,13 @@ mod tests {
     /// domain, pinned exactly by `every_fixed_allowance_covers_the_overhead_the_real_path_measures`
     /// so the margins quoted in the module documentation cannot drift unnoticed.
     const OVERHEAD_RETAINED_ENVELOPE: u64 = 2_441;
-    const OVERHEAD_OBSERVATION: u64 = 1_995;
-    const OVERHEAD_BATCH: u64 = 328;
-    const OVERHEAD_ENTRY: u64 = 1_031;
-    const OVERHEAD_SEGMENT: u64 = 1_594;
+    const OVERHEAD_OBSERVATION: u64 = 1_839;
+    const OVERHEAD_BATCH: u64 = 329;
+    const OVERHEAD_ENTRY: u64 = 946;
+    const OVERHEAD_SEGMENT: u64 = 1_557;
     /// The same segment overhead on an authenticated-private domain, whose sealed body carries a
     /// 16-byte Poly1305 tag the public-integrity domain does not have.
-    const OVERHEAD_SEGMENT_SEALED: u64 = 1_700;
+    const OVERHEAD_SEGMENT_SEALED: u64 = 1_667;
 
     /// Physical byte lengths actually produced by the real chain functions.
     #[derive(Clone, Copy, Debug)]
@@ -562,17 +595,17 @@ mod tests {
     fn reservation() -> AttemptReservation {
         AttemptReservation {
             contract: crate::SUPERVISOR_CONTRACT_VERSION.into(),
-            reservation_id: ReservationId::new("c1-physical-size-0001").unwrap(),
+            reservation_id: ReservationId::new("ingest-physical-size-0001").unwrap(),
             installation_id: "inst-00000000000000000000000000000000".into(),
-            source_key: SourceKey::new(C1_SOURCE_KEY).unwrap(),
-            operation_key: OperationKey::new(C1_OPERATION_KEY).unwrap(),
+            source_key: SourceKey::new(MEASURED_SOURCE_KEY).unwrap(),
+            operation_key: OperationKey::new(MEASURED_OPERATION_KEY).unwrap(),
             generation: GenerationId::new(1),
             attempt_ordinal: 1,
             kind: AttemptKind::HttpRequest,
             scope: scope(),
             lower: Boundary::Wall { value: at() },
             protection: ProtectionProfile::PublicIntegrity {
-                domain: ProtectionDomainId::new("public-c1").unwrap(),
+                domain: ProtectionDomainId::new("public-ingest").unwrap(),
             },
             run: None,
             execution_claim: None,
@@ -582,7 +615,7 @@ mod tests {
         }
     }
 
-    /// The largest safe-header set the C1 contract can admit, and therefore the largest one a
+    /// The largest safe-header set the wire contract can admit, and therefore the largest one a
     /// conforming transport can hand this path.
     ///
     /// Every one of the four allowlisted names is present, because a fifth header would have to
@@ -613,12 +646,13 @@ mod tests {
         UnixMillis(at().as_datetime().unix_timestamp() * 1_000)
     }
 
-    /// The exact envelope the C1 wire contract admits, and the only one this path can measure:
-    /// [`joshi_sources::read_public_solana_c1_frame`] pins the source, contract version, transport,
+    /// The exact envelope the wire contract admits, and the only one this path can measure:
+    /// [`joshi_sources::read_solana_json_rpc_frame`] pins the source, contract version, transport,
     /// stream class, direction, content type, a positive receipt stamp, `connection_epoch == 1`,
-    /// `sequence == 1`, an HTTP status of exactly 200 and the safe-header allowlist, and the C1
-    /// evidence adapter delegates admission to it. There is no wider shape to charge: a frame the
-    /// contract refuses never reaches the evidence path at all.
+    /// `sequence == 1`, an HTTP status of exactly 200 and the safe-header allowlist. There is no
+    /// wider shape to charge: a frame the contract refuses never reaches the evidence path at all,
+    /// and `every_measured_fixture_is_a_frame_the_wire_contract_admits` proves every fixture here
+    /// is one it accepts.
     fn frame(body: Vec<u8>, headers: Vec<SafeHeader>) -> RawSourceFrame {
         RawSourceFrame {
             contract_version: ADAPTER_CONTRACT_VERSION.to_owned(),
@@ -636,23 +670,83 @@ mod tests {
         }
     }
 
-    /// Runs the **real** C1 evidence adapter over one frame at the shipped ingress ceiling.
+    /// Runs one frame through the **real** general ingest chain, stage for stage.
     ///
-    /// Everything measured below therefore carries the vocabulary that path actually retains — its
-    /// policy contract and policy document, its observation source variant, its missing-provider-
-    /// clock reason and its absent-monotonic-clock domain — rather than a local restatement of
-    /// them. A prior revision rebuilt the chain by hand from copied strings, and the copy diverged
-    /// from the real path on all four.
+    /// Every stage here is the production function, not a local reimplementation:
+    /// [`joshi_sources::observation_draft`] is the same adapter `joshi_admission`'s
+    /// `source_frames` and the collector runtime both use, the batch digest is the real
+    /// [`joshi_store::SqliteStore::canonical_batch_digest`], and the entry is built by the real
+    /// [`crate::prepare_evidence_batch`] seam. Only the identifiers, locator, clock reasons and
+    /// policy document are a fixture, and the module documentation says what that costs.
     fn prepare(body: Vec<u8>, headers: Vec<SafeHeader>) -> PendingSegment {
-        C1RawObservationAdapter::new(c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap())
-            .unwrap()
-            .prepare_raw_page(&reservation(), frame(body, headers))
-            .unwrap()
+        let reservation = reservation();
+        let draft = joshi_sources::observation_draft(
+            frame(body, headers),
+            EvidenceContext {
+                occurrence_namespace: reservation.installation_id.clone(),
+                redacted_request_fingerprint_material: format!(
+                    "{MEASURED_SOURCE_KEY}:{MEASURED_OPERATION_KEY}"
+                ),
+                parent_acquisition_id: None,
+                locator: LogicalSourceLocator::SolanaPublicHttp {
+                    method: joshi_sources::SOLANA_SIGNATURES_METHOD,
+                },
+                source_variant: OpenVariant::known("public_solana_raw_page").unwrap(),
+                source_cursor: None,
+                source_events: Vec::new(),
+                // A public endpoint gives no trustworthy provider clock for this read, so the
+                // event time is recorded as absent with a stated reason rather than inferred.
+                provider_event_time: ProviderEventTime::Missing {
+                    reason: "public_endpoint_has_no_provider_event_clock".to_owned(),
+                },
+                chain_slot: None,
+                transaction_index: None,
+                instruction_path: Vec::new(),
+                log_index: None,
+                finality: None,
+                acquisition_started_at: reservation.reserved_at,
+                requested_at: None,
+                monotonic_clock_id: format!("no-monotonic-clock:{}", reservation.installation_id),
+                acquisition_started_monotonic_ns: 0,
+                received_monotonic_ns: 0,
+                persisted_at: at(),
+            },
+        )
+        .expect("the fixture frame adapts to one observation");
+        let EvidenceDraft::Observation(observation) = draft else {
+            panic!("a retained frame must produce an observation")
+        };
+        let mut batch = DurableIngestBatch {
+            contract_version: StableString::new(
+                joshi_evidence::DURABLE_INGEST_BATCH_CONTRACT_VERSION,
+            )
+            .unwrap(),
+            batch_id: StableString::new(format!("batch:{}", reservation.reservation_id)).unwrap(),
+            expected_digest: BatchDigest::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+            observations: vec![observation],
+            source_events: Vec::new(),
+            assertions: Vec::new(),
+            coverage_windows: Vec::new(),
+            coverage_gaps: Vec::new(),
+            coverage_recoveries: Vec::new(),
+            cursor_advances: Vec::new(),
+        };
+        batch.expected_digest =
+            joshi_store::SqliteStore::canonical_batch_digest(&batch).expect("canonical digest");
+        let exact_batch_bytes = serde_json::to_vec(&batch).expect("canonical batch bytes");
+        prepare_evidence_batch(
+            reservation,
+            &batch,
+            exact_batch_bytes,
+            MEASURED_POLICY_CONTRACT,
+            MEASURED_POLICY_DOCUMENT.to_vec(),
+        )
+        .expect("the real spool entry seam")
     }
 
     fn batch_entry(pending: &PendingSegment) -> &EvidenceBatchEntry {
         let SpoolEntry::EvidenceBatch(entry) = &pending.entry else {
-            panic!("a C1 raw page must queue an evidence batch")
+            panic!("a retained raw page must queue an evidence batch")
         };
         entry
     }
@@ -672,25 +766,25 @@ mod tests {
         let pending = prepare(body, headers);
         let observation = only_observation(&pending);
 
-        let domain = ProtectionDomainId::new("public-c1").unwrap();
+        let domain = ProtectionDomainId::new("public-ingest").unwrap();
         let (protection, protector) = match nonce {
             None => (ProtectionRequest::Public { domain }, None),
             Some(nonce) => (
                 ProtectionRequest::AuthenticatedPrivate {
                     domain,
-                    key_id: "c1-physical-size-key".to_owned(),
+                    key_id: "ingest-physical-size-key".to_owned(),
                     nonce,
                 },
                 Some(
                     SegmentProtector::new(
-                        KeyMaterial::new("c1-physical-size-key", [7_u8; 32]).unwrap(),
+                        KeyMaterial::new("ingest-physical-size-key", [7_u8; 32]).unwrap(),
                     )
                     .unwrap(),
                 ),
             ),
         };
         let (segment, _closure) = encode_segment(
-            SegmentId::new("seg-c1-physical-size-0001").unwrap(),
+            SegmentId::new("seg-ingest-physical-size-0001").unwrap(),
             at(),
             std::slice::from_ref(&pending.entry),
             &protection,
@@ -748,7 +842,7 @@ mod tests {
     }
 
     fn assert_within_bound(body_len: u64, measured: Measured) {
-        let bound = c1_physical_bound(body_len).unwrap();
+        let bound = ingest_physical_bound(body_len).unwrap();
         assert!(
             measured.retained_envelope <= bound.max_retained_envelope_bytes(),
             "retained envelope {} exceeded bound {} at body {body_len}",
@@ -873,9 +967,9 @@ mod tests {
         padded_page(total, 1)
     }
 
-    /// The costliest body the C1 contract admits at all: that page at the ingress ceiling.
+    /// The costliest body the wire contract admits at all: that page at the ingress ceiling.
     fn costliest_admissible_page() -> Vec<u8> {
-        costliest_page_of_length(usize::try_from(C1_MAX_RESPONSE_BODY_BYTES).unwrap())
+        costliest_page_of_length(usize::try_from(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap())
     }
 
     /// The array of integers is the only stage of the chain whose cost depends on content, so the
@@ -883,7 +977,7 @@ mod tests {
     /// everywhere above against the hundred-row page of the same length.
     #[test]
     fn a_single_row_page_is_the_costliest_shape_of_its_length() {
-        let total = usize::try_from(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
+        let total = usize::try_from(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap();
         let one_row = exact_json_integer_array_bytes(&costliest_page_of_length(total));
         let hundred_rows = exact_json_integer_array_bytes(&padded_page(total, 100));
         let realistic = exact_json_integer_array_bytes(&realistic_page());
@@ -902,7 +996,7 @@ mod tests {
         );
     }
 
-    /// Every body and envelope measured here has to be one the C1 wire contract actually admits,
+    /// Every body and envelope measured here has to be one the wire contract actually admits,
     /// or the measurement is of a shape that can never reach disk. This asks the contract reader
     /// itself rather than asserting the property.
     #[test]
@@ -916,19 +1010,19 @@ mod tests {
             costliest_admissible_page(),
         ] {
             let length = body.len();
-            let outcome = joshi_sources::read_public_solana_c1_frame(
+            let outcome = joshi_sources::read_solana_json_rpc_frame(
                 &frame(body, worst_case_admissible_headers()),
-                joshi_sources::PUBLIC_SOLANA_C1_MAX_ROWS,
+                joshi_sources::SOLANA_SIGNATURES_MAX_ROWS,
             );
             assert!(
                 outcome.is_ok(),
-                "the {length} byte fixture page is not a frame the C1 contract admits: {:?}",
+                "the {length} byte fixture page is not a frame the contract admits: {:?}",
                 outcome.err()
             );
         }
         assert_eq!(
             costliest_admissible_page().len(),
-            usize::try_from(C1_MAX_RESPONSE_BODY_BYTES).unwrap(),
+            usize::try_from(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap(),
             "the costliest fixture must sit exactly on the ingress ceiling"
         );
     }
@@ -940,15 +1034,15 @@ mod tests {
     fn the_header_fixture_is_the_largest_admissible_safe_header_set() {
         let headers = worst_case_admissible_headers();
         assert!(
-            public_solana_c1_safe_headers_are_bounded(&headers),
-            "the fixture must be a set the real C1 contract admits"
+            solana_safe_headers_are_bounded(&headers),
+            "the fixture must be a set the real contract admits"
         );
         assert_eq!(headers.len(), ADMISSIBLE_HEADER_NAMES.len());
 
         let mut fifth = headers.clone();
         fifth.push(headers[0].clone());
         assert!(
-            !public_solana_c1_safe_headers_are_bounded(&fifth),
+            !solana_safe_headers_are_bounded(&fifth),
             "a fifth header must repeat an allowlisted name, and repeats are refused"
         );
 
@@ -956,7 +1050,7 @@ mod tests {
             let mut wider = headers.clone();
             wider[index].value.push('"');
             assert!(
-                !public_solana_c1_safe_headers_are_bounded(&wider),
+                !solana_safe_headers_are_bounded(&wider),
                 "{ADMISSIBLE_HEADER_VALUE_BYTES} is the exact per-value ceiling",
             );
         }
@@ -1014,7 +1108,7 @@ mod tests {
 
         // The measured overheads at the shipped ceiling, public-integrity domain. They are pinned
         // exactly so the documented margins cannot drift: a change to the retained policy document
-        // or to the C1 observation vocabulary moves these numbers and has to be re-measured here.
+        // or to the fixture's observation vocabulary moves these numbers and has to be re-measured here.
         let at_ceiling = overhead(&costliest_admissible_page(), None);
         assert_eq!(at_ceiling.retained_envelope, OVERHEAD_RETAINED_ENVELOPE);
         assert_eq!(at_ceiling.observation, OVERHEAD_OBSERVATION);
@@ -1040,7 +1134,7 @@ mod tests {
         assert_eq!(at_ceiling_sealed.segment, OVERHEAD_SEGMENT_SEALED);
         assert_eq!(
             OVERHEAD_SEGMENT_SEALED - OVERHEAD_SEGMENT,
-            106,
+            110,
             "the sealed domain pays for its Poly1305 tag and the header fields the seal adds"
         );
     }
@@ -1092,9 +1186,9 @@ mod tests {
 
         // The same statement at the ingress ceiling, where the margin is thinnest: an all-0xFF
         // body pays three digits for every byte, and the bound still covers it by exactly one.
-        let all_high = vec![0xFF_u8; usize::try_from(C1_MAX_RESPONSE_BODY_BYTES).unwrap()];
+        let all_high = vec![0xFF_u8; usize::try_from(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap()];
         assert_eq!(
-            json_integer_array_bytes(C1_MAX_RESPONSE_BODY_BYTES).unwrap()
+            json_integer_array_bytes(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap()
                 - exact_json_integer_array_bytes(&all_high),
             1
         );
@@ -1105,25 +1199,25 @@ mod tests {
         let body = realistic_page();
         let length = body.len();
         assert!(
-            u64::try_from(length).unwrap() <= C1_MAX_RESPONSE_BODY_BYTES,
+            u64::try_from(length).unwrap() <= INGEST_MAX_RESPONSE_BODY_BYTES,
             "a 100-row page of {length} bytes must fit the chosen ingress ceiling"
         );
         let realistic = measure(body, worst_case_admissible_headers(), None);
         assert_within_bound(u64::try_from(length).unwrap(), realistic);
-        // The second headline measurement: 20_135 ingress bytes reach disk at 177_427, an 8.811x
-        // expansion, under the 9.529x the memo-padded page at the ceiling pays.
+        // The second headline measurement: 20_135 ingress bytes reach disk at 176_998, an 8.790x
+        // expansion, under the 9.527x the memo-padded page at the ceiling pays.
         assert_eq!(length, 20_135);
-        assert_eq!(realistic.segment, 177_427);
+        assert_eq!(realistic.segment, 176_998);
         assert_eq!(
             realistic.segment * 1000 / u64::try_from(length).unwrap(),
-            8_811
+            8_790
         );
     }
 
     #[test]
     fn an_authenticated_private_segment_stays_within_the_bound() {
         assert_within_bound(
-            C1_MAX_RESPONSE_BODY_BYTES,
+            INGEST_MAX_RESPONSE_BODY_BYTES,
             measure(
                 costliest_admissible_page(),
                 worst_case_admissible_headers(),
@@ -1136,17 +1230,17 @@ mod tests {
     /// dropped the body term at some stage, satisfies `>=` at every sample and fails here.
     ///
     /// The sampled domain is the whole `0 ..= 1 MiB` range the binary search in
-    /// `a_one_mebibyte_segment_ceiling_cannot_host_the_shipped_c1_ceiling` walks, not just the
+    /// `a_one_mebibyte_segment_ceiling_cannot_host_the_shipped_ceiling` walks, not just the
     /// shipped ceiling. The stride is larger than the 3-byte base64 group, so every stage really
     /// does move between consecutive samples.
     #[test]
     fn the_bound_is_strictly_increasing_in_the_ingress_ceiling() {
-        let mut previous = c1_physical_bound(0).unwrap();
+        let mut previous = ingest_physical_bound(0).unwrap();
         for body_len in (0..=SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES)
             .step_by(997)
             .skip(1)
         {
-            let current = c1_physical_bound(body_len).unwrap();
+            let current = ingest_physical_bound(body_len).unwrap();
             assert!(current.max_response_body_bytes() > previous.max_response_body_bytes());
             assert!(current.max_retained_envelope_bytes() > previous.max_retained_envelope_bytes());
             assert!(
@@ -1164,10 +1258,10 @@ mod tests {
         for input in [u64::MAX, u64::MAX / 2, u64::MAX / 4, u64::MAX / 8] {
             assert!(
                 matches!(
-                    c1_physical_bound(input),
+                    ingest_physical_bound(input),
                     Err(SupervisorError::InvalidValue(_))
                 ),
-                "c1_physical_bound({input}) must refuse rather than wrap"
+                "ingest_physical_bound({input}) must refuse rather than wrap"
             );
         }
     }
@@ -1191,8 +1285,8 @@ mod tests {
         // The largest ingress ceiling the whole derivation survives. Every input below is above
         // it, and this one is not, so the chain is total underneath the first refusal.
         let largest_derivable = 1_945_555_039_024_026_171_u64;
-        assert!(c1_physical_bound(largest_derivable).is_ok());
-        assert!(c1_physical_bound(largest_derivable + 1).is_err());
+        assert!(ingest_physical_bound(largest_derivable).is_ok());
+        assert!(ingest_physical_bound(largest_derivable + 1).is_err());
 
         for (input, stage, step) in [
             (
@@ -1251,7 +1345,7 @@ mod tests {
                 "checked_add(SEGMENT_FIXED_BYTES)",
             ),
         ] {
-            let error = c1_physical_bound(input)
+            let error = ingest_physical_bound(input)
                 .expect_err(&format!("{step} must refuse at ingress ceiling {input}"));
             let message = error.to_string();
             assert!(
@@ -1287,10 +1381,10 @@ mod tests {
         // The value the ceiling ships today. Every golden number in this module is derived from
         // it, so this is where a change on the `joshi-sources` side first says so by name. There
         // is only one definition of the ceiling in this crate, so nothing here can usefully
-        // compare it against `joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES`: that
+        // compare it against `joshi_sources::INGEST_MAX_RESPONSE_BYTES`: that
         // comparison would be a value against its own definition.
-        assert_eq!(C1_MAX_RESPONSE_BODY_BYTES, 256 * 1024);
-        let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
+        assert_eq!(INGEST_MAX_RESPONSE_BODY_BYTES, 256 * 1024);
+        let bound = ingest_physical_bound(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap();
         assert!(
             bound.max_segment_bytes() < SMALLEST_HOSTING_SEGMENT_CEILING_BYTES,
             "segment bound {} must stay under the 4 MiB hosting anchor",
@@ -1307,9 +1401,9 @@ mod tests {
         );
     }
 
-    /// The anchor excludes the 1 MiB configurations because no C1 read runs under them. That
+    /// The anchor excludes the 1 MiB configurations because no bounded read runs under them. That
     /// exclusion has a consequence, and this test states it: the shipped bound does not fit a 1 MiB
-    /// segment ceiling. A 1 MiB spool is therefore not treated as a C1 host, which is why the
+    /// segment ceiling. A 1 MiB spool is therefore not treated as a host, which is why the
     /// runtime configuration check is load-bearing rather than decorative.
     ///
     /// Whether the ~82 KiB of ingress a 1 MiB ceiling does admit would hold a full 100-row page is
@@ -1317,8 +1411,8 @@ mod tests {
     /// module is 20,135 bytes, and how much longer a page carrying maximal memo text could be is
     /// not something this module observes.
     #[test]
-    fn a_one_mebibyte_segment_ceiling_cannot_host_the_shipped_c1_ceiling() {
-        let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
+    fn a_one_mebibyte_segment_ceiling_cannot_host_the_shipped_ceiling() {
+        let bound = ingest_physical_bound(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap();
         assert!(
             bound.max_segment_bytes() > SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES,
             "the shipped bound {} was expected not to fit a 1 MiB segment ceiling",
@@ -1327,7 +1421,10 @@ mod tests {
 
         // The fixed allowances alone, before a single ingress byte, already consume a quarter of a
         // 1 MiB ceiling.
-        assert_eq!(c1_physical_bound(0).unwrap().max_segment_bytes(), 266_432);
+        assert_eq!(
+            ingest_physical_bound(0).unwrap().max_segment_bytes(),
+            266_432
+        );
 
         // The largest ingress ceiling that fits under 1 MiB at all. The search assumes the bound
         // is nondecreasing over the whole `0 ..= 1 MiB` search domain, which
@@ -1338,7 +1435,7 @@ mod tests {
         let mut high = SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES;
         while low < high {
             let middle = low + (high - low).div_ceil(2);
-            if c1_physical_bound(middle).unwrap().max_segment_bytes()
+            if ingest_physical_bound(middle).unwrap().max_segment_bytes()
                 < SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES
             {
                 low = middle;
@@ -1348,12 +1445,12 @@ mod tests {
         }
         assert_eq!(low, 82_491);
         assert!(
-            c1_physical_bound(low).unwrap().max_segment_bytes()
+            ingest_physical_bound(low).unwrap().max_segment_bytes()
                 < SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES,
             "{low} ingress bytes must still fit a 1 MiB segment ceiling"
         );
         assert!(
-            c1_physical_bound(low + 1).unwrap().max_segment_bytes()
+            ingest_physical_bound(low + 1).unwrap().max_segment_bytes()
                 >= SMALLEST_CONFIGURED_SEGMENT_CEILING_BYTES,
             "one ingress byte past {low} must not fit a 1 MiB segment ceiling"
         );
@@ -1373,23 +1470,26 @@ mod tests {
             worst_case_admissible_headers(),
             None,
         );
-        let refuted = C1_MAX_RESPONSE_BODY_BYTES + 16 * 1024;
+        let refuted = INGEST_MAX_RESPONSE_BODY_BYTES + 16 * 1024;
         assert!(
             measured.segment > refuted,
             "a body-plus-16-KiB claim would have under-reserved: measured {} against {refuted}",
             measured.segment
         );
         assert!(
-            measured.segment >= C1_MAX_RESPONSE_BODY_BYTES * 9,
+            measured.segment >= INGEST_MAX_RESPONSE_BODY_BYTES * 9,
             "expected at least a 9x physical expansion, measured {}",
             measured.segment
         );
-        let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES).unwrap();
-        // The headline measurement the module documentation quotes: 2_498_126 physical segment
-        // bytes for the costliest admissible 262_144 byte page, a 9.529x expansion that consumes
+        let bound = ingest_physical_bound(INGEST_MAX_RESPONSE_BODY_BYTES).unwrap();
+        // The headline measurement the module documentation quotes: 2_497_701 physical segment
+        // bytes for the costliest admissible 262_144 byte page, a 9.527x expansion that consumes
         // 90.7% of the derived bound.
-        assert_eq!(measured.segment, 2_498_126);
-        assert_eq!(measured.segment * 1000 / C1_MAX_RESPONSE_BODY_BYTES, 9_529);
+        assert_eq!(measured.segment, 2_497_701);
+        assert_eq!(
+            measured.segment * 1000 / INGEST_MAX_RESPONSE_BODY_BYTES,
+            9_527
+        );
         assert_eq!(measured.segment * 1000 / bound.max_segment_bytes(), 907);
         assert!(measured.segment <= bound.max_segment_bytes());
     }

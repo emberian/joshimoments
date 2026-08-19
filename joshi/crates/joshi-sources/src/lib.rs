@@ -14,10 +14,10 @@ pub mod health;
 pub mod helius;
 pub mod ingress;
 pub mod provider_plan;
-pub mod public_solana_c1;
 pub mod pumpportal;
 pub mod runner_port;
 pub mod scope;
+pub mod solana_json_rpc;
 pub mod websocket;
 
 pub use backoff::{Backoff, BackoffPolicy};
@@ -35,9 +35,9 @@ pub use frame::{
 };
 pub use health::{HealthEvent, HealthSnapshot, HealthState, SourceHealth};
 pub use helius::{
-    HeliusControl, HeliusError, HeliusFrameKind, HeliusFrameMetadata, HeliusHttpClient,
-    HeliusSubscription, HeliusWsAdapter, HeliusWsProtocol, PublicSolanaHttpClient, RateLimitSignal,
-    SolanaReadMethod, SolanaReadRequest,
+    DEFAULT_MAX_RESPONSE_BYTES, HeliusControl, HeliusError, HeliusFrameKind, HeliusFrameMetadata,
+    HeliusHttpClient, HeliusSubscription, HeliusWsAdapter, HeliusWsProtocol,
+    PublicSolanaHttpClient, RateLimitSignal, SolanaReadMethod, SolanaReadRequest,
 };
 pub use ingress::{BoundedIngress, IngressError};
 pub use provider_plan::{
@@ -51,15 +51,6 @@ pub use provider_plan::{
     ValidatedProviderOperation, ValidatedProviderRunPlan, parse_provider_run_plan_exact,
     validate_provider_run_plan,
 };
-pub use public_solana_c1::{
-    CanonicalC1Request, JsonRpcRefusal, PUBLIC_SOLANA_C1_COMMITMENT, PUBLIC_SOLANA_C1_JSON_RPC_ID,
-    PUBLIC_SOLANA_C1_JSON_RPC_VERSION, PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES,
-    PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES, PUBLIC_SOLANA_C1_MAX_ROWS, PUBLIC_SOLANA_C1_METHOD,
-    PUBLIC_SOLANA_C1_MIN_ROWS, PublicSolanaC1ConformanceError, PublicSolanaC1Outcome,
-    PublicSolanaC1RequestError, RawSignaturePage, RawSignatureRow,
-    canonical_public_solana_c1_request, public_solana_c1_safe_headers_are_bounded,
-    read_public_solana_c1_body, read_public_solana_c1_frame,
-};
 pub use pumpportal::{
     PumpPortalCommand, PumpPortalControl, PumpPortalFrameKind, PumpPortalFrameMetadata,
     PumpPortalMethod, PumpPortalSession, PumpPortalWsAdapter,
@@ -72,6 +63,14 @@ pub use runner_port::{
     SyntheticStep,
 };
 pub use scope::{HotLease, LeaseKey, LeaseKind, ScopeBook, ScopeDelta};
+pub use solana_json_rpc::{
+    CanonicalSolanaRequest, INGEST_MAX_RESPONSE_BYTES, JsonRpcRefusal, RawSignaturePage,
+    RawSignatureRow, SOLANA_JSON_RPC_ID, SOLANA_JSON_RPC_MAX_REQUEST_BYTES,
+    SOLANA_JSON_RPC_VERSION, SOLANA_SIGNATURES_COMMITMENT, SOLANA_SIGNATURES_MAX_ROWS,
+    SOLANA_SIGNATURES_METHOD, SOLANA_SIGNATURES_MIN_ROWS, SolanaJsonRpcConformanceError,
+    SolanaJsonRpcOutcome, SolanaRequestError, canonical_solana_signatures_request,
+    read_solana_json_rpc_body, read_solana_json_rpc_frame, solana_safe_headers_are_bounded,
+};
 pub use websocket::{
     FrameInterpretation, ProtocolError, SourceOutput, WebSocketBuildError, WebSocketCommand,
     WebSocketControlHandle, WebSocketEndpoint, WebSocketExit, WebSocketProtocol,

@@ -124,6 +124,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0023_wave5_c1_activation.sql",
         sql: include_str!("../../../schema/migrations/0023_wave5_c1_activation.sql"),
     },
+    Migration {
+        id: 24,
+        name: "0024_retire_wave5_c1_activation.sql",
+        sql: include_str!("../../../schema/migrations/0024_retire_wave5_c1_activation.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -187,7 +192,7 @@ pub(crate) fn assert_linked_runtime() -> Result<()> {
 /// returns once the data has reached the drive, not once the drive has flushed its own write
 /// cache. Without `fullfsync` a power loss between a claim commit and the next checkpoint can
 /// therefore drop the claim's WAL frame while the earlier activation frame is already on media,
-/// which would present a burned Wave 5 C1 activation as claimable again. `fullfsync` asks the VFS
+/// which would present an already-consumed one-shot row as available again. `fullfsync` asks the VFS
 /// for `F_FULLFSYNC` instead, which is the same primitive `std::fs::File::sync_all` already uses
 /// for the supervisor journal on Apple targets, so the two layers stop disagreeing about what a
 /// successful sync means. `checkpoint_fullfsync` extends the request to the checkpoint syncs that
@@ -452,15 +457,15 @@ mod tests {
         assert_eq!(g0.current, 10);
         assert_eq!(g0.applied, vec![10]);
 
-        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V23");
-        assert_eq!(current.current, 23);
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V24");
+        assert_eq!(current.current, 24);
         assert_eq!(
             current.applied,
-            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
         );
 
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
-            .expect_err("G0 migration cannot downgrade V23");
+            .expect_err("G0 migration cannot downgrade V24");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
     }
 
@@ -523,10 +528,10 @@ mod tests {
 
     /// `recursive_triggers` is what makes a `BEFORE DELETE` guard cover `INSERT OR REPLACE`.
     ///
-    /// This exercises the trigger shape migration 0023 uses for its append-only tables on a
-    /// throwaway table, in both pragma states, so the pragma choice rests on observed `SQLite`
-    /// behavior rather than on a reading of the documentation. It is a statement about that
-    /// trigger shape, not about the C1 tables: no C1 code path issues `REPLACE` today.
+    /// This exercises the append-only trigger shape this schema uses on a throwaway table, in
+    /// both pragma states, so the pragma choice rests on observed `SQLite` behavior rather than on
+    /// a reading of the documentation. It is a statement about that trigger shape, which several
+    /// live tables carry, not about any one table.
     #[test]
     fn replace_reaches_append_only_delete_triggers_only_with_recursive_triggers() {
         let connection = Connection::open_in_memory().expect("scratch catalog");

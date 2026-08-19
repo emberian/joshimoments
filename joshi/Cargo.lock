@@ -1563,7 +1563,6 @@ dependencies = [
  "joshi-publication",
  "joshi-scientific-memory",
  "joshi-surface",
- "joshi-wave5-c1-activation",
  "joshi-wave6-campaign",
  "joshi-wave6-registry",
  "rusqlite",
@@ -1586,15 +1585,12 @@ dependencies = [
  "joshi-sources",
  "joshi-spool",
  "joshi-store",
- "joshi-wave5-c1-activation",
- "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "time",
- "tokio",
 ]
 
 [[package]]
@@ -1654,17 +1650,6 @@ dependencies = [
  "joshi-evidence",
  "serde",
  "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "joshi-wave5-c1-activation"
-version = "0.1.0"
-dependencies = [
- "joshi-sources",
- "serde",
- "serde_json",
- "sha2",
  "thiserror",
 ]
 

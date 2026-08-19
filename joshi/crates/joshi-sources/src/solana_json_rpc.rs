@@ -1,16 +1,16 @@
-//! Bounded C1 public-Solana wire contract, plus a package-test-only one-page runner.
+//! The bounded public-Solana JSON-RPC wire contract.
 //!
-//! Two layers live in this module and they carry different authority.
-//!
-//! The **wire contract** is real, non-test, and completely pure. It encodes the exact
-//! `getSignaturesForAddress` request body admitted for C1 and reads a hostile response body back
+//! This module is real, non-test, and completely pure. It encodes the exact
+//! `getSignaturesForAddress` request body this tree admits and reads a hostile response body back
 //! into unverified raw conformance data. It contains no endpoint, URL, host, request header,
-//! credential, socket, clock, or retry policy, and it performs no I/O. A separately reviewed
-//! transport may consume it; nothing here can cause a request.
+//! credential, socket, clock, or retry policy, and it performs no I/O. Any reviewed transport may
+//! consume it — the authenticated Helius path and the free public path alike; nothing here can
+//! cause a request.
 //!
-//! The **runner** (`PublicSolanaC1Runner` and `PublicSolanaC1Executor`) remains `cfg(test)`.
-//! It exists to freeze and exercise the permit-gated one-page boundary before a separately
-//! reviewed live executor is mounted. The production collector does not construct it.
+//! The response-side reader is written for a hostile body: it refuses before it parses (length
+//! ceiling first, then UTF-8, then exactly one JSON value with no trailing bytes and no duplicate
+//! keys), and every structural refusal names what it refused rather than truncating and retaining
+//! a partial provider claim.
 //!
 //! Nothing produced here is a verified fact. The rows this module returns are provider claims
 //! retained verbatim; the authority ceiling `read_only_no_execution` applies to all of it.
@@ -25,18 +25,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    ContentType, FrameDirection, ProviderRunnerError, RawSourceFrame, SafeHeader, SourceId,
-    StreamClass, Transport,
-};
-
-#[cfg(test)]
-use crate::{
-    ProviderAttemptAssociation, ProviderAttemptOutcome, ProviderAttemptPermit, ProviderAttemptPlan,
-    ProviderAttemptReport, ProviderCompletionReason, ProviderOperation, ProviderRunner,
-    ProviderRunnerCompletion, ProviderRunnerNext, ProviderScopePort, RuntimeBudgetPort,
-    SourceOutput, ValidatedProviderRunPlan,
-    provider_plan::{BuiltInExecutionDisposition, CanaryProfilePort},
-    runner_port::validate_outcome,
+    ContentType, FrameDirection, RawSourceFrame, SafeHeader, SourceId, StreamClass, Transport,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -44,31 +33,34 @@ use crate::{
 // ---------------------------------------------------------------------------------------------
 
 /// Exact JSON-RPC protocol version string admitted on both the request and the response.
-pub const PUBLIC_SOLANA_C1_JSON_RPC_VERSION: &str = "2.0";
-/// Exact JSON-RPC request identifier. C1 admits exactly one request, so the identifier is fixed.
-pub const PUBLIC_SOLANA_C1_JSON_RPC_ID: u64 = 1;
+pub const SOLANA_JSON_RPC_VERSION: &str = "2.0";
+/// Exact JSON-RPC request identifier. The canonical request is a single call, never a batch, so
+/// the identifier is fixed rather than a counter.
+pub const SOLANA_JSON_RPC_ID: u64 = 1;
 /// Exact registered method name.
-pub const PUBLIC_SOLANA_C1_METHOD: &str = "getSignaturesForAddress";
+pub const SOLANA_SIGNATURES_METHOD: &str = "getSignaturesForAddress";
 /// Exact commitment declared by the registered method and required of every returned row.
-pub const PUBLIC_SOLANA_C1_COMMITMENT: &str = "finalized";
+pub const SOLANA_SIGNATURES_COMMITMENT: &str = "finalized";
 /// Lowest row bound the frozen schema admits.
-pub const PUBLIC_SOLANA_C1_MIN_ROWS: u16 = 1;
+pub const SOLANA_SIGNATURES_MIN_ROWS: u16 = 1;
 /// Highest row bound the frozen schema admits.
-pub const PUBLIC_SOLANA_C1_MAX_ROWS: u16 = 100;
+pub const SOLANA_SIGNATURES_MAX_ROWS: u16 = 100;
 /// Local restatement of the registered `max_request_bytes` for this method: 4096 bytes.
 ///
 /// This constant is *not* read from the source registry at run time. It is pinned to the registry
 /// by the unit test `registered_request_bound_matches_the_canonical_source_registry`, so a
 /// registry change fails that test rather than silently widening the bound admitted here.
-pub const PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES: usize = 4 * 1_024;
+pub const SOLANA_JSON_RPC_MAX_REQUEST_BYTES: usize = 4 * 1_024;
 
-/// Longest C1 response entity body this module will look at: 256 KiB.
+/// Longest response entity body any ingest path in this tree will look at: 256 KiB.
 ///
-/// This is the C1 **ingress ceiling**, and `joshi-sources` is its single source of truth.
+/// This is the **ingress ceiling**, and `joshi-sources` is its single source of truth. It is not
+/// specific to one endpoint or one method: it bounds the authenticated Helius reads, the free
+/// public Solana reads, and the response reader below, all from one definition.
 ///
 /// The coupling is realised in code rather than by agreement: at
-/// `crates/joshi-supervisor/src/c1/physical_size.rs` the supervisor's
-/// `C1_MAX_RESPONSE_BODY_BYTES` is *defined* as `joshi_sources::PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES
+/// `crates/joshi-supervisor/src/ingest/physical_size.rs` the supervisor's
+/// `INGEST_MAX_RESPONSE_BODY_BYTES` is *defined* as `joshi_sources::INGEST_MAX_RESPONSE_BYTES
 /// as u64`, so the whole physical-size derivation there reads this constant and cannot disagree
 /// with it. The direction is forced by the dependency edge: `joshi-supervisor` depends on
 /// `joshi-sources` and not the reverse, so the ceiling has to live on this side of it.
@@ -83,29 +75,26 @@ pub const PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES: usize = 4 * 1_024;
 ///
 /// **What a widening costs, measured rather than assumed.** The compile-time guard admits any
 /// ceiling up to 414,267 bytes, since that is the largest one whose derived segment stays under
-/// the 4 MiB anchor. Inside that range a change still compiles — but it is not consequence-free,
-/// and this doc claimed it was. Raising this constant to 320 KiB and re-running both suites was
-/// measured on 2026-08-19: every one of this crate's 118 library tests still passes, so the
-/// change is silent *on this side*, while two `joshi-supervisor` unit tests fail —
-/// `c1::physical_size::tests::the_chosen_ceiling_stays_strictly_under_the_hosting_anchor` and
-/// `c1::physical_size::tests::the_expansion_is_multiplicative_not_a_fixed_overhead` — because
-/// every golden physical measurement in that module is derived from 262,144. Past 414,267 bytes
-/// the supervisor stops compiling instead. So a widening is an operational change with no
-/// consequence *here*, and always a failing-test or failing-build consequence *there*; whoever
-/// makes one has to re-measure the physical bound rather than only edit this line.
+/// the 4 MiB anchor. Inside that range a change still compiles — but it is not consequence-free.
+/// A widening is silent *on this side*, because no test here is derived from the value, and it
+/// fails `joshi-supervisor` unit tests *there*, because every golden physical measurement in that
+/// module is derived from 262,144. Past 414,267 bytes the supervisor stops compiling instead. So
+/// whoever widens this has to re-measure the physical bound rather than only edit this line.
 ///
 /// The number is not a schema value and is not read from the source registry. The registry
-/// declares a 64 MiB `max_response_bytes` for this method, but that is a *contract* ceiling on
-/// what the source is permitted to send, not a budget this path can durably absorb: the
-/// supervisor's derivation expands one ingress byte into a worst case of `4 * (4/3)^3 = 256/27`,
-/// about 9.5 bytes of local spool segment, so a 64 MiB body would not fit the configured segment
-/// ceiling at all. 256 KiB is instead sized against the shape C1 actually admits — at most 100
-/// rows, a realistic full page being roughly 20-30 KiB — leaving a wide margin for long memo text
-/// and verbose `err` objects. It is a chosen operational bound, not a derived or exact quantity.
+/// declares a 64 MiB `max_response_bytes` for `getSignaturesForAddress`, but that is a *contract*
+/// ceiling on what the source is permitted to send, not a budget this path can durably absorb:
+/// the supervisor's derivation expands one ingress byte into a worst case of `4 * (4/3)^3 =
+/// 256/27`, about 9.5 bytes of local spool segment, so a 64 MiB body would not fit the configured
+/// segment ceiling at all. 256 KiB is instead sized against the shape a signature page actually
+/// admits — at most 100 rows, a realistic full page being roughly 20-30 KiB — leaving a wide
+/// margin for long memo text and verbose `err` objects. It is a chosen operational bound, not a
+/// derived or exact quantity, and a caller whose sink can absorb more may construct its client
+/// with a larger one.
 ///
-/// Refusing at this length is what keeps [`read_public_solana_c1_body`] bounded: every step after
+/// Refusing at this length is what keeps [`read_solana_json_rpc_body`] bounded: every step after
 /// the check costs work proportional to the body, so the check runs before all of them.
-pub const PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES: usize = 256 * 1_024;
+pub const INGEST_MAX_RESPONSE_BYTES: usize = 256 * 1_024;
 
 /// Exact decoded length of a Solana address.
 const ADDRESS_BYTES: usize = 32;
@@ -168,27 +157,27 @@ const MAX_SAFE_HEADER_VALUE_BYTES: usize = 256;
 /// **This type carries no witness.** Both fields are public and there is no private member, so
 /// any caller can build one whose `byte_len` disagrees with `body.len()`, or whose `body` is not
 /// a canonical request at all. The type is a return shape, not a proof: the guarantees below hold
-/// of values returned by [`canonical_public_solana_c1_request`] and of nothing else, and a caller
+/// of values returned by [`canonical_solana_signatures_request`] and of nothing else, and a caller
 /// that receives one from somewhere else has been told nothing by its type. Making the fields
 /// private would say more, and would also break the in-tree consumers that read `body` and
 /// `byte_len` directly; the doc is corrected here rather than the claim left standing.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CanonicalC1Request {
+pub struct CanonicalSolanaRequest {
     /// Exact request body bytes, canonically encoded by
-    /// [`canonical_public_solana_c1_request`].
+    /// [`canonical_solana_signatures_request`].
     pub body: Vec<u8>,
     /// Length of `body` in bytes.
     ///
-    /// Equal to `body.len()` in every value [`canonical_public_solana_c1_request`] returns, which
+    /// Equal to `body.len()` in every value [`canonical_solana_signatures_request`] returns, which
     /// `canonical_request_bytes_are_exact_and_byte_identical_across_calls` pins. It is a
     /// convenience, never an independent fact, and a caller that needs the length of a
-    /// `CanonicalC1Request` it did not receive from that function should read `body.len()`.
+    /// `CanonicalSolanaRequest` it did not receive from that function should read `body.len()`.
     pub byte_len: usize,
 }
 
 /// Refusal from canonical request construction. It never renders the rejected input back.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum PublicSolanaC1RequestError {
+pub enum SolanaRequestError {
     #[error("address is not base58")]
     AddressNotBase58,
     #[error("address does not decode to exactly 32 bytes")]
@@ -208,7 +197,7 @@ pub enum PublicSolanaC1RequestError {
 /// `commitment`, `limit`, with no whitespace and no floating-point numbers. The frozen schema is
 /// `fixtures/source-registry/solana_get_signatures_for_address.v1.json`, closed over by
 /// `PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT`. The optional `before` cursor the schema
-/// permits is deliberately not emitted: C1 reads exactly one newest-first page.
+/// permits is deliberately not emitted: this request reads exactly one newest-first page.
 ///
 /// The address is validated by decoding it as base58 to exactly 32 bytes and re-encoding it back
 /// to the identical string. This is what licenses splicing `address` straight into the JSON
@@ -216,19 +205,19 @@ pub enum PublicSolanaC1RequestError {
 /// which contains neither a quote nor a backslash. `bs58` decoding already refuses characters
 /// outside that alphabet, so the re-encode is a defensive restatement of the property the splice
 /// depends on rather than the only guard, and no input is known that reaches
-/// [`PublicSolanaC1RequestError::AddressNotCanonicalBase58`].
+/// [`SolanaRequestError::AddressNotCanonicalBase58`].
 ///
 /// # Boundedness
 ///
 /// Length is checked before the decode, for the same reason
-/// [`read_public_solana_c1_body`] checks its ingress ceiling first: base58 decoding is quadratic
+/// [`read_solana_json_rpc_body`] checks its ingress ceiling first: base58 decoding is quadratic
 /// in the input length, so decoding an arbitrary-length argument first would let a caller spend
 /// work proportional to the square of what it passed. An address over
 /// `MAX_ADDRESS_BASE58_CHARS` bytes is refused before any decode, so the decode that does run
 /// is over at most 44 bytes.
 ///
 /// That ordering is visible in the refusal a caller gets: an over-long argument is refused as
-/// [`PublicSolanaC1RequestError::AddressNotThirtyTwoBytes`] whether or not it is base58 at all,
+/// [`SolanaRequestError::AddressNotThirtyTwoBytes`] whether or not it is base58 at all,
 /// because the length alone already establishes that it does not decode to 32 bytes.
 ///
 /// # Errors
@@ -236,49 +225,49 @@ pub enum PublicSolanaC1RequestError {
 /// Refuses an address longer than `MAX_ADDRESS_BASE58_CHARS` bytes, a non-base58 address, an
 /// address that does not decode to exactly 32 bytes, a non-canonical base58 address, a `max_rows`
 /// outside the schema's 1..=100 range, and — as a defensive check that no admissible input is
-/// expected to reach — a body larger than [`PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES`].
-pub fn canonical_public_solana_c1_request(
+/// expected to reach — a body larger than [`SOLANA_JSON_RPC_MAX_REQUEST_BYTES`].
+pub fn canonical_solana_signatures_request(
     address: &str,
     max_rows: u16,
-) -> Result<CanonicalC1Request, PublicSolanaC1RequestError> {
-    if !(PUBLIC_SOLANA_C1_MIN_ROWS..=PUBLIC_SOLANA_C1_MAX_ROWS).contains(&max_rows) {
-        return Err(PublicSolanaC1RequestError::RowBoundOutOfRange);
+) -> Result<CanonicalSolanaRequest, SolanaRequestError> {
+    if !(SOLANA_SIGNATURES_MIN_ROWS..=SOLANA_SIGNATURES_MAX_ROWS).contains(&max_rows) {
+        return Err(SolanaRequestError::RowBoundOutOfRange);
     }
     // Length first: bs58 decoding is quadratic in its input, so an unbounded argument must never
     // reach it. Nothing over this width can decode to 32 bytes, so no admissible input is lost.
     if address.len() > MAX_ADDRESS_BASE58_CHARS {
-        return Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes);
+        return Err(SolanaRequestError::AddressNotThirtyTwoBytes);
     }
     let decoded = bs58::decode(address)
         .into_vec()
-        .map_err(|_| PublicSolanaC1RequestError::AddressNotBase58)?;
+        .map_err(|_| SolanaRequestError::AddressNotBase58)?;
     if decoded.len() != ADDRESS_BYTES {
-        return Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes);
+        return Err(SolanaRequestError::AddressNotThirtyTwoBytes);
     }
     if bs58::encode(&decoded).into_string() != address {
-        return Err(PublicSolanaC1RequestError::AddressNotCanonicalBase58);
+        return Err(SolanaRequestError::AddressNotCanonicalBase58);
     }
 
     let mut body = String::with_capacity(192);
     body.push_str("{\"jsonrpc\":\"");
-    body.push_str(PUBLIC_SOLANA_C1_JSON_RPC_VERSION);
+    body.push_str(SOLANA_JSON_RPC_VERSION);
     body.push_str("\",\"id\":");
-    body.push_str(&PUBLIC_SOLANA_C1_JSON_RPC_ID.to_string());
+    body.push_str(&SOLANA_JSON_RPC_ID.to_string());
     body.push_str(",\"method\":\"");
-    body.push_str(PUBLIC_SOLANA_C1_METHOD);
+    body.push_str(SOLANA_SIGNATURES_METHOD);
     body.push_str("\",\"params\":[\"");
     body.push_str(address);
     body.push_str("\",{\"commitment\":\"");
-    body.push_str(PUBLIC_SOLANA_C1_COMMITMENT);
+    body.push_str(SOLANA_SIGNATURES_COMMITMENT);
     body.push_str("\",\"limit\":");
     body.push_str(&max_rows.to_string());
     body.push_str("}]}");
 
     let body = body.into_bytes();
-    if body.len() > PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES {
-        return Err(PublicSolanaC1RequestError::RequestExceedsRegisteredBound);
+    if body.len() > SOLANA_JSON_RPC_MAX_REQUEST_BYTES {
+        return Err(SolanaRequestError::RequestExceedsRegisteredBound);
     }
-    Ok(CanonicalC1Request {
+    Ok(CanonicalSolanaRequest {
         byte_len: body.len(),
         body,
     })
@@ -288,14 +277,14 @@ pub fn canonical_public_solana_c1_request(
 // Response conformance (pure; hostile input in, unverified raw data out)
 // ---------------------------------------------------------------------------------------------
 
-/// The three outcomes of reading a C1 response body are kept explicitly distinct.
+/// The three outcomes of reading a response body are kept explicitly distinct.
 ///
 /// A well-formed provider refusal is *not* a page, *not* absence, and *not* a transport failure.
-/// It is modelled as its own [`PublicSolanaC1Outcome::ProviderRefusal`] variant and can never
+/// It is modelled as its own [`SolanaJsonRpcOutcome::ProviderRefusal`] variant and can never
 /// carry rows. A malformed or hostile body is neither variant: it is an
-/// [`PublicSolanaC1ConformanceError`].
+/// [`SolanaJsonRpcConformanceError`].
 #[derive(Clone, Debug, PartialEq)]
-pub enum PublicSolanaC1Outcome {
+pub enum SolanaJsonRpcOutcome {
     /// A structurally conforming page of unverified raw provider claims.
     Page(RawSignaturePage),
     /// A typed JSON-RPC refusal from the provider, retained verbatim within a sanitation bound.
@@ -357,8 +346,8 @@ pub struct JsonRpcRefusal {
 
 /// Refusal from response conformance reading. It never renders the rejected body back.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum PublicSolanaC1ConformanceError {
-    #[error("response body is longer than the C1 ingress ceiling")]
+pub enum SolanaJsonRpcConformanceError {
+    #[error("response body is longer than the ingress ceiling")]
     ResponseExceedsIngressCeiling,
     #[error("registered row bound is outside the schema's 1..=100 range")]
     RegisteredRowBoundOutOfRange,
@@ -394,11 +383,11 @@ pub enum PublicSolanaC1ConformanceError {
     OrderingNotNewestFirst,
     #[error("row does not carry the registered finalized commitment claim")]
     ConfirmationStatusNotFinalized,
-    #[error("frame envelope does not match the bounded C1 declaration")]
+    #[error("frame envelope does not match the bounded public-Solana declaration")]
     FrameEnvelopeMismatch,
 }
 
-/// Read a raw C1 response body into unverified raw conformance data.
+/// Read a raw public-Solana JSON-RPC response body into unverified raw conformance data.
 ///
 /// This is the public entry point for hostile-body validation. It takes only the raw bytes and the
 /// registered `max_rows` and returns only unverified raw conformance data: structural conformance
@@ -413,12 +402,12 @@ pub enum PublicSolanaC1ConformanceError {
 /// are refused separately.
 ///
 /// A well-formed typed JSON-RPC error is returned as
-/// [`PublicSolanaC1Outcome::ProviderRefusal`] and can never carry rows.
+/// [`SolanaJsonRpcOutcome::ProviderRefusal`] and can never carry rows.
 ///
 /// # Boundedness
 ///
 /// The reader is bounded by length before it is bounded by anything else. A body longer than
-/// [`PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES`] is refused as the very first act, before the bytes are
+/// [`INGEST_MAX_RESPONSE_BYTES`] is refused as the very first act, before the bytes are
 /// examined as UTF-8, parsed, walked for duplicate keys, or decoded, so a hostile body cannot make
 /// this function allocate in proportion to its own length. Inside that ceiling the work is bounded
 /// but not minimal: the document is still parsed once into a `serde_json::Value`, walked a second
@@ -427,7 +416,7 @@ pub enum PublicSolanaC1ConformanceError {
 ///
 /// # Errors
 ///
-/// Refuses a body longer than [`PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES`], a `max_rows` outside
+/// Refuses a body longer than [`INGEST_MAX_RESPONSE_BYTES`], a `max_rows` outside
 /// 1..=100, an empty body, non-UTF-8 input, malformed JSON, trailing bytes after the JSON value,
 /// duplicate JSON object keys at any depth, an envelope that is neither a typed result nor a typed
 /// error (or is both), a page over the registered row bound, a signature that is not base58 or
@@ -435,63 +424,63 @@ pub enum PublicSolanaC1ConformanceError {
 /// whose commitment claim is not `finalized`.
 ///
 /// A well-formed typed JSON-RPC error does **not** always reach
-/// [`PublicSolanaC1Outcome::ProviderRefusal`]. Its message is also sanitation-bounded, so a
+/// [`SolanaJsonRpcOutcome::ProviderRefusal`]. Its message is also sanitation-bounded, so a
 /// refusal whose message is empty, longer than the local 512-byte bound, or carrying a control
 /// character is refused as
-/// [`PublicSolanaC1ConformanceError::RefusalMessageNotBounded`] rather than returned, and a
+/// [`SolanaJsonRpcConformanceError::RefusalMessageNotBounded`] rather than returned, and a
 /// refusal whose auxiliary `data` serializes to more than the local 1024-byte bound is refused as
-/// [`PublicSolanaC1ConformanceError::RefusalDataNotBounded`]. Both bounds refuse the whole body
+/// [`SolanaJsonRpcConformanceError::RefusalDataNotBounded`]. Both bounds refuse the whole body
 /// rather than retaining a truncated provider claim.
-pub fn read_public_solana_c1_body(
+pub fn read_solana_json_rpc_body(
     body: &[u8],
     max_rows: u16,
-) -> Result<PublicSolanaC1Outcome, PublicSolanaC1ConformanceError> {
+) -> Result<SolanaJsonRpcOutcome, SolanaJsonRpcConformanceError> {
     // First act of all, before any allocation, copy, decode, or parse. Everything below this line
     // costs work proportional to the body, so the length is what bounds the whole reader.
-    if body.len() > PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES {
-        return Err(PublicSolanaC1ConformanceError::ResponseExceedsIngressCeiling);
+    if body.len() > INGEST_MAX_RESPONSE_BYTES {
+        return Err(SolanaJsonRpcConformanceError::ResponseExceedsIngressCeiling);
     }
-    if !(PUBLIC_SOLANA_C1_MIN_ROWS..=PUBLIC_SOLANA_C1_MAX_ROWS).contains(&max_rows) {
-        return Err(PublicSolanaC1ConformanceError::RegisteredRowBoundOutOfRange);
+    if !(SOLANA_SIGNATURES_MIN_ROWS..=SOLANA_SIGNATURES_MAX_ROWS).contains(&max_rows) {
+        return Err(SolanaJsonRpcConformanceError::RegisteredRowBoundOutOfRange);
     }
     if body.is_empty() {
-        return Err(PublicSolanaC1ConformanceError::EmptyBody);
+        return Err(SolanaJsonRpcConformanceError::EmptyBody);
     }
-    let text = std::str::from_utf8(body).map_err(|_| PublicSolanaC1ConformanceError::NotUtf8)?;
+    let text = std::str::from_utf8(body).map_err(|_| SolanaJsonRpcConformanceError::NotUtf8)?;
 
     let mut reader = serde_json::Deserializer::from_str(text);
     let value = Value::deserialize(&mut reader)
-        .map_err(|_| PublicSolanaC1ConformanceError::MalformedJson)?;
+        .map_err(|_| SolanaJsonRpcConformanceError::MalformedJson)?;
     reader
         .end()
-        .map_err(|_| PublicSolanaC1ConformanceError::TrailingBytes)?;
+        .map_err(|_| SolanaJsonRpcConformanceError::TrailingBytes)?;
 
     // The document is now known to be exactly one well-formed JSON value, so the only refusal this
     // second pass can raise is this module's own explicit duplicate-key refusal.
     let mut scanner = serde_json::Deserializer::from_str(text);
     DuplicateFreeJson::deserialize(&mut scanner)
-        .map_err(|_| PublicSolanaC1ConformanceError::DuplicateJsonKey)?;
+        .map_err(|_| SolanaJsonRpcConformanceError::DuplicateJsonKey)?;
 
     classify_envelope(value, max_rows)
 }
 
-/// Read one bounded C1 response frame into unverified raw conformance data.
+/// Read one bounded public-Solana response frame into unverified raw conformance data.
 ///
 /// This is the promoted frame-envelope half of the former runner-internal `validate_response`. It
 /// checks only the frame envelope this crate itself produced and then defers to
-/// [`read_public_solana_c1_body`]. It reads no budget and consults no clock. It does read the
+/// [`read_solana_json_rpc_body`]. It reads no budget and consults no clock. It does read the
 /// frame's own `received_at` receipt stamp, but only to require that it is a positive Unix-millis
 /// value; nothing here compares that stamp against a current time, and elapsed time is not a wire
 /// fact and is not admitted at all.
 ///
 /// # Errors
 ///
-/// Refuses a frame whose envelope is not the exact bounded C1 declaration, and propagates every
-/// body refusal from [`read_public_solana_c1_body`].
-pub fn read_public_solana_c1_frame(
+/// Refuses a frame whose envelope is not the exact bounded declaration, and propagates every
+/// body refusal from [`read_solana_json_rpc_body`].
+pub fn read_solana_json_rpc_frame(
     frame: &RawSourceFrame,
     max_rows: u16,
-) -> Result<PublicSolanaC1Outcome, PublicSolanaC1ConformanceError> {
+) -> Result<SolanaJsonRpcOutcome, SolanaJsonRpcConformanceError> {
     if frame.source != SourceId::SolanaPublicHttp
         || frame.contract_version != crate::ADAPTER_CONTRACT_VERSION
         || frame.transport != Transport::Http
@@ -502,14 +491,14 @@ pub fn read_public_solana_c1_frame(
         || frame.connection_epoch != 1
         || frame.sequence != 1
         || frame.http_status != Some(200)
-        || !public_solana_c1_safe_headers_are_bounded(&frame.safe_headers)
+        || !solana_safe_headers_are_bounded(&frame.safe_headers)
     {
-        return Err(PublicSolanaC1ConformanceError::FrameEnvelopeMismatch);
+        return Err(SolanaJsonRpcConformanceError::FrameEnvelopeMismatch);
     }
-    read_public_solana_c1_body(&frame.body, max_rows)
+    read_solana_json_rpc_body(&frame.body, max_rows)
 }
 
-/// Report whether a retained safe-header set is within the bounded C1 allowance.
+/// Report whether a retained safe-header set is within the bounded allowance.
 ///
 /// Only the four rate-limit response headers are admitted, each at most once after ASCII
 /// lowercasing, each value at most 256 bytes (`MAX_SAFE_HEADER_VALUE_BYTES`), and none carrying a
@@ -520,7 +509,7 @@ pub fn read_public_solana_c1_frame(
 /// to state the bound where a reader looks for it. It is not the check that refuses an oversized
 /// set, and deleting it would not widen what this function accepts.
 #[must_use]
-pub fn public_solana_c1_safe_headers_are_bounded(headers: &[SafeHeader]) -> bool {
+pub fn solana_safe_headers_are_bounded(headers: &[SafeHeader]) -> bool {
     const ALLOWED: &[&str] = &[
         "retry-after",
         "x-ratelimit-limit",
@@ -536,24 +525,6 @@ pub fn public_solana_c1_safe_headers_are_bounded(headers: &[SafeHeader]) -> bool
                 && header.value.len() <= MAX_SAFE_HEADER_VALUE_BYTES
                 && !header.value.chars().any(char::is_control)
         })
-}
-
-/// Collapse a wire-contract refusal into the runner's single C1 boundary error.
-///
-/// This deliberately discards the specific refusal: [`ProviderRunnerError`] is a boundary type and
-/// is not widened here. Callers that need the specific reason must call the wire-contract
-/// functions directly.
-impl From<PublicSolanaC1ConformanceError> for ProviderRunnerError {
-    fn from(_: PublicSolanaC1ConformanceError) -> Self {
-        Self::PublicSolanaC1Execution
-    }
-}
-
-/// Collapse a request-construction refusal into the runner's single C1 boundary error.
-impl From<PublicSolanaC1RequestError> for ProviderRunnerError {
-    fn from(_: PublicSolanaC1RequestError) -> Self {
-        Self::PublicSolanaC1Execution
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -630,9 +601,9 @@ where
 fn classify_envelope(
     value: Value,
     max_rows: u16,
-) -> Result<PublicSolanaC1Outcome, PublicSolanaC1ConformanceError> {
+) -> Result<SolanaJsonRpcOutcome, SolanaJsonRpcConformanceError> {
     let Value::Object(members) = &value else {
-        return Err(PublicSolanaC1ConformanceError::EnvelopeMismatch);
+        return Err(SolanaJsonRpcConformanceError::EnvelopeMismatch);
     };
     match (
         members.contains_key("result"),
@@ -640,30 +611,28 @@ fn classify_envelope(
     ) {
         (true, false) => {
             let response: JsonRpcResponse = serde_json::from_value(value)
-                .map_err(|_| PublicSolanaC1ConformanceError::EnvelopeMismatch)?;
-            validate_json_rpc_page(response, max_rows).map(PublicSolanaC1Outcome::Page)
+                .map_err(|_| SolanaJsonRpcConformanceError::EnvelopeMismatch)?;
+            validate_json_rpc_page(response, max_rows).map(SolanaJsonRpcOutcome::Page)
         }
         (false, true) => {
             let response: JsonRpcErrorResponse = serde_json::from_value(value)
-                .map_err(|_| PublicSolanaC1ConformanceError::EnvelopeMismatch)?;
-            validate_json_rpc_refusal(response).map(PublicSolanaC1Outcome::ProviderRefusal)
+                .map_err(|_| SolanaJsonRpcConformanceError::EnvelopeMismatch)?;
+            validate_json_rpc_refusal(response).map(SolanaJsonRpcOutcome::ProviderRefusal)
         }
-        (true, true) => Err(PublicSolanaC1ConformanceError::ResultAndErrorBothPresent),
-        (false, false) => Err(PublicSolanaC1ConformanceError::NeitherResultNorError),
+        (true, true) => Err(SolanaJsonRpcConformanceError::ResultAndErrorBothPresent),
+        (false, false) => Err(SolanaJsonRpcConformanceError::NeitherResultNorError),
     }
 }
 
 fn validate_json_rpc_page(
     response: JsonRpcResponse,
     max_rows: u16,
-) -> Result<RawSignaturePage, PublicSolanaC1ConformanceError> {
-    if response.jsonrpc != PUBLIC_SOLANA_C1_JSON_RPC_VERSION
-        || response.id != PUBLIC_SOLANA_C1_JSON_RPC_ID
-    {
-        return Err(PublicSolanaC1ConformanceError::EnvelopeMismatch);
+) -> Result<RawSignaturePage, SolanaJsonRpcConformanceError> {
+    if response.jsonrpc != SOLANA_JSON_RPC_VERSION || response.id != SOLANA_JSON_RPC_ID {
+        return Err(SolanaJsonRpcConformanceError::EnvelopeMismatch);
     }
     if response.result.len() > usize::from(max_rows) {
-        return Err(PublicSolanaC1ConformanceError::RowLimitExceeded);
+        return Err(SolanaJsonRpcConformanceError::RowLimitExceeded);
     }
     let mut prior_slot: Option<u64> = None;
     let mut signatures: BTreeSet<String> = BTreeSet::new();
@@ -671,19 +640,19 @@ fn validate_json_rpc_page(
     for row in response.result {
         let decoded = bs58::decode(&row.signature)
             .into_vec()
-            .map_err(|_| PublicSolanaC1ConformanceError::SignatureNotBase58)?;
+            .map_err(|_| SolanaJsonRpcConformanceError::SignatureNotBase58)?;
         if decoded.len() != SIGNATURE_BYTES {
-            return Err(PublicSolanaC1ConformanceError::SignatureWrongLength);
+            return Err(SolanaJsonRpcConformanceError::SignatureWrongLength);
         }
         if !signatures.insert(row.signature.clone()) {
-            return Err(PublicSolanaC1ConformanceError::DuplicateSignature);
+            return Err(SolanaJsonRpcConformanceError::DuplicateSignature);
         }
         // Newest-first is enforced as "slots never increase". Equal adjacent slots are legal.
         if prior_slot.is_some_and(|prior| row.slot > prior) {
-            return Err(PublicSolanaC1ConformanceError::OrderingNotNewestFirst);
+            return Err(SolanaJsonRpcConformanceError::OrderingNotNewestFirst);
         }
-        if row.confirmation_status.0.as_deref() != Some(PUBLIC_SOLANA_C1_COMMITMENT) {
-            return Err(PublicSolanaC1ConformanceError::ConfirmationStatusNotFinalized);
+        if row.confirmation_status.0.as_deref() != Some(SOLANA_SIGNATURES_COMMITMENT) {
+            return Err(SolanaJsonRpcConformanceError::ConfirmationStatusNotFinalized);
         }
         prior_slot = Some(row.slot);
         rows.push(RawSignatureRow {
@@ -700,18 +669,16 @@ fn validate_json_rpc_page(
 
 fn validate_json_rpc_refusal(
     response: JsonRpcErrorResponse,
-) -> Result<JsonRpcRefusal, PublicSolanaC1ConformanceError> {
-    if response.jsonrpc != PUBLIC_SOLANA_C1_JSON_RPC_VERSION
-        || response.id != PUBLIC_SOLANA_C1_JSON_RPC_ID
-    {
-        return Err(PublicSolanaC1ConformanceError::EnvelopeMismatch);
+) -> Result<JsonRpcRefusal, SolanaJsonRpcConformanceError> {
+    if response.jsonrpc != SOLANA_JSON_RPC_VERSION || response.id != SOLANA_JSON_RPC_ID {
+        return Err(SolanaJsonRpcConformanceError::EnvelopeMismatch);
     }
     let message = response.error.message;
     if message.is_empty()
         || message.len() > MAX_REFUSAL_MESSAGE_BYTES
         || message.chars().any(char::is_control)
     {
-        return Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded);
+        return Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded);
     }
     let data = match response.error.data {
         None => None,
@@ -720,9 +687,9 @@ fn validate_json_rpc_refusal(
             // such value is representable. It refuses rather than admits anyway, so an encoder
             // failure could never be the reason an unmeasured value was retained.
             let encoded = serde_json::to_vec(&data)
-                .map_err(|_| PublicSolanaC1ConformanceError::RefusalDataNotBounded)?;
+                .map_err(|_| SolanaJsonRpcConformanceError::RefusalDataNotBounded)?;
             if encoded.len() > MAX_REFUSAL_DATA_BYTES {
-                return Err(PublicSolanaC1ConformanceError::RefusalDataNotBounded);
+                return Err(SolanaJsonRpcConformanceError::RefusalDataNotBounded);
             }
             Some(data)
         }
@@ -824,335 +791,12 @@ impl<'de> Visitor<'de> for DuplicateFreeJsonVisitor {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Package-test-only execution boundary
-// ---------------------------------------------------------------------------------------------
-
-/// Exact logical request admitted by the C1 runner. It contains no endpoint or credential.
-#[cfg(test)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublicSolanaC1Request {
-    pub address: String,
-    pub max_rows: u16,
-    pub commitment: &'static str,
-    pub request_id: u64,
-    /// Exact canonical body bytes from [`canonical_public_solana_c1_request`].
-    pub body: Vec<u8>,
-}
-
-/// Exact scripted transport result. The runner derives counts, bytes, and credits; elapsed time
-/// remains unverified test input and must not be reused as a production budget clock.
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub struct PublicSolanaC1TransportResponse {
-    pub frame: RawSourceFrame,
-    pub elapsed_ms: u64,
-}
-
-/// Sanitized failure from an unverified C1 executor. It must not retain a URL or response body.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum PublicSolanaC1ExecutionError {
-    #[error("public Solana C1 transport failed")]
-    Transport,
-}
-
-/// Package-test-only scripted execution boundary used after exact unverified permit matching.
-/// Implementing this trait proves no durable reservation and grants no source, store, or coverage
-/// authority.
-#[cfg(test)]
-pub trait PublicSolanaC1Executor: Send {
-    /// Perform one exact read-only request after the caller has durably started the attempt.
-    ///
-    /// # Errors
-    ///
-    /// Returns only a sanitized transport, size, or schema refusal. Implementations must not
-    /// retain or render endpoint URLs or response bodies in the error.
-    fn execute(
-        &mut self,
-        request: &PublicSolanaC1Request,
-    ) -> Result<PublicSolanaC1TransportResponse, PublicSolanaC1ExecutionError>;
-}
-
-/// One-page C1 runner. No production constructor supplies it with a network executor.
-#[cfg(test)]
-pub struct PublicSolanaC1Runner<E> {
-    plan: ValidatedProviderRunPlan,
-    executor: E,
-    pending: Option<ProviderAttemptPlan>,
-    exhausted: bool,
-    shutdown_requested: bool,
-}
-
-#[cfg(test)]
-impl<E: PublicSolanaC1Executor> PublicSolanaC1Runner<E> {
-    /// Construct the runner around an explicitly unverified executor.
-    ///
-    /// The accepted plan is still `ValidationOnlyNoProviderIo`; this constructor is not exposed by
-    /// the collector CLI and grants no live-source or W5-G1 qualification.
-    ///
-    /// # What this constructor can actually refuse
-    ///
-    /// Seven conditions are written below and they have **two** possible arguments between them.
-    /// A [`ValidatedProviderRunPlan`] has private fields and one constructor,
-    /// [`crate::validate_provider_run_plan`], and in this tree that constructor can return
-    /// exactly two plan shapes: the sealed C0 plan and the public-Solana C1 plan. The C1 plan is
-    /// admitted here and the C0 plan is refused; nothing else can be passed in.
-    ///
-    /// Why the domain is that small:
-    ///
-    /// - **No C2 plan validates.** `validate_c2_shape` admits only Helius operations, and neither
-    ///   admissible source/method pair in the tree declares one, so every C2 plan is refused for
-    ///   its method contract before it can become a `ValidatedProviderRunPlan`.
-    /// - **`built_in_execution()` is a function of the profile**: `SyntheticEnabled` for C0 and
-    ///   `ValidationOnlyNoProviderIo` otherwise. It restates the profile condition, it does not
-    ///   add to it.
-    /// - **Only two source/method pairs are admissible**, and the one that is not the sealed C0
-    ///   synthetic pair yields `SolanaSignaturesForAddress` on [`SourceId::SolanaPublicHttp`], so
-    ///   a validated C1 operation carries those two values or the plan did not validate.
-    /// - **A C1 plan carries exactly one operation**: it must carry exactly one wallet-page
-    ///   operation, and every admissible C1 operation *is* a wallet page. That operation's
-    ///   `max_attempts` must be 1, and a wallet-page operation must carry a `PublicWalletPage`
-    ///   scope.
-    ///
-    /// The consequence is worth stating plainly rather than leaving to a reader to discover: five
-    /// of these conditions — profile, execution disposition, operation, source and scope — each
-    /// refuse the sealed C0 plan on their own, so **deleting any one of them changes no
-    /// observable behaviour**, and no test can distinguish them. What is observable, and what
-    /// `the_only_plan_this_constructor_can_refuse_is_the_sealed_c0_one` pins, is the boundary
-    /// itself: the C0 plan is refused and the C1 plan is admitted. Deleting the conditions
-    /// together fails that test.
-    ///
-    /// They stay because each states at the point of use what this runner requires rather than
-    /// deferring to an argument about another module, and because the argument above is about
-    /// *this tree's* registry rather than about a property of the types.
-    /// `a_validated_c1_plan_cannot_have_the_shape_the_other_conditions_refuse` pins every
-    /// structural fact that argument rests on, so widening
-    /// [`crate::validate_provider_run_plan`] fails a test here rather than quietly making these
-    /// conditions load-bearing without anyone noticing.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a validated plan that is not the one-operation public-Solana C1 declaration. In
-    /// this tree the only such plan is the sealed C0 one.
-    pub fn with_unverified_executor(
-        plan: ValidatedProviderRunPlan,
-        executor: E,
-    ) -> Result<Self, ProviderRunnerError> {
-        let [operation] = plan.operations() else {
-            return Err(ProviderRunnerError::LiveProviderExecutionDisabled);
-        };
-        if plan.plan().profile != CanaryProfilePort::C1
-            || plan.built_in_execution() != BuiltInExecutionDisposition::ValidationOnlyNoProviderIo
-            || operation.plan.operation != ProviderOperation::SolanaSignaturesForAddress
-            || operation.source_id != SourceId::SolanaPublicHttp
-            || operation.plan.max_attempts != 1
-            || !matches!(
-                operation.plan.scope,
-                ProviderScopePort::PublicWalletPage { .. }
-            )
-        {
-            return Err(ProviderRunnerError::LiveProviderExecutionDisabled);
-        }
-        Ok(Self {
-            plan,
-            executor,
-            pending: None,
-            exhausted: false,
-            shutdown_requested: false,
-        })
-    }
-
-    fn completion(&self, reason: ProviderCompletionReason) -> ProviderRunnerCompletion {
-        ProviderRunnerCompletion {
-            run_id: self.plan.plan().run.run_id.clone(),
-            registration_digest: self.plan.plan().run.registration_digest.clone(),
-            plan_id: self.plan.plan().plan_id.clone(),
-            plan_digest: self.plan.plan_digest().to_owned(),
-            reason,
-        }
-    }
-}
-
-#[cfg(test)]
-impl<E: PublicSolanaC1Executor> ProviderRunner for PublicSolanaC1Runner<E> {
-    fn validated_plan(&self) -> &ValidatedProviderRunPlan {
-        &self.plan
-    }
-
-    fn plan_next(&mut self) -> Result<ProviderRunnerNext, ProviderRunnerError> {
-        if self.pending.is_some() {
-            return Err(ProviderRunnerError::PendingAttemptExists);
-        }
-        if self.shutdown_requested {
-            return Ok(ProviderRunnerNext::Finished(
-                self.completion(ProviderCompletionReason::ShutdownRequested),
-            ));
-        }
-        if self.exhausted {
-            return Ok(ProviderRunnerNext::Finished(
-                self.completion(ProviderCompletionReason::Exhausted),
-            ));
-        }
-        let operation = &self.plan.operations()[0];
-        let attempt = ProviderAttemptPlan {
-            association: ProviderAttemptAssociation {
-                run_id: self.plan.plan().run.run_id.clone(),
-                registration_digest: self.plan.plan().run.registration_digest.clone(),
-                plan_id: self.plan.plan().plan_id.clone(),
-                plan_template_digest: self.plan.plan_template_digest().to_owned(),
-                plan_digest: self.plan.plan_digest().to_owned(),
-                source_key: operation.plan.source_key.clone(),
-                method_key: operation.plan.method_key.clone(),
-                operation: operation.plan.operation,
-                generation: operation.plan.generation,
-                attempt_ordinal: 1,
-            },
-            source_id: operation.source_id.clone(),
-            coverage_family: operation.coverage_family.clone(),
-            protection_domain: operation.protection_domain.clone(),
-            maximum_cost: operation.plan.attempt_cost.clone(),
-        };
-        self.pending = Some(attempt.clone());
-        Ok(ProviderRunnerNext::Attempt(Box::new(attempt)))
-    }
-
-    fn execute(
-        &mut self,
-        permit: ProviderAttemptPermit,
-    ) -> Result<ProviderAttemptReport, ProviderRunnerError> {
-        let pending = self
-            .pending
-            .take()
-            .ok_or(ProviderRunnerError::NoPendingAttempt)?;
-        if permit.association() != &pending.association
-            || permit.maximum_cost() != &pending.maximum_cost
-        {
-            self.pending = Some(pending);
-            return Err(ProviderRunnerError::PermitMismatch);
-        }
-        let ProviderScopePort::PublicWalletPage { address, max_rows } =
-            &self.plan.operations()[0].plan.scope
-        else {
-            return Err(ProviderRunnerError::LiveProviderExecutionDisabled);
-        };
-        // The bounded scope must encode to the exact frozen request before the boundary is
-        // crossed. A scope that cannot be encoded never reaches the executor.
-        let canonical = canonical_public_solana_c1_request(address, *max_rows)?;
-        // The registered method admits exactly one attempt. Once the call boundary is crossed,
-        // even a transport/schema refusal cannot silently create a second request.
-        self.exhausted = true;
-        let response = self
-            .executor
-            .execute(&PublicSolanaC1Request {
-                address: address.clone(),
-                max_rows: *max_rows,
-                commitment: PUBLIC_SOLANA_C1_COMMITMENT,
-                request_id: PUBLIC_SOLANA_C1_JSON_RPC_ID,
-                body: canonical.body,
-            })
-            .map_err(|_| ProviderRunnerError::PublicSolanaC1Execution)?;
-        validate_scripted_response(&response, *max_rows, &pending.maximum_cost)?;
-        let ingress_bytes = u64::try_from(response.frame.body.len())
-            .map_err(|_| ProviderRunnerError::ArithmeticOverflow)?;
-        let actual_usage = RuntimeBudgetPort {
-            requests: 1,
-            pages: 1,
-            ingress_bytes,
-            durable_bytes: 0,
-            provider_credits: 0,
-            wall_millis: response.elapsed_ms,
-            ..RuntimeBudgetPort::default()
-        };
-        let outcome = ProviderAttemptOutcome::Captured {
-            outputs: vec![SourceOutput::Frame(response.frame)],
-        };
-        validate_outcome(
-            &pending.source_id,
-            pending.association.operation,
-            &actual_usage,
-            &pending.maximum_cost,
-            &outcome,
-        )?;
-        Ok(ProviderAttemptReport {
-            association: pending.association,
-            reservation_id: permit.reservation_id().to_owned(),
-            actual_usage,
-            outcome,
-        })
-    }
-
-    fn cancel_planned(&mut self, attempt: &ProviderAttemptPlan) -> Result<(), ProviderRunnerError> {
-        let pending = self
-            .pending
-            .as_ref()
-            .ok_or(ProviderRunnerError::NoPendingAttempt)?;
-        if pending.association != attempt.association
-            || pending.maximum_cost != attempt.maximum_cost
-        {
-            return Err(ProviderRunnerError::PermitMismatch);
-        }
-        self.pending = None;
-        Ok(())
-    }
-
-    fn request_shutdown(&mut self) -> Result<(), ProviderRunnerError> {
-        if self.pending.is_some() {
-            return Err(ProviderRunnerError::PendingAttemptExists);
-        }
-        self.shutdown_requested = true;
-        Ok(())
-    }
-}
-
-/// Budget gate for the scripted runner boundary. Every wire-contract check lives in the real
-/// functions above; only the unverified elapsed/size clamp is left here, and a well-formed
-/// provider refusal is refused rather than captured as a page.
-///
-/// Each of the three remaining conditions is exercised by a test that asserts the error this
-/// clamp returns, not merely that the call failed. That distinction is the whole point: with the
-/// clamp removed a zero elapsed time is simply accepted, while an over-budget elapsed time or an
-/// over-budget body still reaches `validate_outcome` and comes back as `ActualUsageExceeded`
-/// instead.
-///
-/// A fourth condition, `body_len == 0`, was deleted rather than kept. An empty body is already
-/// refused by `read_public_solana_c1_body` as `EmptyBody`, which collapses into the identical
-/// `PublicSolanaC1Execution` boundary error, so no input could distinguish the two spellings and
-/// no test could pin the condition. `an_empty_scripted_body_is_refused_by_the_wire_contract` pins
-/// the behaviour that remains.
-#[cfg(test)]
-fn validate_scripted_response(
-    response: &PublicSolanaC1TransportResponse,
-    max_rows: u16,
-    maximum: &crate::RuntimeAttemptCostPort,
-) -> Result<(), ProviderRunnerError> {
-    let body_len = u64::try_from(response.frame.body.len())
-        .map_err(|_| ProviderRunnerError::ArithmeticOverflow)?;
-    let reserved = maximum.reserved_total()?;
-    if response.elapsed_ms == 0
-        || response.elapsed_ms > reserved.wall_millis
-        || body_len > reserved.ingress_bytes
-    {
-        return Err(ProviderRunnerError::PublicSolanaC1Execution);
-    }
-    match read_public_solana_c1_frame(&response.frame, max_rows)? {
-        PublicSolanaC1Outcome::Page(_) => Ok(()),
-        PublicSolanaC1Outcome::ProviderRefusal(_) => {
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::{
-        PROVIDER_RUN_PLAN_PORT_VERSION, PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT,
-        PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT, ProviderOperationPlan, ProviderRunPlan,
-        RegisteredRunPort, RuntimeAttemptCostPort, UnixMillis, validate_provider_run_plan,
-    };
+    use crate::UnixMillis;
 
     const WALLET: &str = "BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh";
 
@@ -1170,89 +814,6 @@ mod tests {
     /// Solana ed25519 transaction signature has, which is what lets it pin the constant.
     const FIXED_SIGNATURE: &str =
         "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv";
-
-    struct ScriptedExecutor {
-        response: Option<PublicSolanaC1TransportResponse>,
-        calls: usize,
-        last_request: Option<PublicSolanaC1Request>,
-    }
-
-    impl PublicSolanaC1Executor for ScriptedExecutor {
-        fn execute(
-            &mut self,
-            request: &PublicSolanaC1Request,
-        ) -> Result<PublicSolanaC1TransportResponse, PublicSolanaC1ExecutionError> {
-            self.calls += 1;
-            self.last_request = Some(request.clone());
-            self.response
-                .take()
-                .ok_or(PublicSolanaC1ExecutionError::Transport)
-        }
-    }
-
-    fn plan() -> ValidatedProviderRunPlan {
-        plan_with_reserved(1_048_576, 10_000)
-    }
-
-    /// The scripted plan with its reserved ingress and wall budget chosen by the caller. The
-    /// clamp in `validate_scripted_response` compares against the *reserved* total, so the hard
-    /// cap and the single attempt's worst case move together and nothing else about the plan
-    /// changes.
-    fn plan_with_reserved(ingress_bytes: u64, wall_millis: u64) -> ValidatedProviderRunPlan {
-        validate_provider_run_plan(raw_plan(ingress_bytes, wall_millis)).expect("C1 plan")
-    }
-
-    /// The same plan before validation, so a test can vary one field and ask
-    /// [`validate_provider_run_plan`] what it thinks of the result.
-    fn raw_plan(ingress_bytes: u64, wall_millis: u64) -> ProviderRunPlan {
-        ProviderRunPlan {
-            port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
-            plan_id: "public-solana-c1".to_owned(),
-            run: RegisteredRunPort {
-                run_id: "run-public-solana-c1".to_owned(),
-                registration_digest:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-            },
-            profile: CanaryProfilePort::C1,
-            hard_cap: RuntimeBudgetPort {
-                requests: 1,
-                pages: 1,
-                ingress_bytes,
-                durable_bytes: 8_388_608,
-                wall_millis,
-                ..RuntimeBudgetPort::default()
-            },
-            max_elapsed_ms: wall_millis,
-            max_ingress_bytes_per_second: None,
-            max_in_flight_attempts: 1,
-            operations: vec![ProviderOperationPlan {
-                source_key: "solana.public.mainnet".to_owned(),
-                method_key: "get_signatures_for_address".to_owned(),
-                source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-                method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
-                    .to_owned(),
-                operation: ProviderOperation::SolanaSignaturesForAddress,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::PublicWalletPage {
-                    address: WALLET.to_owned(),
-                    max_rows: 2,
-                },
-                attempt_cost: RuntimeAttemptCostPort {
-                    worst_case: RuntimeBudgetPort {
-                        requests: 1,
-                        pages: 1,
-                        ingress_bytes,
-                        durable_bytes: 8_388_608,
-                        wall_millis,
-                        ..RuntimeBudgetPort::default()
-                    },
-                    max_overshoot: RuntimeBudgetPort::default(),
-                },
-            }],
-        }
-    }
 
     fn signature(byte: u8) -> String {
         bs58::encode([byte; SIGNATURE_BYTES]).into_string()
@@ -1284,34 +845,27 @@ mod tests {
         .expect("response JSON")
     }
 
-    fn frame_with(body: Vec<u8>) -> PublicSolanaC1TransportResponse {
-        PublicSolanaC1TransportResponse {
-            frame: RawSourceFrame {
-                contract_version: crate::ADAPTER_CONTRACT_VERSION.to_owned(),
-                source: SourceId::SolanaPublicHttp,
-                transport: Transport::Http,
-                stream_class: StreamClass::Backfill,
-                direction: FrameDirection::Inbound,
-                content_type: ContentType::Json,
-                received_at: UnixMillis(1_000),
-                connection_epoch: 1,
-                sequence: 1,
-                http_status: Some(200),
-                safe_headers: Vec::new(),
-                body: Bytes::from(body),
-            },
-            elapsed_ms: 5,
+    fn frame_with(body: Vec<u8>) -> RawSourceFrame {
+        RawSourceFrame {
+            contract_version: crate::ADAPTER_CONTRACT_VERSION.to_owned(),
+            source: SourceId::SolanaPublicHttp,
+            transport: Transport::Http,
+            stream_class: StreamClass::Backfill,
+            direction: FrameDirection::Inbound,
+            content_type: ContentType::Json,
+            received_at: UnixMillis(1_000),
+            connection_epoch: 1,
+            sequence: 1,
+            http_status: Some(200),
+            safe_headers: Vec::new(),
+            body: Bytes::from(body),
         }
     }
 
-    fn response(slots: [u64; 2]) -> PublicSolanaC1TransportResponse {
-        frame_with(two_row_body(slots))
-    }
-
     fn page_of(body: &[u8], max_rows: u16) -> RawSignaturePage {
-        match read_public_solana_c1_body(body, max_rows).expect("conforming page") {
-            PublicSolanaC1Outcome::Page(page) => page,
-            PublicSolanaC1Outcome::ProviderRefusal(_) => {
+        match read_solana_json_rpc_body(body, max_rows).expect("conforming page") {
+            SolanaJsonRpcOutcome::Page(page) => page,
+            SolanaJsonRpcOutcome::ProviderRefusal(_) => {
                 panic!("a provider refusal is not a page")
             }
         }
@@ -1323,8 +877,8 @@ mod tests {
 
     #[test]
     fn canonical_request_bytes_are_exact_and_byte_identical_across_calls() {
-        let first = canonical_public_solana_c1_request(WALLET, 2).expect("canonical request");
-        let second = canonical_public_solana_c1_request(WALLET, 2).expect("canonical request");
+        let first = canonical_solana_signatures_request(WALLET, 2).expect("canonical request");
+        let second = canonical_solana_signatures_request(WALLET, 2).expect("canonical request");
         assert_eq!(first.body, CANONICAL_TWO_ROW_REQUEST.as_bytes());
         assert_eq!(first.byte_len, 154);
         assert_eq!(first.byte_len, first.body.len());
@@ -1332,7 +886,7 @@ mod tests {
     }
 
     /// The exact byte length of the longest canonical request body any admissible input can
-    /// produce. The test this replaces asserted only `byte_len <= PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES`,
+    /// produce. The test this replaces asserted only `byte_len <= SOLANA_JSON_RPC_MAX_REQUEST_BYTES`,
     /// which the `.expect` on the preceding line already implied — deleting the
     /// `RequestExceedsRegisteredBound` guard left it green. A number is what makes a widening
     /// visible.
@@ -1345,13 +899,14 @@ mod tests {
     fn the_longest_admissible_canonical_request_body_is_exactly_156_bytes() {
         let widest_address = bs58::encode([0xFF_u8; ADDRESS_BYTES]).into_string();
         assert_eq!(widest_address.len(), 44);
-        let widest = canonical_public_solana_c1_request(&widest_address, PUBLIC_SOLANA_C1_MAX_ROWS)
-            .expect("canonical request");
+        let widest =
+            canonical_solana_signatures_request(&widest_address, SOLANA_SIGNATURES_MAX_ROWS)
+                .expect("canonical request");
         assert_eq!(widest.byte_len, 156);
         assert_eq!(widest.body.len(), 156);
-        assert_eq!(PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES - widest.byte_len, 3_940);
+        assert_eq!(SOLANA_JSON_RPC_MAX_REQUEST_BYTES - widest.byte_len, 3_940);
 
-        let wallet = canonical_public_solana_c1_request(WALLET, PUBLIC_SOLANA_C1_MAX_ROWS)
+        let wallet = canonical_solana_signatures_request(WALLET, SOLANA_SIGNATURES_MAX_ROWS)
             .expect("canonical request");
         assert_eq!(wallet.body, CANONICAL_HUNDRED_ROW_REQUEST.as_bytes());
         assert_eq!(wallet.byte_len, 156);
@@ -1370,7 +925,7 @@ mod tests {
         )
         .expect("admitted method");
         assert_eq!(
-            u64::try_from(PUBLIC_SOLANA_C1_MAX_REQUEST_BYTES).expect("bound fits"),
+            u64::try_from(SOLANA_JSON_RPC_MAX_REQUEST_BYTES).expect("bound fits"),
             admitted.method.max_request_bytes
         );
     }
@@ -1378,26 +933,26 @@ mod tests {
     #[test]
     fn canonical_request_refuses_a_bad_address_and_out_of_range_row_bounds() {
         assert_eq!(
-            canonical_public_solana_c1_request("not a base58 address!", 2),
-            Err(PublicSolanaC1RequestError::AddressNotBase58)
+            canonical_solana_signatures_request("not a base58 address!", 2),
+            Err(SolanaRequestError::AddressNotBase58)
         );
         let too_short = bs58::encode([7_u8; 31]).into_string();
         assert_eq!(
-            canonical_public_solana_c1_request(&too_short, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes)
+            canonical_solana_signatures_request(&too_short, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes)
         );
         let too_long = bs58::encode([7_u8; 33]).into_string();
         assert_eq!(
-            canonical_public_solana_c1_request(&too_long, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes)
+            canonical_solana_signatures_request(&too_long, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes)
         );
         assert_eq!(
-            canonical_public_solana_c1_request(WALLET, 0),
-            Err(PublicSolanaC1RequestError::RowBoundOutOfRange)
+            canonical_solana_signatures_request(WALLET, 0),
+            Err(SolanaRequestError::RowBoundOutOfRange)
         );
         assert_eq!(
-            canonical_public_solana_c1_request(WALLET, 101),
-            Err(PublicSolanaC1RequestError::RowBoundOutOfRange)
+            canonical_solana_signatures_request(WALLET, 101),
+            Err(SolanaRequestError::RowBoundOutOfRange)
         );
     }
 
@@ -1412,31 +967,31 @@ mod tests {
         let widest = bs58::encode([0xFF_u8; ADDRESS_BYTES]).into_string();
         assert_eq!(widest.len(), MAX_ADDRESS_BASE58_CHARS);
         assert_eq!(WALLET.len(), MAX_ADDRESS_BASE58_CHARS);
-        canonical_public_solana_c1_request(&widest, 2)
+        canonical_solana_signatures_request(&widest, 2)
             .expect("the widest 32-byte address is admitted");
 
         let over_long_not_base58 = "!".repeat(MAX_ADDRESS_BASE58_CHARS + 1);
         assert_eq!(
-            canonical_public_solana_c1_request(&over_long_not_base58, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes),
+            canonical_solana_signatures_request(&over_long_not_base58, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes),
             "the length is what refuses this, not the alphabet"
         );
         assert_eq!(
-            canonical_public_solana_c1_request("!", 2),
-            Err(PublicSolanaC1RequestError::AddressNotBase58),
+            canonical_solana_signatures_request("!", 2),
+            Err(SolanaRequestError::AddressNotBase58),
             "the control: inside the width, the alphabet is still what refuses"
         );
 
         // One base58 character over the width, and a value far past it. Neither is decoded.
         let one_over = "1".repeat(MAX_ADDRESS_BASE58_CHARS + 1);
         assert_eq!(
-            canonical_public_solana_c1_request(&one_over, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes)
+            canonical_solana_signatures_request(&one_over, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes)
         );
         let far_over = "z".repeat(4 * 1_024);
         assert_eq!(
-            canonical_public_solana_c1_request(&far_over, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes)
+            canonical_solana_signatures_request(&far_over, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes)
         );
 
         // A multi-byte character makes the value wider in bytes than in characters, which is what
@@ -1445,8 +1000,8 @@ mod tests {
         assert_eq!(wide_chars.chars().count(), MAX_ADDRESS_BASE58_CHARS);
         assert!(wide_chars.len() > MAX_ADDRESS_BASE58_CHARS);
         assert_eq!(
-            canonical_public_solana_c1_request(&wide_chars, 2),
-            Err(PublicSolanaC1RequestError::AddressNotThirtyTwoBytes)
+            canonical_solana_signatures_request(&wide_chars, 2),
+            Err(SolanaRequestError::AddressNotThirtyTwoBytes)
         );
     }
 
@@ -1463,107 +1018,107 @@ mod tests {
         let not_json: &[u8] = b"not json at all";
         for max_rows in [0, 101, u16::MAX] {
             assert_eq!(
-                read_public_solana_c1_body(not_json, max_rows),
-                Err(PublicSolanaC1ConformanceError::RegisteredRowBoundOutOfRange)
+                read_solana_json_rpc_body(not_json, max_rows),
+                Err(SolanaJsonRpcConformanceError::RegisteredRowBoundOutOfRange)
             );
         }
         assert_eq!(
-            read_public_solana_c1_body(not_json, 2),
-            Err(PublicSolanaC1ConformanceError::MalformedJson),
+            read_solana_json_rpc_body(not_json, 2),
+            Err(SolanaJsonRpcConformanceError::MalformedJson),
             "the control: the same bytes do reach the parser once the row bound is in range"
         );
 
         // The check also precedes the UTF-8 decode and the empty-body refusal, so neither of those
         // can stand in for it.
         assert_eq!(
-            read_public_solana_c1_body(&[0x7b, 0xff, 0x7d], 0),
-            Err(PublicSolanaC1ConformanceError::RegisteredRowBoundOutOfRange)
+            read_solana_json_rpc_body(&[0x7b, 0xff, 0x7d], 0),
+            Err(SolanaJsonRpcConformanceError::RegisteredRowBoundOutOfRange)
         );
         assert_eq!(
-            read_public_solana_c1_body(b"", 0),
-            Err(PublicSolanaC1ConformanceError::RegisteredRowBoundOutOfRange)
+            read_solana_json_rpc_body(b"", 0),
+            Err(SolanaJsonRpcConformanceError::RegisteredRowBoundOutOfRange)
         );
 
         // A body that would otherwise be read normally is refused on the same ground.
         assert_eq!(
-            read_public_solana_c1_body(&two_row_body([10, 9]), 101),
-            Err(PublicSolanaC1ConformanceError::RegisteredRowBoundOutOfRange)
+            read_solana_json_rpc_body(&two_row_body([10, 9]), 101),
+            Err(SolanaJsonRpcConformanceError::RegisteredRowBoundOutOfRange)
         );
     }
 
     #[test]
     fn an_empty_body_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(b"", 2),
-            Err(PublicSolanaC1ConformanceError::EmptyBody)
+            read_solana_json_rpc_body(b"", 2),
+            Err(SolanaJsonRpcConformanceError::EmptyBody)
         );
     }
 
     #[test]
     fn a_non_utf8_body_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(&[0x7b, 0xff, 0x7d], 2),
-            Err(PublicSolanaC1ConformanceError::NotUtf8)
+            read_solana_json_rpc_body(&[0x7b, 0xff, 0x7d], 2),
+            Err(SolanaJsonRpcConformanceError::NotUtf8)
         );
     }
 
     #[test]
     fn a_malformed_json_body_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","#, 2),
-            Err(PublicSolanaC1ConformanceError::MalformedJson)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","#, 2),
+            Err(SolanaJsonRpcConformanceError::MalformedJson)
         );
     }
 
     #[test]
     fn trailing_bytes_after_the_json_value_are_refused() {
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":1,"result":[]} {"id":1}"#, 2),
-            Err(PublicSolanaC1ConformanceError::TrailingBytes)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":1,"result":[]} {"id":1}"#, 2),
+            Err(SolanaJsonRpcConformanceError::TrailingBytes)
         );
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":1,"result":[]}junk"#, 2),
-            Err(PublicSolanaC1ConformanceError::TrailingBytes)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":1,"result":[]}junk"#, 2),
+            Err(SolanaJsonRpcConformanceError::TrailingBytes)
         );
     }
 
     #[test]
     fn duplicate_json_object_keys_are_refused_at_the_root_and_inside_a_row() {
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":1,"id":1,"result":[]}"#, 2),
-            Err(PublicSolanaC1ConformanceError::DuplicateJsonKey)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":1,"id":1,"result":[]}"#, 2),
+            Err(SolanaJsonRpcConformanceError::DuplicateJsonKey)
         );
         let nested = format!(
             r#"{{"jsonrpc":"2.0","id":1,"result":[{{"signature":"{}","slot":10,"slot":10,"err":null,"memo":null,"blockTime":1,"confirmationStatus":"finalized"}}]}}"#,
             signature(1)
         );
         assert_eq!(
-            read_public_solana_c1_body(nested.as_bytes(), 2),
-            Err(PublicSolanaC1ConformanceError::DuplicateJsonKey)
+            read_solana_json_rpc_body(nested.as_bytes(), 2),
+            Err(SolanaJsonRpcConformanceError::DuplicateJsonKey)
         );
     }
 
     #[test]
     fn an_unknown_or_missing_envelope_member_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":1,"result":[],"context":{}}"#, 2),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":1,"result":[],"context":{}}"#, 2),
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":2,"result":[]}"#, 2),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":2,"result":[]}"#, 2),
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"1.0","id":1,"result":[]}"#, 2),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"1.0","id":1,"result":[]}"#, 2),
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         assert_eq!(
-            read_public_solana_c1_body(b"[]", 2),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            read_solana_json_rpc_body(b"[]", 2),
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         assert_eq!(
-            read_public_solana_c1_body(br#"{"jsonrpc":"2.0","id":1}"#, 2),
-            Err(PublicSolanaC1ConformanceError::NeitherResultNorError)
+            read_solana_json_rpc_body(br#"{"jsonrpc":"2.0","id":1}"#, 2),
+            Err(SolanaJsonRpcConformanceError::NeitherResultNorError)
         );
     }
 
@@ -1603,8 +1158,8 @@ mod tests {
             ("signature ", serde_json::json!("padded key")),
         ] {
             assert_eq!(
-                read_public_solana_c1_body(&row_with(Some((name, value))), 2),
-                Err(PublicSolanaC1ConformanceError::EnvelopeMismatch),
+                read_solana_json_rpc_body(&row_with(Some((name, value))), 2),
+                Err(SolanaJsonRpcConformanceError::EnvelopeMismatch),
                 "a row carrying {name} must be refused"
             );
         }
@@ -1616,27 +1171,27 @@ mod tests {
     #[test]
     fn an_unknown_member_on_the_error_envelope_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"no"},"result":null}"#,
                 2
             ),
-            Err(PublicSolanaC1ConformanceError::ResultAndErrorBothPresent),
+            Err(SolanaJsonRpcConformanceError::ResultAndErrorBothPresent),
             "a null result is still a result member, and that is refused before the shape is read"
         );
         assert_eq!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"no"},"context":{}}"#,
                 2
             ),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         // The control: the same envelope without the extra member is a typed provider refusal.
         assert!(matches!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"no"}}"#,
                 2
             ),
-            Ok(PublicSolanaC1Outcome::ProviderRefusal(_))
+            Ok(SolanaJsonRpcOutcome::ProviderRefusal(_))
         ));
     }
 
@@ -1662,8 +1217,8 @@ mod tests {
             }))
             .expect("body");
             assert_eq!(
-                read_public_solana_c1_body(&body, 2),
-                Err(PublicSolanaC1ConformanceError::EnvelopeMismatch),
+                read_solana_json_rpc_body(&body, 2),
+                Err(SolanaJsonRpcConformanceError::EnvelopeMismatch),
                 "a row missing {absent} must be refused"
             );
         }
@@ -1692,8 +1247,8 @@ mod tests {
     #[test]
     fn a_page_over_the_registered_row_bound_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(&two_row_body([10, 9]), 1),
-            Err(PublicSolanaC1ConformanceError::RowLimitExceeded)
+            read_solana_json_rpc_body(&two_row_body([10, 9]), 1),
+            Err(SolanaJsonRpcConformanceError::RowLimitExceeded)
         );
     }
 
@@ -1720,21 +1275,21 @@ mod tests {
     fn a_signature_that_decodes_to_the_wrong_length_is_refused() {
         let short = bs58::encode([3_u8; 63]).into_string();
         assert_eq!(
-            read_public_solana_c1_body(&rows_body(&[(short, 10)]), 2),
-            Err(PublicSolanaC1ConformanceError::SignatureWrongLength)
+            read_solana_json_rpc_body(&rows_body(&[(short, 10)]), 2),
+            Err(SolanaJsonRpcConformanceError::SignatureWrongLength)
         );
         let long = bs58::encode([3_u8; 65]).into_string();
         assert_eq!(
-            read_public_solana_c1_body(&rows_body(&[(long, 10)]), 2),
-            Err(PublicSolanaC1ConformanceError::SignatureWrongLength)
+            read_solana_json_rpc_body(&rows_body(&[(long, 10)]), 2),
+            Err(SolanaJsonRpcConformanceError::SignatureWrongLength)
         );
     }
 
     #[test]
     fn a_signature_outside_the_base58_alphabet_is_refused() {
         assert_eq!(
-            read_public_solana_c1_body(&rows_body(&[("not base58!".to_owned(), 10)]), 2),
-            Err(PublicSolanaC1ConformanceError::SignatureNotBase58)
+            read_solana_json_rpc_body(&rows_body(&[("not base58!".to_owned(), 10)]), 2),
+            Err(SolanaJsonRpcConformanceError::SignatureNotBase58)
         );
     }
 
@@ -1742,8 +1297,8 @@ mod tests {
     fn a_repeated_signature_inside_one_page_is_refused() {
         let repeated = rows_body(&[(signature(1), 10), (signature(1), 10)]);
         assert_eq!(
-            read_public_solana_c1_body(&repeated, 2),
-            Err(PublicSolanaC1ConformanceError::DuplicateSignature)
+            read_solana_json_rpc_body(&repeated, 2),
+            Err(SolanaJsonRpcConformanceError::DuplicateSignature)
         );
     }
 
@@ -1761,8 +1316,8 @@ mod tests {
         assert_eq!(decreasing.rows[1].slot, 10);
 
         assert_eq!(
-            read_public_solana_c1_body(&two_row_body([9, 10]), 2),
-            Err(PublicSolanaC1ConformanceError::OrderingNotNewestFirst)
+            read_solana_json_rpc_body(&two_row_body([9, 10]), 2),
+            Err(SolanaJsonRpcConformanceError::OrderingNotNewestFirst)
         );
     }
 
@@ -1773,15 +1328,15 @@ mod tests {
         value["result"][0]["confirmationStatus"] = Value::String("confirmed".to_owned());
         let confirmed = serde_json::to_vec(&value).expect("body");
         assert_eq!(
-            read_public_solana_c1_body(&confirmed, 2),
-            Err(PublicSolanaC1ConformanceError::ConfirmationStatusNotFinalized)
+            read_solana_json_rpc_body(&confirmed, 2),
+            Err(SolanaJsonRpcConformanceError::ConfirmationStatusNotFinalized)
         );
 
         value["result"][0]["confirmationStatus"] = Value::Null;
         let null_status = serde_json::to_vec(&value).expect("body");
         assert_eq!(
-            read_public_solana_c1_body(&null_status, 2),
-            Err(PublicSolanaC1ConformanceError::ConfirmationStatusNotFinalized)
+            read_solana_json_rpc_body(&null_status, 2),
+            Err(SolanaJsonRpcConformanceError::ConfirmationStatusNotFinalized)
         );
     }
 
@@ -1806,7 +1361,7 @@ mod tests {
         let page = page_of(&two_row_body([10, 9]), 2);
         assert_eq!(
             page.rows[0].confirmation_status.as_deref(),
-            Some(PUBLIC_SOLANA_C1_COMMITMENT)
+            Some(SOLANA_SIGNATURES_COMMITMENT)
         );
         assert_eq!(page.rows[0].err, Value::Null);
         assert_eq!(page.rows[0].block_time, Some(1));
@@ -1820,20 +1375,20 @@ mod tests {
     #[test]
     fn a_well_formed_rpc_error_is_a_typed_provider_refusal_and_never_a_page() {
         let body = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params: limit out of range"}}"#;
-        match read_public_solana_c1_body(body, 2).expect("typed refusal") {
-            PublicSolanaC1Outcome::ProviderRefusal(refusal) => {
+        match read_solana_json_rpc_body(body, 2).expect("typed refusal") {
+            SolanaJsonRpcOutcome::ProviderRefusal(refusal) => {
                 assert_eq!(refusal.code, -32_602);
                 assert_eq!(refusal.message, "Invalid params: limit out of range");
                 assert_eq!(refusal.data, None);
             }
-            PublicSolanaC1Outcome::Page(_) => panic!("a typed refusal must never be a page"),
+            SolanaJsonRpcOutcome::Page(_) => panic!("a typed refusal must never be a page"),
         }
     }
 
     /// The refusal branch binds the envelope to *this* request exactly as the page branch does.
     /// Both halves are load bearing on their own: without the version check a refusal spoken in
     /// another protocol version would be accepted, and without the id check a refusal answering a
-    /// different request would be accepted as the refusal of this one. C1 issues exactly one
+    /// different request would be accepted as the refusal of this one. This path issues one
     /// request, with `id` fixed at 1, so an answer carrying any other id is an answer to
     /// something else.
     #[test]
@@ -1849,27 +1404,27 @@ mod tests {
 
         // The control: the exact envelope is a typed provider refusal.
         assert!(matches!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 &refusal(
-                    PUBLIC_SOLANA_C1_JSON_RPC_VERSION,
-                    i64::try_from(PUBLIC_SOLANA_C1_JSON_RPC_ID).expect("id fits"),
+                    SOLANA_JSON_RPC_VERSION,
+                    i64::try_from(SOLANA_JSON_RPC_ID).expect("id fits"),
                 ),
                 2
             ),
-            Ok(PublicSolanaC1Outcome::ProviderRefusal(_))
+            Ok(SolanaJsonRpcOutcome::ProviderRefusal(_))
         ));
 
         for jsonrpc in ["1.0", "2", "2.0.0", ""] {
             assert_eq!(
-                read_public_solana_c1_body(&refusal(jsonrpc, 1), 2),
-                Err(PublicSolanaC1ConformanceError::EnvelopeMismatch),
+                read_solana_json_rpc_body(&refusal(jsonrpc, 1), 2),
+                Err(SolanaJsonRpcConformanceError::EnvelopeMismatch),
                 "a refusal declaring JSON-RPC {jsonrpc} must not answer for this request"
             );
         }
         for id in [0, 2, 7, i64::MAX] {
             assert_eq!(
-                read_public_solana_c1_body(&refusal(PUBLIC_SOLANA_C1_JSON_RPC_VERSION, id), 2),
-                Err(PublicSolanaC1ConformanceError::EnvelopeMismatch),
+                read_solana_json_rpc_body(&refusal(SOLANA_JSON_RPC_VERSION, id), 2),
+                Err(SolanaJsonRpcConformanceError::EnvelopeMismatch),
                 "a refusal answering request {id} must not answer for request 1"
             );
         }
@@ -1878,11 +1433,11 @@ mod tests {
     #[test]
     fn a_typed_provider_refusal_retains_auxiliary_data_verbatim() {
         let body = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"rate limited","data":{"retryAfterMs":250}}}"#;
-        match read_public_solana_c1_body(body, 2).expect("typed refusal") {
-            PublicSolanaC1Outcome::ProviderRefusal(refusal) => {
+        match read_solana_json_rpc_body(body, 2).expect("typed refusal") {
+            SolanaJsonRpcOutcome::ProviderRefusal(refusal) => {
                 assert_eq!(refusal.data, Some(serde_json::json!({"retryAfterMs": 250})));
             }
-            PublicSolanaC1Outcome::Page(_) => panic!("a typed refusal must never be a page"),
+            SolanaJsonRpcOutcome::Page(_) => panic!("a typed refusal must never be a page"),
         }
     }
 
@@ -1901,9 +1456,9 @@ mod tests {
         }
 
         fn retained_data(body: &[u8]) -> Option<Value> {
-            match read_public_solana_c1_body(body, 2).expect("typed refusal") {
-                PublicSolanaC1Outcome::ProviderRefusal(refusal) => refusal.data,
-                PublicSolanaC1Outcome::Page(_) => panic!("a typed refusal must never be a page"),
+            match read_solana_json_rpc_body(body, 2).expect("typed refusal") {
+                SolanaJsonRpcOutcome::ProviderRefusal(refusal) => refusal.data,
+                SolanaJsonRpcOutcome::Page(_) => panic!("a typed refusal must never be a page"),
             }
         }
 
@@ -1921,8 +1476,8 @@ mod tests {
             MAX_REFUSAL_DATA_BYTES + 1
         );
         assert_eq!(
-            read_public_solana_c1_body(&refusal_body(&over_bound), 2),
-            Err(PublicSolanaC1ConformanceError::RefusalDataNotBounded)
+            read_solana_json_rpc_body(&refusal_body(&over_bound), 2),
+            Err(SolanaJsonRpcConformanceError::RefusalDataNotBounded)
         );
 
         // The bound is on the whole retained value, not on any one string inside it: a structure
@@ -1933,8 +1488,8 @@ mod tests {
             .into();
         assert!(serde_json::to_vec(&wide).expect("encoded").len() > MAX_REFUSAL_DATA_BYTES);
         assert_eq!(
-            read_public_solana_c1_body(&refusal_body(&wide), 2),
-            Err(PublicSolanaC1ConformanceError::RefusalDataNotBounded)
+            read_solana_json_rpc_body(&refusal_body(&wide), 2),
+            Err(SolanaJsonRpcConformanceError::RefusalDataNotBounded)
         );
 
         // An absent `data` member is not a bound violation. Neither is an explicit null, which
@@ -1961,8 +1516,8 @@ mod tests {
         }))
         .expect("refusal body");
         assert_eq!(
-            read_public_solana_c1_body(&long_message, 2),
-            Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded)
+            read_solana_json_rpc_body(&long_message, 2),
+            Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded)
         );
     }
 
@@ -1984,9 +1539,9 @@ mod tests {
         }
 
         fn retained_message(body: &[u8]) -> String {
-            match read_public_solana_c1_body(body, 2).expect("typed refusal") {
-                PublicSolanaC1Outcome::ProviderRefusal(refusal) => refusal.message,
-                PublicSolanaC1Outcome::Page(_) => panic!("a typed refusal must never be a page"),
+            match read_solana_json_rpc_body(body, 2).expect("typed refusal") {
+                SolanaJsonRpcOutcome::ProviderRefusal(refusal) => refusal.message,
+                SolanaJsonRpcOutcome::Page(_) => panic!("a typed refusal must never be a page"),
             }
         }
 
@@ -1998,8 +1553,8 @@ mod tests {
         let over_bound = "m".repeat(MAX_REFUSAL_MESSAGE_BYTES + 1);
         assert_eq!(over_bound.len(), 513);
         assert_eq!(
-            read_public_solana_c1_body(&refusal_body(&over_bound), 2),
-            Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded)
+            read_solana_json_rpc_body(&refusal_body(&over_bound), 2),
+            Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded)
         );
 
         let wide_at_bound = "\u{e9}".repeat(MAX_REFUSAL_MESSAGE_BYTES / 2);
@@ -2013,41 +1568,41 @@ mod tests {
         let wide_over_bound = "\u{e9}".repeat(MAX_REFUSAL_MESSAGE_BYTES / 2 + 1);
         assert_eq!(wide_over_bound.len(), 514);
         assert_eq!(
-            read_public_solana_c1_body(&refusal_body(&wide_over_bound), 2),
-            Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded)
+            read_solana_json_rpc_body(&refusal_body(&wide_over_bound), 2),
+            Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded)
         );
     }
 
     #[test]
     fn an_unbounded_or_malformed_refusal_is_not_a_typed_provider_refusal() {
         assert_eq!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":""}}"#,
                 2
             ),
-            Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded)
+            Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded)
         );
         let control = format!(
             r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":-1,"message":"{}"}}}}"#,
             "bad\\u0007message"
         );
         assert_eq!(
-            read_public_solana_c1_body(control.as_bytes(), 2),
-            Err(PublicSolanaC1ConformanceError::RefusalMessageNotBounded)
+            read_solana_json_rpc_body(control.as_bytes(), 2),
+            Err(SolanaJsonRpcConformanceError::RefusalMessageNotBounded)
         );
         assert_eq!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"no","extra":1}}"#,
                 2
             ),
-            Err(PublicSolanaC1ConformanceError::EnvelopeMismatch)
+            Err(SolanaJsonRpcConformanceError::EnvelopeMismatch)
         );
         assert_eq!(
-            read_public_solana_c1_body(
+            read_solana_json_rpc_body(
                 br#"{"jsonrpc":"2.0","id":1,"result":[],"error":{"code":-1,"message":"no"}}"#,
                 2
             ),
-            Err(PublicSolanaC1ConformanceError::ResultAndErrorBothPresent)
+            Err(SolanaJsonRpcConformanceError::ResultAndErrorBothPresent)
         );
     }
 
@@ -2058,23 +1613,23 @@ mod tests {
     #[test]
     fn frame_envelope_substitution_is_refused_before_the_body_is_read() {
         let mut wrong_status = frame_with(two_row_body([10, 9]));
-        wrong_status.frame.http_status = Some(204);
+        wrong_status.http_status = Some(204);
         assert_eq!(
-            read_public_solana_c1_frame(&wrong_status.frame, 2),
-            Err(PublicSolanaC1ConformanceError::FrameEnvelopeMismatch)
+            read_solana_json_rpc_frame(&wrong_status, 2),
+            Err(SolanaJsonRpcConformanceError::FrameEnvelopeMismatch)
         );
 
         let mut unbounded_headers = frame_with(two_row_body([10, 9]));
-        unbounded_headers.frame.safe_headers = vec![SafeHeader {
+        unbounded_headers.safe_headers = vec![SafeHeader {
             name: "authorization".to_owned(),
             value: "secret".to_owned(),
         }];
-        assert!(!public_solana_c1_safe_headers_are_bounded(
-            &unbounded_headers.frame.safe_headers
+        assert!(!solana_safe_headers_are_bounded(
+            &unbounded_headers.safe_headers
         ));
         assert_eq!(
-            read_public_solana_c1_frame(&unbounded_headers.frame, 2),
-            Err(PublicSolanaC1ConformanceError::FrameEnvelopeMismatch)
+            read_solana_json_rpc_frame(&unbounded_headers, 2),
+            Err(SolanaJsonRpcConformanceError::FrameEnvelopeMismatch)
         );
     }
 
@@ -2118,26 +1673,26 @@ mod tests {
     /// whole hostile body had already been examined.
     #[test]
     fn a_body_over_the_response_ceiling_is_refused_before_it_is_parsed() {
-        let hostile = vec![b'{'; PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES + 1];
+        let hostile = vec![b'{'; INGEST_MAX_RESPONSE_BYTES + 1];
         assert_eq!(
-            read_public_solana_c1_body(&hostile, 2),
-            Err(PublicSolanaC1ConformanceError::ResponseExceedsIngressCeiling)
+            read_solana_json_rpc_body(&hostile, 2),
+            Err(SolanaJsonRpcConformanceError::ResponseExceedsIngressCeiling)
         );
     }
 
     #[test]
     fn one_byte_over_the_response_ceiling_is_refused_even_though_the_body_is_well_formed() {
-        let body = body_of_exact_length(PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES + 1);
+        let body = body_of_exact_length(INGEST_MAX_RESPONSE_BYTES + 1);
         assert_eq!(
-            read_public_solana_c1_body(&body, 2),
-            Err(PublicSolanaC1ConformanceError::ResponseExceedsIngressCeiling)
+            read_solana_json_rpc_body(&body, 2),
+            Err(SolanaJsonRpcConformanceError::ResponseExceedsIngressCeiling)
         );
     }
 
     #[test]
     fn a_body_at_exactly_the_response_ceiling_is_still_read_normally() {
-        let body = body_of_exact_length(PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES);
-        assert_eq!(body.len(), PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES);
+        let body = body_of_exact_length(INGEST_MAX_RESPONSE_BYTES);
+        assert_eq!(body.len(), INGEST_MAX_RESPONSE_BYTES);
         let page = page_of(&body, 2);
         assert_eq!(page.rows.len(), 1);
         assert!(
@@ -2152,10 +1707,10 @@ mod tests {
     #[test]
     fn a_frame_over_the_response_ceiling_is_refused_by_the_same_ingress_bound() {
         let mut frame = conforming_frame();
-        frame.body = Bytes::from(vec![b'{'; PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES + 1]);
+        frame.body = Bytes::from(vec![b'{'; INGEST_MAX_RESPONSE_BYTES + 1]);
         assert_eq!(
-            read_public_solana_c1_frame(&frame, 2),
-            Err(PublicSolanaC1ConformanceError::ResponseExceedsIngressCeiling)
+            read_solana_json_rpc_frame(&frame, 2),
+            Err(SolanaJsonRpcConformanceError::ResponseExceedsIngressCeiling)
         );
     }
 
@@ -2171,7 +1726,7 @@ mod tests {
         .expect("admitted method");
         assert_eq!(admitted.method.max_response_bytes, 64 * 1_024 * 1_024);
         assert!(
-            u64::try_from(PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES).expect("ceiling fits")
+            u64::try_from(INGEST_MAX_RESPONSE_BYTES).expect("ceiling fits")
                 < admitted.method.max_response_bytes
         );
     }
@@ -2180,7 +1735,7 @@ mod tests {
     // Retained safe-header allowlist
     // -----------------------------------------------------------------------------------------
 
-    /// The exact four names the bounded C1 allowance admits, in the lowercased spelling.
+    /// The exact four names the bounded allowance admits, in the lowercased spelling.
     const ALLOWED_HEADER_NAMES: [&str; 4] = [
         "retry-after",
         "x-ratelimit-limit",
@@ -2199,8 +1754,8 @@ mod tests {
     fn every_allowed_rate_limit_header_is_admitted_on_its_own() {
         for name in ALLOWED_HEADER_NAMES {
             assert!(
-                public_solana_c1_safe_headers_are_bounded(&[header(name, "1")]),
-                "{name} is on the bounded C1 allowlist and must be admitted"
+                solana_safe_headers_are_bounded(&[header(name, "1")]),
+                "{name} is on the bounded allowlist and must be admitted"
             );
         }
     }
@@ -2214,12 +1769,12 @@ mod tests {
             .iter()
             .map(|name| header(name, "1"))
             .collect();
-        assert!(public_solana_c1_safe_headers_are_bounded(&headers));
+        assert!(solana_safe_headers_are_bounded(&headers));
         let mut frame = conforming_frame();
         frame.safe_headers = headers;
-        match read_public_solana_c1_frame(&frame, 2).expect("conforming frame with headers") {
-            PublicSolanaC1Outcome::Page(page) => assert_eq!(page.rows.len(), 2),
-            PublicSolanaC1Outcome::ProviderRefusal(_) => {
+        match read_solana_json_rpc_frame(&frame, 2).expect("conforming frame with headers") {
+            SolanaJsonRpcOutcome::Page(page) => assert_eq!(page.rows.len(), 2),
+            SolanaJsonRpcOutcome::ProviderRefusal(_) => {
                 panic!("a provider refusal is not a page")
             }
         }
@@ -2227,16 +1782,16 @@ mod tests {
 
     #[test]
     fn allowed_header_names_are_matched_case_insensitively() {
-        assert!(public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(solana_safe_headers_are_bounded(&[header(
             "Retry-After",
             "1"
         )]));
-        assert!(public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(solana_safe_headers_are_bounded(&[header(
             "X-RateLimit-Reset",
             "1"
         )]));
         // Case folding is also what makes the single-occurrence rule bite across spellings.
-        assert!(!public_solana_c1_safe_headers_are_bounded(&[
+        assert!(!solana_safe_headers_are_bounded(&[
             header("retry-after", "1"),
             header("RETRY-AFTER", "2"),
         ]));
@@ -2244,11 +1799,11 @@ mod tests {
 
     #[test]
     fn a_header_name_outside_the_allowlist_is_refused() {
-        assert!(!public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(!solana_safe_headers_are_bounded(&[header(
             "authorization",
             "secret"
         )]));
-        assert!(!public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(!solana_safe_headers_are_bounded(&[header(
             "retry-after-ms",
             "1"
         )]));
@@ -2258,12 +1813,12 @@ mod tests {
     fn a_header_value_at_the_sanitation_bound_is_admitted_and_one_byte_over_is_refused() {
         let at_bound = "v".repeat(MAX_SAFE_HEADER_VALUE_BYTES);
         assert_eq!(at_bound.len(), 256);
-        assert!(public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(solana_safe_headers_are_bounded(&[header(
             "retry-after",
             &at_bound
         )]));
         let over_bound = "v".repeat(MAX_SAFE_HEADER_VALUE_BYTES + 1);
-        assert!(!public_solana_c1_safe_headers_are_bounded(&[header(
+        assert!(!solana_safe_headers_are_bounded(&[header(
             "retry-after",
             &over_bound
         )]));
@@ -2273,7 +1828,7 @@ mod tests {
     fn a_header_value_carrying_a_control_character_is_refused() {
         for value in ["1\r\nx-injected: 2", "1\u{7f}", "1\u{0}"] {
             assert!(
-                !public_solana_c1_safe_headers_are_bounded(&[header("retry-after", value)]),
+                !solana_safe_headers_are_bounded(&[header("retry-after", value)]),
                 "a control character must never survive into a retained header"
             );
         }
@@ -2290,14 +1845,14 @@ mod tests {
             .collect();
         repeated.push(header("retry-after", "2"));
         assert_eq!(repeated.len(), ALLOWED_HEADER_NAMES.len() + 1);
-        assert!(!public_solana_c1_safe_headers_are_bounded(&repeated));
+        assert!(!solana_safe_headers_are_bounded(&repeated));
 
         let mut foreign: Vec<_> = ALLOWED_HEADER_NAMES
             .iter()
             .map(|name| header(name, "1"))
             .collect();
         foreign.push(header("x-ratelimit-policy", "1"));
-        assert!(!public_solana_c1_safe_headers_are_bounded(&foreign));
+        assert!(!solana_safe_headers_are_bounded(&foreign));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2307,13 +1862,13 @@ mod tests {
     /// The exact conforming frame the envelope tests below start from. Each of those tests flips
     /// exactly one field, so a refusal there is caused by that field and by nothing else.
     fn conforming_frame() -> RawSourceFrame {
-        frame_with(two_row_body([10, 9])).frame
+        frame_with(two_row_body([10, 9]))
     }
 
     fn assert_envelope_refused(frame: &RawSourceFrame) {
         assert_eq!(
-            read_public_solana_c1_frame(frame, 2),
-            Err(PublicSolanaC1ConformanceError::FrameEnvelopeMismatch)
+            read_solana_json_rpc_frame(frame, 2),
+            Err(SolanaJsonRpcConformanceError::FrameEnvelopeMismatch)
         );
     }
 
@@ -2321,9 +1876,9 @@ mod tests {
     /// frame were refused for some unrelated reason.
     #[test]
     fn the_unflipped_conforming_frame_is_accepted() {
-        match read_public_solana_c1_frame(&conforming_frame(), 2).expect("conforming frame") {
-            PublicSolanaC1Outcome::Page(page) => assert_eq!(page.rows.len(), 2),
-            PublicSolanaC1Outcome::ProviderRefusal(_) => {
+        match read_solana_json_rpc_frame(&conforming_frame(), 2).expect("conforming frame") {
+            SolanaJsonRpcOutcome::Page(page) => assert_eq!(page.rows.len(), 2),
+            SolanaJsonRpcOutcome::ProviderRefusal(_) => {
                 panic!("a provider refusal is not a page")
             }
         }
@@ -2418,7 +1973,7 @@ mod tests {
         }
     }
 
-    /// C1 admits exactly one frame on exactly one connection, so any sequence other than the first
+    /// This contract admits one frame on one connection, so any sequence other than the first
     /// is a frame this contract never asked for.
     #[test]
     fn a_frame_at_another_sequence_number_is_refused() {
@@ -2443,510 +1998,5 @@ mod tests {
         let mut frame = conforming_frame();
         frame.safe_headers = vec![header("authorization", "secret")];
         assert_envelope_refused(&frame);
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Package-test-only runner boundary
-    // -----------------------------------------------------------------------------------------
-
-    fn executor() -> ScriptedExecutor {
-        ScriptedExecutor {
-            response: None,
-            calls: 0,
-            last_request: None,
-        }
-    }
-
-    /// A validated C0 plan, which is the one shape `with_unverified_executor` can actually turn
-    /// away. It is also the only plan in the tree whose `built_in_execution` is not
-    /// `ValidationOnlyNoProviderIo`.
-    fn c0_plan() -> ValidatedProviderRunPlan {
-        validate_provider_run_plan(ProviderRunPlan {
-            port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
-            plan_id: "sealed-c0".to_owned(),
-            run: RegisteredRunPort {
-                run_id: "run-sealed-c0".to_owned(),
-                registration_digest:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-            },
-            profile: CanaryProfilePort::C0,
-            hard_cap: RuntimeBudgetPort {
-                requests: 1,
-                pages: 1,
-                ingress_bytes: 1_024,
-                durable_bytes: 1_024,
-                wall_millis: 1_000,
-                ..RuntimeBudgetPort::default()
-            },
-            max_elapsed_ms: 1_000,
-            max_ingress_bytes_per_second: None,
-            max_in_flight_attempts: 1,
-            operations: vec![ProviderOperationPlan {
-                source_key: "synthetic.local".to_owned(),
-                method_key: "emit".to_owned(),
-                source_contract_fingerprint:
-                    crate::provider_plan::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-                method_schema_fingerprint:
-                    crate::provider_plan::SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
-                operation: ProviderOperation::SyntheticEmit,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::SyntheticScenario {
-                    scenario_id: "walk".to_owned(),
-                },
-                attempt_cost: RuntimeAttemptCostPort {
-                    worst_case: RuntimeBudgetPort {
-                        requests: 1,
-                        pages: 1,
-                        ingress_bytes: 1_024,
-                        durable_bytes: 1_024,
-                        wall_millis: 1_000,
-                        ..RuntimeBudgetPort::default()
-                    },
-                    max_overshoot: RuntimeBudgetPort::default(),
-                },
-            }],
-        })
-        .expect("C0 plan")
-    }
-
-    /// The sealed C0 plan is the only plan that reaches an admission refusal here, and five of
-    /// the constructor's seven conditions refuse it independently — so this test pins the
-    /// boundary, not any one condition. Deleting the conditions together admits a C0 plan into
-    /// the C1 runner and fails here. See `with_unverified_executor`'s own documentation for the
-    /// argument, and `a_validated_c1_plan_cannot_have_the_shape_the_other_conditions_refuse` for
-    /// the structural facts it rests on.
-    #[test]
-    fn the_only_plan_this_constructor_can_refuse_is_the_sealed_c0_one() {
-        let c0 = c0_plan();
-        assert_eq!(c0.plan().profile, CanaryProfilePort::C0);
-        assert_eq!(
-            c0.built_in_execution(),
-            BuiltInExecutionDisposition::SyntheticEnabled,
-            "C0 carries the only disposition the second condition could name, and the profile \
-             condition refuses it first"
-        );
-        assert!(matches!(
-            PublicSolanaC1Runner::with_unverified_executor(c0, executor()),
-            Err(ProviderRunnerError::LiveProviderExecutionDisabled)
-        ));
-
-        // The control: the C1 plan is admitted, so the refusal above is caused by the profile.
-        let c1 = plan();
-        assert_eq!(c1.plan().profile, CanaryProfilePort::C1);
-        assert_eq!(
-            c1.built_in_execution(),
-            BuiltInExecutionDisposition::ValidationOnlyNoProviderIo
-        );
-        assert!(PublicSolanaC1Runner::with_unverified_executor(c1, executor()).is_ok());
-    }
-
-    /// Every structural fact the constructor's unreachability argument rests on, asked of
-    /// `validate_provider_run_plan` itself rather than assumed. If any of these plans ever
-    /// validates, one of the six restated conditions has become reachable and untested, and the
-    /// documentation on `with_unverified_executor` has become false.
-    #[test]
-    fn a_validated_c1_plan_cannot_have_the_shape_the_other_conditions_refuse() {
-        let ingress = 1_048_576;
-        let wall = 10_000;
-        // The control: the unmodified plan validates.
-        assert!(validate_provider_run_plan(raw_plan(ingress, wall)).is_ok());
-
-        // Two operations. Every admissible C1 operation is a wallet page and a C1 plan admits
-        // exactly one, so `let [operation] = plan.operations()` can never fail to match.
-        let mut two = raw_plan(ingress, wall);
-        let second = two.operations[0].clone();
-        two.operations.push(second);
-        assert!(validate_provider_run_plan(two).is_err());
-
-        // A second attempt on the one wallet page.
-        let mut attempts = raw_plan(ingress, wall);
-        attempts.operations[0].max_attempts = 2;
-        assert!(validate_provider_run_plan(attempts).is_err());
-
-        // A scope that is not a bounded public wallet page.
-        let mut scope = raw_plan(ingress, wall);
-        scope.operations[0].scope = ProviderScopePort::SyntheticScenario {
-            scenario_id: "walk".to_owned(),
-        };
-        assert!(validate_provider_run_plan(scope).is_err());
-
-        // Any operation other than the registered one, declared on the C1 profile.
-        for operation in [
-            ProviderOperation::SyntheticEmit,
-            ProviderOperation::HeliusWalletTransactionsPage,
-            ProviderOperation::SolanaTransaction,
-            ProviderOperation::PumpPortalLaunchSubscription,
-        ] {
-            let mut foreign = raw_plan(ingress, wall);
-            foreign.operations[0].operation = operation;
-            assert!(
-                validate_provider_run_plan(foreign).is_err(),
-                "{operation:?} must not validate on the C1 profile"
-            );
-        }
-
-        // The sealed C0 source/method pair on the C1 profile. It is the only other admissible
-        // pair in the tree, and therefore the only way a validated operation could ever carry a
-        // source that is not SolanaPublicHttp.
-        let mut synthetic = raw_plan(ingress, wall);
-        synthetic.operations[0].source_key = "synthetic.local".to_owned();
-        synthetic.operations[0].method_key = "emit".to_owned();
-        synthetic.operations[0].source_contract_fingerprint =
-            crate::provider_plan::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned();
-        synthetic.operations[0].method_schema_fingerprint =
-            crate::provider_plan::SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned();
-        assert!(validate_provider_run_plan(synthetic).is_err());
-
-        // An unregistered source/method pair is not admitted at all.
-        let mut unregistered = raw_plan(ingress, wall);
-        unregistered.operations[0].source_key = "helius.mainnet".to_owned();
-        assert!(validate_provider_run_plan(unregistered).is_err());
-
-        // No C2 plan validates either, which is what leaves the profile condition and the
-        // execution-disposition condition equivalent. `validate_c2_shape` admits only Helius
-        // operations, and neither admissible source/method pair declares one, so a C2 operation
-        // can never satisfy the method contract check.
-        for (source_key, method_key) in [
-            ("synthetic.local", "emit"),
-            (
-                joshi_source_registry::PUBLIC_SOLANA_MAINNET_SOURCE_ID,
-                joshi_source_registry::PUBLIC_SOLANA_SIGNATURES_METHOD_KEY,
-            ),
-        ] {
-            let admitted = crate::contract_port::admit_runtime_method(source_key, method_key)
-                .expect("an admitted runtime method");
-            assert!(
-                !matches!(
-                    admitted.method.operation,
-                    ProviderOperation::HeliusCompactTransactionSubscription
-                        | ProviderOperation::HeliusProgramLogsReference
-                        | ProviderOperation::HeliusFinalizedTransactionHydration
-                ),
-                "{source_key}/{method_key} declares a C2 operation, so a C2 plan may now validate"
-            );
-        }
-        for (source_key, method_key) in [
-            ("helius.mainnet", "compact_transaction_subscription"),
-            ("helius.mainnet", "program_logs_reference"),
-            ("pumpportal.mainnet", "launch_subscription"),
-        ] {
-            assert!(
-                crate::contract_port::admit_runtime_method(source_key, method_key).is_err(),
-                "{source_key}/{method_key} is not an admitted runtime method"
-            );
-        }
-        let mut c2 = raw_plan(ingress, wall);
-        c2.profile = CanaryProfilePort::C2;
-        c2.max_ingress_bytes_per_second = Some(1_048_576);
-        assert!(validate_provider_run_plan(c2).is_err());
-
-        // And what a validated C1 plan does carry, which is exactly what the five restated
-        // conditions say.
-        let admitted = plan();
-        assert_eq!(admitted.operations().len(), 1);
-        let operation = &admitted.operations()[0];
-        assert_eq!(operation.source_id, SourceId::SolanaPublicHttp);
-        assert_eq!(
-            operation.plan.operation,
-            ProviderOperation::SolanaSignaturesForAddress
-        );
-        assert_eq!(operation.plan.max_attempts, 1);
-        assert!(matches!(
-            operation.plan.scope,
-            ProviderScopePort::PublicWalletPage { .. }
-        ));
-    }
-
-    #[test]
-    fn planning_is_pure_and_exact_permit_precedes_the_single_executor_call() {
-        let executor = ScriptedExecutor {
-            response: Some(response([10, 9])),
-            calls: 0,
-            last_request: None,
-        };
-        let mut runner =
-            PublicSolanaC1Runner::with_unverified_executor(plan(), executor).expect("runner");
-        let ProviderRunnerNext::Attempt(attempt) = runner.plan_next().expect("pure plan") else {
-            panic!("expected attempt");
-        };
-        assert_eq!(runner.executor.calls, 0);
-        let permit =
-            ProviderAttemptPermit::bind_reservation_identity_unverified(&attempt, "reservation-c1")
-                .expect("permit");
-        let report = runner.execute(permit).expect("scripted response");
-        assert_eq!(runner.executor.calls, 1);
-        assert_eq!(report.actual_usage.requests, 1);
-        assert_eq!(report.actual_usage.pages, 1);
-        assert_eq!(report.actual_usage.provider_credits, 0);
-        assert_eq!(
-            runner.executor.last_request,
-            Some(PublicSolanaC1Request {
-                address: WALLET.to_owned(),
-                max_rows: 2,
-                commitment: "finalized",
-                request_id: 1,
-                body: CANONICAL_TWO_ROW_REQUEST.as_bytes().to_vec(),
-            })
-        );
-    }
-
-    #[test]
-    fn mismatched_permit_never_calls_the_executor() {
-        let executor = ScriptedExecutor {
-            response: Some(response([10, 9])),
-            calls: 0,
-            last_request: None,
-        };
-        let mut runner = PublicSolanaC1Runner::with_unverified_executor(plan(), executor).unwrap();
-        let ProviderRunnerNext::Attempt(attempt) = runner.plan_next().unwrap() else {
-            panic!("expected attempt");
-        };
-        let foreign_attempt = ProviderAttemptPlan {
-            association: ProviderAttemptAssociation {
-                run_id: "foreign".to_owned(),
-                ..attempt.association.clone()
-            },
-            ..(*attempt).clone()
-        };
-        let permit = ProviderAttemptPermit::bind_reservation_identity_unverified(
-            &foreign_attempt,
-            "reservation-foreign",
-        )
-        .unwrap();
-        assert!(matches!(
-            runner.execute(permit),
-            Err(ProviderRunnerError::PermitMismatch)
-        ));
-        assert_eq!(runner.executor.calls, 0);
-    }
-
-    #[test]
-    fn response_order_and_registered_row_bound_are_enforced() {
-        let executor = ScriptedExecutor {
-            response: Some(response([9, 10])),
-            calls: 0,
-            last_request: None,
-        };
-        let mut runner = PublicSolanaC1Runner::with_unverified_executor(plan(), executor).unwrap();
-        let ProviderRunnerNext::Attempt(attempt) = runner.plan_next().unwrap() else {
-            panic!("expected attempt");
-        };
-        let permit =
-            ProviderAttemptPermit::bind_reservation_identity_unverified(&attempt, "reservation-c1")
-                .unwrap();
-        assert!(matches!(
-            runner.execute(permit),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-    }
-
-    fn execute_response(
-        response: PublicSolanaC1TransportResponse,
-    ) -> Result<ProviderAttemptReport, ProviderRunnerError> {
-        execute_response_under(plan(), response)
-    }
-
-    fn execute_response_under(
-        plan: ValidatedProviderRunPlan,
-        response: PublicSolanaC1TransportResponse,
-    ) -> Result<ProviderAttemptReport, ProviderRunnerError> {
-        let executor = ScriptedExecutor {
-            response: Some(response),
-            calls: 0,
-            last_request: None,
-        };
-        let mut runner = PublicSolanaC1Runner::with_unverified_executor(plan, executor)?;
-        let ProviderRunnerNext::Attempt(attempt) = runner.plan_next()? else {
-            panic!("expected attempt");
-        };
-        let permit = ProviderAttemptPermit::bind_reservation_identity_unverified(
-            &attempt,
-            "reservation-c1",
-        )?;
-        runner.execute(permit)
-    }
-
-    /// The scripted clamp refuses a zero elapsed time. Without the clamp this response is simply
-    /// captured, so the assertion is on the refusal itself rather than on the error variant.
-    #[test]
-    fn the_scripted_clamp_refuses_a_zero_elapsed_time() {
-        let mut zero = response([10, 9]);
-        zero.elapsed_ms = 0;
-        assert!(matches!(
-            execute_response(zero),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-    }
-
-    /// The scripted clamp refuses an elapsed time past the reserved wall budget. The variant
-    /// matters here: with the clamp removed the same response reaches `validate_outcome` and comes
-    /// back as `ActualUsageExceeded`, so an `is_err` assertion would not see the difference.
-    #[test]
-    fn the_scripted_clamp_refuses_an_elapsed_time_over_the_reserved_wall_budget() {
-        let mut over = response([10, 9]);
-        over.elapsed_ms = 10_001;
-        assert!(matches!(
-            execute_response_under(plan_with_reserved(1_048_576, 10_000), over),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let mut at_bound = response([10, 9]);
-        at_bound.elapsed_ms = 10_000;
-        let report = execute_response_under(plan_with_reserved(1_048_576, 10_000), at_bound)
-            .expect("an elapsed time exactly at the reserved wall budget is inside the clamp");
-        assert_eq!(report.actual_usage.wall_millis, 10_000);
-    }
-
-    /// The scripted clamp refuses a body past the reserved ingress budget. The budget is narrowed
-    /// below the body length for this test, because the module's own 256 KiB ingress ceiling would
-    /// otherwise refuse first and leave this condition unexercised. As above, removing the
-    /// condition changes the error to `ActualUsageExceeded` rather than removing it.
-    #[test]
-    fn the_scripted_clamp_refuses_a_body_over_the_reserved_ingress_budget() {
-        let body = two_row_body([10, 9]);
-        let body_len = u64::try_from(body.len()).expect("body length fits");
-        assert!(
-            body_len < u64::try_from(PUBLIC_SOLANA_C1_MAX_RESPONSE_BYTES).expect("ceiling fits"),
-            "the wire contract must not be what refuses this body"
-        );
-        assert!(matches!(
-            execute_response_under(
-                plan_with_reserved(body_len - 1, 10_000),
-                frame_with(body.clone())
-            ),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let report = execute_response_under(plan_with_reserved(body_len, 10_000), frame_with(body))
-            .expect("a body exactly at the reserved ingress budget is inside the clamp");
-        assert_eq!(report.actual_usage.ingress_bytes, body_len);
-    }
-
-    /// The clamp used to spell an empty body out as a fourth condition. It could never be
-    /// exercised: `read_public_solana_c1_body` already refuses an empty body as `EmptyBody`, which
-    /// collapses into the identical boundary error, so no input distinguishes the two spellings.
-    /// The condition is gone and the behaviour that remains is pinned here.
-    #[test]
-    fn an_empty_scripted_body_is_refused_by_the_wire_contract() {
-        assert_eq!(
-            read_public_solana_c1_body(b"", 2),
-            Err(PublicSolanaC1ConformanceError::EmptyBody)
-        );
-        let mut empty = response([10, 9]);
-        empty.frame.body = Bytes::new();
-        assert!(matches!(
-            execute_response(empty),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-    }
-
-    #[test]
-    fn empty_success_is_a_captured_raw_frame_and_never_a_bounded_empty_claim() {
-        let mut response = response([10, 9]);
-        response.frame.body = Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"result":[]}"#);
-        let report = execute_response(response).expect("empty raw page");
-        assert!(matches!(
-            report.outcome,
-            ProviderAttemptOutcome::Captured { outputs } if outputs.len() == 1
-        ));
-    }
-
-    #[test]
-    fn a_typed_provider_refusal_never_becomes_a_captured_frame() {
-        let mut refusal = response([10, 9]);
-        refusal.frame.body = Bytes::from_static(
-            br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params"}}"#,
-        );
-        assert!(matches!(
-            execute_response(refusal),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-    }
-
-    #[test]
-    fn exact_response_and_frame_envelopes_refuse_substitution() {
-        let mut wrong_id = response([10, 9]);
-        wrong_id.frame.body = Bytes::from_static(br#"{"jsonrpc":"2.0","id":2,"result":[]}"#);
-        assert!(matches!(
-            execute_response(wrong_id),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let mut extra_root = response([10, 9]);
-        extra_root.frame.body =
-            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"result":[],"context":{}}"#);
-        assert!(matches!(
-            execute_response(extra_root),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let mut duplicate_root = response([10, 9]);
-        duplicate_root.frame.body =
-            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"id":1,"result":[]}"#);
-        assert!(matches!(
-            execute_response(duplicate_root),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let mut wrong_adapter = response([10, 9]);
-        wrong_adapter.frame.contract_version = "joshi.source.frame.v0".to_owned();
-        assert!(matches!(
-            execute_response(wrong_adapter),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let mut duplicate_header = response([10, 9]);
-        duplicate_header.frame.safe_headers = vec![
-            SafeHeader {
-                name: "retry-after".to_owned(),
-                value: "1".to_owned(),
-            },
-            SafeHeader {
-                name: "Retry-After".to_owned(),
-                value: "2".to_owned(),
-            },
-        ];
-        assert!(matches!(
-            execute_response(duplicate_header),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-    }
-
-    #[test]
-    fn nonfinalized_rows_and_second_attempt_after_transport_failure_refuse() {
-        let mut nonfinalized = response([10, 9]);
-        let mut value: Value = serde_json::from_slice(&nonfinalized.frame.body).unwrap();
-        value["result"][0]["confirmationStatus"] = Value::String("confirmed".to_owned());
-        nonfinalized.frame.body = Bytes::from(serde_json::to_vec(&value).unwrap());
-        assert!(matches!(
-            execute_response(nonfinalized),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-
-        let executor = ScriptedExecutor {
-            response: None,
-            calls: 0,
-            last_request: None,
-        };
-        let mut runner = PublicSolanaC1Runner::with_unverified_executor(plan(), executor).unwrap();
-        let ProviderRunnerNext::Attempt(attempt) = runner.plan_next().unwrap() else {
-            panic!("expected attempt");
-        };
-        let permit =
-            ProviderAttemptPermit::bind_reservation_identity_unverified(&attempt, "reservation-c1")
-                .unwrap();
-        assert!(matches!(
-            runner.execute(permit),
-            Err(ProviderRunnerError::PublicSolanaC1Execution)
-        ));
-        assert!(matches!(
-            runner.plan_next().unwrap(),
-            ProviderRunnerNext::Finished(ProviderRunnerCompletion {
-                reason: ProviderCompletionReason::Exhausted,
-                ..
-            })
-        ));
     }
 }

@@ -5,10 +5,9 @@
 //! listener, catalog write handle, wallet authority, or transaction capability.
 
 mod budget;
-pub mod c1;
-mod c1_activation;
 mod error;
 mod harness;
+pub mod ingest;
 mod journal;
 mod model;
 mod queue;
@@ -18,9 +17,6 @@ mod runtime_config;
 mod supervisor;
 mod transport;
 
-pub use c1_activation::{
-    DisabledC1AdmissionError, DisabledC1AdmissionReport, DisabledC1RuntimeAdmission,
-};
 pub use error::{Result, SupervisorError};
 pub use harness::{FakeProviderHarness, FakeProviderReport, FakeProviderSchedule};
 pub use joshi_admission::operational::{LocalSpoolReceiptV1, SpoolCatalogReceiptV1};

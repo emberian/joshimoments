@@ -1,4 +1,4 @@
-//! Pure validation for bounded C0/C1/C2 provider plans.
+//! Pure validation for the bounded C0 provider plan.
 //!
 //! Validation is synchronous and occurs before credential loading or provider I/O. The canonical
 //! run registration and source registry remain owned by their respective crates; this module binds
@@ -33,31 +33,30 @@ pub const PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT: &str =
     "sha256:b3bafc833d9b859fb0dc475d62fac353d5862994bdb01fe184a6b1dd85aea715";
 
 const MIB: u64 = 1_024 * 1_024;
-const C1_MAX_REQUESTS: u64 = 25;
-const C1_MAX_PROVIDER_CREDITS: u64 = 250;
-const C1_MAX_BYTES: u64 = 64 * MIB;
-const C1_MAX_ELAPSED_MS: u64 = 60_000;
-const C2_MAX_REQUESTS: u64 = 10_000;
-const C2_MAX_PROVIDER_CREDITS: u64 = 10_000;
-const C2_MAX_INGRESS_BYTES: u64 = 256 * MIB;
-const C2_MAX_DURABLE_BYTES: u64 = 128 * MIB;
-const C2_MAX_ELAPSED_MS: u64 = 3_600_000;
-const C2_MAX_INGRESS_BYTES_PER_SECOND: u64 = 8 * MIB;
-const C2_MAX_COMPACT_WINDOWS: u64 = 3;
-const C2_MAX_COMPACT_WINDOW_MS: u64 = 10 * 60 * 1_000;
-const C2_MAX_COMPACT_TOTAL_MS: u64 = 30 * 60 * 1_000;
-const C2_MAX_REFERENCE_TOTAL_MS: u64 = 60 * 1_000;
+/// Largest ingress and durable byte budget a C0 plan may declare.
+const C0_MAX_BYTES: u64 = 64 * MIB;
+/// Longest wall-clock budget a C0 plan may declare.
+const C0_MAX_ELAPSED_MS: u64 = 3_600_000;
 
+/// Which canary profile a provider plan declares.
+///
+/// This is a one-variant enum on purpose. It is a serialized member of the exact plan document
+/// whose bytes are digested by [`PROVIDER_RUN_PLAN_DIGEST_DOMAIN`] and compared byte for byte by
+/// [`parse_provider_run_plan_exact`], so removing the member — or spelling it as anything other
+/// than `"c0"` — would change every plan digest in the tree. Keeping it an enum also means a
+/// document naming a profile this tree no longer has is refused while it is being *decoded*,
+/// rather than validated against a ladder that is no longer there.
+///
+/// It previously carried `C1` and `C2` rungs with their own frozen ceilings. Those rungs were
+/// budget policy for provider spend that no code in this tree could actually incur, and their
+/// only admitted operation reached a free public endpoint; they are gone.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CanaryProfilePort {
     C0,
-    C1,
-    C2,
 }
 
-/// Adapter operation mapped from one canonical source-registry method by the future integration
-/// seam. C1/C2 values are validation-only until that mapping is store-resolved.
+/// Adapter operation mapped from one canonical source-registry method.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderOperation {
@@ -323,6 +322,11 @@ impl ProviderRunPlan {
 pub enum BuiltInExecutionDisposition {
     SyntheticEnabled,
     /// The plan is safe to register/reserve but this crate exposes no live implementation.
+    ///
+    /// Nothing constructs this today: [`CanaryProfilePort`] has one variant and it maps to
+    /// [`Self::SyntheticEnabled`]. The variant stays as the vocabulary a future profile with no
+    /// built-in executor would carry, and the guards that compare against
+    /// [`Self::SyntheticEnabled`] stay as fail-safes rather than active gates.
     ValidationOnlyNoProviderIo,
 }
 
@@ -415,7 +419,7 @@ pub fn parse_provider_run_plan_exact(
 /// # Errors
 ///
 /// Refuses authority/status/kill-switch violations, unbounded work, profile-incompatible methods,
-/// unknown scopes, and any aggregate cost which can exceed a C0/C1/C2 ceiling.
+/// unknown scopes, and any aggregate cost which can exceed the C0 ceiling.
 #[allow(clippy::too_many_lines)]
 pub fn validate_provider_run_plan(
     plan: ProviderRunPlan,
@@ -527,10 +531,8 @@ pub fn validate_provider_run_plan(
     }
     let plan_template_digest = plan.plan_template_digest()?;
     let plan_digest = digest_struct(PROVIDER_RUN_PLAN_DIGEST_DOMAIN, &plan)?;
-    let execution = if plan.profile == CanaryProfilePort::C0 {
-        BuiltInExecutionDisposition::SyntheticEnabled
-    } else {
-        BuiltInExecutionDisposition::ValidationOnlyNoProviderIo
+    let execution = match plan.profile {
+        CanaryProfilePort::C0 => BuiltInExecutionDisposition::SyntheticEnabled,
     };
     Ok(ValidatedProviderRunPlan {
         plan,
@@ -562,35 +564,9 @@ fn validate_profile_caps(plan: &ProviderRunPlan) -> Result<(), ProviderPlanError
             {
                 return Err(ProviderPlanError::C0MustBeFree);
             }
-            if cap.ingress_bytes > C1_MAX_BYTES
-                || cap.durable_bytes > C1_MAX_BYTES
-                || plan.max_elapsed_ms > 3_600_000
-            {
-                return Err(ProviderPlanError::ProfileCapExceeded);
-            }
-        }
-        CanaryProfilePort::C1 => {
-            if cap.requests > C1_MAX_REQUESTS
-                || cap.pages > C1_MAX_REQUESTS
-                || cap.provider_credits > C1_MAX_PROVIDER_CREDITS
-                || cap.ingress_bytes > C1_MAX_BYTES
-                || cap.durable_bytes > C1_MAX_BYTES
-                || plan.max_elapsed_ms > C1_MAX_ELAPSED_MS
-            {
-                return Err(ProviderPlanError::ProfileCapExceeded);
-            }
-        }
-        CanaryProfilePort::C2 => {
-            if cap.requests > C2_MAX_REQUESTS
-                || cap.pages > C2_MAX_REQUESTS
-                || cap.provider_credits > C2_MAX_PROVIDER_CREDITS
-                || cap.ingress_bytes > C2_MAX_INGRESS_BYTES
-                || cap.durable_bytes > C2_MAX_DURABLE_BYTES
-                || plan.max_elapsed_ms > C2_MAX_ELAPSED_MS
-                || plan.max_ingress_bytes_per_second.is_none()
-                || plan
-                    .max_ingress_bytes_per_second
-                    .is_some_and(|value| value == 0 || value > C2_MAX_INGRESS_BYTES_PER_SECOND)
+            if cap.ingress_bytes > C0_MAX_BYTES
+                || cap.durable_bytes > C0_MAX_BYTES
+                || plan.max_elapsed_ms > C0_MAX_ELAPSED_MS
             {
                 return Err(ProviderPlanError::ProfileCapExceeded);
             }
@@ -653,101 +629,6 @@ fn validate_profile_shape(plan: &ProviderRunPlan) -> Result<(), ProviderPlanErro
                 return Err(ProviderPlanError::C0RequiresSingleSyntheticOperation);
             }
         }
-        CanaryProfilePort::C1 => validate_c1_shape(&plan.operations)?,
-        CanaryProfilePort::C2 => validate_c2_shape(&plan.operations)?,
-    }
-    Ok(())
-}
-
-fn validate_c1_shape(operations: &[ProviderOperationPlan]) -> Result<(), ProviderPlanError> {
-    let attempts = operations
-        .iter()
-        .try_fold(0_u64, |sum, operation| add(sum, operation.max_attempts))?;
-    if attempts > C1_MAX_REQUESTS {
-        return Err(ProviderPlanError::ProfileOperationMismatch);
-    }
-    let wallet_pages: Vec<_> = operations
-        .iter()
-        .filter(|operation| {
-            matches!(
-                operation.operation,
-                ProviderOperation::HeliusWalletTransactionsPage
-                    | ProviderOperation::SolanaSignaturesForAddress
-            )
-        })
-        .collect();
-    if wallet_pages.len() != 1 || wallet_pages[0].max_attempts != 1 {
-        return Err(ProviderPlanError::C1RequiresOneWalletPage);
-    }
-    let ProviderScopePort::PublicWalletPage {
-        address: wallet, ..
-    } = &wallet_pages[0].scope
-    else {
-        return Err(ProviderPlanError::ScopeOperationMismatch);
-    };
-    for operation in operations {
-        match operation.operation {
-            ProviderOperation::HeliusWalletTransactionsPage
-            | ProviderOperation::SolanaSignaturesForAddress
-            | ProviderOperation::SolanaTransaction => {}
-            _ => return Err(ProviderPlanError::ProfileOperationMismatch),
-        }
-        if let ProviderScopePort::PublicWalletPage { address, .. } = &operation.scope
-            && address != wallet
-        {
-            return Err(ProviderPlanError::C1WalletMismatch);
-        }
-    }
-    Ok(())
-}
-
-fn validate_c2_shape(operations: &[ProviderOperationPlan]) -> Result<(), ProviderPlanError> {
-    let mut compact_windows = 0_u64;
-    let mut compact_millis = 0_u64;
-    let mut reference_millis = 0_u64;
-    let mut hydration_attempts = 0_u64;
-    for operation in operations {
-        match operation.operation {
-            ProviderOperation::HeliusCompactTransactionSubscription => {
-                compact_windows = add(compact_windows, operation.max_attempts)?;
-                let ProviderScopePort::ProgramWindow { window_millis, .. } = operation.scope else {
-                    return Err(ProviderPlanError::ScopeOperationMismatch);
-                };
-                if window_millis > C2_MAX_COMPACT_WINDOW_MS {
-                    return Err(ProviderPlanError::C2WindowExceeded);
-                }
-                compact_millis = add(
-                    compact_millis,
-                    window_millis
-                        .checked_mul(operation.max_attempts)
-                        .ok_or(ProviderPlanError::ArithmeticOverflow)?,
-                )?;
-            }
-            ProviderOperation::HeliusProgramLogsReference => {
-                let ProviderScopePort::ProgramWindow { window_millis, .. } = operation.scope else {
-                    return Err(ProviderPlanError::ScopeOperationMismatch);
-                };
-                reference_millis = add(
-                    reference_millis,
-                    window_millis
-                        .checked_mul(operation.max_attempts)
-                        .ok_or(ProviderPlanError::ArithmeticOverflow)?,
-                )?;
-            }
-            ProviderOperation::HeliusFinalizedTransactionHydration => {
-                hydration_attempts = add(hydration_attempts, operation.max_attempts)?;
-            }
-            _ => return Err(ProviderPlanError::ProfileOperationMismatch),
-        }
-    }
-    if compact_windows == 0
-        || compact_windows > C2_MAX_COMPACT_WINDOWS
-        || compact_millis > C2_MAX_COMPACT_TOTAL_MS
-        || reference_millis == 0
-        || reference_millis > C2_MAX_REFERENCE_TOTAL_MS
-        || hydration_attempts == 0
-    {
-        return Err(ProviderPlanError::C2ReferenceShape);
     }
     Ok(())
 }
@@ -843,7 +724,7 @@ pub enum ProviderPlanError {
     InFlightMustBeOne,
     #[error("elapsed hard cap and budget wall milliseconds disagree")]
     ElapsedCapMismatch,
-    #[error("provider currency and chain-native spend are forbidden in C0/C1/C2")]
+    #[error("provider currency and chain-native spend are forbidden")]
     EconomicSpendForbidden,
     #[error("provider disabled pending canonical source-registry admission")]
     ProviderDisabledPendingCanonicalAdmission,
@@ -859,7 +740,7 @@ pub enum ProviderPlanError {
     MethodContractBoundExceeded,
     #[error("operation scope does not match its admitted method")]
     ScopeOperationMismatch,
-    #[error("wallet page is outside the one-to-100-row C1 envelope")]
+    #[error("wallet page is outside the one-to-100-row envelope")]
     InvalidWalletPage,
     #[error("program window is empty or outside its structural bound")]
     InvalidProgramWindow,
@@ -867,7 +748,7 @@ pub enum ProviderPlanError {
     InvalidAddress,
     #[error("aggregate worst-case cost exceeds the registered run cap")]
     AggregateBudgetExceeded,
-    #[error("provider plan exceeds its C0/C1/C2 hard ceiling")]
+    #[error("provider plan exceeds its C0 hard ceiling")]
     ProfileCapExceeded,
     #[error("C0 must have no provider-credit or economic budget")]
     C0MustBeFree,
@@ -875,14 +756,6 @@ pub enum ProviderPlanError {
     C0RequiresSingleSyntheticOperation,
     #[error("provider operation is not admitted by this canary profile")]
     ProfileOperationMismatch,
-    #[error("C1 requires exactly one registered public-wallet page attempt")]
-    C1RequiresOneWalletPage,
-    #[error("C1 public-wallet page operations disagree on wallet")]
-    C1WalletMismatch,
-    #[error("C2 compact/reference window limit exceeded")]
-    C2WindowExceeded,
-    #[error("C2 requires compact windows, a <=60s log reference, and finalized hydration")]
-    C2ReferenceShape,
     #[error("provider plan arithmetic overflow")]
     ArithmeticOverflow,
     #[error("provider plan source-contract fingerprint differs from the canonical registry")]
@@ -903,9 +776,6 @@ pub enum ProviderPlanError {
 mod tests {
     use super::*;
 
-    const WALLET: &str = "BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh";
-    const PUMP: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
-
     fn attempt_cost(credits: u64, elapsed: u64) -> RuntimeAttemptCostPort {
         RuntimeAttemptCostPort {
             worst_case: RuntimeBudgetPort {
@@ -924,8 +794,6 @@ mod tests {
     fn run(profile: CanaryProfilePort, operations: Vec<ProviderOperationPlan>) -> ProviderRunPlan {
         let (requests, credits, ingress, durable, elapsed) = match profile {
             CanaryProfilePort::C0 => (25, 0, 64 * MIB, 64 * MIB, 60_000),
-            CanaryProfilePort::C1 => (25, 250, 64 * MIB, 64 * MIB, 60_000),
-            CanaryProfilePort::C2 => (10_000, 10_000, 256 * MIB, 128 * MIB, 3_600_000),
         };
         ProviderRunPlan {
             port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
@@ -947,7 +815,7 @@ mod tests {
                 ..RuntimeBudgetPort::default()
             },
             max_elapsed_ms: elapsed,
-            max_ingress_bytes_per_second: (profile == CanaryProfilePort::C2).then_some(8 * MIB),
+            max_ingress_bytes_per_second: None,
             max_in_flight_attempts: 1,
             operations,
         }
@@ -1007,19 +875,17 @@ mod tests {
     #[test]
     fn exact_final_plan_roundtrips_and_refuses_noncanonical_or_ambiguous_json() {
         let plan = run(
-            CanaryProfilePort::C1,
+            CanaryProfilePort::C0,
             vec![ProviderOperationPlan {
-                source_key: "solana.public.mainnet".to_owned(),
-                method_key: "get_signatures_for_address".to_owned(),
-                source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-                method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
-                    .to_owned(),
-                operation: ProviderOperation::SolanaSignaturesForAddress,
+                source_key: "synthetic.local".to_owned(),
+                method_key: "emit".to_owned(),
+                source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
+                operation: ProviderOperation::SyntheticEmit,
                 generation: 1,
                 max_attempts: 1,
-                scope: ProviderScopePort::PublicWalletPage {
-                    address: WALLET.to_owned(),
-                    max_rows: 100,
+                scope: ProviderScopePort::SyntheticScenario {
+                    scenario_id: "canonical-roundtrip".to_owned(),
                 },
                 attempt_cost: attempt_cost(0, 10_000),
             }],
@@ -1084,54 +950,21 @@ mod tests {
     }
 
     #[test]
-    fn c1_public_solana_shape_is_canonically_bound_but_has_no_builtin_io() {
-        let plan = run(
-            CanaryProfilePort::C1,
-            vec![ProviderOperationPlan {
-                source_key: "solana.public.mainnet".to_owned(),
-                method_key: "get_signatures_for_address".to_owned(),
-                source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-                method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
-                    .to_owned(),
-                operation: ProviderOperation::SolanaSignaturesForAddress,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::PublicWalletPage {
-                    address: WALLET.to_owned(),
-                    max_rows: 100,
-                },
-                attempt_cost: attempt_cost(0, 10_000),
-            }],
-        );
-        let validated = validate_provider_run_plan(plan).unwrap();
-        assert_eq!(
-            validated.built_in_execution(),
-            BuiltInExecutionDisposition::ValidationOnlyNoProviderIo
-        );
-        assert_eq!(
-            validated.operations()[0].source_id,
-            SourceId::SolanaPublicHttp
-        );
-    }
-
-    #[test]
-    fn c1_refuses_source_or_method_fingerprint_substitution() {
+    fn a_substituted_source_or_method_fingerprint_is_refused_against_the_registry() {
         let operation = ProviderOperationPlan {
-            source_key: "solana.public.mainnet".to_owned(),
-            method_key: "get_signatures_for_address".to_owned(),
-            source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-            method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
-                .to_owned(),
-            operation: ProviderOperation::SolanaSignaturesForAddress,
+            source_key: "synthetic.local".to_owned(),
+            method_key: "emit".to_owned(),
+            source_contract_fingerprint: SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+            method_schema_fingerprint: SEALED_C0_METHOD_SCHEMA_FINGERPRINT.to_owned(),
+            operation: ProviderOperation::SyntheticEmit,
             generation: 1,
             max_attempts: 1,
-            scope: ProviderScopePort::PublicWalletPage {
-                address: WALLET.to_owned(),
-                max_rows: 100,
+            scope: ProviderScopePort::SyntheticScenario {
+                scenario_id: "fingerprint-substitution".to_owned(),
             },
             attempt_cost: attempt_cost(0, 10_000),
         };
-        let mut source_substitution = run(CanaryProfilePort::C1, vec![operation.clone()]);
+        let mut source_substitution = run(CanaryProfilePort::C0, vec![operation.clone()]);
         source_substitution.operations[0].source_contract_fingerprint =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
         assert_eq!(
@@ -1139,168 +972,12 @@ mod tests {
             ProviderPlanError::SourceContractFingerprintMismatch
         );
 
-        let mut method_substitution = run(CanaryProfilePort::C1, vec![operation]);
+        let mut method_substitution = run(CanaryProfilePort::C0, vec![operation]);
         method_substitution.operations[0].method_schema_fingerprint =
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
         assert_eq!(
             validate_provider_run_plan(method_substitution).unwrap_err(),
             ProviderPlanError::MethodSchemaFingerprintMismatch
-        );
-    }
-
-    #[test]
-    fn c1_public_solana_refuses_provider_credit_or_retry_laundering() {
-        let operation = ProviderOperationPlan {
-            source_key: "solana.public.mainnet".to_owned(),
-            method_key: "get_signatures_for_address".to_owned(),
-            source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
-            method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
-                .to_owned(),
-            operation: ProviderOperation::SolanaSignaturesForAddress,
-            generation: 1,
-            max_attempts: 1,
-            scope: ProviderScopePort::PublicWalletPage {
-                address: WALLET.to_owned(),
-                max_rows: 100,
-            },
-            attempt_cost: attempt_cost(1, 10_000),
-        };
-        assert_eq!(
-            validate_provider_run_plan(run(CanaryProfilePort::C1, vec![operation.clone()]))
-                .unwrap_err(),
-            ProviderPlanError::MethodContractBoundExceeded
-        );
-
-        let mut retry = operation;
-        retry.attempt_cost = attempt_cost(0, 10_000);
-        retry.max_attempts = 2;
-        assert_eq!(
-            validate_provider_run_plan(run(CanaryProfilePort::C1, vec![retry])).unwrap_err(),
-            ProviderPlanError::C1RequiresOneWalletPage
-        );
-    }
-
-    #[test]
-    fn c2_valid_shape_still_refuses_without_canonical_admission() {
-        let program_scope = |window_millis| ProviderScopePort::ProgramWindow {
-            program_ids: vec![PUMP.to_owned()],
-            window_millis,
-        };
-        let operations = vec![
-            ProviderOperationPlan {
-                source_key: "helius.compact".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusCompactTransactionSubscription,
-                generation: 1,
-                max_attempts: 3,
-                scope: program_scope(600_000),
-                attempt_cost: attempt_cost(1_000, 600_000),
-            },
-            ProviderOperationPlan {
-                source_key: "helius.logs".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusProgramLogsReference,
-                generation: 1,
-                max_attempts: 1,
-                scope: program_scope(60_000),
-                attempt_cost: attempt_cost(1_000, 60_000),
-            },
-            ProviderOperationPlan {
-                source_key: "helius.hydrate".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusFinalizedTransactionHydration,
-                generation: 1,
-                max_attempts: 10,
-                scope: ProviderScopePort::TransactionReferenceSet {
-                    reference_set_id: "reference-1".to_owned(),
-                },
-                attempt_cost: attempt_cost(100, 10_000),
-            },
-        ];
-        assert_eq!(
-            validate_provider_run_plan(run(CanaryProfilePort::C2, operations)).unwrap_err(),
-            ProviderPlanError::ProviderDisabledPendingCanonicalAdmission
-        );
-    }
-
-    #[test]
-    fn c2_refuses_reference_longer_than_sixty_seconds() {
-        let operations = vec![
-            ProviderOperationPlan {
-                source_key: "helius.compact".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusCompactTransactionSubscription,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::ProgramWindow {
-                    program_ids: vec![PUMP.to_owned()],
-                    window_millis: 600_000,
-                },
-                attempt_cost: attempt_cost(100, 600_000),
-            },
-            ProviderOperationPlan {
-                source_key: "helius.logs".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusProgramLogsReference,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::ProgramWindow {
-                    program_ids: vec![PUMP.to_owned()],
-                    window_millis: 60_001,
-                },
-                attempt_cost: attempt_cost(100, 60_001),
-            },
-            ProviderOperationPlan {
-                source_key: "helius.hydrate".to_owned(),
-                method_key: "read".to_owned(),
-                source_contract_fingerprint:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                method_schema_fingerprint:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_owned(),
-                operation: ProviderOperation::HeliusFinalizedTransactionHydration,
-                generation: 1,
-                max_attempts: 1,
-                scope: ProviderScopePort::TransactionReferenceSet {
-                    reference_set_id: "reference-1".to_owned(),
-                },
-                attempt_cost: attempt_cost(100, 1_000),
-            },
-        ];
-        assert_eq!(
-            validate_provider_run_plan(run(CanaryProfilePort::C2, operations)).unwrap_err(),
-            ProviderPlanError::C2ReferenceShape
         );
     }
 

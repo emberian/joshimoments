@@ -1,10 +1,11 @@
 //! Private runtime projection seam for the canonical source registry.
 //!
 //! `joshi-source-registry` owns source policy. This module is intentionally crate-private: a
-//! caller cannot author an alternate registry or manually admit a provider. C0 resolves one
-//! sealed local fixture contract here. C1 rederives one canonical credential-free public-Solana
-//! declaration but remains validation-only; C2 has no admitted projection. Provider I/O remains
-//! disabled until the root-owned runtime consumes a store-resolved registration and reservation.
+//! caller cannot author an alternate registry or manually admit a provider. The sealed C0 profile
+//! resolves one local fixture contract here; the canonical credential-free public-Solana
+//! declaration is also projected, and is what the wire contract in [`crate::solana_json_rpc`] is
+//! pinned against, but no provider plan in this tree admits it. Provider I/O remains disabled
+//! until the root-owned runtime consumes a store-resolved registration and reservation.
 
 use joshi_source_registry::{
     AbsenceSemantics, AccessClass, BillingUnit, Commitment, CredentialAuthority, FinalityPolicy,

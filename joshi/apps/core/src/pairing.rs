@@ -1770,7 +1770,7 @@ mod tests {
         let config = crate::wave5_g0::offline_fixture_store_config(root.path()).unwrap();
         let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter).unwrap();
         let migration = store.migrate(aligned_now()).unwrap();
-        assert_eq!(migration.runtime.user_version, 23);
+        assert_eq!(migration.runtime.user_version, 24);
         let publication = store
             .load_cockpit_v2_publication_v1(&publication_id)
             .unwrap()
@@ -1903,7 +1903,7 @@ mod tests {
             accepted["contract"],
             "joshi.core.cockpit_v2_browser_presentation_receipt"
         );
-        assert_eq!(accepted["catalogSchema"], "joshi.sqlite.v23");
+        assert_eq!(accepted["catalogSchema"], "joshi.sqlite.v24");
         assert_eq!(accepted["status"], "accepted");
         assert_eq!(
             accepted["ceiling"],

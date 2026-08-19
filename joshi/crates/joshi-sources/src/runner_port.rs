@@ -158,7 +158,8 @@ pub trait ProviderRunner: Send {
     /// Refuses a concurrent pending attempt or an exhausted operation bound.
     fn plan_next(&mut self) -> Result<ProviderRunnerNext, ProviderRunnerError>;
 
-    /// Execute only the exact previously planned C0 attempt. C1/C2 have no execution path.
+    /// Execute only the exact previously planned C0 attempt. No other profile has an execution
+    /// path, and the C0 one is synthetic.
     ///
     /// # Errors
     ///
@@ -216,8 +217,9 @@ impl SyntheticProviderRunner {
     ///
     /// # Errors
     ///
-    /// Refuses C1/C2, an unbound scenario, an operation index/count violation, invalid outputs, or
-    /// actual use outside the exact attempt reservation.
+    /// Refuses a plan whose built-in execution is not synthetic, an unbound scenario, an operation
+    /// index/count violation, invalid outputs, or actual use outside the exact attempt
+    /// reservation.
     pub fn new(
         plan: ValidatedProviderRunPlan,
         scenario: SyntheticScenario,
@@ -529,8 +531,6 @@ pub enum ProviderRunnerError {
     ActualUsageExceeded,
     #[error("started bounded page attempt must report exactly one request and one page")]
     InexactStartedUsage,
-    #[error("public Solana C1 conformance boundary failed")]
-    PublicSolanaC1Execution,
     #[error("captured progress requires at least one exact source frame")]
     CapturedRequiresFrame,
     #[error("sealed C0 captured output admits frames only")]

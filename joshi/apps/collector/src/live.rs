@@ -113,7 +113,13 @@ pub(crate) fn ingest_live(options: &LiveIngestOptions) -> Result<String, Box<dyn
     let migration = store.migrate(now_utc()?)?;
 
     let helius = HeliusConfig::mainnet(CredentialFile(options.key_file.clone()));
-    let client = HeliusHttpClient::at_startup(&helius)?;
+    // The client is constructed with the ceiling every response it reads is abandoned at. This
+    // collector's sink is the SQLite catalog rather than the supervisor's local spool, so the
+    // bound that belongs here is the catalog's own inline-blob boundary: a response longer than
+    // this could not be retained as one inline payload, and reading it is work spent on bytes
+    // there is nowhere to put. Before this ceiling existed the read was unbounded, and an
+    // unbounded parse of hostile input was measured in this repository at 294 MB peak RSS.
+    let client = HeliusHttpClient::at_startup(&helius, INLINE_BLOB_MAX_BYTES)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
