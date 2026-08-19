@@ -4091,7 +4091,7 @@ mod tests {
         let report = store
             .migrate(time("2026-08-16T16:00:00.000000Z"))
             .expect("migrate test store");
-        assert_eq!(report.current, 19);
+        assert_eq!(report.current, 20);
         store
     }
 
@@ -4114,7 +4114,7 @@ mod tests {
         let json = serde_json::to_value(&accepted).expect("receipt JSON");
         assert_eq!(json["contract"], "joshi.store.ingest_receipt");
         assert_eq!(json["schemaVersion"], 1);
-        assert_eq!(json["catalogSchema"], "joshi.sqlite.v19");
+        assert_eq!(json["catalogSchema"], "joshi.sqlite.v20");
         assert_eq!(json["admitted"]["observations"], "0");
         assert!(json.get("storeAdmissionDigest").is_some());
 
@@ -4400,7 +4400,7 @@ mod tests {
         let receipt_json = serde_json::to_value(&receipt).expect("operator receipt JSON");
         assert_eq!(receipt_json["contract"], "joshi.store.command_receipt");
         assert_eq!(receipt_json["schemaVersion"], 1);
-        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v19");
+        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v20");
         assert_eq!(receipt_json["scene"]["sceneId"], "scene-golden-1");
         assert_eq!(receipt_json["scene"]["viewDigest"], view.digest().as_str());
         assert_eq!(

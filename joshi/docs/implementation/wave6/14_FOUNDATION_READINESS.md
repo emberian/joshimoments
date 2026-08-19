@@ -8,19 +8,19 @@ claim.**
 [`scripts/wave6-foundation-readiness`](../../../scripts/wave6-foundation-readiness) is the first
 root runner for the Wave 6 foundation. It runs:
 
-- all schema migrations and the V4-to-V19 upgrade check;
+- all schema migrations and the V4-to-V20 upgrade check;
 - the exact `joshi-wave6-registry` and `joshi-wave6-campaign` suites;
 - the store's Wave 6 program/schema/artifact-content/DAG/decision/campaign-bundle/proposal/review
   byte tests;
 - the Core program/schema/artifact-content/DAG/decision/campaign-bundle/proposal/review byte restart
   test; and
 - the focused Python market-atlas reducer/Ruff gates; and
-- two invocations of the real `wave6-program-registration` command over the same V19 catalog.
+- two invocations of the real `wave6-program-registration` command over the same V20 catalog.
 
 The second invocation must reproduce the original program, six schemas, three evaluation-content
 artifacts, the exact six-row market-atlas document, one fixture-DAG, one decision-ledger, one atomic
 campaign-bundle, one proposal, and one caller-fed `hold` byte commit identities. The script emits
-`joshi.wave6.fixture_foundation_witness.v8` with the exact report and V11-V19 migration digests. It
+`joshi.wave6.fixture_foundation_witness.v9` with the exact report and V11-V20 migration digests. It
 separately fixes store-resolved market authority, authenticated human review, approval/execution,
 and result authority to false.
 

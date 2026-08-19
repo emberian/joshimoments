@@ -91,6 +91,11 @@ enum Command {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Join one genuine W5 source occurrence to W6 as an input census, not a market atlas.
+    Wave6StoreInputCensus {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Serve bounded local admission and immutable query endpoints on loopback only.
     Serve {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -195,6 +200,10 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Wave6ProgramRegistration { state }) => {
             let report = joshi_core::wave6_registration::run_wave6_program_registration(&state)?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave6StoreInputCensus { state }) => {
+            let report = joshi_core::wave6_store_input::run_wave6_store_input_census(&state)?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Serve {
@@ -430,6 +439,8 @@ enum CliError {
     Wave5G0FaultLedger(#[from] joshi_core::wave5_g0_fault_root::G0ExecutedFaultLedgerError),
     #[error(transparent)]
     Wave6Registration(#[from] joshi_core::wave6_registration::Wave6RegistrationError),
+    #[error(transparent)]
+    Wave6StoreInput(#[from] joshi_core::wave6_store_input::Wave6StoreInputCensusError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

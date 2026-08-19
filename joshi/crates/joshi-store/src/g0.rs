@@ -1435,7 +1435,7 @@ impl SqliteStore {
         validate_accepted_c0_receipt(
             exact_receipt,
             self.config.catalog_id.as_str(),
-            &self.catalog_schema_id()?,
+            "joshi.sqlite.v10",
         )?;
         let store_commit = CommitSeq::new(as_u64(store_commit, "C0 store commit")?);
         let sources: Vec<String> = {
@@ -2899,7 +2899,7 @@ fn resolved_publication_input(
 fn validate_accepted_c0_receipt(
     bytes: &[u8],
     catalog_id: &str,
-    catalog_schema: &StableString,
+    catalog_schema: &str,
 ) -> Result<()> {
     let value: Value = serde_json::from_slice(bytes)?;
     let object = value
@@ -2917,7 +2917,7 @@ fn validate_accepted_c0_receipt(
         && nested.get("contract").and_then(Value::as_str) == Some("joshi.store.ingest_receipt")
         && nested.get("status").and_then(Value::as_str) == Some("accepted")
         && nested.get("catalogId").and_then(Value::as_str) == Some(catalog_id)
-        && nested.get("catalogSchema").and_then(Value::as_str) == Some(catalog_schema.as_str());
+        && nested.get("catalogSchema").and_then(Value::as_str) == Some(catalog_schema);
     if !accepted {
         return Err(StoreError::InvalidBatch(
             "receipt is not the exact accepted public C0 closure for this catalog".into(),

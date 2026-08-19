@@ -104,6 +104,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0019_wave6_market_atlas_fixture.sql",
         sql: include_str!("../../../schema/migrations/0019_wave6_market_atlas_fixture.sql"),
     },
+    Migration {
+        id: 20,
+        name: "0020_wave6_store_input_census.sql",
+        sql: include_str!("../../../schema/migrations/0020_wave6_store_input_census.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -357,12 +362,15 @@ mod tests {
         assert_eq!(g0.current, 10);
         assert_eq!(g0.applied, vec![10]);
 
-        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V19");
-        assert_eq!(current.current, 19);
-        assert_eq!(current.applied, vec![11, 12, 13, 14, 15, 16, 17, 18, 19]);
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V20");
+        assert_eq!(current.current, 20);
+        assert_eq!(
+            current.applied,
+            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        );
 
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
-            .expect_err("G0 migration cannot downgrade V19");
+            .expect_err("G0 migration cannot downgrade V20");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
     }
 }

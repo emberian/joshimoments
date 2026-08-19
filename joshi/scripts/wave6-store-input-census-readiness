@@ -1,0 +1,144 @@
+#!/bin/sh
+set -eu
+
+JOSHI_REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$JOSHI_REPO"
+
+JOSHI_W6_INPUT_CREATED_STATE=0
+if [ "${JOSHI_W6_INPUT_STATE:-}" = "" ]; then
+  JOSHI_W6_INPUT_STATE=$(mktemp -d /tmp/joshi-wave6-input.XXXXXX)
+  JOSHI_W6_INPUT_CREATED_STATE=1
+fi
+case "$JOSHI_W6_INPUT_STATE" in
+  /tmp/joshi-wave6-input.*) ;;
+  *)
+    echo "JOSHI_W6_INPUT_STATE must be an explicit /tmp/joshi-wave6-input.* directory" >&2
+    exit 2
+    ;;
+esac
+export JOSHI_W6_INPUT_STATE
+
+cleanup() {
+  if [ "$JOSHI_W6_INPUT_CREATED_STATE" -eq 1 ]; then
+    echo "Wave 6 input-census witness retained at $JOSHI_W6_INPUT_STATE/witness.json" >&2
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+./schema/validate.sh
+cargo test --locked --offline -p joshi-store --all-targets
+cargo test --locked --offline -p joshi-core \
+  wave6_store_input::tests::genuine_w5_source_retries_and_reopens_without_market_atlas_promotion \
+  -- --exact
+cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
+
+mkdir -p "$JOSHI_W6_INPUT_STATE/catalog"
+cargo run --locked --offline -q -p joshi-core -- wave6-store-input-census \
+  --state "$JOSHI_W6_INPUT_STATE/catalog" > "$JOSHI_W6_INPUT_STATE/first.json"
+cargo run --locked --offline -q -p joshi-core -- wave6-store-input-census \
+  --state "$JOSHI_W6_INPUT_STATE/catalog" > "$JOSHI_W6_INPUT_STATE/retry.json"
+
+for report in "$JOSHI_W6_INPUT_STATE/first.json" "$JOSHI_W6_INPUT_STATE/retry.json"; do
+  jq -e '
+    .contract == "joshi.core.wave6_store_input_census_report.v1"
+    and .schemaVersion == 1
+    and .status == "useful_partial"
+    and .authority == "read_record_replay_propose_shadow_only"
+    and .semanticCeiling == "store_resolved_offline_fixture_input_census_only"
+    and .claimScope == "mint_discovery_input_census_not_market_atlas_field_release_causal_strategy_or_execution"
+    and .catalogSchema == "joshi.sqlite.v20"
+    and .programId == "w6-program-fixture-001"
+    and (.programRegistrationDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.sourceOccurrenceId | test("^source-c0:[0-9a-f]{64}$"))
+    and (.sourceDescriptorDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.sourceCreatedCommitSeq | test("^[1-9][0-9]*$"))
+    and (.sourceKnownThroughCommitSeq | test("^[1-9][0-9]*$"))
+    and (.bindingId | test("^wave6-input-census:[0-9a-f]{64}$"))
+    and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and (.acceptedCommitSeq | test("^[1-9][0-9]*$"))
+    and (.firstStatus == "accepted" or .firstStatus == "idempotent")
+    and .retryStatus == "idempotent"
+    and .factCount == "2"
+    and .eligibleSubjectCount == "2"
+    and .membershipCount == "2"
+    and .coverageCount == "2"
+    and .gapCount == "0"
+    and .hotSubjectCount == "1"
+    and .coldControlSubjectCount == "1"
+    and .storeResolvedSource == true
+    and .exactRetryClosed == true
+    and .restartReverified == true
+    and .storeResolvedMarketAtlas == false
+    and .fieldRelease == false
+    and .empiricalClaim == false
+    and .causalClaim == false
+    and .strategyClaim == false
+    and .providerIo == false
+    and .externalMutation == false
+    and .productQualified == false
+    and .liveQualified == false
+  ' "$report" >/dev/null
+done
+
+jq -en --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" \
+  --slurpfile retry "$JOSHI_W6_INPUT_STATE/retry.json" '
+  $first[0].bindingId == $retry[0].bindingId
+  and $first[0].documentDigest == $retry[0].documentDigest
+  and $first[0].acceptedCommitSeq == $retry[0].acceptedCommitSeq
+  and $retry[0].firstStatus == "idempotent"
+' >/dev/null
+
+JOSHI_W6_INPUT_MIGRATION_SHA=$(shasum -a 256 \
+  schema/migrations/0020_wave6_store_input_census.sql | awk '{print $1}')
+JOSHI_W6_INPUT_REPORT_SHA=$(shasum -a 256 \
+  "$JOSHI_W6_INPUT_STATE/first.json" | awk '{print $1}')
+
+jq -cn \
+  --arg migration "sha256:$JOSHI_W6_INPUT_MIGRATION_SHA" \
+  --arg report "sha256:$JOSHI_W6_INPUT_REPORT_SHA" \
+  --slurpfile first "$JOSHI_W6_INPUT_STATE/first.json" '
+  {
+    contract: "joshi.wave6.store_input_census_witness.v1",
+    schemaVersion: 1,
+    status: "useful_partial",
+    authority: "read_record_replay_propose_shadow_only",
+    semanticCeiling: "store_resolved_offline_fixture_input_census_only",
+    migrationDigest: $migration,
+    reportDigest: $report,
+    catalogSchema: $first[0].catalogSchema,
+    programId: $first[0].programId,
+    sourceOccurrenceId: $first[0].sourceOccurrenceId,
+    sourceDescriptorDigest: $first[0].sourceDescriptorDigest,
+    bindingId: $first[0].bindingId,
+    documentDigest: $first[0].documentDigest,
+    acceptedCommitSeq: $first[0].acceptedCommitSeq,
+    counts: {
+      facts: $first[0].factCount,
+      eligibleSubjects: $first[0].eligibleSubjectCount,
+      memberships: $first[0].membershipCount,
+      coverage: $first[0].coverageCount,
+      gaps: $first[0].gapCount,
+      hotSubjects: $first[0].hotSubjectCount,
+      coldControlSubjects: $first[0].coldControlSubjectCount
+    },
+    attainedCapabilities: [
+      "store_resolved_w5_input_census",
+      "exact_retry",
+      "read_only_restart"
+    ],
+    qualification: {
+      storeResolvedSource: true,
+      storeResolvedMarketAtlas: false,
+      fieldRelease: false,
+      empiricalClaim: false,
+      causalClaim: false,
+      strategyClaim: false,
+      providerIo: false,
+      externalMutation: false,
+      productQualified: false,
+      liveQualified: false
+    }
+  }
+' > "$JOSHI_W6_INPUT_STATE/witness.json"
+
+cat "$JOSHI_W6_INPUT_STATE/witness.json"

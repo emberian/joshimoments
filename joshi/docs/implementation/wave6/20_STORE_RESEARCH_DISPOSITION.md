@@ -26,7 +26,7 @@ a decision. Changed bytes, a missing proposal, a second batch for one identity, 
 foreign proposal binding refuse.
 
 Core report `joshi.core.wave6_program_registration_report.v9` and root witness
-`joshi.wave6.fixture_foundation_witness.v8` carry the exact disposition/proposal binding and
+`joshi.wave6.fixture_foundation_witness.v9` carry the exact disposition/proposal binding and
 retain authenticated human review, proposal execution, and research-result qualification as
 false.
 

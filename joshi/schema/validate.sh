@@ -158,7 +158,7 @@ fi
 # Exercise the production upgrade edges independently: create an exact V4 catalog, close it, then
 # reopen and apply V5, the acquisition-table V6 rebuild, the additive V7 operational schema,
 # narrow V8 semantic artifact mappings, the additive V9 authority spine, the G0 V10 spine, and
-# the fixture-only Wave 6 program/schema registry V11-V12 spine.
+# the fixture-only Wave 6 registry/analysis spine through the V20 store-input census bridge.
 fresh_validation_db=$validation_db
 upgrade_db=$validation_dir/joshi-upgrade-v4.sqlite
 validation_db=$upgrade_db
@@ -218,13 +218,14 @@ apply_migration "$schema_dir/migrations/0016_wave6_campaign_bundle.sql"
 apply_migration "$schema_dir/migrations/0017_wave6_research_proposal.sql"
 apply_migration "$schema_dir/migrations/0018_wave6_research_disposition.sql"
 apply_migration "$schema_dir/migrations/0019_wave6_market_atlas_fixture.sql"
+apply_migration "$schema_dir/migrations/0020_wave6_store_input_census.sql"
 upgrade_version=$($sqlite_bin "$validation_db" 'PRAGMA user_version;')
 upgrade_integrity=$($sqlite_bin "$validation_db" 'PRAGMA integrity_check;')
 upgrade_clock=$($sqlite_bin -separator '|' "$validation_db" \
     "SELECT local_clock_id,started_mono_ns FROM acquisition WHERE acquisition_id='upgrade-acquisition';")
-if [[ "$upgrade_version" != 19 || "$upgrade_integrity" != ok \
+if [[ "$upgrade_version" != 20 || "$upgrade_integrity" != ok \
       || "$upgrade_clock" != 'upgrade-source-clock|7' ]]; then
-    echo "V4-to-V19 upgrade validation failed: version=$upgrade_version integrity=$upgrade_integrity" >&2
+    echo "V4-to-V20 upgrade validation failed: version=$upgrade_version integrity=$upgrade_integrity" >&2
     exit 1
 fi
 for suffix in '' '-wal' '-shm'; do
