@@ -116,12 +116,16 @@ The generated domain battery closes the seven missing families named in the firs
 Every case binds sorted fixture identities, typed exact outputs, a negative control, a falsifier,
 fixed fixture-only authority, and a recomputed truth digest. The candidate must return every case
 exactly once with byte-exact outputs and a recomputed result/evaluation digest. The canonical
-evaluation bytes strictly reparse and reject duplicate or reordered JSON.
+evaluation is checked in under [`fixtures/wave6/artifacts`](../../../fixtures/wave6/artifacts),
+regenerates byte-for-byte in Python, and strictly cross-parses in Rust. Missing cases, changed
+kind/schema mappings, duplicate or reordered JSON, authority changes, and self-digest substitution
+refuse.
 
-This fourth evaluation is intentionally **not yet** a registered N00 artifact kind, checked-in
-golden, or store row. Its ceiling is the generated intrinsic fixture battery only. It cannot be
-counted among the three V12/V13/V15 durable evaluation artifacts until a separate registry/schema
-change freezes that boundary.
+This fourth evaluation is intentionally **not yet** a registered N00 artifact kind or store row.
+Its checked golden and strict cross-runtime parser freeze only the intrinsic fixture boundary; the
+kind remains absent from the N00 artifact denominator. It cannot be counted among the three
+V12/V13/V15 durable evaluation artifacts until a separate registry/schema/store change freezes
+that boundary.
 
 ## Three registered exact evaluation artifacts
 

@@ -41,6 +41,7 @@ pub use decision::{
 };
 pub use error::{RegistryError, Result};
 pub use evaluation::{
+    DOMAIN_EVALUATION_KIND, DOMAIN_EVALUATION_SCHEMA, DomainEvaluationV1,
     FixtureEvaluationArtifactV1, KNOWN_TRUTH_EVALUATION_KIND, KNOWN_TRUTH_EVALUATION_SCHEMA,
     KnownTruthEvaluationV1, PROTOCOL_EVALUATION_KIND, PROTOCOL_EVALUATION_SCHEMA,
     ProtocolEvaluationV1, STRUCTURAL_EVALUATION_KIND, STRUCTURAL_EVALUATION_SCHEMA,

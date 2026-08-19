@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,9 @@ from joshi_analysis.wave6_known_truth import (
     parse_domain_evaluation_exact,
     validate_domain_candidate_result,
 )
+
+ROOT = Path(__file__).resolve().parents[3]
+ARTIFACT = ROOT / "fixtures/wave6/artifacts/domain_known_truth_evaluation_v1.json"
 
 
 def _battery():
@@ -50,6 +54,7 @@ def test_battery_closes_all_seven_domain_adversaries_and_exact_candidate() -> No
     assert evaluation.suite_digest == battery.suite_digest
     assert evaluation.evaluation_digest.startswith("sha256:")
     assert evaluation.exact_bytes().endswith(b"\n")
+    assert evaluation.exact_bytes() == ARTIFACT.read_bytes()
     assert parse_domain_evaluation_exact(evaluation.exact_bytes()) == evaluation
 
     duplicate = evaluation.exact_bytes().replace(

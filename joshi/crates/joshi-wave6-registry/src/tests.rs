@@ -4,9 +4,9 @@ use crate::{
     ARTIFACT_DAG_CONTRACT, ArtifactDagV1, ArtifactDecisionKindV1, ArtifactDecisionV1,
     ArtifactOccurrenceV1, ArtifactRefV1, CAMPAIGN_LIFECYCLE_CONTRACT, CampaignLifecycleV1,
     CampaignStateV1, CampaignTransitionV1, ClaimCausalityV1, ClaimEconomicMeaningV1,
-    ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimRungV1, ClaimVerbV1,
-    FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1, MARKET_ATLAS_KIND,
-    MARKET_ATLAS_SCHEMA, ProgramAuthorityV1, RegistryError, SemanticCeilingV1,
+    ClaimIdentityMeaningV1, ClaimLanguageV1, ClaimRungV1, ClaimVerbV1, DOMAIN_EVALUATION_KIND,
+    DOMAIN_EVALUATION_SCHEMA, FIXTURE_DECISION_LEDGER_CONTRACT, FixtureDecisionLedgerV1,
+    MARKET_ATLAS_KIND, MARKET_ATLAS_SCHEMA, ProgramAuthorityV1, RegistryError, SemanticCeilingV1,
     Wave6ProgramRegistrationV1, canonical_bytes, digest_bytes, parse_artifact_dag_exact,
     parse_campaign_lifecycle_exact, parse_decision_ledger_exact, parse_evaluation_artifact_exact,
     parse_market_atlas_fixture_exact, parse_program_registration_exact, validate_claim_language,
@@ -25,12 +25,16 @@ const RESEARCH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/research_proposal_v1.json");
 const STRUCTURAL_TRUTH_SCHEMA: &[u8] =
     include_bytes!("../../../fixtures/wave6/schemas/structural_known_truth_evaluation_v1.json");
+const DOMAIN_TRUTH_SCHEMA: &[u8] =
+    include_bytes!("../../../fixtures/wave6/schemas/domain_known_truth_evaluation_v1.json");
 const KNOWN_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/known_truth_evaluation_v1.json");
 const PROTOCOL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/protocol_known_truth_evaluation_v1.json");
 const STRUCTURAL_TRUTH_EVALUATION: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/structural_known_truth_evaluation_v1.json");
+const DOMAIN_TRUTH_EVALUATION: &[u8] =
+    include_bytes!("../../../fixtures/wave6/artifacts/domain_known_truth_evaluation_v1.json");
 const MARKET_ATLAS_FIXTURE: &[u8] =
     include_bytes!("../../../fixtures/wave6/artifacts/market_atlas_snapshot_v1.json");
 const EVALUATION_DAG: &[u8] = include_bytes!("../../../fixtures/wave6/artifact_dag_v1.json");
@@ -540,6 +544,13 @@ fn exact_python_evaluation_artifacts_cross_parse_without_promotion() {
             3,
             "sha256:f5c5f9d41a8dd686425a145b77c7b90f27a9154f07a607d562fa1596f3e71705",
         ),
+        (
+            DOMAIN_EVALUATION_KIND,
+            DOMAIN_EVALUATION_SCHEMA,
+            DOMAIN_TRUTH_EVALUATION,
+            7,
+            "sha256:56d99ee04af5faf2704f1744b2be0d9c43d27228f4f746385139ad6c0a2799f7",
+        ),
     ];
     for (kind, schema, bytes, count, semantic_digest) in cases {
         let parsed = parse_evaluation_artifact_exact(&stable(kind), &stable(schema), bytes)
@@ -556,6 +567,28 @@ fn exact_python_evaluation_artifacts_cross_parse_without_promotion() {
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
         );
     }
+
+    let registration = parse_program_registration_exact(FIXTURE).expect("registration");
+    let domain_schema: serde_json::Value =
+        serde_json::from_slice(DOMAIN_TRUTH_SCHEMA).expect("domain schema JSON");
+    assert_eq!(exact_json(&domain_schema), DOMAIN_TRUTH_SCHEMA);
+    assert_eq!(
+        domain_schema["contract"],
+        serde_json::Value::String(DOMAIN_EVALUATION_SCHEMA.to_owned())
+    );
+    assert_eq!(
+        digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain schema digest"),
+        ValueDigest::new("sha256:b077caa5d835ca35bf4323be3808f2f50ef1be4f8717953fef9de1f7aa4daa09")
+            .expect("domain schema digest literal")
+    );
+    assert!(
+        registration.value().artifact_kinds.iter().all(|kind| {
+            kind.kind_id.as_str() != DOMAIN_EVALUATION_KIND
+                && kind.schema_digest
+                    != digest_bytes(DOMAIN_TRUTH_SCHEMA).expect("domain schema digest")
+        }),
+        "cross-runtime parsing must not silently register the domain artifact kind"
+    );
 }
 
 #[test]
@@ -656,6 +689,36 @@ fn evaluation_mapping_canonicality_denominator_and_self_digest_substitution_refu
             &stable("known_truth_evaluation_fixture"),
             &stable("joshi.analysis.wave6-known-truth/v1"),
             &empty_bytes,
+        ),
+        Err(RegistryError::Evaluation("exact result denominator"))
+    ));
+
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable(DOMAIN_EVALUATION_KIND),
+            &stable("joshi.analysis.wave6-known-truth/v1"),
+            DOMAIN_TRUTH_EVALUATION,
+        ),
+        Err(RegistryError::Evaluation(
+            "unsupported registered evaluation kind/schema mapping"
+        ))
+    ));
+
+    let mut incomplete_domain: serde_json::Value =
+        serde_json::from_slice(DOMAIN_TRUTH_EVALUATION).expect("domain evaluation JSON");
+    incomplete_domain["passed_case_ids"]
+        .as_array_mut()
+        .expect("domain case IDs")
+        .pop();
+    incomplete_domain["result_digests"]
+        .as_array_mut()
+        .expect("domain result digests")
+        .pop();
+    assert!(matches!(
+        parse_evaluation_artifact_exact(
+            &stable(DOMAIN_EVALUATION_KIND),
+            &stable(DOMAIN_EVALUATION_SCHEMA),
+            &exact_json(&incomplete_domain),
         ),
         Err(RegistryError::Evaluation("exact result denominator"))
     ));

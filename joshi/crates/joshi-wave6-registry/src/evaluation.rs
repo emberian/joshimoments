@@ -1,4 +1,4 @@
-//! Exact fixture-only wire contracts for registered N01 evaluation artifacts.
+//! Exact fixture-only wire contracts for supported N01 evaluation artifacts.
 
 use joshi_domain::{StableString, ValueDigest};
 use serde::{Deserialize, Serialize};
@@ -17,11 +17,17 @@ pub const PROTOCOL_EVALUATION_SCHEMA: &str = "joshi.analysis.wave6-protocol-know
 pub const STRUCTURAL_EVALUATION_KIND: &str = "structural_known_truth_evaluation_fixture";
 /// Registered structural known-truth evaluation schema.
 pub const STRUCTURAL_EVALUATION_SCHEMA: &str = "joshi.analysis.wave6-structural-known-truth/v1";
+/// Generated domain-counterexample evaluation kind. N00 does not register this kind yet.
+pub const DOMAIN_EVALUATION_KIND: &str = "domain_known_truth_evaluation_fixture";
+/// Generated domain-counterexample evaluation schema. Parsing does not register or persist it.
+pub const DOMAIN_EVALUATION_SCHEMA: &str = "joshi.analysis.wave6-domain-known-truth/v1";
 
 const GENERIC_AUTHORITY: &str = "fixture_only_no_market_causal_policy_or_economic_claim";
 const PROTOCOL_AUTHORITY: &str = "fixture_protocol_arithmetic_only_no_market_or_economic_claim";
 const STRUCTURAL_AUTHORITY: &str =
     "fixture_structural_transition_only_no_identity_market_causal_or_economic_claim";
+const DOMAIN_AUTHORITY: &str =
+    "fixture_domain_counterexamples_only_no_market_identity_causal_policy_or_economic_claim";
 const PUMP_FIXTURE_DIGEST: &str =
     "sha256:47837451236ec38eaffa78521d4fc6aa8ffb44d69136a19a0b532d1ad20c29df";
 const DLMM_FIXTURE_DIGEST: &str =
@@ -95,7 +101,29 @@ pub struct StructuralEvaluationV1 {
     pub suite_id: StableString,
 }
 
-/// One of the three registered evaluation artifact families.
+/// Complete generated domain-counterexample evaluation output.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainEvaluationV1 {
+    /// Fixed fixture-only authority.
+    pub authority: StableString,
+    /// Candidate implementation identity.
+    pub candidate_id: StableString,
+    /// Self-digest over the exact evaluation material.
+    pub evaluation_digest: ValueDigest,
+    /// Exact sorted passing case denominator.
+    pub passed_case_ids: Vec<StableString>,
+    /// One result digest in matching case order.
+    pub result_digests: Vec<ValueDigest>,
+    /// Exact suite digest.
+    pub suite_digest: ValueDigest,
+    /// Exact suite identity.
+    pub suite_id: StableString,
+}
+
+/// One supported evaluation artifact family.
+///
+/// Parsing a value does not prove that its kind is present in an N00 registration or store.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FixtureEvaluationArtifactV1 {
     /// Generic signed-flow known-truth evaluation.
@@ -104,6 +132,8 @@ pub enum FixtureEvaluationArtifactV1 {
     Protocol(ProtocolEvaluationV1),
     /// Migration/order/identity structural evaluation.
     Structural(StructuralEvaluationV1),
+    /// Generated venue/burst/mechanism/operator/episode/household counterexamples.
+    Domain(DomainEvaluationV1),
 }
 
 impl FixtureEvaluationArtifactV1 {
@@ -114,6 +144,7 @@ impl FixtureEvaluationArtifactV1 {
             Self::KnownTruth(value) => &value.evaluation_digest,
             Self::Protocol(value) => &value.evaluation_digest,
             Self::Structural(value) => &value.evaluation_digest,
+            Self::Domain(value) => &value.evaluation_digest,
         }
     }
 
@@ -124,6 +155,7 @@ impl FixtureEvaluationArtifactV1 {
             Self::KnownTruth(value) => value.result_digests.len(),
             Self::Protocol(value) => value.result_digests.len(),
             Self::Structural(value) => value.result_digests.len(),
+            Self::Domain(value) => value.result_digests.len(),
         }
     }
 }
@@ -195,6 +227,11 @@ pub fn parse_evaluation_artifact_exact(
             validate_structural(&value)?;
             FixtureEvaluationArtifactV1::Structural(value)
         }
+        (DOMAIN_EVALUATION_KIND, DOMAIN_EVALUATION_SCHEMA) => {
+            let value: DomainEvaluationV1 = decode_canonical(bytes)?;
+            validate_domain(&value)?;
+            FixtureEvaluationArtifactV1::Domain(value)
+        }
         _ => {
             return Err(RegistryError::Evaluation(
                 "unsupported registered evaluation kind/schema mapping",
@@ -237,6 +274,17 @@ struct StructuralDigestMaterial<'a> {
     authority: &'a StableString,
     candidate_id: &'a StableString,
     fixture_digest: &'a ValueDigest,
+    passed_case_ids: &'a [StableString],
+    result_digests: &'a [ValueDigest],
+    schema_id: &'static str,
+    suite_digest: &'a ValueDigest,
+    suite_id: &'a StableString,
+}
+
+#[derive(Serialize)]
+struct DomainDigestMaterial<'a> {
+    authority: &'a StableString,
+    candidate_id: &'a StableString,
     passed_case_ids: &'a [StableString],
     result_digests: &'a [ValueDigest],
     schema_id: &'static str,
@@ -309,6 +357,26 @@ fn validate_structural(value: &StructuralEvaluationV1) -> Result<()> {
         passed_case_ids: &value.passed_case_ids,
         result_digests: &value.result_digests,
         schema_id: STRUCTURAL_EVALUATION_SCHEMA,
+        suite_digest: &value.suite_digest,
+        suite_id: &value.suite_id,
+    };
+    validate_self_digest(&material, &value.evaluation_digest)
+}
+
+fn validate_domain(value: &DomainEvaluationV1) -> Result<()> {
+    validate_common(
+        &value.authority,
+        DOMAIN_AUTHORITY,
+        &value.passed_case_ids,
+        &value.result_digests,
+        7,
+    )?;
+    let material = DomainDigestMaterial {
+        authority: &value.authority,
+        candidate_id: &value.candidate_id,
+        passed_case_ids: &value.passed_case_ids,
+        result_digests: &value.result_digests,
+        schema_id: DOMAIN_EVALUATION_SCHEMA,
         suite_digest: &value.suite_digest,
         suite_id: &value.suite_id,
     };

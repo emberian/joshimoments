@@ -42,6 +42,12 @@ schema grants only `fixture_campaign_protocol_only`; it explicitly prohibits any
 result or operational campaign inference. The independently bounded N03 contract is documented in
 [11_PROSPECTIVE_CAMPAIGN_CONTRACT.md](11_PROSPECTIVE_CAMPAIGN_CONTRACT.md).
 
+The registry package can also strictly cross-parse the checked seven-case domain-counterexample
+evaluation and pins its canonical schema bytes and digest. That parser support is not registration:
+the domain kind and schema digest remain absent from the exact N00 `artifactKinds` denominator and
+therefore cannot enter its artifact DAG, decision ledger, store adapter, or claim grammar. Adding it
+to N00 is a separate digest-changing registration tranche.
+
 ## Artifact lineage and claim grammar
 
 `ArtifactDagV1` binds the exact program and registration digest, registered artifact kinds,
