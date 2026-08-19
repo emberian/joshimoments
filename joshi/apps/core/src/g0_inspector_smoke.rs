@@ -1,13 +1,17 @@
 //! One-shot, offline-only pairing and Cockpit V2 route witness for the G0 fixture.
 //!
-//! This is not a browser-presentation or product-use witness. It exercises the real local HTTP
-//! router in-process against an already completed fixture catalog, then proves restart
-//! invalidation and exact publication readback without serializing a code or capability.
+//! This is not an attached-browser presentation or product-use witness. It exercises the real
+//! local HTTP router in process against an already completed fixture catalog, exact-retries one
+//! explicitly scripted browser-format claim, then proves restart invalidation and exact readback
+//! without serializing a code or capability.
 
 use crate::{
     pairing::OrdinaryPairingError,
     service::{CoreService, PairingCapability, PairingCapabilityGenerationError},
-    wave5_g0::offline_fixture_store_config,
+    wave5_g0::{
+        browser_inspector_store_config, offline_fixture_store_config,
+        prepare_g0_browser_inspector_store_for_coordinates,
+    },
 };
 use axum::{
     Router,
@@ -19,6 +23,7 @@ use joshi_domain::StableString;
 use joshi_pairing::{
     PairingConfig, PairingOccurrenceKind, PairingOrigin, PairingScope, pairing_occurrence_id,
 };
+use joshi_publication::CockpitV2BrowserPresentationClaimV1;
 use joshi_store::{SqliteStore, StoreError, StoreMode};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -40,7 +45,7 @@ pub enum G0InspectorSmokeFaultPoint {
     AfterReopen,
 }
 
-/// Exact, secret-free result of the in-process pairing and immutable-open smoke walk.
+/// Exact, secret-free result of the in-process pairing, open, and scripted-report smoke walk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
@@ -62,7 +67,15 @@ pub struct G0InspectorSmokeReport {
     pub route_response_digest: String,
     pub route_response_byte_length: u64,
     pub reopened_response_digest: String,
+    pub scripted_presentation_claim_id: String,
+    pub scripted_presentation_claim_digest: String,
+    pub scripted_presentation_claim_bytes_digest: String,
+    pub scripted_presentation_receipt_digest: String,
+    pub scripted_presentation_retry_receipt_digest: String,
+    pub scripted_presentation_commit_digest: String,
     pub paired_route_read_closed: bool,
+    pub scripted_presentation_evidence_stored: bool,
+    pub scripted_presentation_exact_retry_closed: bool,
     pub restart_old_capability_refused: bool,
     pub fresh_pairing_reopen_closed: bool,
     pub full_offline_fault_walk: bool,
@@ -105,7 +118,25 @@ struct ExchangeResponse {
     capability: String,
 }
 
-/// Exercise durable pairing, exact Cockpit V2 HTTP open, restart invalidation, and fresh reopen.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PresentationReceipt {
+    contract: String,
+    schema_version: u16,
+    catalog_id: String,
+    catalog_schema: String,
+    client_presentation_id: String,
+    claim_digest: String,
+    claim_bytes_digest: String,
+    pairing_session_id: String,
+    publication_id: String,
+    store_commit_seq: String,
+    status: String,
+    authority: String,
+    ceiling: String,
+}
+
+/// Exercise durable pairing, exact Cockpit V2 HTTP open, scripted report, and fresh reopen.
 ///
 /// The input state must already contain exactly one headed offline G0 fixture publication. No
 /// network socket is opened. The report intentionally excludes all code/capability material.
@@ -132,9 +163,9 @@ pub async fn run_g0_inspector_smoke_with_fault(
     state: &Path,
     fault: Option<G0InspectorSmokeFaultPoint>,
 ) -> Result<G0InspectorSmokeReport, G0InspectorSmokeError> {
-    let config = offline_fixture_store_config(state)
+    let source_config = offline_fixture_store_config(state)
         .map_err(|_| G0InspectorSmokeError::Invariant("fixture store configuration is invalid"))?;
-    let store = SqliteStore::open(config.clone(), StoreMode::SingleWriter)?;
+    let store = SqliteStore::open(source_config, StoreMode::ReadOnly)?;
     let headed = store.list_headed_cockpit_v2_publications_v1()?;
     let [(publication, head)] = headed.as_slice() else {
         return Err(G0InspectorSmokeError::Invariant(
@@ -159,15 +190,29 @@ pub async fn run_g0_inspector_smoke_with_fault(
     let run_registration_digest = registration.exact_digest;
     drop(store);
 
+    let inspector_store = prepare_g0_browser_inspector_store_for_coordinates(
+        state,
+        publication_id.as_str(),
+        publication_digest.as_str(),
+        source_occurrence_id.as_str(),
+        head.head_digest.as_str(),
+    )
+    .map_err(|_| G0InspectorSmokeError::Invariant("browser inspector overlay is invalid"))?;
+    let inspector_config = browser_inspector_store_config(state)
+        .map_err(|_| G0InspectorSmokeError::Invariant("inspector store config is invalid"))?;
+
     let origin = PairingOrigin::new(ORIGIN)?;
     let (core, pairing) = CoreService::with_sqlite_pairing(
-        SqliteStore::open(config.clone(), StoreMode::SingleWriter)?,
+        inspector_store,
         None,
         PairingCapability::generate_os_random()?,
         origin.clone(),
         PairingConfig::default(),
     )?;
-    let issued = pairing.issue_code(vec![PairingScope::CockpitRead])?;
+    let issued = pairing.issue_code(vec![
+        PairingScope::CockpitRead,
+        PairingScope::PresentationEvidenceWrite,
+    ])?;
     let issued_ordinal = occurrence_ordinal(issued.metadata.occurrence_id.as_str())?;
     let consumed_id = pairing_occurrence_id(
         &origin,
@@ -184,7 +229,11 @@ pub async fn run_g0_inspector_smoke_with_fault(
         || exchange_response.origin != ORIGIN
         || exchange_response.epoch != issued.metadata.epoch.get().to_string()
         || exchange_response.authority != "read_only_no_execution"
-        || exchange_response.scopes != [PairingScope::CockpitRead]
+        || exchange_response.scopes
+            != [
+                PairingScope::CockpitRead,
+                PairingScope::PresentationEvidenceWrite,
+            ]
         || exchange_response.expires_at.is_empty()
     {
         return Err(G0InspectorSmokeError::Invariant(
@@ -220,13 +269,135 @@ pub async fn run_g0_inspector_smoke_with_fault(
     let route_response_byte_length = u64::try_from(opened_bytes.len())
         .map_err(|_| G0InspectorSmokeError::Invariant("route response length overflow"))?;
     inject(fault, G0InspectorSmokeFaultPoint::AfterGlassRead)?;
+
+    let mounted_at = crate::wave5_readiness::now().map_err(|_| {
+        G0InspectorSmokeError::Invariant("scripted presentation clock is unavailable")
+    })?;
+    let page_id = format!("scripted-page-{session_id}");
+    let presentation_id = format!("scripted-presentation-{session_id}");
+    let mut claim: CockpitV2BrowserPresentationClaimV1 =
+        serde_json::from_value(serde_json::json!({
+            "contract": "joshi.cockpit.v2.browser_presentation_claim",
+            "schemaVersion": 1,
+            "idempotencyKey": format!("browser-presentation:{page_id}:1"),
+            "clientPresentationId": presentation_id,
+            "browserPageId": page_id,
+            "presentationSeq": "1",
+            "publication": {
+                "publicationId": publication_id.as_str(),
+                "publicationDigest": publication_digest.as_str(),
+                "publicationBytesDigest": publication.publication_bytes_digest.as_str(),
+                "publicationCommitSeq": publication.commit_seq.get().to_string(),
+            },
+            "head": {
+                "headDigest": head_digest.as_str(),
+                "headBytesDigest": head.head_digest.as_str(),
+                "headCommitSeq": head.commit_seq.get().to_string(),
+            },
+            "sourceOccurrenceId": source_occurrence_id.as_str(),
+            "renderedSubjects": publication.publication.manifest.rendered_subjects,
+            "renderedSubjectCount": publication
+                .publication
+                .manifest
+                .rendered_subjects
+                .len()
+                .to_string(),
+            "mountedAt": mounted_at.to_string(),
+            "clientClockId": format!("{page_id}-scripted-clock"),
+            "monotonicNs": "1",
+            "viewport": {
+                "widthCssPx": "1280",
+                "heightCssPx": "800",
+                "devicePixelRatioMilli": "1000",
+            },
+            "documentVisibility": "visible",
+            "documentHasFocus": true,
+            "authority": "read_only_no_execution",
+            "ceiling": "browser_reported_not_pixel_verified",
+            "claimDigest": format!("sha256:{}", "0".repeat(64)),
+        }))?;
+    claim.claim_digest = claim.computed_digest().map_err(|_| {
+        G0InspectorSmokeError::Invariant("scripted presentation claim digest failed")
+    })?;
+    let claim_bytes = claim.canonical_bytes().map_err(|_| {
+        G0InspectorSmokeError::Invariant("scripted presentation claim is not canonical")
+    })?;
+    let claim_bytes_digest = Sha256Digest::of_bytes(&claim_bytes).to_string();
+    let presentation_response = send(
+        &app,
+        presentation_request(capability.as_str(), claim_bytes.clone())?,
+    )
+    .await;
+    if presentation_response.status() != StatusCode::OK {
+        return Err(G0InspectorSmokeError::Invariant(
+            "scripted presentation route did not durably accept the exact claim",
+        ));
+    }
+    let presentation_receipt_bytes = response_bytes(presentation_response).await?;
+    let presentation_receipt: PresentationReceipt =
+        serde_json::from_slice(&presentation_receipt_bytes)?;
+    let presentation_commit_seq = presentation_receipt
+        .store_commit_seq
+        .parse::<u64>()
+        .map_err(|_| G0InspectorSmokeError::Invariant("presentation commit is not a u64"))?;
+    if presentation_receipt.contract != "joshi.core.cockpit_v2_browser_presentation_receipt"
+        || presentation_receipt.schema_version != 1
+        || presentation_receipt.catalog_id != "catalog-publication-test"
+        || presentation_receipt.catalog_schema != "joshi.sqlite.v21"
+        || presentation_receipt.client_presentation_id != claim.client_presentation_id.as_str()
+        || presentation_receipt.claim_digest != claim.claim_digest.as_str()
+        || presentation_receipt.claim_bytes_digest != claim_bytes_digest
+        || presentation_receipt.pairing_session_id != session_id
+        || presentation_receipt.publication_id != publication_id.as_str()
+        || presentation_commit_seq <= head.commit_seq.get()
+        || presentation_receipt.status != "accepted"
+        || presentation_receipt.authority != "read_only_no_execution"
+        || presentation_receipt.ceiling != "durable_browser_report_only_not_pixel_verified"
+    {
+        return Err(G0InspectorSmokeError::Invariant(
+            "scripted presentation receipt does not close the exact claim/session/publication",
+        ));
+    }
+    let presentation_receipt_digest =
+        Sha256Digest::of_bytes(&presentation_receipt_bytes).to_string();
+    let retry_response = send(
+        &app,
+        presentation_request(capability.as_str(), claim_bytes.clone())?,
+    )
+    .await;
+    if retry_response.status() != StatusCode::OK {
+        return Err(G0InspectorSmokeError::Invariant(
+            "exact scripted presentation retry was refused",
+        ));
+    }
+    let retry_receipt_bytes = response_bytes(retry_response).await?;
+    let retry_receipt: PresentationReceipt = serde_json::from_slice(&retry_receipt_bytes)?;
+    if retry_receipt.contract != presentation_receipt.contract
+        || retry_receipt.schema_version != presentation_receipt.schema_version
+        || retry_receipt.catalog_id != presentation_receipt.catalog_id
+        || retry_receipt.catalog_schema != presentation_receipt.catalog_schema
+        || retry_receipt.client_presentation_id != presentation_receipt.client_presentation_id
+        || retry_receipt.claim_digest != presentation_receipt.claim_digest
+        || retry_receipt.claim_bytes_digest != presentation_receipt.claim_bytes_digest
+        || retry_receipt.pairing_session_id != presentation_receipt.pairing_session_id
+        || retry_receipt.publication_id != presentation_receipt.publication_id
+        || retry_receipt.store_commit_seq != presentation_receipt.store_commit_seq
+        || retry_receipt.status != "idempotent"
+        || retry_receipt.authority != presentation_receipt.authority
+        || retry_receipt.ceiling != presentation_receipt.ceiling
+    {
+        return Err(G0InspectorSmokeError::Invariant(
+            "scripted presentation exact retry changed its durable receipt",
+        ));
+    }
+    let retry_receipt_digest = Sha256Digest::of_bytes(&retry_receipt_bytes).to_string();
     drop(app);
     drop(pairing);
 
     inject(fault, G0InspectorSmokeFaultPoint::BeforeReopen)?;
 
     let (restarted_core, restarted_pairing) = CoreService::with_sqlite_pairing(
-        SqliteStore::open(config.clone(), StoreMode::SingleWriter)?,
+        SqliteStore::open(inspector_config.clone(), StoreMode::SingleWriter)?,
         None,
         PairingCapability::generate_os_random()?,
         origin.clone(),
@@ -269,7 +440,7 @@ pub async fn run_g0_inspector_smoke_with_fault(
     drop(restarted_app);
     drop(restarted_pairing);
 
-    let store = SqliteStore::open(config, StoreMode::ReadOnly)?;
+    let store = SqliteStore::open(inspector_config, StoreMode::ReadOnly)?;
     let pairing_occurrence =
         store
             .load_pairing_occurrence_v1(&consumed_id)?
@@ -307,10 +478,26 @@ pub async fn run_g0_inspector_smoke_with_fault(
             "publication/head changed across paired restart",
         ));
     }
+    let reopened_presentation = store
+        .load_cockpit_v2_browser_presentation_v1(&claim.client_presentation_id)?
+        .ok_or(G0InspectorSmokeError::Invariant(
+            "scripted presentation was absent after pairing restart",
+        ))?;
+    if reopened_presentation.claim != claim
+        || reopened_presentation.claim_bytes != claim_bytes
+        || reopened_presentation.claim_bytes_digest.as_str() != claim_bytes_digest
+        || reopened_presentation.pairing_session_id.as_str() != session_id
+        || reopened_presentation.claim.publication.publication_id != publication_id
+        || reopened_presentation.commit_seq.get() != presentation_commit_seq
+    {
+        return Err(G0InspectorSmokeError::Invariant(
+            "scripted presentation changed across exact read-only reopen",
+        ));
+    }
 
     Ok(G0InspectorSmokeReport {
         contract: "joshi.wave5.g0_inspector_smoke",
-        schema_version: 1,
+        schema_version: 2,
         authority: "read_only_no_execution",
         status: "useful_partial",
         run_registration_id: run_registration_id.to_string(),
@@ -326,7 +513,15 @@ pub async fn run_g0_inspector_smoke_with_fault(
         route_response_digest: route_response_digest.to_string(),
         route_response_byte_length,
         reopened_response_digest: Sha256Digest::of_bytes(&reopened_bytes).to_string(),
+        scripted_presentation_claim_id: claim.client_presentation_id.to_string(),
+        scripted_presentation_claim_digest: claim.claim_digest.to_string(),
+        scripted_presentation_claim_bytes_digest: claim_bytes_digest,
+        scripted_presentation_receipt_digest: presentation_receipt_digest,
+        scripted_presentation_retry_receipt_digest: retry_receipt_digest,
+        scripted_presentation_commit_digest: reopened_presentation.commit_digest.to_string(),
         paired_route_read_closed: true,
+        scripted_presentation_evidence_stored: true,
+        scripted_presentation_exact_retry_closed: true,
         restart_old_capability_refused: true,
         fresh_pairing_reopen_closed: true,
         full_offline_fault_walk: false,
@@ -406,6 +601,24 @@ fn authorized_request(
         .map_err(|_| G0InspectorSmokeError::Invariant("authorized request construction failed"))
 }
 
+fn presentation_request(
+    capability: &str,
+    body: Vec<u8>,
+) -> Result<Request<Body>, G0InspectorSmokeError> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/cockpit-v2/presentations")
+        .header("host", "127.0.0.1:8787")
+        .header("origin", ORIGIN)
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-mode", "cors")
+        .header("sec-fetch-dest", "empty")
+        .header("content-type", "application/json")
+        .header("x-joshi-pairing-token", capability)
+        .body(Body::from(body))
+        .map_err(|_| G0InspectorSmokeError::Invariant("presentation request construction failed"))
+}
+
 async fn send(app: &Router, request: Request<Body>) -> Response<Body> {
     match app.clone().oneshot(request).await {
         Ok(response) => response,
@@ -454,6 +667,8 @@ mod tests {
             .await
             .expect("G0 inspector smoke");
         assert!(report.paired_route_read_closed);
+        assert!(report.scripted_presentation_evidence_stored);
+        assert!(report.scripted_presentation_exact_retry_closed);
         assert!(report.restart_old_capability_refused);
         assert!(report.fresh_pairing_reopen_closed);
         assert_eq!(
@@ -488,6 +703,8 @@ mod tests {
                 .await
                 .expect("fresh-session inspector recovery");
             assert!(recovered.paired_route_read_closed);
+            assert!(recovered.scripted_presentation_evidence_stored);
+            assert!(recovered.scripted_presentation_exact_retry_closed);
             assert!(recovered.restart_old_capability_refused);
             assert!(recovered.fresh_pairing_reopen_closed);
             assert_eq!(

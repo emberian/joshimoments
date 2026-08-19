@@ -1859,6 +1859,85 @@ pub fn offline_fixture_store_config(
     Ok(value)
 }
 
+pub(crate) fn browser_inspector_store_config(
+    state: &Path,
+) -> Result<joshi_store::StoreConfig, Wave5G0SourcePublicationError> {
+    let mut value = offline_fixture_store_config(state)?;
+    value.catalog_path = state.join("browser-inspector/catalog.sqlite");
+    Ok(value)
+}
+
+/// Creates or reopens the mutable V21 browser-evidence overlay for one frozen V10 component.
+///
+/// The source catalog is copied through `SQLite`'s consistent backup API and never migrated in
+/// place. Every reopen resolves the exact source/publication/head named by the immutable V10
+/// report before the returned writer can accept pairing or presentation evidence.
+///
+/// # Errors
+///
+/// Refuses a non-file/symlink overlay, migration drift, or any report/catalog substitution.
+pub fn prepare_g0_browser_inspector_store(
+    state: &Path,
+    report: &Wave5G0SourcePublicationReport,
+) -> Result<SqliteStore, Wave5G0SourcePublicationError> {
+    prepare_g0_browser_inspector_store_for_coordinates(
+        state,
+        &report.publication_id,
+        &report.publication_digest,
+        &report.source_occurrence_id,
+        &report.head_digest,
+    )
+}
+
+pub(crate) fn prepare_g0_browser_inspector_store_for_coordinates(
+    state: &Path,
+    publication_id: &str,
+    publication_digest: &str,
+    source_occurrence_id: &str,
+    head_bytes_digest: &str,
+) -> Result<SqliteStore, Wave5G0SourcePublicationError> {
+    let source_config = offline_fixture_store_config(state)?;
+    let inspector_config = browser_inspector_store_config(state)?;
+    match fs::symlink_metadata(&inspector_config.catalog_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(Wave5G0SourcePublicationError::Invariant(
+                    "browser inspector overlay is not a regular file",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let source = SqliteStore::open(source_config, StoreMode::ReadOnly)?;
+            source.backup_to(&inspector_config.catalog_path)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let mut store = SqliteStore::open(inspector_config, StoreMode::SingleWriter)?;
+    if store.migrate(crate::wave5_readiness::now()?)?.current != 21 {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "browser inspector overlay did not reach V21",
+        ));
+    }
+    let publication_id = CockpitPublicationId::new(publication_id.to_owned())?;
+    let publication = store
+        .load_cockpit_v2_publication_v1(&publication_id)?
+        .ok_or(Wave5G0SourcePublicationError::Invariant(
+            "browser inspector publication is absent",
+        ))?;
+    let head = store.load_cockpit_v2_head_v1(&publication_id)?.ok_or(
+        Wave5G0SourcePublicationError::Invariant("browser inspector head is absent"),
+    )?;
+    if publication.publication.publication_digest.as_str() != publication_digest
+        || publication.source_occurrence_id.as_str() != source_occurrence_id
+        || head.head_digest.as_str() != head_bytes_digest
+    {
+        return Err(Wave5G0SourcePublicationError::Invariant(
+            "browser inspector overlay differs from frozen V10 evidence",
+        ));
+    }
+    Ok(store)
+}
+
 struct CensoredMemoryFixture {
     act: Vec<u8>,
     episode: Vec<u8>,

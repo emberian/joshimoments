@@ -1,14 +1,16 @@
 //! Consolidated, explicitly partial Wave 5 G0 root evidence.
 //!
-//! This joins the durable source/publication component to the ordinary-pairing HTTP open and
-//! restart smoke over the same store state. It closes all eighteen baseline evidence roles, but
-//! it does not execute or qualify the deterministic 37-scenario fault schedule.
+//! This joins the durable source/publication component to the ordinary-pairing HTTP open,
+//! scripted-presentation, and restart smoke over a separate evidence overlay. It closes all
+//! eighteen baseline evidence roles, but does not execute or qualify the deterministic
+//! 37-scenario fault schedule or claim an attached browser ran.
 
 use crate::{
     g0_inspector_smoke::{G0InspectorSmokeError, G0InspectorSmokeReport, run_g0_inspector_smoke},
     wave5_g0::{
         Wave5G0SourcePublicationError, Wave5G0SourcePublicationReport,
-        offline_fixture_store_config, run_wave5_g0_source_publication, supervisor_config,
+        browser_inspector_store_config, offline_fixture_store_config,
+        run_wave5_g0_source_publication, supervisor_config,
     },
 };
 use joshi_admission::Sha256Digest;
@@ -23,7 +25,7 @@ use std::{
 };
 use thiserror::Error;
 
-const CONTRACT: &str = "joshi.wave5.g0_root_evidence.v1";
+const CONTRACT: &str = "joshi.wave5.g0_root_evidence.v2";
 const AUTHORITY: &str = "offline_fixture_evidence_no_fault_qualification";
 
 const REQUIRED_ROLES: [EvidenceRole; 18] = [
@@ -71,6 +73,8 @@ pub struct Wave5G0RootEvidenceReport {
     pub component: Wave5G0SourcePublicationReport,
     pub inspector: G0InspectorSmokeReport,
     pub partial_root_evidence_closed: bool,
+    pub scripted_presentation_evidence_stored: bool,
+    pub scripted_presentation_exact_retry_closed: bool,
     pub full_offline_fault_walk: bool,
     pub browser_presented: bool,
     pub product_qualified: bool,
@@ -89,6 +93,10 @@ pub struct G0FinalRecoveryReport {
     pub backup_inventory_digest: String,
     pub restore_id: String,
     pub restore_readback_digest: String,
+    pub inspector_backup_id: String,
+    pub inspector_backup_manifest_digest: String,
+    pub inspector_restore_id: String,
+    pub inspector_restore_readback_digest: String,
     pub supervisor_backup_manifest_digest: String,
     pub supervisor_file_count: u64,
     pub origin_segment_digest: String,
@@ -96,6 +104,7 @@ pub struct G0FinalRecoveryReport {
     pub original_paths_unavailable_during_reopen: bool,
     pub store_full_verification_closed: bool,
     pub supervisor_origin_reopened: bool,
+    pub scripted_presentation_reopened: bool,
     pub full_offline_fault_walk: bool,
 }
 
@@ -193,7 +202,7 @@ pub(crate) fn join_reports(
 
     Ok(Wave5G0RootEvidenceReport {
         contract: CONTRACT,
-        schema_version: 1,
+        schema_version: 2,
         authority: AUTHORITY,
         status: "useful_partial",
         component_report_digest,
@@ -210,6 +219,8 @@ pub(crate) fn join_reports(
         component,
         inspector,
         partial_root_evidence_closed: true,
+        scripted_presentation_evidence_stored: true,
+        scripted_presentation_exact_retry_closed: true,
         full_offline_fault_walk: false,
         browser_presented: false,
         product_qualified: false,
@@ -240,6 +251,8 @@ fn validate_report_pair(
     }
     if !component.restart_reverified
         || !inspector.paired_route_read_closed
+        || !inspector.scripted_presentation_evidence_stored
+        || !inspector.scripted_presentation_exact_retry_closed
         || !inspector.restart_old_capability_refused
         || !inspector.fresh_pairing_reopen_closed
         || inspector.route_response_digest != inspector.reopened_response_digest
@@ -315,12 +328,13 @@ fn validate_final_recovery(
     component: &Wave5G0SourcePublicationReport,
     recovery: &G0FinalRecoveryReport,
 ) -> Result<(), Wave5G0RootEvidenceError> {
-    if recovery.contract != "joshi.wave5.g0_final_recovery.v1"
+    if recovery.contract != "joshi.wave5.g0_final_recovery.v2"
         || recovery.authority != AUTHORITY
         || recovery.origin_segment_digest != component.origin_segment_digest
         || !recovery.original_paths_unavailable_during_reopen
         || !recovery.store_full_verification_closed
         || !recovery.supervisor_origin_reopened
+        || !recovery.scripted_presentation_reopened
         || recovery.full_offline_fault_walk
     {
         return Err(Wave5G0RootEvidenceError::Invariant(
@@ -353,9 +367,13 @@ struct FinalReadbackMaterial<'a> {
     import_registration_digest: &'a str,
     status_record_digest: &'a str,
     pairing_occurrence_digest: &'a str,
+    scripted_presentation_claim_digest: &'a str,
+    scripted_presentation_commit_digest: &'a str,
     origin_segment_digest: &'a str,
     backup_manifest_digest: &'a str,
     restore_readback_digest: &'a str,
+    inspector_backup_manifest_digest: &'a str,
+    inspector_restore_readback_digest: &'a str,
     supervisor_backup_manifest_digest: &'a str,
 }
 
@@ -385,7 +403,10 @@ pub(crate) fn run_final_recovery_with_fault(
     let root = state.join(format!("g0-root-recovery-{tag}"));
     let backup_id = StableString::new(format!("backup:g0-root-final-{tag}"))?;
     let restore_id = StableString::new(format!("restore:g0-root-final-{tag}"))?;
+    let inspector_backup_id = StableString::new(format!("backup:g0-inspector-final-{tag}"))?;
+    let inspector_restore_id = StableString::new(format!("restore:g0-inspector-final-{tag}"))?;
     let config = offline_fixture_store_config(state)?;
+    let inspector_config = browser_inspector_store_config(state)?;
     let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter)?;
     inject_final(fault, G0FinalRecoveryFaultPoint::BeforeBackup)?;
     let backup_context = store.begin_wave5_commit(
@@ -398,6 +419,18 @@ pub(crate) fn run_final_recovery_with_fault(
         &root.join("backup/catalog.sqlite"),
         &root.join("backup/artifacts"),
         &backup_context,
+    )?;
+    let mut inspector_store = SqliteStore::open(inspector_config.clone(), StoreMode::SingleWriter)?;
+    let inspector_backup_context = inspector_store.begin_wave5_commit(
+        StableString::new(format!("wave5:g0:inspector-final-backup:{tag}"))?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let inspector_backup = inspector_store.commit_wave5_g0_backup_v1(
+        &inspector_backup_id,
+        &StableString::new(component.run_registration_id.clone())?,
+        &root.join("backup/inspector-catalog.sqlite"),
+        &root.join("backup/inspector-artifacts"),
+        &inspector_backup_context,
     )?;
     let supervisor_backup = root.join("backup/supervisor");
     let supervisor_entries = copy_exact_tree(&state.join("supervisor"), &supervisor_backup)?;
@@ -422,6 +455,17 @@ pub(crate) fn run_final_recovery_with_fault(
         &root.join("restored/artifacts"),
         &restore_context,
     )?;
+    let inspector_restore_context = inspector_store.begin_wave5_commit(
+        StableString::new(format!("wave5:g0:inspector-final-restore:{tag}"))?,
+        StableString::new(env!("CARGO_PKG_VERSION"))?,
+    )?;
+    let inspector_restore = inspector_store.commit_wave5_g0_backup_restore_v1(
+        &inspector_restore_id,
+        &inspector_backup_id,
+        &root.join("restored/inspector-catalog.sqlite"),
+        &root.join("restored/inspector-artifacts"),
+        &inspector_restore_context,
+    )?;
     let supervisor_restore_state = next_supervisor_restore_state(&root)?;
     let supervisor_restore = supervisor_restore_state.join("supervisor");
     let restored_supervisor_entries = copy_exact_tree(&supervisor_backup, &supervisor_restore)?;
@@ -432,11 +476,15 @@ pub(crate) fn run_final_recovery_with_fault(
     }
     inject_final(fault, G0FinalRecoveryFaultPoint::AfterRestore)?;
     drop(store);
+    drop(inspector_store);
 
     let original_paths = [
         config.catalog_path.clone(),
         config.catalog_path.with_extension("sqlite-wal"),
         config.catalog_path.with_extension("sqlite-shm"),
+        inspector_config.catalog_path.clone(),
+        inspector_config.catalog_path.with_extension("sqlite-wal"),
+        inspector_config.catalog_path.with_extension("sqlite-shm"),
         config.blob_root.clone(),
         config.export_root.clone(),
         state.join("supervisor"),
@@ -461,6 +509,14 @@ pub(crate) fn run_final_recovery_with_fault(
     restored_config.export_root = restore.restored_artifact_root.join("export");
     let restored_store = SqliteStore::open(restored_config, StoreMode::ReadOnly)?;
     restored_store.verify(VerifyDepth::Full)?;
+    let mut restored_inspector_config = inspector_config;
+    restored_inspector_config
+        .catalog_path
+        .clone_from(&inspector_restore.restored_catalog_path);
+    restored_inspector_config.blob_root = inspector_restore.restored_artifact_root.join("blob");
+    restored_inspector_config.export_root = inspector_restore.restored_artifact_root.join("export");
+    let restored_inspector = SqliteStore::open(restored_inspector_config, StoreMode::ReadOnly)?;
+    restored_inspector.verify(VerifyDepth::Full)?;
     let run_id = StableString::new(component.run_registration_id.clone())?;
     let run = restored_store
         .load_wave5_run_registration_v1(&run_id)?
@@ -511,11 +567,28 @@ pub(crate) fn run_final_recovery_with_fault(
             "status occurrence is absent from restored catalog",
         ))?;
     let pairing_id = StableString::new(inspector.pairing_occurrence_id.clone())?;
-    let pairing = restored_store
+    let pairing = restored_inspector
         .load_pairing_occurrence_v1(&pairing_id)?
         .ok_or(Wave5G0RootEvidenceError::Invariant(
             "pairing occurrence is absent from restored catalog",
         ))?;
+    let presentation_id = StableString::new(inspector.scripted_presentation_claim_id.clone())?;
+    let presentation = restored_inspector
+        .load_cockpit_v2_browser_presentation_v1(&presentation_id)?
+        .ok_or(Wave5G0RootEvidenceError::Invariant(
+            "scripted presentation is absent from restored catalog",
+        ))?;
+    if presentation.claim.claim_digest.as_str() != inspector.scripted_presentation_claim_digest
+        || presentation.claim_bytes_digest.as_str()
+            != inspector.scripted_presentation_claim_bytes_digest
+        || presentation.commit_digest.as_str() != inspector.scripted_presentation_commit_digest
+        || presentation.pairing_session_id.as_str() != inspector.session_id
+        || presentation.claim.publication.publication_id.as_str() != component.publication_id
+    {
+        return Err(Wave5G0RootEvidenceError::Invariant(
+            "restored scripted presentation differs from inspector evidence",
+        ));
+    }
 
     let restored_supervisor = Supervisor::open(supervisor_config(&supervisor_restore_state))?;
     let reservations = restored_supervisor
@@ -535,6 +608,8 @@ pub(crate) fn run_final_recovery_with_fault(
     }
 
     let backup_manifest_digest = Sha256Digest::of_bytes(&backup.manifest_bytes).to_string();
+    let inspector_backup_manifest_digest =
+        Sha256Digest::of_bytes(&inspector_backup.manifest_bytes).to_string();
     let final_material = FinalReadbackMaterial {
         run_registration_digest: run.exact_digest.as_str(),
         source_descriptor_digest: source.descriptor_digest.as_str(),
@@ -547,26 +622,35 @@ pub(crate) fn run_final_recovery_with_fault(
         import_registration_digest: import.registration_digest.as_str(),
         status_record_digest: status.record_digest.as_str(),
         pairing_occurrence_digest: pairing.document_digest.as_str(),
+        scripted_presentation_claim_digest: presentation.claim.claim_digest.as_str(),
+        scripted_presentation_commit_digest: presentation.commit_digest.as_str(),
         origin_segment_digest: &origin_segment_digest,
         backup_manifest_digest: &backup_manifest_digest,
         restore_readback_digest: restore.readback_digest.as_str(),
+        inspector_backup_manifest_digest: &inspector_backup_manifest_digest,
+        inspector_restore_readback_digest: inspector_restore.readback_digest.as_str(),
         supervisor_backup_manifest_digest: &supervisor_manifest_digest,
     };
     let final_readback_digest =
         Sha256Digest::of_bytes(&serde_json::to_vec(&final_material)?).to_string();
     inject_final(fault, G0FinalRecoveryFaultPoint::AfterReopen)?;
     drop(restored_supervisor);
+    drop(restored_inspector);
     drop(restored_store);
     guard.restore()?;
 
     Ok(G0FinalRecoveryReport {
-        contract: "joshi.wave5.g0_final_recovery.v1",
+        contract: "joshi.wave5.g0_final_recovery.v2",
         authority: AUTHORITY,
         backup_id: backup.backup_id.to_string(),
         backup_manifest_digest,
         backup_inventory_digest: backup.artifact_inventory_digest.to_string(),
         restore_id: restore.restore_id.to_string(),
         restore_readback_digest: restore.readback_digest.to_string(),
+        inspector_backup_id: inspector_backup.backup_id.to_string(),
+        inspector_backup_manifest_digest,
+        inspector_restore_id: inspector_restore.restore_id.to_string(),
+        inspector_restore_readback_digest: inspector_restore.readback_digest.to_string(),
         supervisor_backup_manifest_digest: supervisor_manifest_digest,
         supervisor_file_count: u64::try_from(supervisor_entries.len()).map_err(|_| {
             Wave5G0RootEvidenceError::Invariant("supervisor backup file count overflow")
@@ -576,6 +660,7 @@ pub(crate) fn run_final_recovery_with_fault(
         original_paths_unavailable_during_reopen: true,
         store_full_verification_closed: true,
         supervisor_origin_reopened: true,
+        scripted_presentation_reopened: true,
         full_offline_fault_walk: false,
     })
 }
@@ -847,10 +932,14 @@ pub(crate) fn recover_interrupted_original_roots(
         };
     };
     let config = offline_fixture_store_config(state)?;
+    let inspector_config = browser_inspector_store_config(state)?;
     let originals = [
         config.catalog_path.clone(),
         config.catalog_path.with_extension("sqlite-wal"),
         config.catalog_path.with_extension("sqlite-shm"),
+        inspector_config.catalog_path.clone(),
+        inspector_config.catalog_path.with_extension("sqlite-wal"),
+        inspector_config.catalog_path.with_extension("sqlite-shm"),
         config.blob_root,
         config.export_root,
         state.join("supervisor"),
@@ -920,6 +1009,8 @@ mod tests {
             REQUIRED_ROLES
         );
         assert!(report.partial_root_evidence_closed);
+        assert!(report.scripted_presentation_evidence_stored);
+        assert!(report.scripted_presentation_exact_retry_closed);
         assert!(
             report
                 .final_recovery
@@ -927,6 +1018,7 @@ mod tests {
         );
         assert!(report.final_recovery.store_full_verification_closed);
         assert!(report.final_recovery.supervisor_origin_reopened);
+        assert!(report.final_recovery.scripted_presentation_reopened);
         assert!(!report.full_offline_fault_walk);
         assert!(!report.product_qualified);
 
@@ -942,9 +1034,23 @@ mod tests {
         wrong_route.reopened_response_digest = format!("sha256:{}", "1".repeat(64));
         assert!(join_reports(component, wrong_route, recovery.clone()).is_err());
 
+        let mut wrong_presentation = report.inspector.clone();
+        wrong_presentation.scripted_presentation_evidence_stored = false;
+        assert!(
+            join_reports(
+                report.component.clone(),
+                wrong_presentation,
+                recovery.clone()
+            )
+            .is_err()
+        );
+
         let mut wrong_recovery = recovery;
         wrong_recovery.origin_segment_digest = format!("sha256:{}", "2".repeat(64));
         assert!(validate_final_recovery(&report.component, &wrong_recovery).is_err());
+        let mut wrong_inspector_recovery = report.final_recovery.clone();
+        wrong_inspector_recovery.scripted_presentation_reopened = false;
+        assert!(validate_final_recovery(&report.component, &wrong_inspector_recovery).is_err());
 
         let mut missing = report.evidence_bundle.clone();
         missing.items.pop();
@@ -1003,16 +1109,23 @@ mod tests {
         let root = state.path().join("g0-root-recovery-test");
         let unavailable = root.join("original-paths-unavailable");
         let catalog = state.path().join("catalog.sqlite");
+        let inspector_catalog = state.path().join("browser-inspector/catalog.sqlite");
         let blobs = state.path().join("blobs");
         let supervisor = state.path().join("supervisor");
         fs::create_dir_all(&blobs).expect("blob root");
         fs::create_dir_all(&supervisor).expect("supervisor root");
         fs::write(&catalog, b"catalog fixture").expect("catalog fixture");
+        fs::create_dir_all(inspector_catalog.parent().expect("inspector parent"))
+            .expect("inspector root");
+        fs::write(&inspector_catalog, b"inspector fixture").expect("inspector fixture");
         let guard = OriginalRootsGuard::hide(
             &[
                 catalog.clone(),
                 catalog.with_extension("sqlite-wal"),
                 catalog.with_extension("sqlite-shm"),
+                inspector_catalog.clone(),
+                inspector_catalog.with_extension("sqlite-wal"),
+                inspector_catalog.with_extension("sqlite-shm"),
                 blobs.clone(),
                 state.path().join("exports"),
                 supervisor.clone(),
@@ -1026,6 +1139,10 @@ mod tests {
         assert_eq!(
             fs::read(&catalog).expect("catalog readback"),
             b"catalog fixture"
+        );
+        assert_eq!(
+            fs::read(&inspector_catalog).expect("inspector readback"),
+            b"inspector fixture"
         );
         assert!(blobs.is_dir());
         assert!(supervisor.is_dir());

@@ -124,10 +124,11 @@ mechanics-capability tests, and strict focused Clippy gates pass at this handoff
 `wave5-ignition-readiness` command also emits the expected V9 `useful_partial` result. A fresh full
 `./scripts/wave5-readiness` run now passes the preserved workspace gate and executes the C0
 ignition component plus one joined partial G0 root-evidence command. The latter runs the durable
-component and one-shot paired route/restart smoke over the same catalog, then exact-matches their
-run, source, publication, head and response bytes. Its schema-V5 witness binds the nested component
-and inspector reports, their consolidated eighteen-role evidence bundle, V10 snapshot and V9/V10
-migration digests while
+component and one-shot paired route/restart smoke over the same frozen V10 truth. Pairing and the
+scripted presentation receipt live in a separately migrated V21 evidence overlay; the join
+exact-matches run, source, publication, head, response, claim and receipt bytes. Its schema-V5
+witness binds the nested component and V2 inspector/root reports, their consolidated eighteen-role
+evidence bundle, V10 snapshot and V9/V10 migration digests while
 keeping every root/product/live qualification false.
 
 The final script output must continue to state `useful_partial`,
@@ -135,8 +136,8 @@ The final script output must continue to state `useful_partial`,
 restart-recovered, sustained, live, Ember-use, accessibility, and parity maturity until separate
 occurrences prove those states. The C0 component walk reports
 `public_c0_spool_catalog_closed`; it does not claim the full fixture traversal because qualified
-presentation/outcome memory, default product mount, and the full 37-scenario crash boundary remain
-open. The separate
+an actual browser presentation, qualified outcome memory, default product mount, and the full
+37-scenario crash boundary remain open. The separate
 `wave5-g0-source-publication` command now closes source fact plus Cockpit V2
 prepare/body/head for one exact offline fixture and reports their artifact identities, but keeps
 `fullOfflineFaultWalk:false`. The same command now closes one same-run, fixture-bound supervisor
@@ -178,13 +179,15 @@ The component uses a 1 KiB inline threshold so the retained source body produces
 external immutable object, then executes the store-owned backup and restore writers into distinct
 roots. It requires a nonempty inventory, exact retry, restored catalog/artifact digest equality and
 read-only restart verification. After the paired route/restart smoke, the root-evidence command
-creates a later store backup containing that pairing lineage, separately copies and rehashes the
-complete supervisor journal/origin/ACK tree, restores both into distinct roots, temporarily makes
-the original catalog/blob/export/supervisor paths unavailable, and reopens the registered run,
-source, headed publication, memory terminal, import/export/status, pairing occurrence and exact
-origin from only the restored roots. Deterministic interruption immediately before and after the
-composite backup, composite restore and final reopen now retries to the same verified truth in six
-fresh-state scenarios. This closes the baseline recovery set and those six exact prefix cases;
+creates later store-owned backups for both the immutable component catalog and the mutable V21
+pairing/presentation overlay, separately copies and rehashes the complete supervisor
+journal/origin/ACK tree, and restores all three into distinct roots. During final readback it makes
+both original catalogs plus the original blob/export/supervisor paths unavailable and reopens the
+registered run, source, headed publication, memory terminal, import/export/status, pairing
+occurrence, exact scripted presentation claim and exact origin from only the restored roots.
+Deterministic interruption immediately before and after the composite backup, composite restore
+and final reopen retries to the same verified truth in six fresh-state scenarios. This closes the
+baseline recovery set and those six exact prefix cases;
 crash-safe orchestration of every earlier seam remains part of the unqualified 37-scenario fault
 walk.
 
@@ -220,17 +223,19 @@ separate `dev:paired-inspect` opt-in consumes the exact V2 index/open seam read-
 operational shell remains fail closed because its older launch envelope has no reviewed adapter to
 the mounted V2 body/head contract. The
 explicit `wave5-g0-inspect` command mounts a still narrower bounded store-rederived index and exact
-open route only for the offline component fixture with a read-only one-time code. An explicit Glass build now consumes
-that exact V2 inspection contract, independently recomputes the Rust digest domains, and exposes no
-operator or presentation sink. No connected browser was available for real UI QA, and default
-Glass remains unavailable, so this local join is not recorded as product Glass use or as a
-completed root occurrence.
+open route only for the offline component fixture. Its one-time code carries Cockpit read plus the
+dedicated presentation-evidence scope. An explicit Glass build independently recomputes the Rust
+digest domains and posts one exact mount claim, but exposes no operator/execution sink. No
+connected browser was available for real UI QA, and default Glass remains unavailable, so this
+local join is not recorded as product Glass use or as a completed browser occurrence.
 The one-shot `wave5-g0-inspector-smoke` command exercises the actual exchange and exact Cockpit V2
-HTTP open in process, restarts the SQLite pairing epoch, proves the old capability is refused, and
-opens identical response bytes under a fresh scoped session. Its JSON is secret-free and keeps
-`browserPresented`, product/live qualification, and the full fault walk false. The
-`wave5-g0-root-evidence` command now runs it after the component and joins its consumed pairing,
-route response and reopen readback artifacts to the same run/source/publication lineage.
+HTTP open in process, posts and exact-retries one scripted browser-format claim into the V21
+overlay, restarts the SQLite pairing epoch, proves the old capability is refused, and opens
+identical response bytes under a fresh scoped session. Its V2 JSON is secret-free and explicitly
+separates `scriptedPresentationEvidenceStored:true` from `browserPresented:false`; product/live
+qualification and the full fault walk stay false. The `wave5-g0-root-evidence` command joins that
+claim and its restored store commit to the same run/source/publication lineage without adding a
+nineteenth baseline evidence role or laundering the scripted client into browser proof.
 
 The component report now embeds a strict G0 V1 partial fault result. Fifteen baseline artifacts are
 bound by exact owner/store digests (supervisor reservation, origin, receipt, binding, ACK, fact,

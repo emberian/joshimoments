@@ -42,6 +42,14 @@ the session, publication, and later store commit before displaying success.
 A visible transport-failure action retries the retained claim object byte-for-byte; it never
 remeasures the mount or reuses the idempotency key for changed content.
 
+The V2 root-evidence smoke also exercises the route with an explicitly scripted client. It
+exact-retries the retained bytes, restarts pairing, reopens the claim, then backs up and restores
+the V21 evidence overlay separately from the frozen V10 component catalog. Final recovery hides
+both original catalogs and validates the pairing session, publication, claim bytes, claim digest,
+and store commit only from the two restored stores. Its fields deliberately say
+`scriptedPresentationEvidenceStored:true` and `browserPresented:false`; this closes storage and
+recovery plumbing, not an attached-browser occurrence.
+
 ## Executed witness
 
 The integration regression executes a real V10 G0 source/publication fixture, forward-migrates its

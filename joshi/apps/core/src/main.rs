@@ -11,7 +11,6 @@ use joshi_core::{
 use joshi_domain::{StableString, UtcTimestamp};
 use joshi_evidence::IngestLimits;
 use joshi_pairing::{PairingConfig, PairingError, PairingOrigin, PairingScope};
-use joshi_publication::CockpitPublicationId;
 use joshi_store::{SqliteStore, StoreConfig, StoreMode};
 use std::{
     fs,
@@ -321,7 +320,7 @@ async fn main() -> Result<(), CliError> {
             {
                 return Err(CliError::FixtureInspectorQualification);
             }
-            let store = prepare_g0_browser_inspector_store(&state, &report)?;
+            let store = joshi_core::wave5_g0::prepare_g0_browser_inspector_store(&state, &report)?;
             let pairing = PairingCapability::generate_os_random()?;
             let origin = PairingOrigin::new(glass_origin)?;
             let (core, launcher) = CoreService::with_sqlite_pairing(
@@ -438,45 +437,6 @@ fn pairing_scope_names(scopes: &[PairingScope]) -> String {
         .join(",")
 }
 
-fn prepare_g0_browser_inspector_store(
-    state: &Path,
-    report: &joshi_core::wave5_g0::Wave5G0SourcePublicationReport,
-) -> Result<SqliteStore, CliError> {
-    let source_config = joshi_core::wave5_g0::offline_fixture_store_config(state)?;
-    let mut inspector_config = source_config.clone();
-    inspector_config.catalog_path = state.join("browser-inspector/catalog.sqlite");
-    match fs::symlink_metadata(&inspector_config.catalog_path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(CliError::FixtureInspectorQualification);
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let source = SqliteStore::open(source_config, StoreMode::ReadOnly)?;
-            source.backup_to(&inspector_config.catalog_path)?;
-        }
-        Err(error) => return Err(error.into()),
-    }
-    let mut store = SqliteStore::open(inspector_config, StoreMode::SingleWriter)?;
-    if store.migrate(now()?)?.current != 21 {
-        return Err(CliError::FixtureInspectorQualification);
-    }
-    let publication_id = CockpitPublicationId::new(report.publication_id.clone())?;
-    let publication = store
-        .load_cockpit_v2_publication_v1(&publication_id)?
-        .ok_or(CliError::FixtureInspectorQualification)?;
-    let head = store
-        .load_cockpit_v2_head_v1(&publication_id)?
-        .ok_or(CliError::FixtureInspectorQualification)?;
-    if publication.publication.publication_digest.as_str() != report.publication_digest
-        || publication.source_occurrence_id.as_str() != report.source_occurrence_id
-        || head.head_digest.as_str() != report.head_digest
-    {
-        return Err(CliError::FixtureInspectorQualification);
-    }
-    Ok(store)
-}
-
 fn read_pairing_token(path: &Path) -> Result<Zeroizing<String>, CliError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 {
@@ -567,12 +527,12 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary G0 browser-inspector state");
         let report = joshi_core::wave5_g0::run_wave5_g0_source_publication(root.path())
             .expect("frozen V10 G0 component");
-        let first = prepare_g0_browser_inspector_store(root.path(), &report)
+        let first = joshi_core::wave5_g0::prepare_g0_browser_inspector_store(root.path(), &report)
             .expect("first browser-inspector overlay");
         assert_eq!(first.catalog_schema().unwrap().as_str(), "joshi.sqlite.v21");
         drop(first);
 
-        let second = prepare_g0_browser_inspector_store(root.path(), &report)
+        let second = joshi_core::wave5_g0::prepare_g0_browser_inspector_store(root.path(), &report)
             .expect("restart browser-inspector overlay");
         assert_eq!(
             second.catalog_schema().unwrap().as_str(),

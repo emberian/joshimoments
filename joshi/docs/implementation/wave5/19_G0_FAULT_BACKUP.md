@@ -197,8 +197,10 @@ backup manifest and distinct-root restore readback. Their identities may contain
 the colon separators used by actual store/spool contracts. The reservation and later origin are
 now one ordered handoff: the supervisor fsyncs the exact Pump batch and the store consumes that
 same immutable segment before the run binding and ACK. A separate one-shot root smoke now binds a
-durable pairing-consume occurrence, exact Cockpit HTTP response, old-capability restart refusal,
-and byte-identical fresh-session reopen. Those baseline artifacts are not yet attached to every
+durable pairing-consume occurrence, exact Cockpit HTTP response, an exact-retried scripted
+presentation claim/store receipt, old-capability restart refusal, and byte-identical fresh-session
+reopen. `browserPresented` remains false because the scripted client is not an attached browser.
+Those baseline artifacts are not yet attached to every
 before/after fault scenario, so pairing/Glass fault evidence and the final no-original-root reopen
 remain absent from this component bundle and therefore cannot appear
 `observed_partial`. The partial backup contains the store-reachable external source object,
@@ -210,7 +212,8 @@ the V10 export; it does not invent a second import commit. This does not add a h
 the separate 37-scenario root matrix true.
 The one-shot paired route has its own six exact component-local interruptions: before/after
 exchange, before/after exact Cockpit read, and before/after pairing reopen. Each injected run is
-followed by a fresh-session recovery on the same catalog and an identical response-body check.
+followed by a fresh-session recovery over the same V10 truth and its V21 evidence overlay, an
+identical response-body check, and an exact scripted-claim retry/readback.
 Together with the thirty-two source/publication/memory/export points this is 38 package-local fault
 checks. A separate exact adapter map covers all 36 frozen transitions: four supervisor
 reservation/origin process kills, six store/catalog transitions, sixteen component transitions,
