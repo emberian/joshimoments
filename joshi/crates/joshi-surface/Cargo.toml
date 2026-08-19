@@ -6,9 +6,24 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# The private store-readback adapter. It is on by default so the crate's own gate
+# exercises real catalog rows; consumers that only need the pure DTOs can turn it off.
+default = ["store-readback"]
+store-readback = ["dep:rusqlite", "dep:time"]
+
 [dependencies]
 joshi-domain = { path = "../joshi-domain" }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+time = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Cyclic dev-dependency: the readback tests must write rows with the real single-writer
+# store rather than hand-built SQL, and `joshi-store` depends on this crate's DTOs.
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-store = { path = "../joshi-store" }
+tempfile = "3.27.0"

@@ -482,3 +482,99 @@ fn profile_bound_cut_rejects_missing_field_cells() {
         Err(SurfaceError::UniverseNotClosed)
     ));
 }
+
+fn hot_lease() -> HotLeaseV1 {
+    let created = t("2026-08-17T12:00:00.000000Z");
+    HotLeaseV1 {
+        lease_id: s("lease-1"),
+        intent: HotScopeIntentV1 {
+            intent_id: s("intent-1"),
+            subject: s("mint-a"),
+            reason: s("operator-watch"),
+            denominator: s("census-1"),
+            created_at: created,
+        },
+        desired: HotScopeDesiredV1 {
+            desired_id: s("desired-1"),
+            intent_id: s("intent-1"),
+            lease_id: s("lease-1"),
+            reason: s("operator-watch"),
+            ttl_seconds: ttl(60),
+            expires_at: t("2026-08-17T12:01:00.000000Z"),
+        },
+        denominator: s("census-1"),
+        control_reservation: HotControlWriteReservationV1 {
+            reservation_id: s("control-1"),
+            desired_id: s("desired-1"),
+            reserved_at: created,
+            control_digest: d('7'),
+        },
+        applied: Some(HotScopeAppliedV1 {
+            applied_id: s("applied-1"),
+            desired_id: s("desired-1"),
+            control_reservation_id: s("control-1"),
+            applied_at: t("2026-08-17T12:00:10.000000Z"),
+            receipt_id: s("receipt-1"),
+        }),
+        degraded: None,
+        acquisition_reservation: AcquisitionReservationV1 {
+            reservation_id: s("acquire-1"),
+            subject: s("mint-a"),
+            reserved_at: t("2026-08-17T12:00:20.000000Z"),
+            cost_digest: d('8'),
+        },
+        authority: SurfaceSemanticAuthority::UnverifiedSemantic,
+    }
+}
+
+#[test]
+fn lease_and_session_parsers_require_exact_canonical_bytes() {
+    // Before this, a lease or a session could only enter through a struct an integrator built
+    // itself; neither DTO had a parser, so neither had an exact-byte rule.
+    let lease = hot_lease();
+    let bytes = lease.canonical_bytes().unwrap();
+    assert_eq!(parse_hot_lease(&bytes).unwrap(), lease);
+    let mut padded = vec![b' '];
+    padded.extend(bytes.clone());
+    assert!(matches!(
+        parse_hot_lease(&padded),
+        Err(SurfaceError::DigestMismatch)
+    ));
+    let mut broken: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    broken
+        .as_object_mut()
+        .unwrap()
+        .insert("surprise".to_owned(), serde_json::Value::Bool(true));
+    assert!(parse_hot_lease(&serde_json::to_vec(&broken).unwrap()).is_err());
+
+    let p = profile();
+    let session = EmberUseSessionV1 {
+        session_id: s("session-parse"),
+        build_digest: d('3'),
+        profile_digest: p.profile_digest.clone(),
+        supported_critical_tasks: BTreeSet::from([s("open-launch")]),
+        switched_away_for_parity_gap: false,
+        switch_reason: None,
+        fixture_rendered: true,
+        live_read_only: false,
+        evidence: Vec::new(),
+        acknowledgment: EmberUseAcknowledgmentV1 {
+            acknowledgment_id: s("ack-parse"),
+            build_digest: d('3'),
+            session_id: s("session-parse"),
+            profile_digest: p.profile_digest,
+            reduced_navigation_burden: true,
+            preserved_orientation: true,
+            worth_reopening: true,
+            acknowledged_at: t("2026-08-17T12:00:00.000000Z"),
+        },
+    };
+    let bytes = session.canonical_bytes().unwrap();
+    assert_eq!(parse_ember_use_session(&bytes).unwrap(), session);
+    let mut padded = vec![b' '];
+    padded.extend(bytes);
+    assert!(matches!(
+        parse_ember_use_session(&padded),
+        Err(SurfaceError::DigestMismatch)
+    ));
+}

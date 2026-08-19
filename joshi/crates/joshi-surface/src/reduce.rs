@@ -420,6 +420,40 @@ pub fn parse_surface_cut_against(
     Ok(cut)
 }
 
+/// Parse strict canonical hot-lease bytes.
+///
+/// The lease DTO previously had no parser at all, so an integrator could hand `validate_hot_lease`
+/// a struct it had built itself. This closes the same exact-byte rule the cut and profile parsers
+/// already enforce: the input must be byte-for-byte the canonical encoding of the value it
+/// decodes to.
+///
+/// # Errors
+///
+/// Returns [`SurfaceError::DigestMismatch`] for non-canonical bytes, or the underlying lease
+/// validation failure.
+pub fn parse_hot_lease(bytes: &[u8]) -> Result<HotLeaseV1, SurfaceError> {
+    let lease: HotLeaseV1 = serde_json::from_slice(bytes)?;
+    lease.validate()?;
+    if lease.canonical_bytes()? != bytes {
+        return Err(SurfaceError::DigestMismatch);
+    }
+    Ok(lease)
+}
+
+/// Parse strict canonical Ember-use session bytes.
+///
+/// # Errors
+///
+/// Returns [`SurfaceError::DigestMismatch`] when the input is not byte-for-byte the canonical
+/// encoding of the value it decodes to.
+pub fn parse_ember_use_session(bytes: &[u8]) -> Result<EmberUseSessionV1, SurfaceError> {
+    let session: EmberUseSessionV1 = serde_json::from_slice(bytes)?;
+    if session.canonical_bytes()? != bytes {
+        return Err(SurfaceError::DigestMismatch);
+    }
+    Ok(session)
+}
+
 /// Parse strict profile bytes; unknown fields are rejected by the DTOs.
 pub fn parse_profile(bytes: &[u8]) -> Result<DailyUseSurfaceProfileV1, SurfaceError> {
     let profile: DailyUseSurfaceProfileV1 = serde_json::from_slice(bytes)?;

@@ -737,6 +737,16 @@ impl HotLeaseV1 {
         }
         Ok(())
     }
+
+    /// Compact canonical lease bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lease does not validate or cannot be encoded.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, SurfaceError> {
+        self.validate()?;
+        Ok(serde_json::to_vec(self)?)
+    }
 }
 
 /// Exact Ember acknowledgment used for product-use qualification.
@@ -766,6 +776,17 @@ pub struct EmberUseSessionV1 {
     pub live_read_only: bool,
     pub evidence: Vec<QualificationEvidenceRefV1>,
     pub acknowledgment: EmberUseAcknowledgmentV1,
+}
+
+impl EmberUseSessionV1 {
+    /// Compact canonical session bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session cannot be encoded.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, SurfaceError> {
+        Ok(serde_json::to_vec(self)?)
+    }
 }
 
 /// Typed reason for leaving Glass; arbitrary text cannot manufacture a parity witness.
