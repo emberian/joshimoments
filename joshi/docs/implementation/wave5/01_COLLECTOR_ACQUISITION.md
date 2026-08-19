@@ -63,21 +63,36 @@ method, operation, cap, or cross-run substitution.
 The final V2 plan also has a bounded exact-byte boundary: strict decoding rejects duplicate and
 unknown fixed fields, semantic validation rederives source/method fingerprints and all caps, and
 canonical reserialization must reproduce the supplied bytes exactly. This parser still grants no
-execution or durability authority; it exists so a future store-owned C1 activation can retain and
-re-read the actual plan document rather than blessing an unaccompanied digest.
+execution or durability authority; it lets the store retain and re-read the actual plan document
+rather than blessing an unaccompanied digest.
 
 `joshi-wave5-c1-activation` now defines that activation document's inert semantic layer. It binds
-one exact supervisor `inst-` identity and registered run to the exact final-plan bytes, their raw SHA-256 and byte
-length, the template and final plan digests, the canonical public-Solana source/method
-fingerprints, the public wallet page, finalized commitment, and every independent budget bound.
+one supervisor-shaped `inst-` identity and registered run to the exact final-plan bytes, their raw
+SHA-256 and byte length, the template and final plan digests, the canonical public-Solana
+source/method fingerprints, the public wallet page, finalized commitment, and every independent
+budget bound.
 It accepts only one generation-one C1 `SolanaSignaturesForAddress` operation with one attempt and
 one in-flight request, no separate ingress-rate setting, exact no-slack reservation, zero
 overshoot, and no credits, currency, or chain spend. The strict parser returns data marked
-`read_only_no_execution`; the crate contains no
-receipt, claim, store, transport, provider client, persistence, capability, or I/O API. Callers can
-construct and validate these bytes, so validation is never authorization. The next authority seam
-must be a sole-store commit/readback followed by a one-shot opaque claim; neither the supervisor
-nor an application may accept this public semantic result as permission to execute.
+`read_only_no_execution`; the crate contains no receipt, claim, store, transport, provider client,
+persistence, capability, or I/O API. Callers can construct and validate these bytes, so validation
+is never authorization.
+
+Migration V23 supplies the sole-store authority seam. It retains and re-parses the exact
+activation and final-plan bytes, re-closes the prior durable run, its configuration/template, and
+every comparable accounting ceiling, and prevents the same exact plan from being registered under
+a second activation ID. Registration is exact-idempotent; claim is deliberately not. The claim row
+commits once before the store returns a private-field, non-serializable, non-cloneable capability,
+and reuse refuses across batch retry and process reopen. Public receipts and readbacks remain
+structural evidence only. The current general catalog advances to V23; frozen V10 export truth and
+V22 browser/operator-evidence overlays continue to migrate through their explicit historical
+boundaries rather than silently changing schema identity.
+
+The store claim compares that identifier exactly and burns the activation before returning, but
+the string is not authentication by itself. C1 remains inert until the future supervisor-owned
+entry point obtains the actual durable journal installation identity, compares it to the claimed
+activation, and consumes the opaque claim by value. A caller-supplied `inst-` string, public commit
+receipt, stored activation, or plan digest is never sufficient runtime authority.
 
 Each provider step is deliberately two phase:
 

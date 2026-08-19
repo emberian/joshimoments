@@ -256,10 +256,10 @@ pub fn run_wave6_program_registration(
     fs::create_dir_all(state)?;
     let store_config = config(state)?;
     let mut store = SqliteStore::open(store_config.clone(), StoreMode::SingleWriter)?;
-    let migration = store.migrate(now()?)?;
+    let migration = store.migrate_wave6_operator_evidence_v22(now()?)?;
     if migration.current != 22 {
         return Err(Wave6RegistrationError::Invariant(
-            "Wave 6 registration did not reach latest V22",
+            "Wave 6 registration did not reach frozen V22",
         ));
     }
     let batch_id = StableString::new(BATCH_ID)?;

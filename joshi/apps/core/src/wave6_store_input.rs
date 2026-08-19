@@ -125,10 +125,10 @@ pub fn run_wave6_store_input_census(
     };
 
     let mut store = SqliteStore::open(config.clone(), StoreMode::SingleWriter)?;
-    let migration = store.migrate(now()?)?;
+    let migration = store.migrate_wave6_operator_evidence_v22(now()?)?;
     if migration.current != 22 {
         return Err(Wave6StoreInputCensusError::Invariant(
-            "Wave 6 input census did not reach latest V22",
+            "Wave 6 input census did not reach frozen V22",
         ));
     }
     let writer_build = StableString::new(format!("joshi-core-{}", env!("CARGO_PKG_VERSION")))?;

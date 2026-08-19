@@ -1913,7 +1913,11 @@ pub(crate) fn prepare_g0_browser_inspector_store_for_coordinates(
         Err(error) => return Err(error.into()),
     }
     let mut store = SqliteStore::open(inspector_config, StoreMode::SingleWriter)?;
-    if store.migrate(crate::wave5_readiness::now()?)?.current != 22 {
+    if store
+        .migrate_wave6_operator_evidence_v22(crate::wave5_readiness::now()?)?
+        .current
+        != 22
+    {
         return Err(Wave5G0SourcePublicationError::Invariant(
             "browser inspector overlay did not reach V22",
         ));

@@ -163,6 +163,28 @@ impl SqliteStore {
         )
     }
 
+    /// Applies the forward-only ledger through the frozen Wave 6 operator-evidence V22 schema.
+    ///
+    /// The G0 browser-inspector overlay uses this boundary to remain an exact restartable
+    /// reproduction surface even after unrelated current-catalog migrations exist. It refuses a
+    /// catalog that has already advanced beyond V22.
+    ///
+    /// # Errors
+    ///
+    /// Fails in read-only mode, on migration drift, after V22, or when `SQLite` rejects a
+    /// migration.
+    pub fn migrate_wave6_operator_evidence_v22(
+        &mut self,
+        applied_at: UtcTimestamp,
+    ) -> Result<MigrationReport> {
+        self.require_writer()?;
+        migration::migrate_through(
+            &mut self.connection,
+            positive_timestamp_us(applied_at, "migration applied_at")?,
+            22,
+        )
+    }
+
     /// Returns the exact applied catalog-schema identity without changing migration state.
     ///
     /// # Errors
@@ -4091,7 +4113,7 @@ mod tests {
         let report = store
             .migrate(time("2026-08-16T16:00:00.000000Z"))
             .expect("migrate test store");
-        assert_eq!(report.current, 22);
+        assert_eq!(report.current, 23);
         store
     }
 
@@ -4114,7 +4136,7 @@ mod tests {
         let json = serde_json::to_value(&accepted).expect("receipt JSON");
         assert_eq!(json["contract"], "joshi.store.ingest_receipt");
         assert_eq!(json["schemaVersion"], 1);
-        assert_eq!(json["catalogSchema"], "joshi.sqlite.v22");
+        assert_eq!(json["catalogSchema"], "joshi.sqlite.v23");
         assert_eq!(json["admitted"]["observations"], "0");
         assert!(json.get("storeAdmissionDigest").is_some());
 
@@ -4400,7 +4422,7 @@ mod tests {
         let receipt_json = serde_json::to_value(&receipt).expect("operator receipt JSON");
         assert_eq!(receipt_json["contract"], "joshi.store.command_receipt");
         assert_eq!(receipt_json["schemaVersion"], 1);
-        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v22");
+        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v23");
         assert_eq!(receipt_json["scene"]["sceneId"], "scene-golden-1");
         assert_eq!(receipt_json["scene"]["viewDigest"], view.digest().as_str());
         assert_eq!(
