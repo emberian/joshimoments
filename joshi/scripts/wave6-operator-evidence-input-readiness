@@ -28,12 +28,22 @@ trap cleanup EXIT HUP INT TERM
 ./schema/validate.sh
 cargo test --locked --offline -p joshi-core wave6_operator_input --lib
 cargo clippy --locked --offline -p joshi-store -p joshi-core --all-targets -- -D warnings
+uv --directory analysis run --locked pytest tests/wave6_operator_model -q
+uv --directory analysis run --locked ruff check \
+  src/joshi_analysis/wave6_operator_model tests/wave6_operator_model \
+  src/joshi_analysis/cli.py
 
 mkdir -p "$JOSHI_W6_OPERATOR_STATE/catalog"
 cargo run --locked --offline -q -p joshi-core -- wave6-operator-evidence-input \
   --state "$JOSHI_W6_OPERATOR_STATE/catalog" > "$JOSHI_W6_OPERATOR_STATE/first.json"
 cargo run --locked --offline -q -p joshi-core -- wave6-operator-evidence-input \
   --state "$JOSHI_W6_OPERATOR_STATE/catalog" > "$JOSHI_W6_OPERATOR_STATE/retry.json"
+uv --directory analysis run --locked joshi-analysis validate-operator-evidence \
+  --report "$JOSHI_W6_OPERATOR_STATE/first.json" \
+  > "$JOSHI_W6_OPERATOR_STATE/analysis-first.json"
+uv --directory analysis run --locked joshi-analysis validate-operator-evidence \
+  --report "$JOSHI_W6_OPERATOR_STATE/retry.json" \
+  > "$JOSHI_W6_OPERATOR_STATE/analysis-retry.json"
 
 for report in "$JOSHI_W6_OPERATOR_STATE/first.json" "$JOSHI_W6_OPERATOR_STATE/retry.json"; do
   jq -e '
@@ -61,6 +71,15 @@ for report in "$JOSHI_W6_OPERATOR_STATE/first.json" "$JOSHI_W6_OPERATOR_STATE/re
     and (.pairingSessionId | length > 0)
     and (.bindingId | test("^wave6-operator-input:[0-9a-f]{64}$"))
     and (.documentDigest | test("^sha256:[0-9a-f]{64}$"))
+    and .operatorEvidenceInput.contract == "joshi.store.wave6.operator-evidence-input.v1"
+    and .operatorEvidenceInput.bindingId == .bindingId
+    and .operatorEvidenceInput.memoryOccurrenceId == .memoryOccurrenceId
+    and .operatorEvidenceInput.presentationClaimId == .presentationClaimId
+    and .operatorEvidenceInput.actPresentationGapRetained == true
+    and .operatorEvidenceInput.presentationRepairsActGap == false
+    and .operatorEvidenceInput.humanViewingVerified == false
+    and .operatorEvidenceInput.recognitionObserved == false
+    and .operatorEvidenceInput.operatorModelResolved == false
     and (.acceptedCommitSeq | test("^[1-9][0-9]*$"))
     and (.firstStatus == "accepted" or .firstStatus == "idempotent")
     and .retryStatus == "idempotent"
@@ -83,6 +102,24 @@ for report in "$JOSHI_W6_OPERATOR_STATE/first.json" "$JOSHI_W6_OPERATOR_STATE/re
   ' "$report" >/dev/null
 done
 
+for validation in \
+  "$JOSHI_W6_OPERATOR_STATE/analysis-first.json" \
+  "$JOSHI_W6_OPERATOR_STATE/analysis-retry.json"; do
+  jq -e '
+    .contract == "joshi.analysis.wave6-operator-evidence-validation/v1"
+    and .schemaVersion == 1
+    and .status == "valid_nonpromoting"
+    and .authority == "read_record_replay_propose_shadow_only"
+    and .semanticCeiling == "cross_runtime_store_input_validated_not_model_admitted"
+    and .modelAdmissionRefusal == "unrepaired_w5_presentation_gap_and_no_recognition_response"
+    and .sceneBindingMaterialized == false
+    and .replayMaterialized == false
+    and .humanViewingVerified == false
+    and .recognitionObserved == false
+    and .operatorModelResolved == false
+  ' "$validation" >/dev/null
+done
+
 jq -en --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" \
   --slurpfile retry "$JOSHI_W6_OPERATOR_STATE/retry.json" '
   $first[0].bindingId == $retry[0].bindingId
@@ -91,16 +128,26 @@ jq -en --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" \
   and $first[0].presentationClaimId == $retry[0].presentationClaimId
   and $retry[0].firstStatus == "idempotent"
 ' >/dev/null
+jq -en --slurpfile first "$JOSHI_W6_OPERATOR_STATE/analysis-first.json" \
+  --slurpfile retry "$JOSHI_W6_OPERATOR_STATE/analysis-retry.json" '
+  $first[0].bindingId == $retry[0].bindingId
+  and $first[0].documentDigest == $retry[0].documentDigest
+  and $first[0].acceptedCommitSeq == $retry[0].acceptedCommitSeq
+' >/dev/null
 
 JOSHI_W6_OPERATOR_MIGRATION_SHA=$(shasum -a 256 \
   schema/migrations/0022_wave6_operator_evidence_input.sql | awk '{print $1}')
 JOSHI_W6_OPERATOR_REPORT_SHA=$(shasum -a 256 \
   "$JOSHI_W6_OPERATOR_STATE/first.json" | awk '{print $1}')
+JOSHI_W6_OPERATOR_ANALYSIS_SHA=$(shasum -a 256 \
+  "$JOSHI_W6_OPERATOR_STATE/analysis-first.json" | awk '{print $1}')
 
 jq -cn \
   --arg migration "sha256:$JOSHI_W6_OPERATOR_MIGRATION_SHA" \
   --arg report "sha256:$JOSHI_W6_OPERATOR_REPORT_SHA" \
-  --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" '
+  --arg analysis "sha256:$JOSHI_W6_OPERATOR_ANALYSIS_SHA" \
+  --slurpfile first "$JOSHI_W6_OPERATOR_STATE/first.json" \
+  --slurpfile validation "$JOSHI_W6_OPERATOR_STATE/analysis-first.json" '
   {
     contract: "joshi.wave6.operator_evidence_input_witness.v1",
     schemaVersion: 1,
@@ -109,6 +156,7 @@ jq -cn \
     semanticCeiling: "store_resolved_operator_evidence_input_only",
     migrationDigest: $migration,
     reportDigest: $report,
+    crossRuntimeValidationDigest: $analysis,
     catalogSchema: $first[0].catalogSchema,
     programId: $first[0].programId,
     inputCensusBindingId: $first[0].inputCensusBindingId,
@@ -124,8 +172,18 @@ jq -cn \
       "store_resolved_gapped_operator_act",
       "store_resolved_later_browser_report",
       "exact_retry",
-      "read_only_restart"
+      "read_only_restart",
+      "cross_runtime_exact_document_validation"
     ],
+    crossRuntimeValidation: {
+      status: $validation[0].status,
+      semanticCeiling: $validation[0].semanticCeiling,
+      modelAdmissionRefusal: $validation[0].modelAdmissionRefusal,
+      sceneBindingMaterialized: false,
+      replayMaterialized: false,
+      recognitionObserved: false,
+      operatorModelResolved: false
+    },
     qualification: {
       scriptedPresentationPath: true,
       actPresentationGapRetained: true,

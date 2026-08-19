@@ -26,6 +26,12 @@ that document from all priors after commit and read-only restart. Exact retry re
 identity and commit. An episode cannot substitute for the act; a missing/foreign presentation
 cannot substitute for the selected claim.
 
+Core embeds that exact store-built document in its JSON report. The locked Python
+`wave6_operator_model.store_input` validator preserves Rust field order, recomputes the physical
+document, memory occurrence, browser claim, and claim-material digests, rederives the binding ID,
+and rechecks the complete scalar and commit closure. Duplicate/reordered JSON and re-signed
+subject/gap/qualification substitutions refuse.
+
 The later browser report does **not** rewrite or repair the act. The two session identifiers remain
 in their distinct memory and pairing domains, with no equivalence claim. The document fixes:
 
@@ -57,7 +63,9 @@ Or run the complete focused gate:
 The command creates the W5 G0 prefix and its distinct browser-evidence overlay when absent, runs
 the in-process scripted browser-format claim path without opening a network socket, commits the W6
 program and V20 census, commits/retries V22, and reopens it read-only. A whole-command retry selects
-the original V22 input rather than minting another presentation.
+the original V22 input rather than minting another presentation. The focused gate then feeds both
+reports through the locked Python validator and requires identical binding, document, and commit
+coordinates with the explicit non-admission receipt.
 
 ## Hard ceiling
 
@@ -71,3 +79,7 @@ not pixel verification or evidence that Ember saw, understood, recognized, or re
 scene. The bridge does not instantiate the Python Wave 6 operator-model protocol and supplies no
 recognition response, ontology label truth, economic effect, outcome, provider I/O, external
 mutation, product qualification, or live qualification.
+
+The Python receipt's ceiling is
+`cross_runtime_store_input_validated_not_model_admitted`. It does not construct `SceneBinding`,
+`ReplayMaterialReceipt`, `RecognitionResponse`, or any model output.

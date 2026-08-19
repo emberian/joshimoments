@@ -6,7 +6,7 @@ use joshi_domain::StableString;
 use joshi_scientific_memory::{MemoryOccurrence, PresentationBinding};
 use joshi_store::{
     IdempotencyStatus, SqliteStore, StoreMode, StoredWave6OperatorEvidenceInput,
-    Wave6OperatorEvidenceInputReceipt,
+    Wave6OperatorEvidenceInputReceipt, Wave6OperatorEvidenceInputV1,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -51,6 +51,7 @@ pub struct Wave6OperatorEvidenceInputReport {
     pub pairing_session_id: String,
     pub binding_id: String,
     pub document_digest: String,
+    pub operator_evidence_input: Wave6OperatorEvidenceInputV1,
     pub accepted_commit_seq: String,
     pub first_status: IdempotencyStatus,
     pub retry_status: IdempotencyStatus,
@@ -264,6 +265,7 @@ fn report(
         pairing_session_id: document.pairing_session_id.to_string(),
         binding_id: document.binding_id.to_string(),
         document_digest: stored.document_digest.to_string(),
+        operator_evidence_input: document.clone(),
         accepted_commit_seq: stored.commit_seq.to_string(),
         first_status,
         retry_status: IdempotencyStatus::Idempotent,

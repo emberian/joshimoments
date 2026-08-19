@@ -14,6 +14,7 @@ from .field_models import run_field_prototype_job
 from .job import run_descriptive_chart_job
 from .response_kernels import run_kernel_prototype_job
 from .snapshot import validate_snapshot
+from .wave6_operator_model import validate_store_operator_evidence_report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         "validate-derived", help="validate a restricted derived artifact and exact Parquet bytes"
     )
     validate_derived.add_argument("--artifact", required=True, type=Path)
+    validate_operator_evidence = commands.add_parser(
+        "validate-operator-evidence",
+        help="validate an exact V22 operator-evidence report without model promotion",
+    )
+    validate_operator_evidence.add_argument("--report", required=True, type=Path)
     return parser
 
 
@@ -105,13 +111,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.snapshot, args.output_root, analysis_run_id=args.analysis_run_id
         )
         payload = {"status": "complete", "derived_artifact_dir": str(run_dir)}
-    else:
+    elif args.command == "validate-derived":
         artifact = validate_derived_artifact(args.artifact)
         payload = {
             "status": "valid",
             "artifact_id": artifact.artifact_id,
             "row_count": artifact.table.num_rows,
         }
+    else:
+        operator_input = validate_store_operator_evidence_report(args.report)
+        payload = operator_input.validation_receipt()
     print(canonical_json_bytes(payload).decode("utf-8"))
     return 0
 

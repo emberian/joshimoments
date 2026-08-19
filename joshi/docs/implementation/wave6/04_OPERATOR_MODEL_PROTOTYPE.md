@@ -11,6 +11,16 @@ objects and deterministic SHA-256 artifact digests. It neither writes a store no
 modifies Wave 5 scene, presentation, act, replay, or effect owners. IDs in this
 package are references to those owned artifacts.
 
+`store_input.py` also accepts the artifact-bearing Core V22 operator-evidence report. It enforces
+the exact Rust field order, physical document/memory/browser-claim digests, browser-claim
+self-digest, store binding identity, commit order, act/scene/gap/subject/publication lineage, and
+every negative qualification bit. The returned validated packet is private to the parser rather
+than a caller-constructible qualifying DTO, and it is not a `SceneBinding` or `OperatorAct`: V22
+preserves the act's original presentation gap, while the later browser report is separate evidence
+and contains no recognition response. The parser therefore fixes
+`model_admission_refusal=unrepaired_w5_presentation_gap_and_no_recognition_response` and leaves
+scene binding, replay, human viewing, recognition, and operator-model resolution false.
+
 The package fixes these separations:
 
 - `RawOperatorAssertion` preserves either exact `raw_bytes`, an opaque token, or
@@ -81,8 +91,17 @@ unverified semantic input until a separate owner supplies durable scene,
 presentation, rendering, and response receipts. Neither recognition nor an
 ontology assignment is label truth.
 
+The V22 adapter is a narrower exception to the generic caller-fed input statement: it validates an
+artifact-bearing report emitted after sole-store readback. That raises only the evidence-input
+ceiling. It still cannot fill the Python model's missing versioned view/presentation material or
+prove that a person viewed or recognized anything, so it deliberately refuses model admission.
+
 Focused adversarial tests cover future-cut leakage, forced taxonomy, append-only
 correction, unit/topology clock collapse, assertion/effect conflation, typed
 presentation gaps, scalar-pressure laundering, replay phase labels after/before
 reveal, replay receipt/scene/material substitution, and same-ID material
 version/content-digest swaps.
+
+The cross-runtime tests additionally reject duplicate/reordered JSON, scalar substitution,
+positive human/model qualification, replacement of the original gap, and omission of the act
+subject from the later browser report.

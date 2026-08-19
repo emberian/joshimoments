@@ -41,9 +41,15 @@ from .contracts import (
     materialize_replay,
     validate_replay_material,
 )
+from .store_input import (
+    MODEL_ADMISSION_REFUSAL,
+    StoreOperatorEvidenceError,
+    validate_store_operator_evidence_report,
+)
 
 __all__ = [
     "AUTHORITY",
+    "MODEL_ADMISSION_REFUSAL",
     "NO_SCALAR_PRESSURE",
     "SCHEMA_VERSION",
     "ActKind",
@@ -76,10 +82,12 @@ __all__ = [
     "ResponseState",
     "SceneBinding",
     "StatedIntention",
+    "StoreOperatorEvidenceError",
     "TemporalClosureError",
     "TypedGap",
     "compare_recognition",
     "deterministic_digest",
     "materialize_replay",
     "validate_replay_material",
+    "validate_store_operator_evidence_report",
 ]
