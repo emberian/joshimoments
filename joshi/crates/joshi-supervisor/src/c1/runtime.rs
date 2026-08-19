@@ -245,10 +245,27 @@ struct C1Replay {
 ///
 /// # Errors
 ///
-/// Refuses a second bound activation, a reservation without a bound activation, a second
-/// reservation, a prepared request or I/O start out of order or duplicated, durability without an
-/// I/O start, a duplicated resolution or settlement, a second stop, and any C1 record naming a
-/// reservation the journal never reserved.
+/// Every refusal is reachable and has its own case in
+/// `replay_refuses_every_documented_out_of_order_or_duplicated_c1_record`, which asserts the
+/// specific message rather than merely that the read failed:
+///
+/// 1. a second bound activation;
+/// 2. a reservation before any bound activation;
+/// 3. a second reservation;
+/// 4. a prepared request naming a reservation this journal never reserved;
+/// 5. a duplicated request closure, or one after the I/O boundary;
+/// 6. an I/O start naming a reservation this journal never reserved;
+/// 7. an I/O start before its request closure;
+/// 8. a second I/O start;
+/// 9. a durability record naming a reservation this journal never reserved;
+/// 10. durability before any I/O start;
+/// 11. a second attempt resolution, in each of the three orders durability and abandonment can
+///     duplicate one another;
+/// 12. an abandonment naming a reservation this journal never reserved;
+/// 13. a settlement naming a reservation this journal never reserved;
+/// 14. a second settlement;
+/// 15. a stop before any bound activation;
+/// 16. a second stop.
 pub fn scan_c1_journal(records: &[JournalRecord]) -> Result<C1ReplayStateV1> {
     replay_c1_journal(records).map(|replay| replay.state)
 }
@@ -288,6 +305,11 @@ fn replay_c1_journal(records: &[JournalRecord]) -> Result<C1Replay> {
                     reservation_id,
                     "a prepared C1 request",
                 )?;
+                // `state.io_started` is implied by `state.request_prepared`: the I/O-start arm
+                // below refuses a start that has no closure before it, so a journal can never
+                // reach an I/O start without one. The disjunct states the "late" half of the rule
+                // where a reader looks for it; it is not the clause that refuses, and deleting it
+                // would not widen what this reader accepts.
                 if state.request_prepared || state.io_started {
                     return Err(out_of_order("a duplicated or late C1 request closure"));
                 }
@@ -497,12 +519,45 @@ impl C1Runtime {
     ///
     /// # Errors
     ///
-    /// Refuses a journal that already carries any bound C1 activation, an admission bound to a
-    /// different installation, a run reference that does not match the admission, exact plan bytes
-    /// that do not reproduce the admission's digests, a plan that is not the isolated one-page C1
-    /// public-Solana shape, a spool configuration that does not fit the derived physical segment
-    /// or does not match the live spool, an attempt budget that cannot absorb the admitted page,
-    /// and any journal or health failure while binding.
+    /// These refusals are **live** — each is reachable from a store-produced admission and has a
+    /// test that fails if it is removed: a journal that already carries any bound C1 activation,
+    /// an admission bound to a different installation, a run reference that does not itself
+    /// validate, a run reference that is not the registration the admission closed over, exact
+    /// plan bytes that do not reproduce the admission's closure, a live spool whose segment
+    /// ceiling cannot host the derived physical segment, an attempt budget that cannot absorb the
+    /// admitted page, and any journal or health failure while binding.
+    ///
+    /// The remaining refusals below are **restatements of conditions the only path that can
+    /// produce a [`DisabledC1RuntimeAdmission`] has already enforced**, and are unreachable
+    /// through it. They are kept as defence in depth against a second constructor for a claim, and
+    /// this list exists so none of them is mistaken for a gate being applied here for the first
+    /// time:
+    ///
+    /// * The admission's disposition and authority ceiling. Both are `&'static str` fields the
+    ///   admission's own constructor derives; no store-produced claim can carry another value.
+    /// * The plan shape and the bounded public wallet page.
+    ///   `joshi_wave5_c1_activation::parse_c1_activation_exact` requires the same profile,
+    ///   execution disposition, absent ingress rate, single in-flight attempt, single operation,
+    ///   `SolanaSignaturesForAddress`, generation 1, one attempt, and `PublicWalletPage` scope over
+    ///   exactly these plan bytes before the activation can be committed. `admit_c1_plan_shape`
+    ///   is still exercised directly as the function it is.
+    /// * The canonical request encoding of the address and row bound.
+    ///   `joshi_sources::validate_provider_run_plan` already refuses a scope whose address is not
+    ///   base58 decoding to 32 bytes or whose row bound is outside 1..=100, and base58 encoding is
+    ///   injective, so no admitted scope can fail the canonical encoder.
+    /// * The one admitted source and method pair. `joshi_sources` admits exactly two source/method
+    ///   pairs, and only one of them carries `SolanaSignaturesForAddress`, which the plan shape
+    ///   above already requires.
+    /// * The economic-spend refusal inside `execution_envelope`. Both the plan validator and the
+    ///   activation parser refuse a plan carrying provider currency or chain-native atoms. It too
+    ///   is exercised directly as a function.
+    /// * The live-spool agreement check. `Supervisor::open` clones one `SpoolConfig` into both the
+    ///   supervisor and the spool it opens, so `spool_config()` and `spool().status()` report the
+    ///   same numbers by construction. It is defence against a future supervisor that builds the
+    ///   spool from a different source.
+    /// * `RunBudgetLimits::validate`, `AttemptBudgetClaim::validate`, `SourceKey::new`,
+    ///   `OperationKey::new`, and `ProtectionProfile::validate`. Every input is derived from a plan
+    ///   the validator already bounded.
     #[allow(clippy::too_many_lines)] // The refusal order is the contract and stays in one place.
     pub fn open(
         mut supervisor: Supervisor,
@@ -549,6 +604,14 @@ impl C1Runtime {
         }
 
         // 3. Reparse the exact plan bytes rather than trusting the report's account of them.
+        //
+        // The five equalities below are one check written five ways, and only their conjunction is
+        // separately testable. `parse_provider_run_plan_exact` refuses bytes that are not the
+        // canonical encoding of the plan it decodes, so the plan struct determines the bytes: any
+        // substitution that changes one of these values changes all of them, and no substitution
+        // can change one alone. They are kept because each names a distinct thing the admission
+        // closed over, and a reader checking one of them should find it here rather than have to
+        // reconstruct the argument that the others imply it.
         let plan = parse_provider_run_plan_exact(exact_plan_bytes)?;
         if sha256(exact_plan_bytes) != report.exact_plan_digest
             || plan.plan().plan_id != report.plan_id
@@ -578,11 +641,18 @@ impl C1Runtime {
         let bound = c1_physical_bound(C1_MAX_RESPONSE_BODY_BYTES)?;
         let spool = supervisor.spool_config().clone();
         let status = supervisor.spool().status()?;
+        // Defence in depth, and unreachable as written: `Supervisor::open` clones one
+        // `SpoolConfig` into both the supervisor and the `LocalSpool` it opens, and `status()`
+        // reports that spool's own copy, so the two agree by construction. It stays because the
+        // *next* stage reasons about a ceiling the running spool enforces rather than one a
+        // configuration merely names, and that reasoning should fail loudly rather than silently
+        // if a future supervisor ever builds the spool from somewhere else.
         if spool.max_total_bytes != status.maximum_bytes
             || spool.control_reserve_bytes != status.control_reserve_bytes
         {
             return Err(SupervisorError::InvalidConfig(
-                "the supplied spool configuration is not the one this supervisor is running on"
+                "the running C1 spool does not report the ceilings this supervisor is configured \
+                 with"
                     .into(),
             ));
         }
@@ -713,22 +783,39 @@ impl C1Runtime {
     ///
     /// # Errors
     ///
-    /// Refuses a runtime that has already run or become terminal, a journal that already shows a
-    /// C1 attempt, an exhausted budget, and every transport, conformance, evidence, durability,
-    /// settlement, and journal failure. Failures after the I/O boundary are charged at the
-    /// reservation's maximum and leave this runtime permanently terminal.
+    /// Refuses a runtime whose one admitted read is already spent — every second call, whether the
+    /// first succeeded or failed — an exhausted budget, and every transport, conformance,
+    /// evidence, durability, settlement, and journal failure. Failures after the I/O boundary are
+    /// charged at the reservation's maximum and leave this runtime permanently terminal.
+    ///
+    /// Two further refusals are restated below and are **not reachable** through this type. The
+    /// terminal check cannot fire on its own: nothing sets `terminal` before `spent`, so a spent
+    /// runtime is what a caller actually meets. The journal-attempt check cannot fire either:
+    /// [`C1Runtime::open`] refuses any journal that already binds an activation, this runtime owns
+    /// its supervisor by value and hands out only `&Supervisor`, so no other writer can add a C1
+    /// reservation between `open` and here, and a second `run_once` stops at `spent` above it.
+    /// Both are kept as defence in depth against a future constructor or a shared supervisor, and
+    /// neither should be read as a live protection.
     #[allow(clippy::too_many_lines)] // The ordered pre-I/O and post-I/O paths stay auditable here.
     pub fn run_once(&mut self, at: UtcTimestamp, monotonic_ms: u64) -> Result<C1RunReport> {
-        if self.terminal {
-            return Err(SupervisorError::InvalidState(
-                "the C1 runtime is terminal after a prior boundary failure".into(),
-            ));
-        }
+        // `spent` is checked first because it is the fact that is true in every already-run state:
+        // it is set below before anything can set `terminal`, so reporting a boundary failure for
+        // a read that in fact completed would simply be false.
         if self.spent {
             return Err(SupervisorError::InvalidState(
                 "the one admitted C1 read has already been performed".into(),
             ));
         }
+        if self.terminal {
+            return Err(SupervisorError::InvalidState(
+                "the C1 runtime is terminal after a prior boundary failure".into(),
+            ));
+        }
+        // Unreachable as written, and kept anyway. `open` refuses a journal that already binds an
+        // activation, this runtime owns its supervisor by value and lends out only `&Supervisor`,
+        // and a second call stops at `spent` above — so no journal reaching here can already carry
+        // a C1 attempt. It is the last line of the one-read cap rather than a live gate, and the
+        // `terminal` refusal above it is only reachable through this branch.
         let replay = scan_c1_journal(self.supervisor.journal_records())?;
         if replay.reservation_id.is_some() || replay.io_started {
             self.terminal = true;
@@ -1259,7 +1346,9 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::transport::probe::{Loopback, Step, chunked_response, ok_page_response};
+    use super::super::transport::probe::{
+        Loopback, Step, chunked_response, ok_page_response, request_body, request_line,
+    };
     use super::*;
     use crate::{
         CollectorRuntimeConfigV1, FaultInjector, FaultPoint, QueueLimits, RetryPolicy,
@@ -1432,7 +1521,20 @@ mod tests {
     }
 
     fn plan_template(suffix: &str) -> ProviderRunPlanTemplate {
-        let cost = attempt_cost();
+        plan_template_with_cost(suffix, &attempt_cost())
+    }
+
+    /// The same fixture plan with a caller-chosen attempt cost.
+    ///
+    /// Nothing between here and `C1Runtime::open` requires an attempt to reserve as much as the
+    /// admitted page can physically need — the plan validator bounds the cost from *above* and the
+    /// activation parser only requires internal consistency — so a plan that reserves too little
+    /// is committable, burnable, and reaches `open`. That is what makes the absorption refusal a
+    /// live gate rather than a restatement.
+    fn plan_template_with_cost(
+        suffix: &str,
+        cost: &RuntimeAttemptCostPort,
+    ) -> ProviderRunPlanTemplate {
         ProviderRunPlanTemplate {
             port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
             plan_id: format!("c1-runtime-plan-{suffix}"),
@@ -1454,9 +1556,21 @@ mod tests {
                     address: WALLET.to_owned(),
                     max_rows: MAX_ROWS,
                 },
-                attempt_cost: cost,
+                attempt_cost: cost.clone(),
             }],
         }
+    }
+
+    /// One validated plan bound to a nominal run, for the tests of the pure plan gates.
+    ///
+    /// Those gates take a `ValidatedProviderRunPlan` and nothing else, so no durable catalog,
+    /// registration, or activation is involved and none is opened here.
+    fn fixture_plan(suffix: &str, template: ProviderRunPlanTemplate) -> ValidatedProviderRunPlan {
+        validate_provider_run_plan(template.bind_run(RegisteredRunPort {
+            run_id: format!("run:c1-runtime-{suffix}"),
+            registration_digest: digest_of(suffix.as_bytes()),
+        }))
+        .expect("a plan joshi_sources itself accepts")
     }
 
     /// One durably registered run, plus the exact bytes a caller has to re-supply later.
@@ -1467,7 +1581,15 @@ mod tests {
     }
 
     fn register_run(store: &mut SqliteStore, suffix: &str) -> RegisteredRun {
-        let template = plan_template(suffix);
+        register_run_with_cost(store, suffix, &attempt_cost())
+    }
+
+    fn register_run_with_cost(
+        store: &mut SqliteStore,
+        suffix: &str,
+        cost: &RuntimeAttemptCostPort,
+    ) -> RegisteredRun {
+        let template = plan_template_with_cost(suffix, cost);
         let template_digest = template.plan_template_digest().expect("template digest");
         let run_id = format!("run:c1-runtime-{suffix}");
 
@@ -1500,7 +1622,7 @@ mod tests {
         }
         .canonical_bytes()
         .expect("canonical configuration");
-        let cap = attempt_cost().reserved_total().expect("reserved total");
+        let cap = cost.reserved_total().expect("reserved total");
         let budget = ExecutionAccountingDocumentV1 {
             contract: "joshi.collector.execution_accounting.v1".to_owned(),
             schema_version: 1,
@@ -1577,7 +1699,16 @@ mod tests {
     }
 
     fn burn_activation(store: &mut SqliteStore, installation_id: &str, suffix: &str) -> Burned {
-        let registered = register_run(store, suffix);
+        burn_activation_with_cost(store, installation_id, suffix, &attempt_cost())
+    }
+
+    fn burn_activation_with_cost(
+        store: &mut SqliteStore,
+        installation_id: &str,
+        suffix: &str,
+        cost: &RuntimeAttemptCostPort,
+    ) -> Burned {
+        let registered = register_run_with_cost(store, suffix, cost);
         let plan = &registered.plan;
         let operation = &plan.operations()[0];
         let activation_id = format!("activation:c1-runtime-{suffix}");
@@ -1667,6 +1798,16 @@ mod tests {
             let installation = supervisor.installation_id().to_owned();
             burn_activation(&mut self.store, &installation, suffix)
         }
+
+        fn burn_with_cost(
+            &mut self,
+            supervisor: &Supervisor,
+            suffix: &str,
+            cost: &RuntimeAttemptCostPort,
+        ) -> Burned {
+            let installation = supervisor.installation_id().to_owned();
+            burn_activation_with_cost(&mut self.store, &installation, suffix, cost)
+        }
     }
 
     fn open_runtime(supervisor: Supervisor, burned: Burned) -> Result<C1Runtime> {
@@ -1674,6 +1815,51 @@ mod tests {
             .admit_claimed_wave5_c1_disabled(burned.claim)
             .expect("admit the burned claim");
         C1Runtime::open(supervisor, admission, burned.run, &burned.plan_bytes, at())
+    }
+
+    /// Open, keeping the admission's own report so durable records can be compared to it field by
+    /// field rather than by discriminator.
+    fn open_runtime_with_report(
+        supervisor: Supervisor,
+        burned: Burned,
+    ) -> (crate::DisabledC1AdmissionReport, C1Runtime) {
+        let admission = supervisor
+            .admit_claimed_wave5_c1_disabled(burned.claim)
+            .expect("admit the burned claim");
+        let report = admission.report().clone();
+        let runtime = C1Runtime::open(supervisor, admission, burned.run, &burned.plan_bytes, at())
+            .expect("open the C1 runtime");
+        (report, runtime)
+    }
+
+    fn activation_bound_record(records: &[JournalRecord]) -> &JournalEvent {
+        records
+            .iter()
+            .find_map(|record| match &record.event {
+                event @ JournalEvent::C1ActivationBound { .. } => Some(event),
+                _ => None,
+            })
+            .expect("a bound activation")
+    }
+
+    fn prepared_record(records: &[JournalRecord]) -> &JournalEvent {
+        records
+            .iter()
+            .find_map(|record| match &record.event {
+                event @ JournalEvent::C1RequestPrepared { .. } => Some(event),
+                _ => None,
+            })
+            .expect("a prepared request")
+    }
+
+    fn reserved_record(records: &[JournalRecord]) -> AttemptReservation {
+        records
+            .iter()
+            .find_map(|record| match &record.event {
+                JournalEvent::C1AttemptReserved(reservation) => Some(reservation.clone()),
+                _ => None,
+            })
+            .expect("a reserved attempt")
     }
 
     /// The C1 journal event discriminators in order, for exact ordering assertions.
@@ -1795,8 +1981,49 @@ mod tests {
         assert!(!state.attempt_abandoned && !state.attempt_unresolved());
     }
 
+    /// The one-shot flag, not the terminal flag, is what refuses the second call.
+    ///
+    /// `run_once` spends the one-shot before anything can mark the runtime terminal, so a spent
+    /// runtime is the state a caller actually meets, and the refusal has to say so: a read that
+    /// *completed* is not "terminal after a prior boundary failure". Pinning the exact message is
+    /// the point — asserting merely that some error came back leaves the two guards
+    /// indistinguishable, which is how the flag went untested in the first place.
+    /// The whole ordered path opens exactly one connection, and it carries the canonical body.
+    ///
+    /// The listener accepts in a loop and records every connection, so a second request — which a
+    /// spent client can only make by opening one — would show up here. This is the property the
+    /// entire C1 design exists to hold, so it is asserted directly on the observed connections
+    /// rather than only through a "no further request" drain.
     #[test]
-    fn a_second_run_once_on_the_same_runtime_is_refused_and_issues_no_request() {
+    fn the_one_admitted_read_opens_exactly_one_connection_carrying_the_canonical_body() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let burned = bench.burn(&supervisor, "one-connection");
+        let mut runtime = open_runtime(supervisor, burned).expect("open the C1 runtime");
+        let server = Loopback::start(vec![Step::Write(ok_page_response(ONE_ROW_PAGE, ""))]);
+        runtime.bind_loopback_for_tests(server.base_url());
+        runtime.run_once(at(), 0).expect("one bounded C1 read");
+        drop(runtime);
+
+        let observed = server.observed_requests();
+        assert_eq!(
+            observed.len(),
+            1,
+            "the one admitted read issues exactly one request, and this is the assertion that \
+             can see a second one"
+        );
+        assert_eq!(request_line(&observed[0]), "POST / HTTP/1.1");
+        assert_eq!(
+            request_body(&observed[0]),
+            canonical_public_solana_c1_request(WALLET, MAX_ROWS)
+                .expect("canonical body")
+                .body,
+            "and the bytes on the wire are the canonical request, not something re-encoded"
+        );
+    }
+
+    #[test]
+    fn a_second_run_once_after_a_completed_read_is_refused_as_spent_and_issues_no_request() {
         let mut bench = Bench::new();
         let supervisor = bench.supervisor();
         let burned = bench.burn(&supervisor, "twice");
@@ -1807,10 +2034,234 @@ mod tests {
 
         let error = runtime.run_once(at(), 0).unwrap_err();
         assert!(
-            matches!(&error, SupervisorError::InvalidState(message) if message.contains("terminal")),
-            "a spent runtime refuses: {error}"
+            matches!(&error, SupervisorError::InvalidState(message)
+                if message == "the one admitted C1 read has already been performed"),
+            "a completed read is refused as spent, never as a boundary failure: {error}"
+        );
+        // And again, so the flag is not a one-time latch that clears itself.
+        assert!(runtime.run_once(at(), 0).is_err());
+        server.assert_exactly_one_request();
+    }
+
+    /// A read that died past the I/O boundary is equally spent, and equally never retried.
+    #[test]
+    fn a_second_run_once_after_a_post_io_failure_is_also_refused_as_spent() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let burned = bench.burn(&supervisor, "twice-failed");
+        let mut runtime = open_runtime(supervisor, burned).expect("open the C1 runtime");
+        let server = Loopback::start(vec![Step::Write(ok_page_response(NON_CONFORMANT_PAGE, ""))]);
+        runtime.bind_loopback_for_tests(server.base_url());
+        runtime.run_once(at(), 0).unwrap_err();
+
+        let error = runtime.run_once(at(), 0).unwrap_err();
+        assert!(
+            matches!(&error, SupervisorError::InvalidState(message)
+                if message == "the one admitted C1 read has already been performed"),
+            "a failed read is spent too: {error}"
         );
         server.assert_exactly_one_request();
+    }
+
+    /// The binding record is the admission report, verbatim, plus the two derived ceilings.
+    ///
+    /// Checking only that a `C1ActivationBound` record exists leaves every identity and digest in
+    /// it free: a binding that named a different activation, or that swapped the template and
+    /// final plan digests, would look identical to a discriminator sequence. This compares the
+    /// whole payload against the report the admission actually carried.
+    #[test]
+    fn the_activation_binding_record_carries_the_admission_report_verbatim() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let installation = supervisor.installation_id().to_owned();
+        let burned = bench.burn(&supervisor, "bound-payload");
+        let (report, runtime) = open_runtime_with_report(supervisor, burned);
+
+        let records = runtime.supervisor().journal_records();
+        assert_eq!(c1_event_names(records), vec!["activation_bound"]);
+        let JournalEvent::C1ActivationBound {
+            activation_id,
+            installation_id,
+            run_registration_id,
+            run_registration_digest,
+            activation_digest,
+            exact_plan_digest,
+            plan_id,
+            plan_template_digest,
+            final_plan_digest,
+            activation_commit_sequence,
+            claim_commit_sequence,
+            claim_commit_digest,
+            maximum_response_bytes,
+            maximum_segment_bytes,
+        } = activation_bound_record(records)
+        else {
+            unreachable!("the record was just matched as a bound activation")
+        };
+        assert_eq!(activation_id, &report.activation_id);
+        assert_eq!(installation_id, &report.installation_id);
+        assert_eq!(
+            installation_id, &installation,
+            "the binding names the journal it was written to"
+        );
+        assert_eq!(run_registration_id, &report.run_registration_id);
+        assert_eq!(run_registration_digest, &report.run_registration_digest);
+        assert_eq!(activation_digest, &report.activation_digest);
+        assert_eq!(exact_plan_digest, &report.exact_plan_digest);
+        assert_eq!(plan_id, &report.plan_id);
+        assert_eq!(plan_template_digest, &report.plan_template_digest);
+        assert_eq!(final_plan_digest, &report.final_plan_digest);
+        assert_ne!(
+            plan_template_digest, final_plan_digest,
+            "the two plan digests are distinct values, so swapping them is observable"
+        );
+        assert_eq!(
+            *activation_commit_sequence,
+            report.activation_commit_sequence
+        );
+        assert_eq!(*claim_commit_sequence, report.claim_commit_sequence);
+        assert_eq!(claim_commit_digest, &report.claim_commit_digest);
+        assert_eq!(*maximum_response_bytes, C1_MAX_RESPONSE_BODY_BYTES);
+        assert_eq!(*maximum_segment_bytes, derived_segment_bytes());
+        assert!(
+            *claim_commit_sequence > *activation_commit_sequence,
+            "the burn strictly follows the activation it consumed"
+        );
+    }
+
+    /// The prepared-request record and the run report, field by field.
+    ///
+    /// Both are digest-only accounts of one request, and both were previously unasserted beyond
+    /// their discriminators. The endpoint and body digests are recomputed here from the listener
+    /// address and the canonical request bytes, so a record that digested something else fails.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One flat account of one attempt, asserted field by field.
+    fn the_prepared_request_record_and_the_run_report_carry_the_exact_identities_and_digests() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let installation = supervisor.installation_id().to_owned();
+        let burned = bench.burn(&supervisor, "payload");
+        let run_id = burned.run.run_id.clone();
+        let (admission, mut runtime) = open_runtime_with_report(supervisor, burned);
+
+        let server = Loopback::start(vec![Step::Write(ok_page_response(
+            ONE_ROW_PAGE,
+            "Retry-After: 3\r\nSet-Cookie: session=secret\r\n",
+        ))]);
+        let base_url = server.base_url();
+        runtime.bind_loopback_for_tests(base_url.clone());
+        let report = runtime.run_once(at(), 0).expect("one bounded C1 read");
+
+        let expected_body = canonical_public_solana_c1_request(WALLET, MAX_ROWS)
+            .expect("the canonical C1 request body");
+        let expected_endpoint_digest = digest_of(base_url.as_bytes());
+        let expected_body_digest = digest_of(&expected_body.body);
+
+        let records = runtime.supervisor().journal_records();
+        let reservation = reserved_record(records);
+        let JournalEvent::C1RequestPrepared {
+            reservation_id,
+            endpoint_digest,
+            request_body_digest,
+            request_body_byte_length,
+            method_key,
+            maximum_response_bytes,
+            deadline_ms,
+        } = prepared_record(records)
+        else {
+            unreachable!("the record was just matched as a prepared request")
+        };
+        assert_eq!(reservation_id, &reservation.reservation_id);
+        assert_eq!(endpoint_digest, &expected_endpoint_digest);
+        assert_ne!(
+            endpoint_digest,
+            &digest_of(crate::c1::transport::C1_ENDPOINT_URL.as_bytes()),
+            "a record produced against a private listener is visibly not a public read"
+        );
+        assert_eq!(request_body_digest, &expected_body_digest);
+        assert_eq!(
+            *request_body_byte_length,
+            expected_body.body.len() as u64,
+            "the recorded length is the exact canonical body length"
+        );
+        assert_eq!(method_key, C1_OPERATION_KEY);
+        assert_eq!(*maximum_response_bytes, C1_MAX_RESPONSE_BODY_BYTES);
+        assert_eq!(*deadline_ms, ATTEMPT_WALL_MS);
+
+        // And the report is an account of the same one attempt, not a second opinion.
+        assert_eq!(report.contract, C1_CONTRACT_VERSION);
+        assert_eq!(report.installation_id, installation);
+        assert_eq!(report.activation_id, admission.activation_id);
+        assert_eq!(report.run_id, admission.run_registration_id);
+        assert_eq!(report.run_id, run_id);
+        assert_eq!(
+            report.reservation_id,
+            reservation.reservation_id.to_string()
+        );
+        assert_eq!(report.source_key, C1_SOURCE_KEY);
+        assert_eq!(report.operation_key, C1_OPERATION_KEY);
+        assert_eq!(
+            report.generation, 1,
+            "the one-shot generation is always its first"
+        );
+        assert_eq!(
+            report.generation,
+            reservation.generation.get(),
+            "and it is the generation the reserved attempt recorded"
+        );
+        assert_eq!(
+            report.attempt_ordinal, 1,
+            "the attempt ordinal within that generation is always 1"
+        );
+        assert_eq!(report.attempt_ordinal, reservation.attempt_ordinal);
+        assert_eq!(report.endpoint_digest, expected_endpoint_digest);
+        assert_eq!(report.request_body_digest, expected_body_digest);
+        assert_eq!(
+            report.request_body_byte_length,
+            expected_body.body.len() as u64
+        );
+        assert_eq!(report.maximum_response_bytes, C1_MAX_RESPONSE_BODY_BYTES);
+        assert_eq!(report.maximum_segment_bytes, derived_segment_bytes());
+        assert_eq!(report.deadline_ms, ATTEMPT_WALL_MS);
+        assert_eq!(report.response_status, 200);
+        assert_eq!(report.response_body_bytes, ONE_ROW_PAGE.len() as u64);
+        assert_eq!(
+            report.response_body_digest,
+            digest_of(ONE_ROW_PAGE.as_bytes())
+        );
+        assert_eq!(
+            report.retained_header_names,
+            vec!["retry-after".to_owned()],
+            "the retained names are the bounded allowlist reduction and carry no cookie"
+        );
+        assert_eq!(report.response_shape, C1ResponseShape::Page);
+        assert!(report.elapsed_ms < ATTEMPT_WALL_MS);
+        assert_eq!(report.usage.requests, 1);
+        assert_eq!(report.usage.pages, 1);
+        assert_eq!(report.usage.ingress_bytes, report.response_body_bytes);
+        assert_eq!(report.usage.provider_credits, 0);
+        assert_eq!(
+            report.usage.elapsed_ms, report.elapsed_ms,
+            "the settled elapsed is the measured elapsed, not a second reading"
+        );
+        assert_eq!(report.settlement, RuntimeSettlementDisposition::Observed);
+        assert_eq!(report.authority, crate::AUTHORITY_CEILING);
+
+        // The durable settlement record has to agree with the report it was derived from.
+        let (usage, disposition) = settled_usage(records).expect("a durable settlement");
+        assert_eq!(usage, report.usage);
+        assert_eq!(disposition, report.settlement);
+
+        // The local receipt is the one retained page, and its length is the settled durable use.
+        report
+            .local_spool
+            .validate()
+            .expect("a valid local receipt");
+        assert_eq!(
+            parse_wire_u64(&report.local_spool.exact_segment.byte_length).expect("segment length"),
+            report.usage.durable_bytes
+        );
+        assert!(report.usage.durable_bytes <= derived_segment_bytes());
     }
 
     #[test]
@@ -2055,6 +2506,7 @@ mod tests {
         for (cut, expect_request) in cuts {
             let mut bench = Bench::new();
             let supervisor = bench.supervisor_with_faults(NthAppendFault::armed(cut));
+            let installation = supervisor.installation_id().to_owned();
             let burned = bench.burn(&supervisor, &format!("cut-{cut}"));
             let server = Loopback::start(vec![Step::Write(ok_page_response(EMPTY_PAGE, ""))]);
             let outcome = match open_runtime(supervisor, burned) {
@@ -2077,19 +2529,36 @@ mod tests {
             }
 
             // The claim is burned either way. Authority is never recreated or refunded.
+            //
+            // The re-claim uses this bench's *real* installation id, which `journal.rs` derives
+            // from the root path, pid, and nanos and then persists. A literal placeholder would
+            // never be it, the store would refuse on its installation-mismatch branch, and the
+            // one-shot burn this assertion is named for would never be reached at all — so the
+            // refusal is matched exactly rather than merely asserted to be some error.
+            let activation_id = StableString::new(format!("activation:c1-runtime-cut-{cut}"))
+                .expect("activation id");
             let context = commit_context(&bench.store, &format!("reclaim-{cut}"));
+            let Err(refusal) = bench.store.claim_wave5_c1_activation_v1(
+                &activation_id,
+                &StableString::new(installation.clone()).expect("installation id"),
+                &context,
+            ) else {
+                panic!("cut {cut}: a burned activation is never re-claimable");
+            };
+            assert!(
+                matches!(&refusal, joshi_store::StoreError::IdentityConflict { kind, identity }
+                    if *kind == "Wave 5 C1 activation claim"
+                        && identity == activation_id.as_str()),
+                "cut {cut}: the burn is what refuses, not an installation mismatch: {refusal}"
+            );
+            // And the durable claim receipt is still exactly the one burn that happened.
             assert!(
                 bench
                     .store
-                    .claim_wave5_c1_activation_v1(
-                        &StableString::new(format!("activation:c1-runtime-cut-{cut}"))
-                            .expect("activation id"),
-                        &StableString::new("inst-00000000000000000000000000000000".to_owned())
-                            .expect("installation id"),
-                        &context,
-                    )
-                    .is_err(),
-                "cut {cut}: a burned activation is never re-claimable"
+                    .load_wave5_c1_activation_claim_receipt_v1(&activation_id)
+                    .expect("claim receipt readback")
+                    .is_some(),
+                "cut {cut}: the burned claim stays burned"
             );
 
             let mut supervisor = bench.supervisor();
@@ -2180,6 +2649,236 @@ mod tests {
                 if message.contains("different journal installation")),
             "a foreign installation is refused: {error}"
         );
+    }
+
+    /// A run reference that does not validate never reaches the durable binding.
+    ///
+    /// The mutated field is a *component document* identity, so the reference still names the run
+    /// the admission closed over and still carries its registration digest: the closure equality
+    /// below this guard passes. Only `Wave5RunReferenceV1::validate` refuses it, so removing that
+    /// call binds a burned activation to a malformed reference rather than refusing.
+    #[test]
+    fn a_run_reference_that_does_not_validate_is_refused_before_any_binding() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let mut burned = bench.burn(&supervisor, "bad-run-ref");
+        burned.run.build.document_id = String::new();
+        let admission = supervisor
+            .admit_claimed_wave5_c1_disabled(burned.claim)
+            .expect("admit the burned claim");
+        let error = C1Runtime::open(supervisor, admission, burned.run, &burned.plan_bytes, at())
+            .unwrap_err();
+        assert!(
+            matches!(&error, SupervisorError::Admission(_))
+                && format!("{error}").contains("documentId"),
+            "the malformed component document is what refuses it, not the closure equality \
+             below: {error}"
+        );
+    }
+
+    /// Exact plan bytes for the *same* run, but a different plan, are refused.
+    ///
+    /// `substituted_exact_plan_bytes_are_refused` swaps in another run's plan, which disagrees
+    /// with the admission on the run identity as well. This one keeps the run identity and digest
+    /// intact and changes only the plan, so the plan half of the closure is what has to refuse it.
+    #[test]
+    fn exact_plan_bytes_for_the_same_run_but_a_different_plan_are_refused() {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let burned = bench.burn(&supervisor, "same-run");
+        let other = validate_provider_run_plan(plan_template("same-run-other").bind_run(
+            RegisteredRunPort {
+                run_id: burned.run.run_id.clone(),
+                registration_digest: burned.run.exact_registration.digest.as_str().to_owned(),
+            },
+        ))
+        .expect("a second valid plan over the same registered run");
+        let other_bytes = other.canonical_bytes().expect("canonical plan bytes");
+        assert_eq!(
+            other.plan().run,
+            parse_provider_run_plan_exact(&burned.plan_bytes)
+                .expect("the admitted plan")
+                .plan()
+                .run,
+            "the substituted plan closes over exactly the same registered run"
+        );
+        let admission = supervisor
+            .admit_claimed_wave5_c1_disabled(burned.claim)
+            .expect("admit the burned claim");
+        let error =
+            C1Runtime::open(supervisor, admission, burned.run, &other_bytes, at()).unwrap_err();
+        assert!(
+            matches!(&error, SupervisorError::InvalidState(message)
+                if message.contains("do not reproduce the admission")),
+            "a different plan for the same run is still not the admitted closure: {error}"
+        );
+    }
+
+    /// An attempt that reserves less than the admitted page can physically need is refused.
+    ///
+    /// Refusing here is the whole point: the alternative is a reservation that is guaranteed to be
+    /// violated once the socket is open, which is exactly the state the post-I/O path can only
+    /// resolve by charging a maximum and stopping. Both dimensions are checked separately so
+    /// deleting either half of the condition fails.
+    #[test]
+    fn an_attempt_budget_that_cannot_absorb_the_admitted_page_is_refused_before_any_socket() {
+        for (label, cost) in [
+            (
+                "ingress",
+                RuntimeAttemptCostPort {
+                    worst_case: RuntimeBudgetPort {
+                        ingress_bytes: C1_MAX_RESPONSE_BODY_BYTES - 1,
+                        ..attempt_cost().worst_case
+                    },
+                    max_overshoot: zero_budget(),
+                },
+            ),
+            (
+                "durable",
+                RuntimeAttemptCostPort {
+                    worst_case: RuntimeBudgetPort {
+                        durable_bytes: derived_segment_bytes() - 1,
+                        ..attempt_cost().worst_case
+                    },
+                    max_overshoot: zero_budget(),
+                },
+            ),
+        ] {
+            let mut bench = Bench::new();
+            let supervisor = bench.supervisor();
+            let burned = bench.burn_with_cost(&supervisor, &format!("thin-{label}"), &cost);
+            let error = open_runtime(supervisor, burned).unwrap_err();
+            assert!(
+                matches!(&error, SupervisorError::InvalidConfig(message)
+                    if message.contains("the admitted page can physically need")),
+                "a {label} reservation under the admitted page is refused: {error}"
+            );
+        }
+    }
+
+    /// The plan-shape gate, exercised as the function it is.
+    ///
+    /// It is not reachable from a store-produced admission — `parse_c1_activation_exact` requires
+    /// the same shape over the same plan bytes before an activation can be committed — so this
+    /// calls it directly with plans `joshi_sources` itself accepts. Three of its clauses can be
+    /// isolated that way; the rest (`max_in_flight_attempts`, one operation, one attempt per
+    /// operation) are conditions the plan validator refuses outright, so no validated plan can
+    /// carry them and no test can reach them.
+    #[test]
+    fn the_c1_plan_shape_gate_refuses_every_plan_shape_it_can_be_handed() {
+        let admitted = fixture_plan("shape-ok", plan_template("shape-ok"));
+        admit_c1_plan_shape(&admitted).expect("the isolated one-page C1 shape is admitted");
+
+        // A C0 plan: the wrong profile and, with it, the wrong built-in execution disposition.
+        let synthetic = fixture_plan(
+            "shape-c0",
+            ProviderRunPlanTemplate {
+                port_version: PROVIDER_RUN_PLAN_PORT_VERSION.to_owned(),
+                plan_id: "c1-runtime-shape-c0".to_owned(),
+                profile: CanaryProfilePort::C0,
+                hard_cap: RuntimeBudgetPort {
+                    requests: 1,
+                    pages: 1,
+                    ingress_bytes: 1_024,
+                    durable_bytes: 1_024,
+                    wall_millis: ATTEMPT_WALL_MS,
+                    ..zero_budget()
+                },
+                max_elapsed_ms: ATTEMPT_WALL_MS,
+                max_ingress_bytes_per_second: None,
+                max_in_flight_attempts: 1,
+                operations: vec![ProviderOperationPlan {
+                    // The sealed C0 pair. `joshi_sources` keeps the two key strings private, so they
+                    // are named literally here; the fingerprints beside them are exported and would
+                    // fail the contract lookup if the pair ever changed.
+                    source_key: "synthetic.local".to_owned(),
+                    method_key: "emit".to_owned(),
+                    source_contract_fingerprint:
+                        joshi_sources::SEALED_C0_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                    method_schema_fingerprint: joshi_sources::SEALED_C0_METHOD_SCHEMA_FINGERPRINT
+                        .to_owned(),
+                    operation: ProviderOperation::SyntheticEmit,
+                    generation: 1,
+                    max_attempts: 1,
+                    scope: ProviderScopePort::SyntheticScenario {
+                        scenario_id: "scenario:shape".to_owned(),
+                    },
+                    attempt_cost: RuntimeAttemptCostPort {
+                        worst_case: RuntimeBudgetPort {
+                            requests: 1,
+                            pages: 1,
+                            ingress_bytes: 1_024,
+                            durable_bytes: 1_024,
+                            wall_millis: ATTEMPT_WALL_MS,
+                            ..zero_budget()
+                        },
+                        max_overshoot: zero_budget(),
+                    },
+                }],
+            },
+        );
+        assert!(
+            matches!(admit_c1_plan_shape(&synthetic), Err(SupervisorError::InvalidState(message))
+                if message.contains("isolated one-page public-Solana shape")),
+            "a C0 plan is not the C1 shape"
+        );
+
+        // A C1 plan carrying an ingress-rate bound, which the C1 path compiles in no way to honour.
+        let mut rated = plan_template("shape-rated");
+        rated.max_ingress_bytes_per_second = Some(1_024);
+        let rated = fixture_plan("shape-rated", rated);
+        assert!(
+            matches!(admit_c1_plan_shape(&rated), Err(SupervisorError::InvalidState(message))
+                if message.contains("isolated one-page public-Solana shape")),
+            "a rate-limited plan is not the C1 shape"
+        );
+
+        // A C1 plan whose one operation is not its first generation.
+        let mut regenerated = plan_template("shape-generation");
+        regenerated.operations[0].generation = 2;
+        let regenerated = fixture_plan("shape-generation", regenerated);
+        assert!(
+            matches!(admit_c1_plan_shape(&regenerated),
+                Err(SupervisorError::InvalidState(message))
+                if message.contains("one bounded signature-page read")),
+            "a later generation is not the one admitted read"
+        );
+    }
+
+    /// The economic-spend refusal, exercised as the function it is.
+    ///
+    /// Neither `joshi_sources::validate_provider_run_plan` nor `parse_c1_activation_exact` will
+    /// admit a plan carrying provider currency or chain-native atoms, so no burned activation can
+    /// reach this. It is still the code that decides what a C1 attempt may cost, so it is called
+    /// directly with a cost the validators would have refused.
+    #[test]
+    fn a_c1_attempt_carrying_economic_spend_is_refused_by_the_execution_envelope() {
+        let plan = &fixture_plan("economic", plan_template("economic"));
+        let (limits, claim) = execution_envelope(plan, &plan.operations()[0].plan.attempt_cost)
+            .expect("the admitted envelope");
+        assert_eq!(limits.maximum_requests, plan.plan().hard_cap.requests);
+        assert_eq!(limits.maximum_elapsed_ms, plan.plan().max_elapsed_ms);
+        assert_eq!(claim.maximum_ingress_bytes, C1_MAX_RESPONSE_BODY_BYTES);
+        assert_eq!(claim.maximum_provider_credits, 0);
+
+        for (label, spend) in [("provider currency", true), ("chain-native atoms", false)] {
+            let mut worst = attempt_cost().worst_case;
+            if spend {
+                worst.provider_currency_minor.insert("usd".to_owned(), 1);
+            } else {
+                worst.chain_native_atoms.insert("sol".to_owned(), 1);
+            }
+            let cost = RuntimeAttemptCostPort {
+                worst_case: worst,
+                max_overshoot: zero_budget(),
+            };
+            assert!(
+                matches!(execution_envelope(plan, &cost),
+                    Err(SupervisorError::InvalidValue(message))
+                    if message.contains("cannot carry economic spend")),
+                "{label} is never an admitted C1 attempt cost"
+            );
+        }
     }
 
     #[test]
@@ -2285,6 +2984,278 @@ mod tests {
             Some(C1_MAX_RESPONSE_BODY_BYTES)
         );
         assert_eq!(state.maximum_segment_bytes, Some(derived_segment_bytes()));
+    }
+
+    /// Every C1 record a real gapped run writes, for the abandonment shape replay must accept.
+    fn records_from_a_real_gapped_run() -> Vec<JournalRecord> {
+        let mut bench = Bench::new();
+        let supervisor = bench.supervisor();
+        let burned = bench.burn(&supervisor, "replay-gap-source");
+        let mut runtime = open_runtime(supervisor, burned).expect("open the C1 runtime");
+        let server = Loopback::start(vec![Step::Write(ok_page_response(NON_CONFORMANT_PAGE, ""))]);
+        runtime.bind_loopback_for_tests(server.base_url());
+        runtime.run_once(at(), 0).unwrap_err();
+        runtime.supervisor().journal_records().to_vec()
+    }
+
+    /// The first record of the named C1 family, taken from a real journal.
+    fn c1_event(records: &[JournalRecord], name: &str) -> JournalEvent {
+        records
+            .iter()
+            .find(|record| c1_event_names(std::slice::from_ref(record)) == vec![name])
+            .unwrap_or_else(|| panic!("a real journal carrying a {name} record"))
+            .event
+            .clone()
+    }
+
+    /// Rebuild a journal slice from named C1 records, in exactly the order given.
+    fn c1_slice(records: &[JournalRecord], names: &[&str]) -> Vec<JournalRecord> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| record(index as u64 + 1, c1_event(records, name)))
+            .collect()
+    }
+
+    /// Repoint a C1 record at a reservation the journal never reserved.
+    fn naming_an_unreserved_attempt(event: JournalEvent) -> JournalEvent {
+        naming_attempt(
+            event,
+            crate::ReservationId::new("resv-not-in-this-journal").expect("reservation id"),
+        )
+    }
+
+    /// Repoint a C1 record at a specific reservation identity.
+    fn naming_attempt(mut event: JournalEvent, unknown: crate::ReservationId) -> JournalEvent {
+        match &mut event {
+            JournalEvent::C1RequestPrepared { reservation_id, .. }
+            | JournalEvent::C1IoStarted { reservation_id }
+            | JournalEvent::C1RawDurabilityRecorded { reservation_id, .. }
+            | JournalEvent::C1AttemptAbandoned { reservation_id, .. }
+            | JournalEvent::C1BudgetSettled { reservation_id, .. } => *reservation_id = unknown,
+            _ => panic!("that C1 record carries no reservation identity"),
+        }
+        event
+    }
+
+    /// Every refusal [`scan_c1_journal`] documents, one case each.
+    ///
+    /// The reader's whole job is to refuse a duplicated or out-of-order record rather than repair
+    /// it, so a refusal nothing exercises is a refusal nobody maintains. Each case is built from
+    /// the exact records a real run wrote — a completed one and a gapped one — and each asserts
+    /// the specific refusal, not merely that some error came back, so deleting or inverting one
+    /// ordering guard fails exactly its own case.
+    #[test]
+    #[allow(clippy::too_many_lines)] // The refused orderings stay readable as one table.
+    fn replay_refuses_every_documented_out_of_order_or_duplicated_c1_record() {
+        let (completed, reservation) = reserved_record_from_a_real_run();
+        let gapped = records_from_a_real_gapped_run();
+        let bound = c1_event(&completed, "activation_bound");
+        let reserved = c1_event(&completed, "attempt_reserved");
+        let prepared = c1_event(&completed, "request_prepared");
+        let io = c1_event(&completed, "io_started");
+        let durable = c1_event(&completed, "raw_durability_recorded");
+        let settled = c1_event(&completed, "budget_settled");
+        let stopped = c1_event(&completed, "stopped");
+        // The gapped run reserved its own attempt, so its abandonment is repointed at the
+        // completed run's reservation; every case below then speaks about one attempt identity.
+        let abandoned = naming_attempt(
+            c1_event(&gapped, "attempt_abandoned"),
+            reservation.reservation_id.clone(),
+        );
+
+        let build = |events: Vec<JournalEvent>| -> Vec<JournalRecord> {
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| record(index as u64 + 1, event))
+                .collect()
+        };
+
+        let cases: Vec<(&str, Vec<JournalRecord>)> = vec![
+            (
+                "a second C1 activation binding",
+                build(vec![bound.clone(), bound.clone()]),
+            ),
+            (
+                "a C1 reservation before any bound activation",
+                build(vec![reserved.clone()]),
+            ),
+            (
+                "a second C1 reservation",
+                build(vec![bound.clone(), reserved.clone(), reserved.clone()]),
+            ),
+            (
+                "a prepared C1 request naming a reservation this journal never reserved",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    naming_an_unreserved_attempt(prepared.clone()),
+                ]),
+            ),
+            (
+                "a duplicated or late C1 request closure",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    prepared.clone(),
+                ]),
+            ),
+            (
+                "a duplicated or late C1 request closure",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    prepared.clone(),
+                ]),
+            ),
+            (
+                "a C1 I/O start naming a reservation this journal never reserved",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    naming_an_unreserved_attempt(io.clone()),
+                ]),
+            ),
+            (
+                "a C1 I/O start before its request closure",
+                build(vec![bound.clone(), reserved.clone(), io.clone()]),
+            ),
+            (
+                "a second C1 I/O start",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    io.clone(),
+                ]),
+            ),
+            (
+                "a C1 durability record naming a reservation this journal never reserved",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    naming_an_unreserved_attempt(durable.clone()),
+                ]),
+            ),
+            (
+                "C1 durability before any I/O start",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    durable.clone(),
+                ]),
+            ),
+            (
+                "a second C1 attempt resolution",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    durable.clone(),
+                    durable.clone(),
+                ]),
+            ),
+            (
+                "a second C1 attempt resolution",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    durable.clone(),
+                    abandoned.clone(),
+                ]),
+            ),
+            (
+                "a second C1 attempt resolution",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    abandoned.clone(),
+                    durable.clone(),
+                ]),
+            ),
+            (
+                "a C1 abandonment naming a reservation this journal never reserved",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    prepared.clone(),
+                    io.clone(),
+                    naming_an_unreserved_attempt(abandoned.clone()),
+                ]),
+            ),
+            (
+                "a C1 settlement naming a reservation this journal never reserved",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    naming_an_unreserved_attempt(settled.clone()),
+                ]),
+            ),
+            (
+                "a second C1 settlement",
+                build(vec![
+                    bound.clone(),
+                    reserved.clone(),
+                    settled.clone(),
+                    settled.clone(),
+                ]),
+            ),
+            (
+                "a C1 stop before any bound activation",
+                build(vec![stopped.clone()]),
+            ),
+            (
+                "a second C1 stop",
+                build(vec![bound.clone(), stopped.clone(), stopped.clone()]),
+            ),
+        ];
+
+        for (expected, records) in cases {
+            let error = scan_c1_journal(&records)
+                .err()
+                .unwrap_or_else(|| panic!("replay must refuse {expected:?}"));
+            let SupervisorError::InvalidState(message) = &error else {
+                panic!("{expected:?} must be an invalid-state refusal, got {error}")
+            };
+            assert_eq!(
+                message,
+                &format!("the C1 journal records {expected}"),
+                "the refusal has to name what it refused"
+            );
+        }
+
+        // The abandonment record replay must *accept*, so the resolution guards above are not
+        // passing merely because every abandonment is refused.
+        let gap_lifecycle = c1_slice(
+            &gapped,
+            &[
+                "activation_bound",
+                "attempt_reserved",
+                "request_prepared",
+                "io_started",
+                "attempt_abandoned",
+                "stopped",
+                "budget_settled",
+            ],
+        );
+        let state = scan_c1_journal(&gap_lifecycle).expect("a real gapped lifecycle replays");
+        assert!(state.attempt_abandoned && !state.raw_durability_recorded);
+        assert!(state.budget_settled && state.generation_stopped);
+        assert!(!state.attempt_unresolved());
     }
 
     #[test]
