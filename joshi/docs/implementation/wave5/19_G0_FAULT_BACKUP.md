@@ -83,11 +83,36 @@ in-process fault paths never arm this behavior.
 
 This closes actual process termination for one requested scenario at a time.
 It deliberately emits `fullOfflineFaultWalk:false`: one row is not the 37-row
-schedule, and SIGKILL is neither a power-loss nor a Rust-panic witness even
+schedule, and an OS process kill is neither a power-loss nor a Rust-panic witness even
 when the frozen row names one of those modes. The nonignored integration test
 covers a real pre-reservation child kill; an explicit ignored test walks one
 process-kill row from each of the supervisor, catalog, component, inspector,
 and final-recovery adapter families.
+
+The deliberately slow `wave5-g0-process-kill-ledger` command repeats that
+operation for all 36 mapped before/after boundaries plus a no-fault baseline,
+each under a fresh state root. Its narrow positive invariant is
+`everyMappedBoundaryProcessKilled:true` together with an exact partition of
+same-state root recoveries and typed, hashed recovery refusals. A kill after
+provider I/O but before origin fsync, for example, must retain its abandoned-
+attempt gap and refuse a gap-free root rather than silently re-fetch. The
+ledger still sets `mixedScheduledModesFullyExecuted` and
+`fullOfflineFaultWalk` false: twelve frozen rows ask for process kill, while
+the remaining rows ask for power loss or panic and are not relabeled.
+
+The first complete process-kill ledger finished with 36/36 exact boundary
+markers and terminations, 33 complete same-state root bundles, and three typed
+refusals: `before_origin_fsync`, `after_pre_io_reservation`, and
+`after_origin_fsync`. The first and third lose or cannot durably associate a
+provider response before the supervisor can prove local durability; the
+second retains a terminal pre-I/O cancellation for the finite fixture run.
+None is silently re-fetched or omitted. The exact ledger digest from that run
+was
+`sha256:79bfa81261897ca8ef386d3d3888d1f052f12d2fddf7f5ee049d7121f6b55552`.
+An earlier run exposed that process death around restored reopen bypassed the
+ordinary RAII root-restore guard. Recovery now first restores only the six
+known quarantined roots, refuses symlinks/unknown ordinals/conflicts, and is
+idempotent across another interruption; both reopen rows now close fully.
 
 ```text
 cargo run --locked --offline -p joshi-core -- \
@@ -98,6 +123,9 @@ cargo run --locked --offline -p joshi-core -- \
 cargo test --locked --offline -p joshi-core --test g0_process_kill
 cargo test --locked --offline -p joshi-core --test g0_process_kill \
   actual_child_kill_reaches_every_adapter_family -- --ignored --nocapture
+
+./scripts/wave5-g0-process-kill-ledger \
+  /tmp/joshi-g0-process-kill-ledger.manual
 ```
 
 For every injected crash, the future adapter must prove all of these from

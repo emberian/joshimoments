@@ -71,6 +71,11 @@ enum Command {
         #[arg(long)]
         scenario_id: String,
     },
+    /// Terminate a child at every mapped G0 boundary and account for each exact prefix.
+    Wave5G0ProcessKillLedger {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Internal parked child used only by the parent process-kill scenario runner.
     #[command(hide = true)]
     Wave5G0FaultKillChild {
@@ -169,6 +174,11 @@ async fn main() -> Result<(), CliError> {
                 &scenario_id,
             )
             .await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
+        Some(Command::Wave5G0ProcessKillLedger { state }) => {
+            let report =
+                joshi_core::wave5_g0_fault_root::run_wave5_g0_process_kill_ledger(&state).await?;
             println!("{}", serde_json::to_string(&report)?);
         }
         Some(Command::Wave5G0FaultKillChild {

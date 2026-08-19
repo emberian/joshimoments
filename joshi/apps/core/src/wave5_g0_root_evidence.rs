@@ -143,6 +143,7 @@ pub enum Wave5G0RootEvidenceError {
 pub async fn run_wave5_g0_root_evidence(
     state: &Path,
 ) -> Result<Wave5G0RootEvidenceReport, Wave5G0RootEvidenceError> {
+    recover_interrupted_original_roots(state)?;
     let component = run_wave5_g0_source_publication(state)?;
     let inspector = run_g0_inspector_smoke(state).await?;
     let final_recovery = run_final_recovery(state, &component, &inspector)?;
@@ -800,6 +801,99 @@ impl Drop for OriginalRootsGuard {
     }
 }
 
+pub(crate) fn recover_interrupted_original_roots(
+    state: &Path,
+) -> Result<bool, Wave5G0RootEvidenceError> {
+    if !state.try_exists()? {
+        return Ok(false);
+    }
+    let mut quarantines = Vec::new();
+    for entry in fs::read_dir(state)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("g0-root-recovery-") {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "G0 recovery root is not a real directory",
+            ));
+        }
+        let unavailable = entry.path().join("original-paths-unavailable");
+        if !unavailable.try_exists()? {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&unavailable)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "G0 original-root quarantine is not a real directory",
+            ));
+        }
+        if fs::read_dir(&unavailable)?.next().transpose()?.is_some() {
+            quarantines.push(unavailable);
+        }
+    }
+    let [unavailable] = quarantines.as_slice() else {
+        return if quarantines.is_empty() {
+            Ok(false)
+        } else {
+            Err(Wave5G0RootEvidenceError::Invariant(
+                "multiple interrupted G0 original-root quarantines exist",
+            ))
+        };
+    };
+    let config = offline_fixture_store_config(state)?;
+    let originals = [
+        config.catalog_path.clone(),
+        config.catalog_path.with_extension("sqlite-wal"),
+        config.catalog_path.with_extension("sqlite-shm"),
+        config.blob_root,
+        config.export_root,
+        state.join("supervisor"),
+    ];
+    let mut moves = Vec::new();
+    for entry in fs::read_dir(unavailable)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_str().ok_or(Wave5G0RootEvidenceError::Invariant(
+            "G0 quarantine entry name is not UTF-8",
+        ))?;
+        let ordinal = name
+            .parse::<usize>()
+            .ok()
+            .filter(|ordinal| format!("{ordinal:02}") == name)
+            .filter(|ordinal| *ordinal < originals.len())
+            .ok_or(Wave5G0RootEvidenceError::Invariant(
+                "G0 quarantine contains an unknown original-root ordinal",
+            ))?;
+        let hidden = entry.path();
+        let metadata = fs::symlink_metadata(&hidden)?;
+        if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "G0 quarantine contains a special file",
+            ));
+        }
+        let original = originals[ordinal].clone();
+        if original.try_exists()? {
+            return Err(Wave5G0RootEvidenceError::Invariant(
+                "G0 original root conflicts with its interrupted quarantine",
+            ));
+        }
+        moves.push((ordinal, hidden, original));
+    }
+    moves.sort_by_key(|(ordinal, _, _)| *ordinal);
+    for (_, hidden, original) in moves {
+        fs::rename(hidden, original)?;
+    }
+    File::open(unavailable)?.sync_all()?;
+    File::open(state)?.sync_all()?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -901,5 +995,66 @@ mod tests {
             validate_final_recovery(&component, &recovered).expect("valid final recovery");
             assert!(!recovered.full_offline_fault_walk);
         }
+    }
+
+    #[test]
+    fn interrupted_original_root_quarantine_is_restored_before_component_replay() {
+        let state = tempfile::tempdir().expect("temporary quarantine state");
+        let root = state.path().join("g0-root-recovery-test");
+        let unavailable = root.join("original-paths-unavailable");
+        let catalog = state.path().join("catalog.sqlite");
+        let blobs = state.path().join("blobs");
+        let supervisor = state.path().join("supervisor");
+        fs::create_dir_all(&blobs).expect("blob root");
+        fs::create_dir_all(&supervisor).expect("supervisor root");
+        fs::write(&catalog, b"catalog fixture").expect("catalog fixture");
+        let guard = OriginalRootsGuard::hide(
+            &[
+                catalog.clone(),
+                catalog.with_extension("sqlite-wal"),
+                catalog.with_extension("sqlite-shm"),
+                blobs.clone(),
+                state.path().join("exports"),
+                supervisor.clone(),
+            ],
+            &unavailable,
+        )
+        .expect("hide roots");
+        std::mem::forget(guard);
+
+        assert!(recover_interrupted_original_roots(state.path()).expect("recover roots"));
+        assert_eq!(
+            fs::read(&catalog).expect("catalog readback"),
+            b"catalog fixture"
+        );
+        assert!(blobs.is_dir());
+        assert!(supervisor.is_dir());
+        assert!(
+            fs::read_dir(&unavailable)
+                .expect("empty quarantine")
+                .next()
+                .is_none()
+        );
+        assert!(!recover_interrupted_original_roots(state.path()).expect("idempotent retry"));
+    }
+
+    #[test]
+    fn interrupted_original_root_quarantine_refuses_unknown_or_conflicting_entries() {
+        let unknown = tempfile::tempdir().expect("unknown quarantine state");
+        let unknown_quarantine = unknown
+            .path()
+            .join("g0-root-recovery-test/original-paths-unavailable");
+        fs::create_dir_all(&unknown_quarantine).expect("unknown quarantine");
+        fs::write(unknown_quarantine.join("99"), b"unknown").expect("unknown entry");
+        assert!(recover_interrupted_original_roots(unknown.path()).is_err());
+
+        let conflict = tempfile::tempdir().expect("conflicting quarantine state");
+        let conflict_quarantine = conflict
+            .path()
+            .join("g0-root-recovery-test/original-paths-unavailable");
+        fs::create_dir_all(&conflict_quarantine).expect("conflicting quarantine");
+        fs::write(conflict_quarantine.join("00"), b"hidden catalog").expect("hidden catalog");
+        fs::write(conflict.path().join("catalog.sqlite"), b"new catalog").expect("new catalog");
+        assert!(recover_interrupted_original_roots(conflict.path()).is_err());
     }
 }
