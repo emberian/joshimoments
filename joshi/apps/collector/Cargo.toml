@@ -7,13 +7,23 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bs58 = "0.5.1"
+bytes = "1.12.1"
 clap.workspace = true
+joshi-admission = { path = "../../crates/joshi-admission", features = ["source-edges"] }
 joshi-domain = { path = "../../crates/joshi-domain" }
+joshi-sources = { path = "../../crates/joshi-sources" }
 joshi-spool = { path = "../../crates/joshi-spool" }
+joshi-store = { path = "../../crates/joshi-store" }
 joshi-supervisor = { path = "../../crates/joshi-supervisor" }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde_json.workspace = true
 time.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "time"] }
 zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

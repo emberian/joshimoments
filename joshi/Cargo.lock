@@ -1161,12 +1161,20 @@ dependencies = [
 name = "joshi-collector"
 version = "0.1.0"
 dependencies = [
+ "bs58",
+ "bytes",
  "clap",
+ "joshi-admission",
  "joshi-domain",
+ "joshi-sources",
  "joshi-spool",
+ "joshi-store",
  "joshi-supervisor",
+ "rusqlite",
  "serde_json",
+ "tempfile",
  "time",
+ "tokio",
  "zeroize",
 ]
 
@@ -1594,10 +1602,15 @@ name = "joshi-surface"
 version = "0.1.0"
 dependencies = [
  "joshi-domain",
+ "joshi-evidence",
+ "joshi-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror",
+ "time",
 ]
 
 [[package]]

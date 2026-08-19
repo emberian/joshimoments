@@ -1,3 +1,5 @@
+mod live;
+
 use clap::{Parser, Subcommand};
 use joshi_domain::UtcTimestamp;
 use joshi_spool::{
@@ -9,6 +11,7 @@ use joshi_supervisor::{
     SupervisorHealthV1, SyntheticRuntimeOutcomeAdapter, parse_provider_run_plan_exact,
     replay_spool, synthetic_c0_json_runner,
 };
+use live::{DEFAULT_HELIUS_KEY_PATH, LiveIngestOptions, ingest_live, store_readback};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -80,6 +83,32 @@ enum Command {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Perform bounded authenticated Solana reads and durably commit the exact provider frames.
+    IngestLive {
+        /// Catalog directory; created and migrated when absent.
+        #[arg(long)]
+        root: PathBuf,
+        /// Base58 Solana address whose recent signatures are read.
+        #[arg(long)]
+        wallet: String,
+        /// Signature page size requested from the provider.
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+        /// Hard ceiling on provider requests for the whole occurrence.
+        #[arg(long = "max-requests", default_value_t = 25)]
+        max_requests: u32,
+        /// Maximum transactions fetched from the head of the signature page.
+        #[arg(long, default_value_t = 3)]
+        transactions: u32,
+        /// Owner-only credential file, read once at adapter startup and never rendered.
+        #[arg(long = "key-file", default_value = DEFAULT_HELIUS_KEY_PATH)]
+        key_file: PathBuf,
+    },
+    /// Reopen a catalog read-only and print what one retained observation payload actually holds.
+    StoreReadback {
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 fn main() {
@@ -102,49 +131,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             surface_profile,
             plan,
             fixture,
-        } => {
-            require_existing_root(&root)?;
-            let exact_registration =
-                read_bounded(&registration, MAX_RUNTIME_DOCUMENT_BYTES, "registration")?;
-            let exact_build = read_bounded(&build, MAX_RUNTIME_DOCUMENT_BYTES, "build")?;
-            let exact_source_tree =
-                read_bounded(&source_tree, MAX_RUNTIME_DOCUMENT_BYTES, "source tree")?;
-            let exact_configuration =
-                read_bounded(&config, MAX_RUNTIME_DOCUMENT_BYTES, "configuration")?;
-            let exact_budget = read_bounded(&budget, MAX_RUNTIME_DOCUMENT_BYTES, "budget")?;
-            let exact_privacy = read_bounded(&privacy, MAX_RUNTIME_DOCUMENT_BYTES, "privacy")?;
-            let exact_surface = read_bounded(
-                &surface_profile,
-                MAX_RUNTIME_DOCUMENT_BYTES,
-                "daily-use surface profile",
-            )?;
-            let plan_maximum = u64::try_from(MAX_PROVIDER_RUN_PLAN_BYTES)?;
-            let plan_bytes = read_bounded(&plan, plan_maximum, "provider plan")?;
-            let fixture_body = read_bounded(&fixture, MAX_C0_FIXTURE_BYTES, "C0 fixture")?;
-
-            let plan = parse_provider_run_plan_exact(&plan_bytes)?;
-            let started_at = UtcTimestamp::new(time::OffsetDateTime::now_utc())?;
-            let mut runner = synthetic_c0_json_runner(plan, fixture_body, started_at)?;
-            let supervisor = Supervisor::open(supervisor_config(root))?;
-            let mut runtime = CollectorRuntime::open(
-                RuntimeDocumentSet {
-                    exact_registration: &exact_registration,
-                    exact_build: &exact_build,
-                    exact_source_tree: &exact_source_tree,
-                    exact_configuration: &exact_configuration,
-                    exact_budget: &exact_budget,
-                    exact_privacy: &exact_privacy,
-                    exact_daily_use_surface_profile: &exact_surface,
-                },
-                supervisor,
-                runner.validated_plan(),
-                started_at,
-                0,
-            )?;
-            let mut adapter = SyntheticRuntimeOutcomeAdapter::new();
-            let report = runtime.run_to_completion(&mut runner, &mut adapter, started_at, 0)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
+        } => run_c0_occurrence(C0Occurrence {
+            root,
+            registration,
+            build,
+            source_tree,
+            config,
+            budget,
+            privacy,
+            surface_profile,
+            plan,
+            fixture,
+        })?,
         Command::Replay {
             root,
             private_key_file,
@@ -185,7 +183,96 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let health: SupervisorHealthV1 = serde_json::from_slice(&bytes)?;
             println!("{}", serde_json::to_string_pretty(&health)?);
         }
+        Command::IngestLive {
+            root,
+            wallet,
+            limit,
+            max_requests,
+            transactions,
+            key_file,
+        } => {
+            println!(
+                "{}",
+                ingest_live(&LiveIngestOptions {
+                    root,
+                    wallet,
+                    limit,
+                    max_requests,
+                    transactions,
+                    key_file,
+                })?
+            );
+        }
+        Command::StoreReadback { root } => {
+            require_existing_root(&root)?;
+            println!("{}", store_readback(&root)?);
+        }
     }
+    Ok(())
+}
+
+/// Every exact document path of one registered no-network C0 occurrence.
+struct C0Occurrence {
+    root: PathBuf,
+    registration: PathBuf,
+    build: PathBuf,
+    source_tree: PathBuf,
+    config: PathBuf,
+    budget: PathBuf,
+    privacy: PathBuf,
+    surface_profile: PathBuf,
+    plan: PathBuf,
+    fixture: PathBuf,
+}
+
+fn run_c0_occurrence(paths: C0Occurrence) -> Result<(), Box<dyn std::error::Error>> {
+    require_existing_root(&paths.root)?;
+    let exact_registration = read_bounded(
+        &paths.registration,
+        MAX_RUNTIME_DOCUMENT_BYTES,
+        "registration",
+    )?;
+    let exact_build = read_bounded(&paths.build, MAX_RUNTIME_DOCUMENT_BYTES, "build")?;
+    let exact_source_tree = read_bounded(
+        &paths.source_tree,
+        MAX_RUNTIME_DOCUMENT_BYTES,
+        "source tree",
+    )?;
+    let exact_configuration =
+        read_bounded(&paths.config, MAX_RUNTIME_DOCUMENT_BYTES, "configuration")?;
+    let exact_budget = read_bounded(&paths.budget, MAX_RUNTIME_DOCUMENT_BYTES, "budget")?;
+    let exact_privacy = read_bounded(&paths.privacy, MAX_RUNTIME_DOCUMENT_BYTES, "privacy")?;
+    let exact_surface = read_bounded(
+        &paths.surface_profile,
+        MAX_RUNTIME_DOCUMENT_BYTES,
+        "daily-use surface profile",
+    )?;
+    let plan_maximum = u64::try_from(MAX_PROVIDER_RUN_PLAN_BYTES)?;
+    let plan_bytes = read_bounded(&paths.plan, plan_maximum, "provider plan")?;
+    let fixture_body = read_bounded(&paths.fixture, MAX_C0_FIXTURE_BYTES, "C0 fixture")?;
+
+    let plan = parse_provider_run_plan_exact(&plan_bytes)?;
+    let started_at = UtcTimestamp::new(time::OffsetDateTime::now_utc())?;
+    let mut runner = synthetic_c0_json_runner(plan, fixture_body, started_at)?;
+    let supervisor = Supervisor::open(supervisor_config(paths.root))?;
+    let mut runtime = CollectorRuntime::open(
+        RuntimeDocumentSet {
+            exact_registration: &exact_registration,
+            exact_build: &exact_build,
+            exact_source_tree: &exact_source_tree,
+            exact_configuration: &exact_configuration,
+            exact_budget: &exact_budget,
+            exact_privacy: &exact_privacy,
+            exact_daily_use_surface_profile: &exact_surface,
+        },
+        supervisor,
+        runner.validated_plan(),
+        started_at,
+        0,
+    )?;
+    let mut adapter = SyntheticRuntimeOutcomeAdapter::new();
+    let report = runtime.run_to_completion(&mut runner, &mut adapter, started_at, 0)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
 
