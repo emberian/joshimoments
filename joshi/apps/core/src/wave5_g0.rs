@@ -131,6 +131,10 @@ struct ExactSupervisorFault(FaultPoint);
 impl FaultInjector for ExactSupervisorFault {
     fn check(&self, point: FaultPoint) -> Result<(), SupervisorError> {
         if point == self.0 {
+            crate::g0_process_fault::pause_if_process_kill_armed(
+                "supervisor",
+                &format!("{point:?}"),
+            );
             Err(SupervisorError::Injected(point))
         } else {
             Ok(())
@@ -2016,6 +2020,7 @@ fn inject(
     current: Wave5G0SourcePublicationFaultPoint,
 ) -> Result<(), Wave5G0SourcePublicationError> {
     if requested == Some(current) {
+        crate::g0_process_fault::pause_if_process_kill_armed("component", &format!("{current:?}"));
         Err(Wave5G0SourcePublicationError::Injected(current))
     } else {
         Ok(())

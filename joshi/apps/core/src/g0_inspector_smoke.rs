@@ -341,6 +341,7 @@ fn inject(
     current: G0InspectorSmokeFaultPoint,
 ) -> Result<(), G0InspectorSmokeError> {
     if requested == Some(current) {
+        crate::g0_process_fault::pause_if_process_kill_armed("inspector", &format!("{current:?}"));
         return Err(G0InspectorSmokeError::Injected(current));
     }
     Ok(())

@@ -9,6 +9,7 @@ use crate::{
     g0_inspector_smoke::{
         G0InspectorSmokeError, run_g0_inspector_smoke, run_g0_inspector_smoke_with_fault,
     },
+    g0_process_fault::arm_process_kill_marker,
     wave5_circulation::Wave5CirculationError,
     wave5_g0::{
         Wave5G0SourceChainFaultPoint, Wave5G0SourcePublicationError,
@@ -26,13 +27,242 @@ use joshi_g0_harness::{
 };
 use joshi_supervisor::SupervisorError;
 use serde::Serialize;
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::Path,
+    process::{Child, Command, ExitStatus, Stdio},
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 
 const CONTRACT: &str = "joshi.wave5.g0_executed_fault_ledger.v1";
 const AUTHORITY: &str = "offline_fixture_in_process_fault_evidence_no_kill_qualification";
 const EXECUTION_KIND: &str = "deterministic_in_process_error_injection";
+const PROCESS_KILL_CONTRACT: &str = "joshi.wave5.g0_process_kill_scenario.v1";
+const PROCESS_KILL_AUTHORITY: &str =
+    "offline_fixture_actual_process_kill_single_scenario_no_full_walk_qualification";
+const PROCESS_KILL_EXECUTION_KIND: &str = "os_process_kill_at_exact_armed_fault_boundary";
 const SCHEDULE_BYTES: &[u8] = include_bytes!("../../../fixtures/g0-fault/fake_fault_schedule.json");
+
+/// One actual child-process termination at an exact mapped G0 fault boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
+pub struct G0ProcessKillScenarioV1 {
+    pub contract: &'static str,
+    pub schema_version: u16,
+    pub authority: &'static str,
+    pub status: &'static str,
+    pub schedule_id: String,
+    pub schedule_digest: String,
+    pub scenario_id: String,
+    pub scheduled_crash_mode: CrashMode,
+    pub actual_crash_mode: CrashMode,
+    pub scheduled_mode_matched: bool,
+    pub crash_point: CrashPoint,
+    pub adapter_family: String,
+    pub adapter_point: String,
+    pub execution_kind: &'static str,
+    pub boundary_marker_digest: String,
+    pub child_terminated_without_success: bool,
+    pub recovered_root_report_digest: String,
+    pub recovered_evidence_bundle: EvidenceBundle,
+    pub same_state_recovery_closed: bool,
+    pub full_offline_fault_walk: bool,
+    pub provider_io: bool,
+    pub browser_presented: bool,
+    pub product_qualified: bool,
+    pub live_qualified: bool,
+    pub disqualifiers: Vec<&'static str>,
+}
+
+/// Arm one exact child fault boundary and wait for the parent to terminate this process.
+///
+/// # Errors
+///
+/// Refuses a baseline/unknown scenario, nonempty state, reused marker, or a fault path that
+/// returns instead of parking at its exact requested boundary.
+pub async fn run_wave5_g0_process_kill_child(
+    state: &Path,
+    scenario_id: &str,
+    marker: &Path,
+) -> Result<(), G0ExecutedFaultLedgerError> {
+    require_empty_root(state)?;
+    let expected_marker = state
+        .parent()
+        .ok_or(G0ExecutedFaultLedgerError::UnsafeProcessKillMarker)?
+        .join("child-ready");
+    if marker != expected_marker {
+        return Err(G0ExecutedFaultLedgerError::UnsafeProcessKillMarker);
+    }
+    let schedule: FakeFaultSchedule = serde_json::from_slice(SCHEDULE_BYTES)?;
+    schedule.validate()?;
+    let scenario = scheduled_scenario(&schedule, scenario_id)?;
+    let point = scenario
+        .crash_point
+        .ok_or(G0ExecutedFaultLedgerError::BaselineProcessKill)?;
+    arm_process_kill_marker(marker)?;
+    let adapter = fault_adapter(point);
+    let _returned = execute_interruption_and_recoverable_prefix(state, adapter).await?;
+    Err(G0ExecutedFaultLedgerError::MissingProcessKillPause)
+}
+
+/// Kill one child parked at an exact G0 boundary, then recover the same state to the root bundle.
+///
+/// The result is intentionally one-scenario evidence. Even when the frozen row requested a
+/// process kill, it cannot promote the unexecuted remainder of the 37-row schedule.
+///
+/// # Errors
+///
+/// Refuses a nonempty destination, changed schedule, missing/wrong marker, early child exit,
+/// timeout, unsuccessful termination, or incomplete same-state root recovery.
+#[allow(clippy::too_many_lines)]
+pub async fn run_wave5_g0_process_kill_scenario(
+    root: &Path,
+    scenario_id: &str,
+) -> Result<G0ProcessKillScenarioV1, G0ExecutedFaultLedgerError> {
+    require_empty_root(root)?;
+    let schedule: FakeFaultSchedule = serde_json::from_slice(SCHEDULE_BYTES)?;
+    schedule.validate()?;
+    let schedule_digest = schedule.digest()?;
+    let scenario = scheduled_scenario(&schedule, scenario_id)?;
+    let point = scenario
+        .crash_point
+        .ok_or(G0ExecutedFaultLedgerError::BaselineProcessKill)?;
+    let adapter = fault_adapter(point);
+    let family = adapter_family(adapter);
+    let point_name = adapter_point(adapter);
+    let state = root.join("state");
+    let marker = root.join("child-ready");
+    let child_binary = std::env::current_exe()?;
+    let mut child = KillOnDrop::new(
+        Command::new(child_binary)
+            .arg("wave5-g0-fault-kill-child")
+            .arg("--state")
+            .arg(&state)
+            .arg("--scenario-id")
+            .arg(scenario_id)
+            .arg("--marker")
+            .arg(&marker)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    let deadline = Instant::now() + Duration::from_mins(3);
+    loop {
+        if marker.try_exists()? {
+            break;
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(G0ExecutedFaultLedgerError::ChildExitedBeforeBoundary(
+                status.to_string(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(G0ExecutedFaultLedgerError::ProcessKillBoundaryTimeout);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let marker_bytes = fs::read(&marker)?;
+    let expected_marker = format!("{family}:{point_name}\n");
+    if marker_bytes != expected_marker.as_bytes() {
+        return Err(G0ExecutedFaultLedgerError::WrongProcessKillMarker);
+    }
+    let exit = child.kill_and_wait()?;
+    if exit.success() {
+        return Err(G0ExecutedFaultLedgerError::ChildExitedSuccessfully);
+    }
+    fs::remove_file(&marker)?;
+
+    let recovered = recover_same_state(&state, Some(adapter)).await?;
+    if !recovered.partial_root_evidence_closed
+        || recovered.evidence_bundle.items.len() != 18
+        || recovered.full_offline_fault_walk
+        || recovered.browser_presented
+        || recovered.product_qualified
+        || recovered.live_qualified
+    {
+        return Err(G0ExecutedFaultLedgerError::Invariant(
+            "process-kill recovery did not retain its exact partial root ceiling",
+        ));
+    }
+    recovered.evidence_bundle.validate()?;
+    let report = G0ProcessKillScenarioV1 {
+        contract: PROCESS_KILL_CONTRACT,
+        schema_version: 1,
+        authority: PROCESS_KILL_AUTHORITY,
+        status: "useful_partial",
+        schedule_id: schedule.schedule_id.clone(),
+        schedule_digest,
+        scenario_id: scenario.scenario_id.clone(),
+        scheduled_crash_mode: scenario.crash_mode,
+        actual_crash_mode: CrashMode::ProcessKill,
+        scheduled_mode_matched: scenario.crash_mode == CrashMode::ProcessKill,
+        crash_point: point,
+        adapter_family: family.into(),
+        adapter_point: point_name,
+        execution_kind: PROCESS_KILL_EXECUTION_KIND,
+        boundary_marker_digest: Sha256Digest::of_bytes(&marker_bytes).to_string(),
+        child_terminated_without_success: true,
+        recovered_root_report_digest: Sha256Digest::of_bytes(&serde_json::to_vec(&recovered)?)
+            .to_string(),
+        recovered_evidence_bundle: recovered.evidence_bundle,
+        same_state_recovery_closed: true,
+        full_offline_fault_walk: false,
+        provider_io: false,
+        browser_presented: false,
+        product_qualified: false,
+        live_qualified: false,
+        disqualifiers: vec![
+            "single_scenario_does_not_close_the_37_row_schedule",
+            "power_loss_and_panic_modes_are_not_proven_by_sigkill",
+            "no_browser_presentation_occurrence",
+            "offline_fixture_only",
+        ],
+    };
+    validate_process_kill_report(&report, &schedule, scenario, &expected_marker)?;
+    Ok(report)
+}
+
+struct KillOnDrop(Option<Child>);
+
+impl KillOnDrop {
+    const fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        let status = self
+            .0
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("G0 child was already reaped"))?
+            .try_wait()?;
+        if status.is_some() {
+            self.0 = None;
+        }
+        Ok(status)
+    }
+
+    fn kill_and_wait(&mut self) -> std::io::Result<ExitStatus> {
+        let mut child = self
+            .0
+            .take()
+            .ok_or_else(|| std::io::Error::other("G0 child was already reaped"))?;
+        child.kill()?;
+        child.wait()
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
 
 /// One frozen scenario, its observed interruption, and its same-state recovered root evidence.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -435,6 +665,57 @@ fn validate_report(
     Ok(())
 }
 
+fn validate_process_kill_report(
+    report: &G0ProcessKillScenarioV1,
+    schedule: &FakeFaultSchedule,
+    scenario: &joshi_g0_harness::FaultScenario,
+    marker: &str,
+) -> Result<(), G0ExecutedFaultLedgerError> {
+    if report.contract != PROCESS_KILL_CONTRACT
+        || report.schema_version != 1
+        || report.authority != PROCESS_KILL_AUTHORITY
+        || report.status != "useful_partial"
+        || report.schedule_id != schedule.schedule_id
+        || report.schedule_digest != schedule.digest()?
+        || report.scenario_id != scenario.scenario_id
+        || report.scheduled_crash_mode != scenario.crash_mode
+        || report.actual_crash_mode != CrashMode::ProcessKill
+        || report.scheduled_mode_matched != (scenario.crash_mode == CrashMode::ProcessKill)
+        || Some(report.crash_point) != scenario.crash_point
+        || report.execution_kind != PROCESS_KILL_EXECUTION_KIND
+        || report.boundary_marker_digest != Sha256Digest::of_bytes(marker.as_bytes()).to_string()
+        || !report.child_terminated_without_success
+        || !report.same_state_recovery_closed
+        || report.recovered_evidence_bundle.items.len() != 18
+        || report.full_offline_fault_walk
+        || report.provider_io
+        || report.browser_presented
+        || report.product_qualified
+        || report.live_qualified
+        || report.disqualifiers.len() != 4
+    {
+        return Err(G0ExecutedFaultLedgerError::Invariant(
+            "process-kill scenario report changed or widened its authority",
+        ));
+    }
+    Sha256Digest::parse(report.schedule_digest.clone())?;
+    Sha256Digest::parse(report.boundary_marker_digest.clone())?;
+    Sha256Digest::parse(report.recovered_root_report_digest.clone())?;
+    report.recovered_evidence_bundle.validate()?;
+    Ok(())
+}
+
+fn scheduled_scenario<'a>(
+    schedule: &'a FakeFaultSchedule,
+    scenario_id: &str,
+) -> Result<&'a joshi_g0_harness::FaultScenario, G0ExecutedFaultLedgerError> {
+    schedule
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .ok_or_else(|| G0ExecutedFaultLedgerError::UnknownScenario(scenario_id.to_owned()))
+}
+
 fn require_empty_root(root: &Path) -> Result<(), G0ExecutedFaultLedgerError> {
     fs::create_dir_all(root)?;
     if fs::read_dir(root)?.next().transpose()?.is_some() {
@@ -485,6 +766,22 @@ pub enum G0ExecutedFaultLedgerError {
     MissingInterruption,
     #[error("unexpected G0 interruption result: {0}")]
     UnexpectedInterruption(String),
+    #[error("unknown frozen G0 fault scenario: {0}")]
+    UnknownScenario(String),
+    #[error("the baseline has no process-kill boundary")]
+    BaselineProcessKill,
+    #[error("G0 child returned instead of parking at the process-kill boundary")]
+    MissingProcessKillPause,
+    #[error("G0 child exited before publishing its process-kill boundary: {0}")]
+    ChildExitedBeforeBoundary(String),
+    #[error("timed out waiting for the G0 child process-kill boundary")]
+    ProcessKillBoundaryTimeout,
+    #[error("G0 child published a different process-kill boundary")]
+    WrongProcessKillMarker,
+    #[error("G0 child marker must be the fixed sibling of its isolated state root")]
+    UnsafeProcessKillMarker,
+    #[error("G0 child unexpectedly exited successfully after process termination")]
+    ChildExitedSuccessfully,
     #[error("G0 executed fault-ledger invariant failed: {0}")]
     Invariant(&'static str),
 }

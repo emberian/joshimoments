@@ -74,6 +74,32 @@ the schedule's literal process-kill, power-loss, or panic modes and therefore
 still emits `fullOfflineFaultWalk:false`. It is intentionally excluded from the
 ordinary fast readiness command.
 
+Core also exposes a bounded `wave5-g0-process-kill-scenario` command. It starts
+a separate Core child for one exact checked schedule row, arms only that row's
+mapped fault boundary, waits for the child to publish a synchronized marker
+*inside the fault check*, terminates the parked child process, and then recovers
+the same state into the eighteen-role root evidence bundle. Ordinary
+in-process fault paths never arm this behavior.
+
+This closes actual process termination for one requested scenario at a time.
+It deliberately emits `fullOfflineFaultWalk:false`: one row is not the 37-row
+schedule, and SIGKILL is neither a power-loss nor a Rust-panic witness even
+when the frozen row names one of those modes. The nonignored integration test
+covers a real pre-reservation child kill; an explicit ignored test walks one
+process-kill row from each of the supervisor, catalog, component, inspector,
+and final-recovery adapter families.
+
+```text
+cargo run --locked --offline -p joshi-core -- \
+  wave5-g0-process-kill-scenario \
+  --state /tmp/joshi-g0-process-kill.manual \
+  --scenario-id 01_before_pre_io_reservation
+
+cargo test --locked --offline -p joshi-core --test g0_process_kill
+cargo test --locked --offline -p joshi-core --test g0_process_kill \
+  actual_child_kill_reaches_every_adapter_family -- --ignored --nocapture
+```
+
 For every injected crash, the future adapter must prove all of these from
 durable producer/store readback rather than booleans:
 

@@ -281,6 +281,7 @@ fn inject(
     current: CirculationFaultPoint,
 ) -> Result<(), Wave5CirculationError> {
     if requested == Some(current) {
+        crate::g0_process_fault::pause_if_process_kill_armed("catalog", &format!("{current:?}"));
         return Err(Wave5CirculationError::Injected(current));
     }
     Ok(())

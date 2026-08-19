@@ -584,6 +584,10 @@ fn inject_final(
     current: G0FinalRecoveryFaultPoint,
 ) -> Result<(), Wave5G0RootEvidenceError> {
     if requested == Some(current) {
+        crate::g0_process_fault::pause_if_process_kill_armed(
+            "final_recovery",
+            &format!("{current:?}"),
+        );
         return Err(Wave5G0RootEvidenceError::Injected(current));
     }
     Ok(())
