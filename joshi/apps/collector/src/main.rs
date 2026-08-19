@@ -4,10 +4,10 @@ use joshi_spool::{
     KeyMaterial, LocalSpool, ProtectionMetadata, SegmentProtector, SpoolConfig, inspect_segment,
 };
 use joshi_supervisor::{
-    CollectorRuntime, FakeProviderHarness, FakeProviderSchedule, ProviderRunPlan, ProviderRunner,
-    QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig, SupervisorHealthV1,
-    SyntheticRuntimeOutcomeAdapter, replay_spool, synthetic_c0_json_runner,
-    validate_provider_run_plan,
+    CollectorRuntime, FakeProviderHarness, FakeProviderSchedule, MAX_PROVIDER_RUN_PLAN_BYTES,
+    ProviderRunner, QueueLimits, RetryPolicy, RuntimeDocumentSet, Supervisor, SupervisorConfig,
+    SupervisorHealthV1, SyntheticRuntimeOutcomeAdapter, parse_provider_run_plan_exact,
+    replay_spool, synthetic_c0_json_runner,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -20,7 +20,6 @@ use std::{
 use zeroize::Zeroize as _;
 
 const MAX_RUNTIME_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_PROVIDER_PLAN_BYTES: u64 = 1024 * 1024;
 const MAX_C0_FIXTURE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Parser)]
@@ -119,11 +118,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 MAX_RUNTIME_DOCUMENT_BYTES,
                 "daily-use surface profile",
             )?;
-            let plan_bytes = read_bounded(&plan, MAX_PROVIDER_PLAN_BYTES, "provider plan")?;
+            let plan_maximum = u64::try_from(MAX_PROVIDER_RUN_PLAN_BYTES)?;
+            let plan_bytes = read_bounded(&plan, plan_maximum, "provider plan")?;
             let fixture_body = read_bounded(&fixture, MAX_C0_FIXTURE_BYTES, "C0 fixture")?;
 
-            let plan: ProviderRunPlan = serde_json::from_slice(&plan_bytes)?;
-            let plan = validate_provider_run_plan(plan)?;
+            let plan = parse_provider_run_plan_exact(&plan_bytes)?;
             let started_at = UtcTimestamp::new(time::OffsetDateTime::now_utc())?;
             let mut runner = synthetic_c0_json_runner(plan, fixture_body, started_at)?;
             let supervisor = Supervisor::open(supervisor_config(root))?;

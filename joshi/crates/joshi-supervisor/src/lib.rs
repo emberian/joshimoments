@@ -47,9 +47,9 @@ pub use budget::{
     BudgetPermitId, BudgetSnapshot, RunBudgetLimits,
 };
 pub use joshi_sources::{
-    ProviderAttemptOutcome, ProviderOperationPlan, ProviderRunPlan, ProviderRunner,
-    ProviderRunnerNext, SyntheticProviderRunner, SyntheticScenario, SyntheticStep,
-    ValidatedProviderRunPlan, validate_provider_run_plan,
+    MAX_PROVIDER_RUN_PLAN_BYTES, ProviderAttemptOutcome, ProviderOperationPlan, ProviderRunPlan,
+    ProviderRunner, ProviderRunnerNext, SyntheticProviderRunner, SyntheticScenario, SyntheticStep,
+    ValidatedProviderRunPlan, parse_provider_run_plan_exact, validate_provider_run_plan,
 };
 pub use runtime::{
     CollectorRuntime, RuntimeProgressKind, RuntimeRunReport, RuntimeStepReport,

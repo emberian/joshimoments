@@ -60,6 +60,12 @@ complete run reference and both plan digests. This breaks the otherwise cyclic
 configuration/registration/plan digest graph without allowing a same-name contract, source,
 method, operation, cap, or cross-run substitution.
 
+The final V2 plan also has a bounded exact-byte boundary: strict decoding rejects duplicate and
+unknown fixed fields, semantic validation rederives source/method fingerprints and all caps, and
+canonical reserialization must reproduce the supplied bytes exactly. This parser still grants no
+execution or durability authority; it exists so a future store-owned C1 activation can retain and
+re-read the actual plan document rather than blessing an unaccompanied digest.
+
 Each provider step is deliberately two phase:
 
 ```text

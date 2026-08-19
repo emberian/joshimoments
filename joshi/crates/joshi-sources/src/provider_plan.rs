@@ -17,6 +17,8 @@ pub const PROVIDER_RUN_PLAN_PORT_VERSION: &str = "joshi.provider_run_plan_port.v
 pub const PROVIDER_RUN_PLAN_TEMPLATE_DIGEST_DOMAIN: &str = "joshi.provider_run_plan_template.v2";
 /// SHA-256 domain for the final, run-bound provider plan.
 pub const PROVIDER_RUN_PLAN_DIGEST_DOMAIN: &str = "joshi.provider_run_plan.final.v2";
+/// Maximum accepted exact provider-plan document size.
+pub const MAX_PROVIDER_RUN_PLAN_BYTES: usize = 128 * 1_024;
 /// Exact source-contract digest for the sealed local C0 operation.
 pub const SEALED_C0_SOURCE_CONTRACT_FINGERPRINT: &str =
     "sha256:9225070e38e092e3c4cdd48744c36f61a32fee85c1170d0edcdbdc278428a6ed";
@@ -136,11 +138,35 @@ impl RuntimeBudgetPort {
     }
 
     fn checked_scale(&self, factor: u64) -> Result<Self, ProviderPlanError> {
-        let mut result = Self::default();
-        for _ in 0..factor {
-            result = result.checked_add(self)?;
-        }
-        Ok(result)
+        let factor_u128 = u128::from(factor);
+        Ok(Self {
+            requests: self
+                .requests
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            pages: self
+                .pages
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            ingress_bytes: self
+                .ingress_bytes
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            durable_bytes: self
+                .durable_bytes
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            provider_credits: self
+                .provider_credits
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            wall_millis: self
+                .wall_millis
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?,
+            provider_currency_minor: checked_map_scale(&self.provider_currency_minor, factor_u128)?,
+            chain_native_atoms: checked_map_scale(&self.chain_native_atoms, factor_u128)?,
+        })
     }
 }
 
@@ -173,7 +199,8 @@ pub struct RegisteredRunPort {
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
-    rename_all_fields = "camelCase"
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
 )]
 pub enum ProviderScopePort {
     SyntheticScenario {
@@ -344,6 +371,42 @@ impl ValidatedProviderRunPlan {
     pub const fn built_in_execution(&self) -> BuiltInExecutionDisposition {
         self.execution
     }
+
+    /// Return the exact canonical JSON representation of the validated final plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderPlanError::Encode`] if the fixed-field plan cannot be encoded.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ProviderPlanError> {
+        let bytes = serde_json::to_vec(&self.plan).map_err(|_| ProviderPlanError::Encode)?;
+        if bytes.len() > MAX_PROVIDER_RUN_PLAN_BYTES {
+            return Err(ProviderPlanError::DocumentSize);
+        }
+        Ok(bytes)
+    }
+}
+
+/// Strictly parse, canonically reserialize, and validate one exact final provider plan.
+///
+/// This is a semantic parser only. It grants no execution, source, store, or durability authority.
+///
+/// # Errors
+///
+/// Refuses empty/oversized JSON, duplicate or unknown fixed fields, noncanonical bytes, and every
+/// semantic error enforced by [`validate_provider_run_plan`].
+pub fn parse_provider_run_plan_exact(
+    exact_bytes: &[u8],
+) -> Result<ValidatedProviderRunPlan, ProviderPlanError> {
+    if exact_bytes.is_empty() || exact_bytes.len() > MAX_PROVIDER_RUN_PLAN_BYTES {
+        return Err(ProviderPlanError::DocumentSize);
+    }
+    let plan: ProviderRunPlan =
+        serde_json::from_slice(exact_bytes).map_err(|_| ProviderPlanError::Decode)?;
+    let validated = validate_provider_run_plan(plan)?;
+    if validated.canonical_bytes()?.as_slice() != exact_bytes {
+        return Err(ProviderPlanError::NonCanonical);
+    }
+    Ok(validated)
 }
 
 /// Validate a provider plan against the strict runtime projection before any credential load or
@@ -744,6 +807,22 @@ fn checked_map_add(
     Ok(result)
 }
 
+fn checked_map_scale(
+    values: &BTreeMap<String, u128>,
+    factor: u128,
+) -> Result<BTreeMap<String, u128>, ProviderPlanError> {
+    values
+        .iter()
+        .map(|(key, value)| {
+            stable_identifier(key)?;
+            let value = value
+                .checked_mul(factor)
+                .ok_or(ProviderPlanError::ArithmeticOverflow)?;
+            Ok((key.clone(), value))
+        })
+        .collect()
+}
+
 fn map_within(actual: &BTreeMap<String, u128>, cap: &BTreeMap<String, u128>) -> bool {
     actual
         .iter()
@@ -812,6 +891,12 @@ pub enum ProviderPlanError {
     MethodSchemaFingerprintMismatch,
     #[error("provider plan could not be encoded")]
     Encode,
+    #[error("provider plan exact document is empty or too large")]
+    DocumentSize,
+    #[error("provider plan exact document could not be strictly decoded")]
+    Decode,
+    #[error("provider plan exact document is not canonical JSON")]
+    NonCanonical,
 }
 
 #[cfg(test)]
@@ -916,6 +1001,85 @@ mod tests {
         assert_eq!(
             validate_provider_run_plan(plan).unwrap_err(),
             ProviderPlanError::WrongPortVersion
+        );
+    }
+
+    #[test]
+    fn exact_final_plan_roundtrips_and_refuses_noncanonical_or_ambiguous_json() {
+        let plan = run(
+            CanaryProfilePort::C1,
+            vec![ProviderOperationPlan {
+                source_key: "solana.public.mainnet".to_owned(),
+                method_key: "get_signatures_for_address".to_owned(),
+                source_contract_fingerprint: PUBLIC_SOLANA_SOURCE_CONTRACT_FINGERPRINT.to_owned(),
+                method_schema_fingerprint: PUBLIC_SOLANA_SIGNATURES_METHOD_SCHEMA_FINGERPRINT
+                    .to_owned(),
+                operation: ProviderOperation::SolanaSignaturesForAddress,
+                generation: 1,
+                max_attempts: 1,
+                scope: ProviderScopePort::PublicWalletPage {
+                    address: WALLET.to_owned(),
+                    max_rows: 100,
+                },
+                attempt_cost: attempt_cost(0, 10_000),
+            }],
+        );
+        let validated = validate_provider_run_plan(plan).expect("valid plan");
+        let canonical = validated.canonical_bytes().expect("canonical bytes");
+        let reparsed = parse_provider_run_plan_exact(&canonical).expect("exact parser");
+        assert_eq!(reparsed.plan(), validated.plan());
+        assert_eq!(reparsed.plan_digest(), validated.plan_digest());
+        assert_eq!(
+            reparsed.plan_template_digest(),
+            validated.plan_template_digest()
+        );
+
+        let mut whitespace = canonical.clone();
+        whitespace.push(b'\n');
+        assert_eq!(
+            parse_provider_run_plan_exact(&whitespace).unwrap_err(),
+            ProviderPlanError::NonCanonical
+        );
+
+        let mut root: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+        root.as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), serde_json::Value::Bool(true));
+        assert_eq!(
+            parse_provider_run_plan_exact(&serde_json::to_vec(&root).unwrap()).unwrap_err(),
+            ProviderPlanError::Decode
+        );
+
+        let canonical_text = std::str::from_utf8(&canonical).unwrap();
+        let duplicate = canonical_text.replacen(
+            "\"planId\":\"plan-1\"",
+            "\"planId\":\"plan-1\",\"planId\":\"plan-1\"",
+            1,
+        );
+        assert_eq!(
+            parse_provider_run_plan_exact(duplicate.as_bytes()).unwrap_err(),
+            ProviderPlanError::Decode
+        );
+
+        let mut unknown_scope: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+        unknown_scope["operations"][0]["scope"]["unexpected"] =
+            serde_json::Value::String("hidden".to_owned());
+        assert_eq!(
+            parse_provider_run_plan_exact(&serde_json::to_vec(&unknown_scope).unwrap())
+                .unwrap_err(),
+            ProviderPlanError::Decode
+        );
+        assert_eq!(
+            parse_provider_run_plan_exact(&vec![b' '; MAX_PROVIDER_RUN_PLAN_BYTES + 1])
+                .unwrap_err(),
+            ProviderPlanError::DocumentSize
+        );
+
+        let mut enormous_attempt_count = validated.plan().clone();
+        enormous_attempt_count.operations[0].max_attempts = u64::MAX;
+        assert_eq!(
+            validate_provider_run_plan(enormous_attempt_count).unwrap_err(),
+            ProviderPlanError::ArithmeticOverflow
         );
     }
 
