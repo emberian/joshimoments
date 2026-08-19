@@ -463,13 +463,15 @@ fn c1_activation_is_exact_durable_and_claim_burns_once() {
             .exact_plan_bytes,
         plan
     );
+    let reopened_claim = reopened
+        .load_wave5_c1_activation_claim_receipt_v1(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened_claim.activation_id, id);
+    assert_eq!(reopened_claim.run_registration_id.as_str(), "run:c1-test");
     assert_eq!(
-        reopened
-            .load_wave5_c1_activation_claim_receipt_v1(&id)
-            .unwrap()
-            .unwrap()
-            .activation_id,
-        id
+        reopened_claim.run_registration_digest,
+        receipt.run_registration_digest
     );
     assert!(
         reopened

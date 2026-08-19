@@ -61,6 +61,8 @@ pub struct Wave5C1ActivationClaimReceipt {
     pub activation_id: StableString,
     pub installation_id: StableString,
     pub activation_digest: ValueDigest,
+    pub run_registration_id: StableString,
+    pub run_registration_digest: ValueDigest,
     pub exact_plan_digest: ValueDigest,
     pub claimed_commit_seq: CommitSeq,
     pub claim_commit_digest: ValueDigest,
@@ -588,6 +590,8 @@ impl SqliteStore {
             activation_id: activation_id.clone(),
             installation_id: stable(&installation, "C1 claim installation")?,
             activation_digest: raw_to_digest(&activation_raw, "C1 claim activation")?,
+            run_registration_id: stable(&run_id, "C1 claim run")?,
+            run_registration_digest: raw_to_digest(&run_raw, "C1 claim run")?,
             exact_plan_digest: raw_to_digest(&plan_raw, "C1 claim plan")?,
             claimed_commit_seq: CommitSeq::new(as_u64(claimed_seq, "C1 claim sequence")?),
             claim_commit_digest: raw_to_digest(&commit_digest_raw, "C1 claim commit")?,
@@ -596,8 +600,8 @@ impl SqliteStore {
         if receipt.installation_id != stored.installation_id
             || receipt.activation_digest != stored.activation_digest
             || receipt.exact_plan_digest != stored.exact_plan_digest
-            || run_id != stored.run_registration_id.as_str()
-            || raw_to_digest(&run_raw, "C1 claim run")? != stored.run_registration_digest
+            || receipt.run_registration_id != stored.run_registration_id
+            || receipt.run_registration_digest != stored.run_registration_digest
             || stored.commit_seq >= receipt.claimed_commit_seq
             || commit_raw != "maintenance"
         {
