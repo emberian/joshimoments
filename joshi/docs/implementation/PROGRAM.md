@@ -1,9 +1,18 @@
-# Broad-base implementation program
+# Broad-base implementation program (closed)
 
-Status: **authorized to scaffold and implement the read, record, replay, render, and analyze
-substrate**.
+Status: **CLOSED 2026-08-19. Superseded by [`PILLARS.md`](PILLARS.md).**
 
-Date: 2026-08-16.
+The active program is the pillar and vertical-slice program in [`PILLARS.md`](PILLARS.md). This
+document is retained as history: it is the wave-based program that ran from 2026-08-16 through
+Wave 6, and its premise, capability boundaries, crate posture and walking path are still the
+correct description of what the system is for. Its *sequencing* is what was retired.
+
+Nothing below is deleted and nothing below is authority any more. Read
+[`PILLARS.md`](PILLARS.md) for what is being built now, and see
+[Why this program closed](#why-this-program-closed) at the end of this file for what went wrong.
+
+Original date: 2026-08-16. Original status: authorized to scaffold and implement the read, record,
+replay, render, and analyze substrate.
 
 ## Product premise
 
@@ -119,3 +128,28 @@ Wave 2 broadens the foundation without granting economic authority:
   experiment-lineage, and future ensemble-prediction contracts; and
 - keep the entire current source tree licensed `AGPL-3.0-or-later` with publishable provenance and
   dependency hygiene.
+
+## Why this program closed
+
+Closed on 2026-08-19, with Waves 5 and 6 closed out at [`wave5/CLOSEOUT.md`](wave5/CLOSEOUT.md)
+and [`wave6/CLOSEOUT.md`](wave6/CLOSEOUT.md).
+
+The program was not closed because it reached a gate. Wave 5's `W5-G0` root witness never ran and
+Wave 6 never rose above `unverified_semantic_fixture_only`. It was closed because the wave framing
+was holding the project back.
+
+At close the workspace had 38 crates, roughly 158,000 lines of Rust, about 900 Rust tests, 23
+migrations and four applications, and had never ingested one byte of real market data through its
+evidence pipeline. The Wave 5 ceiling ledger reports the same blocker sentence in nine separate
+rows — *inputs are caller projections, no adapter exists* — because nine pillars were blocked by
+one missing edge, and a program organized by kernel ownership had no place to put a critical path.
+
+The **first integrated walking path** in this document is still exactly right. It was simply never
+walked: no process has ever carried one observation from a source through the store to a rendered
+surface and back after a restart. Waves built every station on the line and never ran a train.
+
+What replaces it: [`PILLARS.md`](PILLARS.md) organizes by the eight pillars in the README and by
+one vertical slice per pillar, under a single promotion rule — a slice is done when a real
+observation, acquired from a real source, reaches a rendered surface and can be read back after a
+restart. The capability boundaries, crate posture, prohibitions and product premise stated above
+carry forward unchanged.
