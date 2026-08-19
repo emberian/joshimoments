@@ -66,6 +66,19 @@ canonical reserialization must reproduce the supplied bytes exactly. This parser
 execution or durability authority; it exists so a future store-owned C1 activation can retain and
 re-read the actual plan document rather than blessing an unaccompanied digest.
 
+`joshi-wave5-c1-activation` now defines that activation document's inert semantic layer. It binds
+one installation and registered run to the exact final-plan bytes, their raw SHA-256 and byte
+length, the template and final plan digests, the canonical public-Solana source/method
+fingerprints, the public wallet page, finalized commitment, and every independent budget bound.
+It accepts only one generation-one C1 `SolanaSignaturesForAddress` operation with one attempt and
+one in-flight request, no separate ingress-rate setting, exact no-slack reservation, zero
+overshoot, and no credits, currency, or chain spend. The strict parser returns data marked
+`read_only_no_execution`; the crate contains no
+receipt, claim, store, transport, provider client, persistence, capability, or I/O API. Callers can
+construct and validate these bytes, so validation is never authorization. The next authority seam
+must be a sole-store commit/readback followed by a one-shot opaque claim; neither the supervisor
+nor an application may accept this public semantic result as permission to execute.
+
 Each provider step is deliberately two phase:
 
 ```text
