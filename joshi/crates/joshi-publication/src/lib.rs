@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod browser_presentation;
 mod error;
 mod identity;
 mod model;
@@ -14,6 +15,7 @@ mod prepare;
 mod selection;
 mod v2;
 
+pub use browser_presentation::*;
 pub use error::*;
 pub use identity::*;
 pub use model::*;
@@ -49,6 +51,11 @@ pub const COCKPIT_V2_QUERY_CONTRACT: &str = "joshi.cockpit.v2.query";
 pub const COCKPIT_V2_RESOLVED_SOURCE_FACTS_INPUT_CONTRACT: &str =
     "joshi.store.cockpit.v2.resolved_source_facts_input";
 pub const COCKPIT_V2_SCHEMA_VERSION: u16 = 2;
+/// Browser-authored claim that exact headed Cockpit V2 bytes mounted in one page.
+pub const COCKPIT_V2_BROWSER_PRESENTATION_CLAIM_CONTRACT: &str =
+    "joshi.cockpit.v2.browser_presentation_claim";
+/// Closed schema for the browser presentation claim waist.
+pub const COCKPIT_V2_BROWSER_PRESENTATION_SCHEMA_VERSION: u16 = 1;
 
 #[cfg(test)]
 mod v2_tests;

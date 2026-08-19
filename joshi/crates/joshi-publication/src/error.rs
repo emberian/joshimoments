@@ -71,4 +71,7 @@ pub enum PublicationError {
     CockpitV2Digest,
     #[error("cockpit V2 commit/head transition failure")]
     CockpitV2Stage,
+    /// A browser-mounted presentation claim is unbounded or does not match exact headed bytes.
+    #[error("cockpit V2 browser presentation claim does not match exact headed publication bytes")]
+    CockpitV2Presentation,
 }

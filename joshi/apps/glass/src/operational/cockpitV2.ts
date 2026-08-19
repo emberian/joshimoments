@@ -160,15 +160,91 @@ export const cockpitV2OpenSchema = z.object({
   sourceOccurrenceId: identity,
 }).strict();
 
+const cockpitV2PresentedPublicationRefSchema = z.object({
+  publicationId: identity,
+  publicationDigest: digest,
+  publicationBytesDigest: digest,
+  publicationCommitSeq: positiveU64,
+}).strict();
+
+const cockpitV2PresentedHeadRefSchema = z.object({
+  headDigest: digest,
+  headBytesDigest: digest,
+  headCommitSeq: positiveU64,
+}).strict();
+
+const cockpitV2BrowserViewportSchema = z.object({
+  widthCssPx: positiveU64,
+  heightCssPx: positiveU64,
+  devicePixelRatioMilli: positiveU64,
+}).strict();
+
+export const cockpitV2BrowserPresentationClaimSchema = z.object({
+  contract: z.literal("joshi.cockpit.v2.browser_presentation_claim"),
+  schemaVersion: z.literal(1),
+  idempotencyKey: identity,
+  clientPresentationId: identity,
+  browserPageId: identity,
+  presentationSeq: positiveU64,
+  publication: cockpitV2PresentedPublicationRefSchema,
+  head: cockpitV2PresentedHeadRefSchema,
+  sourceOccurrenceId: identity,
+  renderedSubjects: z.array(identity).max(4096),
+  renderedSubjectCount: u64,
+  mountedAt: exactUtcInstantSchema,
+  clientClockId: identity,
+  monotonicNs: u64,
+  viewport: cockpitV2BrowserViewportSchema,
+  documentVisibility: z.enum(["visible", "hidden"]),
+  documentHasFocus: z.boolean(),
+  authority,
+  ceiling: z.literal("browser_reported_not_pixel_verified"),
+  claimDigest: digest,
+}).strict();
+
 export type CockpitV2Manifest = z.infer<typeof cockpitV2ManifestSchema>;
 export type CockpitV2Index = z.infer<typeof cockpitV2IndexSchema>;
 export type CockpitV2IndexEntry = z.infer<typeof cockpitV2IndexEntrySchema>;
 export type CockpitV2Open = z.infer<typeof cockpitV2OpenSchema>;
+export type CockpitV2BrowserPresentationClaim = z.infer<typeof cockpitV2BrowserPresentationClaimSchema>;
+export type CockpitV2BrowserPresentationInput = Omit<CockpitV2BrowserPresentationClaim,
+  "contract" | "schemaVersion" | "idempotencyKey" | "publication" | "head" | "sourceOccurrenceId"
+  | "renderedSubjects" | "renderedSubjectCount" | "authority" | "ceiling" | "claimDigest">;
 
 const zeroDigest = `sha256:${"0".repeat(64)}`;
 
 export function digestCanonicalJson(value: unknown): string {
   return `sha256:${bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(value))))}`;
+}
+
+function browserPresentationClaimMaterial(claim: CockpitV2BrowserPresentationClaim) {
+  return {
+    contract: claim.contract,
+    schemaVersion: claim.schemaVersion,
+    idempotencyKey: claim.idempotencyKey,
+    clientPresentationId: claim.clientPresentationId,
+    browserPageId: claim.browserPageId,
+    presentationSeq: claim.presentationSeq,
+    publication: claim.publication,
+    head: claim.head,
+    sourceOccurrenceId: claim.sourceOccurrenceId,
+    renderedSubjects: claim.renderedSubjects,
+    renderedSubjectCount: claim.renderedSubjectCount,
+    mountedAt: claim.mountedAt,
+    clientClockId: claim.clientClockId,
+    monotonicNs: claim.monotonicNs,
+    viewport: claim.viewport,
+    documentVisibility: claim.documentVisibility,
+    documentHasFocus: claim.documentHasFocus,
+    authority: claim.authority,
+    ceiling: claim.ceiling,
+  };
+}
+
+export function digestCockpitV2BrowserPresentationClaim(
+  claim: CockpitV2BrowserPresentationClaim,
+): string {
+  return digestCanonicalJson(browserPresentationClaimMaterial(claim));
 }
 
 function semanticMaterial(manifest: CockpitV2Manifest) {
@@ -349,4 +425,93 @@ export function parseCockpitV2Open(input: unknown, expected?: CockpitV2IndexEntr
     throw new Error("Opened Cockpit V2 publication differs from the selected index entry");
   }
   return opened;
+}
+
+function assertBrowserPresentationClaim(
+  claim: CockpitV2BrowserPresentationClaim,
+  opened?: CockpitV2Open,
+): void {
+  sortedUnique(claim.renderedSubjects, "browser presentation rendered subjects");
+  if (BigInt(claim.renderedSubjectCount) !== BigInt(claim.renderedSubjects.length)) {
+    throw new Error("Cockpit V2 browser presentation rendered subject count mismatch");
+  }
+  if (claim.idempotencyKey !== `browser-presentation:${claim.browserPageId}:${claim.presentationSeq}`) {
+    throw new Error("Cockpit V2 browser presentation idempotency key mismatch");
+  }
+  if (BigInt(claim.publication.publicationCommitSeq) >= BigInt(claim.head.headCommitSeq)) {
+    throw new Error("Cockpit V2 browser presentation head commit must follow its publication commit");
+  }
+  const width = BigInt(claim.viewport.widthCssPx);
+  const height = BigInt(claim.viewport.heightCssPx);
+  const devicePixelRatio = BigInt(claim.viewport.devicePixelRatioMilli);
+  if (width > 32_768n || height > 32_768n || devicePixelRatio < 100n || devicePixelRatio > 10_000n) {
+    throw new Error("Cockpit V2 browser presentation viewport is outside the bounded contract");
+  }
+  if (digestCockpitV2BrowserPresentationClaim(claim) !== claim.claimDigest) {
+    throw new Error("Cockpit V2 browser presentation claim digest mismatch");
+  }
+  if (opened && (claim.publication.publicationId !== opened.publication.publicationId
+    || claim.publication.publicationDigest !== opened.publication.publicationDigest
+    || claim.publication.publicationBytesDigest !== opened.publicationBytesDigest
+    || claim.publication.publicationCommitSeq !== opened.publicationCommitSeq
+    || claim.head.headDigest !== opened.head.headDigest
+    || claim.head.headBytesDigest !== opened.headBytesDigest
+    || claim.head.headCommitSeq !== opened.headCommitSeq
+    || claim.sourceOccurrenceId !== opened.sourceOccurrenceId
+    || JSON.stringify(claim.renderedSubjects) !== JSON.stringify(opened.publication.manifest.renderedSubjects)
+    || claim.mountedAt < opened.publication.manifest.cutoff.knowledgeAt)) {
+    throw new Error("Cockpit V2 browser presentation claim does not match the exact opened publication");
+  }
+}
+
+export function parseCockpitV2BrowserPresentationClaim(
+  input: unknown,
+  opened?: CockpitV2Open,
+): CockpitV2BrowserPresentationClaim {
+  const claim = cockpitV2BrowserPresentationClaimSchema.parse(input);
+  assertBrowserPresentationClaim(claim, opened);
+  return claim;
+}
+
+export function buildCockpitV2BrowserPresentationClaim(
+  openedInput: CockpitV2Open,
+  input: CockpitV2BrowserPresentationInput,
+): CockpitV2BrowserPresentationClaim {
+  const opened = parseCockpitV2Open(openedInput);
+  const unsealed = {
+    contract: "joshi.cockpit.v2.browser_presentation_claim" as const,
+    schemaVersion: 1 as const,
+    idempotencyKey: `browser-presentation:${input.browserPageId}:${input.presentationSeq}`,
+    clientPresentationId: input.clientPresentationId,
+    browserPageId: input.browserPageId,
+    presentationSeq: input.presentationSeq,
+    publication: {
+      publicationId: opened.publication.publicationId,
+      publicationDigest: opened.publication.publicationDigest,
+      publicationBytesDigest: opened.publicationBytesDigest,
+      publicationCommitSeq: opened.publicationCommitSeq,
+    },
+    head: {
+      headDigest: opened.head.headDigest,
+      headBytesDigest: opened.headBytesDigest,
+      headCommitSeq: opened.headCommitSeq,
+    },
+    sourceOccurrenceId: opened.sourceOccurrenceId,
+    renderedSubjects: [...opened.publication.manifest.renderedSubjects],
+    renderedSubjectCount: String(opened.publication.manifest.renderedSubjects.length),
+    mountedAt: input.mountedAt,
+    clientClockId: input.clientClockId,
+    monotonicNs: input.monotonicNs,
+    viewport: input.viewport,
+    documentVisibility: input.documentVisibility,
+    documentHasFocus: input.documentHasFocus,
+    authority: "read_only_no_execution" as const,
+    ceiling: "browser_reported_not_pixel_verified" as const,
+    claimDigest: zeroDigest,
+  };
+  const claim: CockpitV2BrowserPresentationClaim = {
+    ...unsealed,
+    claimDigest: digestCockpitV2BrowserPresentationClaim(unsealed),
+  };
+  return parseCockpitV2BrowserPresentationClaim(claim, opened);
 }

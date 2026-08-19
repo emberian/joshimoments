@@ -3,9 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildCockpitV2BrowserPresentationClaim,
   cockpitV2HeadSchema,
   cockpitV2ManifestSchema,
   digestCanonicalJson,
+  digestCockpitV2BrowserPresentationClaim,
+  parseCockpitV2BrowserPresentationClaim,
   parseCockpitV2Index,
   parseCockpitV2Open,
   type CockpitV2Index,
@@ -17,6 +20,11 @@ const fixture = (name: string): unknown => JSON.parse(readFileSync(
   resolve(process.cwd(), `../../fixtures/publication/${name}`),
   "utf8",
 ));
+
+const fixtureText = (name: string): string => readFileSync(
+  resolve(process.cwd(), `../../fixtures/publication/${name}`),
+  "utf8",
+);
 
 function semanticMaterial(manifest: CockpitV2Manifest) {
   return {
@@ -182,5 +190,59 @@ describe("Cockpit V2 exact browser contract", () => {
     const second = { ...index.items[0]!, publicationId: "cockpit-v2-a", headCommitSeq: "12" };
     const reversed = { ...index, items: [index.items[0]!, second] };
     expect(() => parseCockpitV2Index(reversed)).toThrow(/durable head order/i);
+  });
+
+  it("binds a browser-reported mount to the exact headed publication without claiming pixels", () => {
+    const { opened } = seal(fixture("cockpit_v2_manifest_v1.json"));
+    const claim = buildCockpitV2BrowserPresentationClaim(opened, {
+      clientPresentationId: "browser-presentation-1",
+      browserPageId: "browser-page-1",
+      presentationSeq: "1",
+      mountedAt: "2026-08-18T12:01:00.000000Z",
+      clientClockId: "browser-page-1-performance",
+      monotonicNs: "1234567000",
+      viewport: {
+        widthCssPx: "1280",
+        heightCssPx: "800",
+        devicePixelRatioMilli: "2000",
+      },
+      documentVisibility: "visible",
+      documentHasFocus: true,
+    });
+    expect(claim.ceiling).toBe("browser_reported_not_pixel_verified");
+    expect(claim.renderedSubjects).toEqual(opened.publication.manifest.renderedSubjects);
+    expect(parseCockpitV2BrowserPresentationClaim(claim, opened)).toEqual(claim);
+    const frozenText = fixtureText("cockpit_v2_browser_presentation_claim_v1.json");
+    expect(frozenText.endsWith("\n")).toBe(true);
+    expect(JSON.stringify(claim)).toBe(frozenText.slice(0, -1));
+    expect(parseCockpitV2BrowserPresentationClaim(JSON.parse(frozenText), opened)).toEqual(claim);
+    expect(claim.claimDigest).toBe("sha256:b3be9ee0b5097d2fb15d1718aca21d3d76b8d6e09860d887e0241bbf2de50a26");
+
+    expect(() => parseCockpitV2BrowserPresentationClaim({
+      ...claim,
+      head: { ...claim.head, headCommitSeq: "13" },
+    }, opened)).toThrow(/digest mismatch/i);
+    expect(() => parseCockpitV2BrowserPresentationClaim({
+      ...claim,
+      renderedSubjects: ["mint-2"],
+      renderedSubjectCount: "1",
+    }, opened)).toThrow(/digest mismatch/i);
+    expect(() => parseCockpitV2BrowserPresentationClaim({
+      ...claim,
+      viewport: { ...claim.viewport, widthCssPx: "32769" },
+    }, opened)).toThrow(/bounded contract/i);
+    const nonmonotonic = {
+      ...claim,
+      head: { ...claim.head, headCommitSeq: claim.publication.publicationCommitSeq },
+    };
+    nonmonotonic.claimDigest = digestCockpitV2BrowserPresentationClaim(nonmonotonic);
+    expect(() => parseCockpitV2BrowserPresentationClaim(nonmonotonic)).toThrow(/head commit/i);
+    const wrongKey = {
+      ...claim,
+      idempotencyKey: "browser-presentation:other-page:1",
+    };
+    wrongKey.claimDigest = digestCockpitV2BrowserPresentationClaim(wrongKey);
+    expect(() => parseCockpitV2BrowserPresentationClaim(wrongKey)).toThrow(/idempotency key/i);
+    expect(() => parseCockpitV2BrowserPresentationClaim({ ...claim, extra: true }, opened)).toThrow();
   });
 });

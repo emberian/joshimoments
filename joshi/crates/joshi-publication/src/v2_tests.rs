@@ -9,6 +9,8 @@ const V2_FIXTURE: &str = include_str!("../../../fixtures/publication/cockpit_v2_
 const V2_RESOLVED_INPUT_FIXTURE: &str =
     include_str!("../../../fixtures/publication/cockpit_v2_resolved_source_facts_input_v1.json");
 const V2_HEAD_FIXTURE: &str = include_str!("../../../fixtures/publication/cockpit_v2_head_v1.json");
+const V2_BROWSER_PRESENTATION_FIXTURE: &str =
+    include_str!("../../../fixtures/publication/cockpit_v2_browser_presentation_claim_v1.json");
 
 fn s(value: &str) -> StableString {
     StableString::new(value).unwrap()
@@ -160,6 +162,67 @@ fn manifest() -> CockpitV2ManifestV1 {
     value
 }
 
+fn headed_publication() -> (CockpitV2PublicationV1, CockpitV2HeadV1, Vec<u8>, Vec<u8>) {
+    let prepared = prepare_cockpit_v2(manifest()).unwrap();
+    let publication = finalize_cockpit_v2(
+        &prepared,
+        CockpitPublicationId::new("cockpit-v2-g0-1").unwrap(),
+        CommitSeq::new(11),
+        None,
+        None,
+    )
+    .unwrap();
+    let head = CockpitV2HeadV1::from_publication(&publication).unwrap();
+    let publication_bytes = publication.canonical_bytes().unwrap();
+    let head_bytes = head.canonical_bytes().unwrap();
+    (publication, head, publication_bytes, head_bytes)
+}
+
+fn browser_presentation_claim(
+    publication: &CockpitV2PublicationV1,
+    head: &CockpitV2HeadV1,
+    publication_bytes: &[u8],
+    head_bytes: &[u8],
+) -> CockpitV2BrowserPresentationClaimV1 {
+    let mut claim = CockpitV2BrowserPresentationClaimV1 {
+        contract: s(COCKPIT_V2_BROWSER_PRESENTATION_CLAIM_CONTRACT),
+        schema_version: COCKPIT_V2_BROWSER_PRESENTATION_SCHEMA_VERSION,
+        idempotency_key: s("browser-presentation:browser-page-1:1"),
+        client_presentation_id: s("browser-presentation-1"),
+        browser_page_id: s("browser-page-1"),
+        presentation_seq: WireU64::new(1),
+        publication: CockpitV2PresentedPublicationRefV1 {
+            publication_id: publication.publication_id.clone(),
+            publication_digest: publication.publication_digest.clone(),
+            publication_bytes_digest: sha256_digest(publication_bytes),
+            publication_commit_seq: CommitSeq::new(11),
+        },
+        head: CockpitV2PresentedHeadRefV1 {
+            head_digest: head.head_digest.clone(),
+            head_bytes_digest: sha256_digest(head_bytes),
+            head_commit_seq: CommitSeq::new(12),
+        },
+        source_occurrence_id: s("source-occurrence-vector-1"),
+        rendered_subjects: publication.manifest.rendered_subjects.clone(),
+        rendered_subject_count: WireU64::new(1),
+        mounted_at: t("2026-08-18T12:01:00.000000Z"),
+        client_clock_id: s("browser-page-1-performance"),
+        monotonic_ns: WireU64::new(1_234_567_000),
+        viewport: CockpitV2BrowserViewportV1 {
+            width_css_px: WireU64::new(1_280),
+            height_css_px: WireU64::new(800),
+            device_pixel_ratio_milli: WireU64::new(2_000),
+        },
+        document_visibility: CockpitV2DocumentVisibility::Visible,
+        document_has_focus: true,
+        authority: ProjectionAuthority::ReadOnlyNoExecution,
+        ceiling: CockpitV2BrowserPresentationCeiling::BrowserReportedNotPixelVerified,
+        claim_digest: d('0'),
+    };
+    claim.claim_digest = claim.computed_digest().unwrap();
+    claim
+}
+
 #[test]
 fn v2_semantic_and_container_digests_are_distinct_and_round_trip() {
     let value = manifest();
@@ -187,6 +250,165 @@ fn v2_semantic_and_container_digests_are_distinct_and_round_trip() {
         cutoff: value.cutoff,
     };
     query.validate_loaded(&publication).unwrap();
+}
+
+#[test]
+fn browser_presentation_claim_binds_exact_headed_bytes_and_store_commits() {
+    let (publication, head, publication_bytes, head_bytes) = headed_publication();
+    let claim = browser_presentation_claim(&publication, &head, &publication_bytes, &head_bytes);
+    let source_occurrence = s("source-occurrence-vector-1");
+    claim
+        .validate_against(
+            &publication,
+            &publication_bytes,
+            CommitSeq::new(11),
+            &head,
+            &head_bytes,
+            CommitSeq::new(12),
+            &source_occurrence,
+        )
+        .unwrap();
+    let bytes = claim.canonical_bytes().unwrap();
+    let fixture_bytes = V2_BROWSER_PRESENTATION_FIXTURE
+        .strip_suffix('\n')
+        .unwrap()
+        .as_bytes();
+    assert_eq!(bytes, fixture_bytes);
+    assert_eq!(
+        claim.claim_digest.as_str(),
+        "sha256:b3be9ee0b5097d2fb15d1718aca21d3d76b8d6e09860d887e0241bbf2de50a26"
+    );
+    assert_eq!(
+        parse_cockpit_v2_browser_presentation_claim(&bytes).unwrap(),
+        claim
+    );
+
+    let mut padded_publication = publication_bytes.clone();
+    padded_publication.push(b' ');
+    assert!(
+        claim
+            .validate_against(
+                &publication,
+                &padded_publication,
+                CommitSeq::new(11),
+                &head,
+                &head_bytes,
+                CommitSeq::new(12),
+                &source_occurrence,
+            )
+            .is_err()
+    );
+
+    let mut backdated_body = claim.clone();
+    backdated_body.publication.publication_commit_seq = CommitSeq::new(10);
+    backdated_body.claim_digest = backdated_body.computed_digest().unwrap();
+    assert!(
+        backdated_body
+            .validate_against(
+                &publication,
+                &publication_bytes,
+                CommitSeq::new(10),
+                &head,
+                &head_bytes,
+                CommitSeq::new(12),
+                &source_occurrence,
+            )
+            .is_err()
+    );
+    assert!(
+        claim
+            .validate_against(
+                &publication,
+                &publication_bytes,
+                CommitSeq::new(11),
+                &head,
+                &head_bytes,
+                CommitSeq::new(13),
+                &source_occurrence,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn browser_presentation_claim_refuses_subject_clock_viewport_and_json_laundering() {
+    let (publication, head, publication_bytes, head_bytes) = headed_publication();
+    let source_occurrence = s("source-occurrence-vector-1");
+    let claim = browser_presentation_claim(&publication, &head, &publication_bytes, &head_bytes);
+
+    let mut wrong_subject = claim.clone();
+    wrong_subject.rendered_subjects = vec![s("mint-2")];
+    wrong_subject.claim_digest = wrong_subject.computed_digest().unwrap();
+    assert!(
+        wrong_subject
+            .validate_against(
+                &publication,
+                &publication_bytes,
+                CommitSeq::new(11),
+                &head,
+                &head_bytes,
+                CommitSeq::new(12),
+                &source_occurrence,
+            )
+            .is_err()
+    );
+
+    let mut before_knowledge = claim.clone();
+    before_knowledge.mounted_at = t("2026-08-18T11:59:59.999999Z");
+    before_knowledge.claim_digest = before_knowledge.computed_digest().unwrap();
+    assert!(
+        before_knowledge
+            .validate_against(
+                &publication,
+                &publication_bytes,
+                CommitSeq::new(11),
+                &head,
+                &head_bytes,
+                CommitSeq::new(12),
+                &source_occurrence,
+            )
+            .is_err()
+    );
+
+    let mut unbounded = claim.clone();
+    unbounded.viewport.width_css_px = WireU64::new(32_769);
+    unbounded.claim_digest = unbounded.computed_digest().unwrap();
+    assert!(matches!(
+        unbounded.validate(),
+        Err(PublicationError::CockpitV2Presentation)
+    ));
+
+    let mut forged_focus = claim.clone();
+    forged_focus.document_has_focus = false;
+    assert!(matches!(
+        forged_focus.validate(),
+        Err(PublicationError::DigestMismatch { .. })
+    ));
+
+    let mut nonmonotonic_commits = claim.clone();
+    nonmonotonic_commits.head.head_commit_seq = CommitSeq::new(11);
+    nonmonotonic_commits.claim_digest = nonmonotonic_commits.computed_digest().unwrap();
+    assert!(matches!(
+        nonmonotonic_commits.validate(),
+        Err(PublicationError::CockpitV2Contract)
+    ));
+
+    let mut wrong_idempotency_key = claim.clone();
+    wrong_idempotency_key.idempotency_key = s("browser-presentation:other-page:1");
+    wrong_idempotency_key.claim_digest = wrong_idempotency_key.computed_digest().unwrap();
+    assert!(matches!(
+        wrong_idempotency_key.validate(),
+        Err(PublicationError::CockpitV2Presentation)
+    ));
+
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&claim.canonical_bytes().unwrap()).unwrap();
+    json.as_object_mut()
+        .unwrap()
+        .insert("extra".into(), true.into());
+    assert!(
+        parse_cockpit_v2_browser_presentation_claim(&serde_json::to_vec(&json).unwrap()).is_err()
+    );
 }
 
 #[test]
