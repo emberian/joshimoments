@@ -1,8 +1,36 @@
-//! Sole-store durability and one-shot claiming for an inert Wave 5 C1 activation.
+//! Sole-store durability and per-activation one-shot claiming for an inert Wave 5 C1 activation.
 //!
 //! Parsing an activation is deliberately not enough to reach a future transport.  This module
 //! retains both exact documents, revalidates their complete closure at each durable boundary, and
 //! returns an unconstructable, non-serializable capability only after an append-only claim commits.
+//!
+//! # What is capped here, and what is not
+//!
+//! Capped durably by this module and migration 0023:
+//!
+//! * **One claim per activation.** `wave5_c1_activation_claim_v1.activation_id` is the primary
+//!   key, [`SqliteStore::claim_wave5_c1_activation_v1`] refuses an activation that already carries
+//!   a claim row, and `BEFORE UPDATE`/`BEFORE DELETE` triggers refuse to rewrite or remove one.
+//! * **One activation per exact document.** `activation_sha256` and `exact_plan_sha256` are each
+//!   `UNIQUE`, so a byte-identical activation body or final plan cannot be activated a second
+//!   time, and `created_commit_seq` is `UNIQUE` against the maintenance commit ledger.
+//!
+//! **Not capped here, and deliberately not: the total number of C1 claims a catalog can produce.**
+//! Activation uniqueness is over *plan bytes*, and a final plan embeds the run identifier together
+//! with that run's registration digest. `commit_wave5_run_registration_v1` carries no singleton
+//! guard, so an operator may register a second run — a fresh `run_registration_id` whose
+//! configuration, accounting, privacy, and surface documents are byte-identical to the first —
+//! bind the same plan template to it, and obtain different final-plan bytes, a distinct activation
+//! identity, and a second burnable claim for the same wallet, the same template, and the same
+//! budget. Nothing in this module counts claims per wallet, per template, per budget, or per
+//! catalog.
+//!
+//! So "one-shot" in this module means *one claim per activation*. It is not a global bound on how
+//! many bounded reads may ever occur, and this module must not be cited as one. Such a bound has
+//! to be enforced by the layer a claim must pass through to become a request — the durable
+//! supervisor journal that gates provider I/O — and the store does not implement it. While no
+//! transport consumes a claim this remains a scope statement about the documentation; it becomes
+//! an economic one the moment a transport does.
 
 use crate::{IdempotencyStatus, Result, SqliteStore, StoreError, Wave5CommitContext};
 use joshi_domain::{CommitSeq, StableString, ValueDigest};
@@ -68,11 +96,17 @@ pub struct Wave5C1ActivationClaimReceipt {
     pub claim_commit_digest: ValueDigest,
 }
 
-/// In-process result of a committed one-shot claim.
+/// In-process result of a committed claim, which burns exactly one activation.
 ///
 /// Its fields are private, it has no public constructor, and it implements neither `Serialize`
 /// nor `Deserialize`. A future supervised runtime can inspect exact bounded inputs through these
 /// accessors, but a receipt, identifier, or deserialized data can never manufacture this value.
+/// Those absences are load-bearing and are held in place by the compile-time guards in this
+/// module's test module rather than by review alone.
+///
+/// Holding this value means one specific activation was consumed. It does not mean this is the
+/// only C1 claim the catalog has issued or will issue; see the module documentation for what the
+/// store does and does not cap.
 #[must_use]
 pub struct ClaimedWave5C1Activation {
     activation: Wave5C1ActivationV1,
@@ -356,12 +390,16 @@ impl SqliteStore {
         Ok(Some(stored))
     }
 
-    /// Atomically burns one durable activation and returns the sole opaque in-process capability.
+    /// Atomically burns one durable activation and returns the only opaque in-process capability
+    /// that activation will ever yield.
     ///
     /// The claim row commits before this function returns, so a process crash before any future
-    /// provider I/O leaves the activation consumed rather than reusable. The installation value
+    /// provider I/O leaves that activation consumed rather than reusable. The installation value
     /// is exact-bound data, not authentication; a future supervisor entry point must source it
     /// from the durable journal before consuming the returned capability.
+    ///
+    /// Scope: the burn is per activation. This method places no bound on how many activations a
+    /// catalog may hold or how many claims it may issue in total — see the module documentation.
     ///
     /// # Errors
     ///
@@ -817,4 +855,62 @@ fn as_u64(value: i64, field: &'static str) -> Result<u64> {
         field,
         value: value.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClaimedWave5C1Activation;
+    use serde::{Serialize, de::DeserializeOwned};
+
+    /// Compile-time guard against [`ClaimedWave5C1Activation`] ever gaining `Clone`,
+    /// `Serialize`, `Deserialize`, or `Default`.
+    ///
+    /// One claim per activation is enforced durably by the claim table's primary key and its
+    /// append-only triggers. In process, the matching property — that a holder cannot turn one
+    /// consumed activation into two usable capabilities — rests on this type's private fields, its
+    /// absent public constructor, and the *absence* of exactly those four derives. An absence has
+    /// no ordinary test: a later lane could add `#[derive(Clone)]` and every existing test in this
+    /// workspace would still pass, with nothing in the diff to flag.
+    ///
+    /// Each guard pairs a blanket implementation of a private local trait over the unwanted bound
+    /// with a concrete implementation of the same trait for this type. While the type does not
+    /// satisfy the bound the two implementations are disjoint and this module compiles. The moment
+    /// it does satisfy the bound they overlap and rustc refuses the crate with
+    /// `E0119: conflicting implementations of trait ...`, naming the guard trait, so the build
+    /// failure points at the invariant instead of at an unexplained trait clash.
+    ///
+    /// The `Deserialize` guard is written over `DeserializeOwned`, which is what a `derive` on
+    /// this owned-field type would produce; a hand-written borrowing `Deserialize<'de>` impl would
+    /// slip past it.
+    ///
+    /// These are guards, not proofs of unforgeability: they say nothing about `unsafe`
+    /// transmutation (this workspace forbids `unsafe_code`), about a future inherent `fn clone`
+    /// that is not the `Clone` trait, or about any field accessor a later lane might add.
+    const _CLAIM_STAYS_UNDUPLICABLE: () = {
+        #[allow(dead_code)]
+        trait ClaimedActivationMustNotDeriveClone {}
+        impl<T: Clone> ClaimedActivationMustNotDeriveClone for T {}
+        impl ClaimedActivationMustNotDeriveClone for ClaimedWave5C1Activation {}
+
+        #[allow(dead_code)]
+        trait ClaimedActivationMustNotDeriveSerialize {}
+        impl<T: Serialize> ClaimedActivationMustNotDeriveSerialize for T {}
+        impl ClaimedActivationMustNotDeriveSerialize for ClaimedWave5C1Activation {}
+
+        #[allow(dead_code)]
+        trait ClaimedActivationMustNotDeriveDeserialize {}
+        impl<T: DeserializeOwned> ClaimedActivationMustNotDeriveDeserialize for T {}
+        impl ClaimedActivationMustNotDeriveDeserialize for ClaimedWave5C1Activation {}
+
+        #[allow(dead_code)]
+        trait ClaimedActivationMustNotDeriveDefault {}
+        impl<T: Default> ClaimedActivationMustNotDeriveDefault for T {}
+        impl ClaimedActivationMustNotDeriveDefault for ClaimedWave5C1Activation {}
+    };
+
+    /// Force the guard block above to be evaluated by this crate's test build.
+    #[test]
+    fn claimed_activation_has_no_duplicating_derives() {
+        let () = _CLAIM_STAYS_UNDUPLICABLE;
+    }
 }

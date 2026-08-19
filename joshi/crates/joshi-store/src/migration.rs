@@ -128,6 +128,12 @@ const MIGRATIONS: &[Migration] = &[
 
 /// Linked runtime and active durability settings.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent SQLite pragma read back off the live connection; the \
+              lint's suggested remedies (a state machine, or two-variant enums) would obscure \
+              that one-to-one correspondence rather than clarify it"
+)]
 pub struct RuntimeStatus {
     /// Linked `SQLite` version.
     pub sqlite_version: String,
@@ -137,6 +143,14 @@ pub struct RuntimeStatus {
     pub journal_mode: String,
     /// Active synchronous level.
     pub synchronous: i64,
+    /// Whether the connection asked its VFS for the platform's strongest commit-sync primitive.
+    ///
+    /// This records the requested `fullfsync` pragma, not a proof that any particular syscall ran.
+    pub full_fsync: bool,
+    /// Whether that same request also covers WAL checkpoint syncs (`checkpoint_fullfsync`).
+    pub checkpoint_full_fsync: bool,
+    /// Whether triggers fire for rows deleted by `INSERT OR REPLACE` (`recursive_triggers`).
+    pub recursive_triggers: bool,
     /// Whether foreign keys are active.
     pub foreign_keys: bool,
     /// Catalog application identity.
@@ -166,7 +180,36 @@ pub(crate) fn assert_linked_runtime() -> Result<()> {
     Ok(())
 }
 
+/// Apply the single-writer durability and trigger-visibility contract, then read it back.
+///
+/// `synchronous=FULL` makes `SQLite` sync the WAL before a commit reports success, but the unix
+/// VFS issues a plain `fsync(2)` for that sync unless `fullfsync` is set. On Darwin `fsync(2)`
+/// returns once the data has reached the drive, not once the drive has flushed its own write
+/// cache. Without `fullfsync` a power loss between a claim commit and the next checkpoint can
+/// therefore drop the claim's WAL frame while the earlier activation frame is already on media,
+/// which would present a burned Wave 5 C1 activation as claimable again. `fullfsync` asks the VFS
+/// for `F_FULLFSYNC` instead, which is the same primitive `std::fs::File::sync_all` already uses
+/// for the supervisor journal on Apple targets, so the two layers stop disagreeing about what a
+/// successful sync means. `checkpoint_fullfsync` extends the request to the checkpoint syncs that
+/// move those frames into the main database file and then reset the WAL.
+///
+/// Stated honestly: these pragmas are a request to the VFS, not a durability proof. On platforms
+/// with no `F_FULLFSYNC` (Linux among them) `SQLite` still issues `fsync(2)`; even on Darwin the
+/// unix VFS falls back to `fsync(2)` whenever the `F_FULLFSYNC` `fcntl` fails, which it does on
+/// file systems that do not implement it; and no pragma can compel a drive that reports a flush it
+/// did not perform. What is verified here is only that the connection actually carries the
+/// requested settings: each one is queried back below, so a silently ignored or misspelled pragma
+/// fails the open instead of passing as durability.
+///
+/// `recursive_triggers` is enabled so the append-only `BEFORE DELETE` triggers also fire for rows
+/// removed by `INSERT OR REPLACE`; with the pragma off, `SQLite` performs those deletions without
+/// running delete triggers. No trigger body in `schema/migrations` issues `INSERT`, `UPDATE`,
+/// `DELETE`, or `REPLACE` — every one is a `SELECT ... RAISE(ABORT, ...)` guard — so enabling the
+/// pragma cannot introduce trigger recursion in this catalog.
 pub(crate) fn configure_writer(connection: &Connection) -> Result<()> {
+    connection.pragma_update(None, "fullfsync", "ON")?;
+    connection.pragma_update(None, "checkpoint_fullfsync", "ON")?;
+    connection.pragma_update(None, "recursive_triggers", "ON")?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
@@ -322,6 +365,14 @@ pub(crate) fn verify_runtime(
             expected: "2 (FULL)",
         });
     }
+    let full_fsync = read_flag(connection, "fullfsync")?;
+    let checkpoint_full_fsync = read_flag(connection, "checkpoint_fullfsync")?;
+    let recursive_triggers = read_flag(connection, "recursive_triggers")?;
+    if require_writer {
+        require_flag("fullfsync", full_fsync)?;
+        require_flag("checkpoint_fullfsync", checkpoint_full_fsync)?;
+        require_flag("recursive_triggers", recursive_triggers)?;
+    }
     let foreign_keys: i64 =
         connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     if foreign_keys != 1 {
@@ -345,10 +396,34 @@ pub(crate) fn verify_runtime(
         sqlite_version_number: rusqlite::version_number(),
         journal_mode,
         synchronous,
+        full_fsync,
+        checkpoint_full_fsync,
+        recursive_triggers,
         foreign_keys: true,
         application_id,
         user_version,
     })
+}
+
+/// Read one boolean pragma back from the live connection.
+///
+/// The readback is what makes the setting checkable: `SQLite` accepts an unknown pragma name
+/// silently, so only the queried value distinguishes a configured connection from a typo.
+fn read_flag(connection: &Connection, name: &'static str) -> Result<bool> {
+    let value: i64 = connection.pragma_query_value(None, name, |row| row.get(0))?;
+    Ok(value == 1)
+}
+
+fn require_flag(setting: &'static str, actual: bool) -> Result<()> {
+    if actual {
+        Ok(())
+    } else {
+        Err(StoreError::RuntimeSetting {
+            setting,
+            actual: i64::from(actual).to_string(),
+            expected: "1",
+        })
+    }
 }
 
 #[cfg(test)]
@@ -387,5 +462,165 @@ mod tests {
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)
             .expect_err("G0 migration cannot downgrade V23");
         assert!(matches!(error, StoreError::MigrationConflict { .. }));
+    }
+
+    /// A configured writer must actually carry the durability and trigger-visibility pragmas.
+    ///
+    /// Every value here is read back off the live connection rather than recomputed from the
+    /// constants written in `configure_writer`, so a pragma that `SQLite` ignored, that a later
+    /// statement reset, or whose name was misspelled fails this test.
+    #[test]
+    fn configured_writer_carries_full_fsync_and_recursive_triggers() {
+        let root = tempfile::tempdir().expect("temporary durability root");
+        let path = root.path().join("catalog.sqlite");
+        let connection = Connection::open(&path).expect("open catalog");
+        configure_writer(&connection).expect("configure writer");
+
+        let full_fsync: i64 = connection
+            .pragma_query_value(None, "fullfsync", |row| row.get(0))
+            .expect("query fullfsync back");
+        let checkpoint_full_fsync: i64 = connection
+            .pragma_query_value(None, "checkpoint_fullfsync", |row| row.get(0))
+            .expect("query checkpoint_fullfsync back");
+        let recursive_triggers: i64 = connection
+            .pragma_query_value(None, "recursive_triggers", |row| row.get(0))
+            .expect("query recursive_triggers back");
+        assert_eq!(
+            full_fsync, 1,
+            "writer must request F_FULLFSYNC commit syncs"
+        );
+        assert_eq!(
+            checkpoint_full_fsync, 1,
+            "writer must request F_FULLFSYNC checkpoint syncs"
+        );
+        assert_eq!(
+            recursive_triggers, 1,
+            "append-only delete triggers must fire for REPLACE-deleted rows"
+        );
+
+        let runtime = verify_runtime(&connection, true).expect("verified writer runtime");
+        assert!(runtime.full_fsync);
+        assert!(runtime.checkpoint_full_fsync);
+        assert!(runtime.recursive_triggers);
+
+        // Turning any one of them off must fail the writer contract rather than pass silently.
+        for setting in ["fullfsync", "checkpoint_fullfsync", "recursive_triggers"] {
+            connection
+                .pragma_update(None, setting, "OFF")
+                .expect("relax pragma for the negative case");
+            let error = verify_runtime(&connection, true)
+                .expect_err("a relaxed durability pragma must fail writer verification");
+            assert!(
+                matches!(error, StoreError::RuntimeSetting { setting: observed, .. } if observed == setting),
+                "expected a RuntimeSetting refusal naming {setting}, got {error:?}"
+            );
+            connection
+                .pragma_update(None, setting, "ON")
+                .expect("restore pragma");
+        }
+        verify_runtime(&connection, true).expect("restored writer runtime");
+    }
+
+    /// `recursive_triggers` is what makes a `BEFORE DELETE` guard cover `INSERT OR REPLACE`.
+    ///
+    /// This exercises the trigger shape migration 0023 uses for its append-only tables on a
+    /// throwaway table, in both pragma states, so the pragma choice rests on observed `SQLite`
+    /// behavior rather than on a reading of the documentation. It is a statement about that
+    /// trigger shape, not about the C1 tables: no C1 code path issues `REPLACE` today.
+    #[test]
+    fn replace_reaches_append_only_delete_triggers_only_with_recursive_triggers() {
+        let connection = Connection::open_in_memory().expect("scratch catalog");
+        connection
+            .execute_batch(
+                "CREATE TABLE append_only (id TEXT PRIMARY KEY, payload TEXT NOT NULL) STRICT;
+                 CREATE TRIGGER no_delete_append_only
+                 BEFORE DELETE ON append_only
+                 BEGIN SELECT RAISE(ABORT, 'append_only is append-only'); END;
+                 INSERT INTO append_only VALUES ('a','first');",
+            )
+            .expect("seed scratch append-only table");
+
+        connection
+            .pragma_update(None, "recursive_triggers", "OFF")
+            .expect("disable recursive triggers");
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO append_only VALUES ('a','overwritten')",
+                [],
+            )
+            .expect("without recursive_triggers, REPLACE deletes past the delete trigger");
+        let payload: String = connection
+            .query_row("SELECT payload FROM append_only WHERE id='a'", [], |row| {
+                row.get(0)
+            })
+            .expect("read scratch row");
+        assert_eq!(
+            payload, "overwritten",
+            "this is the gap: the append-only guard did not fire"
+        );
+
+        connection
+            .pragma_update(None, "recursive_triggers", "ON")
+            .expect("enable recursive triggers");
+        let refused = connection.execute(
+            "INSERT OR REPLACE INTO append_only VALUES ('a','again')",
+            [],
+        );
+        assert!(
+            refused.is_err(),
+            "with recursive_triggers the append-only delete guard aborts REPLACE"
+        );
+        let payload: String = connection
+            .query_row("SELECT payload FROM append_only WHERE id='a'", [], |row| {
+                row.get(0)
+            })
+            .expect("read scratch row");
+        assert_eq!(
+            payload, "overwritten",
+            "the refused REPLACE changed nothing"
+        );
+    }
+
+    /// No trigger in the compiled migration ledger issues DML, so `recursive_triggers` cannot
+    /// make any trigger in this catalog fire another trigger.
+    ///
+    /// This is a textual check over the exact SQL this binary compiles in, not a proof about
+    /// the trigger semantics of `SQLite`. It states the premise the `recursive_triggers` decision
+    /// rests on and fails if a later migration breaks it. The scanned region runs from a trigger's
+    /// `BEGIN` to the start of the next top-level `CREATE`, which deliberately over-approximates
+    /// the body rather than stopping at the first `END;` — trigger bodies here contain `CASE ...
+    /// END` and a first-`END` scan would read only part of them.
+    #[test]
+    fn no_compiled_trigger_body_issues_dml() {
+        let mut triggers = 0_usize;
+        for migration in MIGRATIONS {
+            let lowered = migration.sql.to_ascii_lowercase();
+            let mut cursor = 0_usize;
+            while let Some(found) = lowered[cursor..].find("create trigger") {
+                let start = cursor + found;
+                let end = lowered[start + 1..]
+                    .find("\ncreate ")
+                    .map_or(lowered.len(), |offset| start + 1 + offset);
+                let region = &lowered[start..end];
+                let body = region
+                    .find("begin")
+                    .map_or(region, |offset| &region[offset..]);
+                for statement in ["insert", "update", "delete", "replace"] {
+                    assert!(
+                        !body.contains(statement),
+                        "a trigger body in {} mentions {statement}; recursive_triggers could let \
+                         it fire another trigger, so re-check it before trusting that pragma",
+                        migration.name
+                    );
+                }
+                triggers += 1;
+                cursor = end;
+            }
+        }
+        assert!(
+            triggers >= 271,
+            "scanned only {triggers} triggers; the ledger had 271 when this scan was written, so \
+             the scanner stopped matching rather than the triggers disappearing"
+        );
     }
 }
