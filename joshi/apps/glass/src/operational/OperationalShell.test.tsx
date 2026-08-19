@@ -11,7 +11,6 @@ import {
   MemoryOnlyPairingSession,
   OPERATIONAL_SESSION_SCOPES,
   canonicalPairingSessionId,
-  type OperationalSessionScope,
 } from "../security/pairing";
 import { CockpitPublicationDataSource } from "./client";
 import { fixtureCockpitIndex, fixtureCockpitLaunch, fixtureSessionLaunch } from "./fixtures";
@@ -19,10 +18,7 @@ import { OperationalGlassShell, type OperationalClient, type OperationalRuntime 
 
 const PAIRING_CODE = "JOSHI-040G-7080-XPTK-366S-YS65-1JRN-4N5D-NJ7N";
 
-function fixtureClient(
-  session: MemoryOnlyPairingSession,
-  scopes: readonly OperationalSessionScope[] = OPERATIONAL_SESSION_SCOPES,
-) {
+function fixtureClient(session: MemoryOnlyPairingSession) {
   let exchanges = 0;
   const sessionId = canonicalPairingSessionId(window.location.origin, "1", "1");
   const client: OperationalClient = {
@@ -34,7 +30,7 @@ function fixtureClient(
         origin: window.location.origin,
         epoch: "1",
         expiresAt: "2099-08-18T00:00:00.000000Z",
-        scopes,
+        scopes: OPERATIONAL_SESSION_SCOPES,
         authority: "read_only_no_execution",
       });
       return {
@@ -44,7 +40,7 @@ function fixtureClient(
         origin: window.location.origin,
         epoch: "1",
         expiresAt: "2099-08-18T00:00:00.000000Z",
-        scopes: [...scopes],
+        scopes: [...OPERATIONAL_SESSION_SCOPES],
         authority: "read_only_no_execution" as const,
       };
     },
@@ -63,28 +59,6 @@ describe("operational Glass shell", () => {
     expect(screen.getByRole("heading", { name: /live pairing is unavailable/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/one-time pairing code/i)).not.toBeInTheDocument();
     expect(screen.getByText(/will not collect a one-time code/i)).toBeInTheDocument();
-  });
-
-  it("shows the exact pairing gate only under the explicit production opt-in", () => {
-    render(<OperationalGlassShell ordinaryPairingEnabled session={new MemoryOnlyPairingSession()} />);
-    expect(screen.getByRole("heading", { name: /pair this glass session/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/one-time pairing code/i)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: /live pairing is unavailable/i })).not.toBeInTheDocument();
-  });
-
-  it("refuses the full operational surface when Core grants only read and replay", async () => {
-    const session = new MemoryOnlyPairingSession();
-    const user = userEvent.setup();
-    render(<OperationalGlassShell
-      ordinaryPairingEnabled
-      session={session}
-      client={fixtureClient(session, ["cockpit_read", "replay_read"])}
-    />);
-    await user.type(screen.getByLabelText(/one-time pairing code/i), PAIRING_CODE);
-    await user.click(screen.getByRole("button", { name: /pair locally/i }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/requires explicit operator and presentation evidence-write scopes/i);
-    expect(screen.queryByRole("heading", { name: /choose an immutable cockpit publication/i })).not.toBeInTheDocument();
-    expect(session.paired()).toBe(false);
   });
 
   it("is accessible before pairing, clears the one-time code, and never auto-opens market information", async () => {

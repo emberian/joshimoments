@@ -15,9 +15,11 @@ import type { CockpitV2Index, CockpitV2IndexEntry, CockpitV2Open } from "./cockp
 export function CockpitV2InspectorShell({
   session = glassPairingSession,
   client,
+  sourceKind = "offline_fixture",
 }: {
   session?: MemoryOnlyPairingSession;
   client?: CockpitV2InspectorTransport;
+  sourceKind?: "offline_fixture" | "local_store";
 }) {
   const resolvedClient = useMemo(() => client ?? new SameOriginCockpitV2InspectorClient(session), [client, session]);
   const [sessionVersion, setSessionVersion] = useState(0);
@@ -26,6 +28,7 @@ export function CockpitV2InspectorShell({
   const [opened, setOpened] = useState<CockpitV2Open | null>(null);
   const [status, setStatus] = useState<"unpaired" | "pairing" | "loading" | "selecting" | "opening" | "open">("unpaired");
   const [error, setError] = useState<string | null>(null);
+  const fixtureOnly = sourceKind === "offline_fixture";
 
   useEffect(() => session.subscribe(() => setSessionVersion((value) => value + 1)), [session]);
   const paired = session.paired();
@@ -102,9 +105,9 @@ export function CockpitV2InspectorShell({
       <main className="operational-gate">
         <section className="operational-card" aria-labelledby="v2-pairing-title">
           <div className="operational-icon" aria-hidden="true"><LockKeyhole /></div>
-          <p className="eyebrow">Offline G0 inspection</p>
+          <p className="eyebrow">{fixtureOnly ? "Offline G0 inspection" : "Local store inspection"}</p>
           <h1 id="v2-pairing-title">Pair this read-only inspector</h1>
-          <p id="v2-pairing-help">Enter the one-time Cockpit-read code printed by the explicit local fixture launcher. The capability remains only in this page’s memory and disappears on reload.</p>
+          <p id="v2-pairing-help">Enter the one-time Cockpit-read code printed by the {fixtureOnly ? "explicit local fixture launcher" : "opt-in local Core server"}. The capability remains only in this page’s memory and disappears on reload.</p>
           <form onSubmit={(event) => void pair(event)} className="pairing-form">
             <label htmlFor="v2-pairing-code">One-time pairing code</label>
             <input
@@ -124,7 +127,7 @@ export function CockpitV2InspectorShell({
               <KeyRound aria-hidden="true" /> {status === "pairing" ? "Pairing…" : "Pair locally"}
             </button>
           </form>
-          <p className="safety-ceiling"><ShieldCheck aria-hidden="true" /> Offline fixture inspection only. No operator command, presentation witness, signer, wallet, transaction builder, provider I/O, or trading authority is mounted.</p>
+          <p className="safety-ceiling"><ShieldCheck aria-hidden="true" /> {fixtureOnly ? "Offline fixture" : "Local store"} inspection only. No operator command, presentation witness, signer, wallet, transaction builder, provider I/O, or trading authority is mounted.</p>
           {error && <p role="alert" className="operational-error">{error}</p>}
         </section>
       </main>
@@ -139,7 +142,7 @@ export function CockpitV2InspectorShell({
         <section className="operational-card wide" aria-labelledby="v2-open-title">
           <p className="eyebrow">Exact Cockpit V2 · unverified semantic ceiling</p>
           <h1 id="v2-open-title">{opened.publication.publicationId}</h1>
-          <p>The browser independently reparsed the strict body and head, recomputed their semantic and exact-byte digests, and closed the selected durable index entry. This is descriptive offline-fixture evidence, not a recommendation or current market view.</p>
+          <p>The browser independently reparsed the strict body and head, recomputed their semantic and exact-byte digests, and closed the selected durable index entry. This is descriptive {fixtureOnly ? "offline-fixture" : "local-store"} evidence, not a recommendation, quote, or live-data qualification.</p>
           <dl className="session-summary">
             <div><dt>Publication commit</dt><dd>{opened.publicationCommitSeq}</dd></div>
             <div><dt>Head commit</dt><dd>{opened.headCommitSeq}</dd></div>
@@ -209,7 +212,7 @@ export function CockpitV2InspectorShell({
   return (
     <main className="operational-gate operational-selection">
       <section className="operational-card wide" aria-labelledby="v2-index-title">
-        <p className="eyebrow">Paired · Cockpit-read only · offline fixture</p>
+        <p className="eyebrow">Paired · Cockpit-read only · {fixtureOnly ? "offline fixture" : "local store"}</p>
         <h1 id="v2-index-title">Choose an exact Cockpit V2 head</h1>
         <p>The list is the complete bounded set rederived by the store. Nothing opens automatically, and no “latest” pointer is inferred.</p>
         <dl className="session-summary">
@@ -221,7 +224,7 @@ export function CockpitV2InspectorShell({
         {status === "loading" && <p role="status">Loading exact durable heads…</p>}
         {status === "opening" && <p role="status">Reparsing and recomputing the selected body/head…</p>}
         {index === null && <button type="button" className="primary-action" onClick={() => void loadIndex()} disabled={status === "loading"}>Load exact index</button>}
-        {index?.items.length === 0 && <p>No headed offline-fixture publications are available.</p>}
+        {index?.items.length === 0 && <p>No headed {fixtureOnly ? "offline-fixture" : "local-store"} publications are available.</p>}
         {index && index.items.length > 0 && (
           <ul className="publication-list" aria-label="Exact Cockpit V2 heads">
             {index.items.map((entry) => (

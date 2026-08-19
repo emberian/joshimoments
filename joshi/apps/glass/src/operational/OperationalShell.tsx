@@ -47,17 +47,15 @@ export function OperationalGlassShell({
   client,
   runtimeFactory,
   mode = "browse",
-  ordinaryPairingEnabled = false,
 }: {
   session?: MemoryOnlyPairingSession;
   client?: OperationalClient;
   runtimeFactory?: (client: OperationalClient, publication: CockpitLaunchEnvelopeV1, session: MemoryOnlyPairingSession) => OperationalRuntime;
   mode?: "browse" | "prospective";
-  ordinaryPairingEnabled?: boolean;
 }) {
-  // The production entrypoint opts in only through an explicit build flag paired with Core's
-  // explicit loopback mount. Tests may still inject the same exact client contract directly.
-  const ordinaryPairingRouteReviewed = ordinaryPairingEnabled || client !== undefined;
+  // Core does not yet mount the older full-Glass launch envelope. A supplied client is an
+  // integration/test seam; the production entrypoint passes none and remains honestly unavailable.
+  const ordinaryPairingRouteReviewed = client !== undefined;
   const resolvedClient = useMemo<OperationalClient>(() => client ?? new SameOriginOperationalClient(session), [client, session]);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [oneTimeCode, setOneTimeCode] = useState("");
@@ -123,11 +121,7 @@ export function OperationalGlassShell({
     setStatus("pairing");
     setError(null);
     try {
-      const pairedDescriptor = await resolvedClient.exchange(submittedCode);
-      if (!pairedDescriptor.scopes.includes("operator_evidence_write")
-        || !pairedDescriptor.scopes.includes("presentation_evidence_write")) {
-        throw new Error("Full operational Glass requires explicit operator and presentation evidence-write scopes. Restart local Core with --ordinary-pairing-evidence-write, or use the read-only inspector.");
-      }
+      await resolvedClient.exchange(submittedCode);
       if (mode === "prospective") await loadProspectiveSession();
       else await loadIndex();
     } catch (cause) {

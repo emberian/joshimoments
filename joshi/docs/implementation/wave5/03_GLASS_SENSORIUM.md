@@ -142,30 +142,28 @@ the normal pair may be selected explicitly on both sides:
 ```text
 # once: create the unrelated legacy route guard as an owner-only local file
 umask 077
-openssl rand -hex 32 > /tmp/joshi-core-legacy-token
+openssl rand -hex -out /tmp/joshi-core-legacy-token 32
 
 # terminal 1
 cargo run --locked --offline -p joshi-core -- serve \
   --state /tmp/joshi-local-core \
   --companion-installation-id local-glass \
   --pairing-token-file /tmp/joshi-core-legacy-token \
-  --ordinary-pairing-origin http://127.0.0.1:4173 \
-  --ordinary-pairing-evidence-write
+  --ordinary-pairing-origin http://127.0.0.1:4173
 
 # terminal 2
 cd apps/glass
-npm run dev:paired
+npm run dev:paired-inspect
 ```
 
 Core prints one short-lived code only after the loopback listener binds. Glass consumes it once,
-keeps the resulting `jpc1_` capability only in page memory, lists immutable publication IDs, and
-opens only an explicitly selected publication. The full operational shell requires both operator
-and presentation evidence-write scopes because it stages presentation evidence and exposes
-evidence controls. If Core grants only its default read/replay scopes, Glass clears the transient
-session and refuses before listing or opening; the separate G0 inspector is the read-only path.
-Neither side has a signing, wallet, transaction, execution, or provider-query capability. This
-opt-in is a locally testable mount, not an attached-browser, accessibility, daily-use, or live-data
-qualification.
+keeps the resulting `jpc1_` capability only in page memory, lists exact Cockpit V2 heads, and opens
+only an explicitly selected body/head. This normal-server mode deliberately reuses the strict
+read-only V2 inspector. The full operational Glass remains fail closed because its older launch
+envelope is not the mounted V2 wire, and no reviewed V2-to-scene/presentation adapter exists.
+Neither side has a signing, wallet, transaction, execution, evidence-write, or provider-query
+capability in this path. This opt-in is a locally testable read-only mount, not an attached-browser,
+accessibility, daily-use, or live-data qualification.
 
 ## Verification
 
@@ -177,8 +175,8 @@ npm test -- --run
 npm run build
 ```
 
-Current result: TypeScript passed, 23 test files / 157 tests passed, the default production Vite
-build passed, and the explicit inspector build passed. The default build reports one non-fatal
+Current result: TypeScript passed, 23 test files / 158 tests passed, the default production Vite
+build passed, and the explicit normal-server inspector build passed. The default build reports one non-fatal
 main-chunk size warning (>500 KiB); code splitting remains a performance follow-up rather than an
 authority or correctness claim.
 
@@ -186,6 +184,12 @@ A real local smoke also ran through the Vite proxy and Core listener: one-time e
 only `cockpit_read`, the exact index returned one head with two eligible subjects/two facts/zero
 gaps, and explicit-ID open returned the same source occurrence with body/head store commits 25/26.
 The capability value was not printed. This checks the loopback transport/proxy, not visual UI.
+
+A second smoke exercised normal `serve` through that same Vite proxy: the exchange returned only
+`cockpit_read`/`replay_read`, the strict V2 index returned zero heads for the fresh empty store, code
+reuse returned 401, and the obsolete `/cockpit/publications` path returned 404. That last refusal
+is a regression guard: normal Glass must not mistake its older launch-envelope contract for the
+mounted V2 wire.
 
 Attached-browser QA: **not run**. The required browser workflow was attempted again after a real
 local Core fixture launcher and inspector Vite server both started successfully, but no in-app or

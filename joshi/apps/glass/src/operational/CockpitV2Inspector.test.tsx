@@ -100,6 +100,21 @@ const opened: CockpitV2Open = {
 };
 
 describe("Cockpit V2 inspector shell", () => {
+  it("labels the normal-server opt-in as local-store inspection without enabling evidence controls", () => {
+    render(<CockpitV2InspectorShell
+      sourceKind="local_store"
+      session={new MemoryOnlyPairingSession()}
+      client={{
+        exchange: async () => { throw new Error("not exercised"); },
+        list: async () => index,
+        open: async () => opened,
+      }}
+    />);
+    expect(screen.getByText("Local store inspection", { selector: ".eyebrow" })).toBeInTheDocument();
+    expect(screen.getByText(/opt-in local core server/i)).toBeInTheDocument();
+    expect(screen.getByText(/no operator command, presentation witness, signer, wallet/i)).toBeInTheDocument();
+  });
+
   it("pairs explicitly, selects one exact head, and renders only descriptive fixture evidence", async () => {
     const session = new MemoryOnlyPairingSession();
     const descriptor = {

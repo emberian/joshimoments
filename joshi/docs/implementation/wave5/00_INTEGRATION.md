@@ -209,8 +209,9 @@ wrong-scope capability, revoked session, and pre-restart capability are refused.
 unmounted without flags, but can deliberately select the sealed adapter for one exact loopback
 browser origin. That normal opt-in issues read/replay scopes by default; a second explicit switch
 adds only operator/presentation evidence writes, and no signing or execution scope exists. Glass's
-separate `dev:paired` opt-in consumes that normal seam and refuses the full operational surface
-unless both evidence-write scopes were actually returned. The
+separate `dev:paired-inspect` opt-in consumes the exact V2 index/open seam read-only. The full
+operational shell remains fail closed because its older launch envelope has no reviewed adapter to
+the mounted V2 body/head contract. The
 explicit `wave5-g0-inspect` command mounts a still narrower bounded store-rederived index and exact
 open route only for the offline component fixture with a read-only one-time code. An explicit Glass build now consumes
 that exact V2 inspection contract, independently recomputes the Rust digest domains, and exposes no
