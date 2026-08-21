@@ -35,6 +35,7 @@ use joshi_evidence::{
 };
 use joshi_sources::{
     CredentialFile, HeliusConfig, HeliusHttpClient, SolanaReadMethod, SolanaReadRequest,
+    SourceEventLink,
 };
 use joshi_spool::ProtectionDomainId;
 use joshi_store::{SqliteStore, StoreMode};
@@ -736,12 +737,24 @@ fn commit_read(
     let namespace = context.namespace();
     let clock_id = census_clock_id();
     let persisted_at = now_utc()?;
+    // Link this retained response to the mints it actually evidenced. Without the link the mint
+    // is a source-event row nothing points at, and a surface's population -- which walks
+    // observations to their linked events -- cannot reach it. The link is what makes the mint a
+    // thing this observation says, rather than a thing the census happens to know.
+    // Declare the mint events in the SAME batch that evidences them. The store refuses an
+    // observation that links an event the batch does not establish, which is the right refusal:
+    // a link to a row committed later would be a claim standing on nothing at the moment it was
+    // made. Declaring both together means the mint and the bytes that name it become durable in
+    // one transaction or neither does.
+    let mints = read_mints(read);
+    let mut frame_context = evidence_context(read, &namespace, &clock_id, persisted_at)?;
+    frame_context.source_events = mint_links(&mints)?;
     let batch = source_frames(
         vec![SourceFrameInput {
             frame: read.frame.clone(),
-            context: evidence_context(read, &namespace, &clock_id, persisted_at)?,
+            context: frame_context,
         }],
-        Vec::new(),
+        mint_source_events(&mints)?,
         Vec::new(),
         StableString::new(format!("{}-read-{sequence:04}", context.run_id))?,
         now_utc()?,
@@ -839,7 +852,7 @@ fn commit_coverage(
     let batch = source_drafts(SourceDraftBatch {
         batch_id: StableString::new(format!("{}-coverage", context.run_id))?,
         drafts,
-        source_events: mint_source_events(state)?,
+        source_events: Vec::new(),
         cursor_advances: Vec::new(),
         // The source row this coverage references is registered by the committed read batches;
         // `commit_coverage` refuses to run before one exists rather than registering a second
@@ -1088,36 +1101,54 @@ fn absorb_transaction(
 }
 
 /// Every mint named by the retained token-balance rows. Nothing is inferred from anything else.
-/// Name every observed mint as a durable source event so a surface can render it.
+/// The mints named by the token balances of one retained response, if it carries any.
 ///
-/// Without this the census is only a receipt. The mints would exist in the JSON this process
-/// prints and inside the retained response bytes, and nowhere that a renderer can reach: a
-/// surface derives its population from declared coverage subjects and from source-event natural
-/// keys, so a mint with neither is a mint no surface can name. That is the difference between
-/// having observed something and having recorded that you observed it.
+/// `getSlot` and a signature page carry none, and returning an empty set for them is the honest
+/// outcome rather than a defect.
+fn read_mints(read: &CapturedRead) -> BTreeSet<String> {
+    serde_json::from_slice::<Value>(&read.frame.body)
+        .ok()
+        .and_then(|parsed| parsed.get("result").map(transaction_mints))
+        .unwrap_or_default()
+}
+
+/// Observation-to-event links for one response.
 ///
-/// The namespace is `solana.token_mint` and the natural key is the mint address exactly as the
-/// provider spelled it. The event kind carries the same relation the receipt states and no
-/// stronger one: the mint appeared in the token balances of a transaction whose resolved account
-/// keys included a census program address. It is not a launch, a trade, or a price.
+/// The relation is `contains`: this body carries the token balances in which the mint appeared.
+/// It is not `revision`, because nothing here supersedes an earlier statement, and it is not a
+/// claim that this response is complete for that mint.
+fn mint_links(mints: &BTreeSet<String>) -> Result<Vec<SourceEventLink>, Box<dyn Error>> {
+    mints
+        .iter()
+        .map(|mint| {
+            Ok(SourceEventLink {
+                source_event_id: format!("mint:{mint}"),
+                relation: OpenVariant::known("contains")?,
+                event_ordinal: None,
+            })
+        })
+        .collect()
+}
+
+/// Name each mint as a durable source event so a surface can reach it.
 ///
-/// `source_order_key` is the highest slot the mint was observed in, zero-padded so the source's
-/// own ordering survives lexicographic comparison. It orders these events against each other and
-/// asserts nothing about completeness between them.
-fn mint_source_events(state: &CensusState) -> Result<Vec<SourceEventRecord>, Box<dyn Error>> {
+/// A surface derives its population by walking observations to the events they link, so a mint
+/// that is only in the receipt JSON and inside the retained bytes is a mint no renderer can name.
+/// The namespace is `solana.token_mint`, the natural key is the address exactly as the provider
+/// spelled it, and the event kind carries the same relation the receipt states and no stronger
+/// one: observed in the token balances of a transaction whose resolved account keys included a
+/// census program address. Not a launch, not a trade, not a price.
+fn mint_source_events(mints: &BTreeSet<String>) -> Result<Vec<SourceEventRecord>, Box<dyn Error>> {
     let source_id = joshi_domain::SourceId::new(DOMAIN_SOURCE_ID)?;
     let namespace = StableString::new("solana.token_mint")?;
-    let mut events = Vec::with_capacity(state.mints.len());
-    for (mint, census) in &state.mints {
+    let mut events = Vec::with_capacity(mints.len());
+    for mint in mints {
         events.push(SourceEventRecord {
             source_event_id: joshi_domain::SourceEventId::new(format!("mint:{mint}"))?,
             source_id: source_id.clone(),
             namespace: namespace.clone(),
             natural_key: StableString::new(mint.clone())?,
-            source_order_key: census
-                .highest_slot
-                .map(|slot| StableString::new(format!("{slot:020}")))
-                .transpose()?,
+            source_order_key: None,
             event_kind: OpenVariant::known("observed_in_program_transaction_token_balances")?,
         });
     }

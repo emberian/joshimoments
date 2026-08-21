@@ -103,6 +103,42 @@ denominator. That is exactly S1, in flight now.
   cutoff: that is the absence of a declared or observed subject row, not evidence that the market
   was empty". Gating now.
 
+## S1 IS CLOSED — 2026-08-21 08:20
+
+All four clauses met in one occurrence, by the S3 lane's scene path (`joshi-core
+live-surface-inspect` / `live-gesture-walk`), verified cross-process with sqlite3 and python:
+
+| Clause | Evidence |
+| --- | --- |
+| real observation | 13 durable observations, real 18KB getTransaction bodies |
+| from a real source | helius.http.solana.v1, mainnet slots 440345530 / 440345975 |
+| reaches a rendered surface | a Glass V1 scene derived FROM STORE ROWS naming three real mints: 14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump, 4xSqLzcTQz8nCrgaDhSCKocXavkJzArzdvtC2Nz5pump, Fd1ARmK9DWJpQikCC2oQzFTXAiB7K3fT2AeeMboKpump |
+| readable after restart | servedSnapshotDigest == reopenedSnapshotDigest (cac2e93b...), sceneBoundToServedBytes true, rederivationIsStable true |
+
+The integration risk I recorded was real: two renders were built. The one that closes S1 is the
+GlassView scene in apps/core, because that is what the cockpit can actually serve. The
+joshi-surface text render is a separate, still-useful artifact.
+
+WHAT THE REAL DATA ACTUALLY SAYS, and the lane did not flinch: all six getTransaction responses are
+FAILED transactions. No fill, no size, no price in those bytes. So priceSol, marketCapUsd and
+change5mBps are null, symbol is "unobserved", finality is "unstated", and the candle array is
+empty. The first real surface JOSHI ever rendered is mostly nulls, honestly.
+
+That forced a real contract finding: Glass V1 required at least two OHLC candles per candidate in
+both Rust and TypeScript, which chain-only evidence cannot satisfy without inventing bars. The
+contract was widened to admit no price series at all (one bar is still refused: a single point
+implies an interval it does not have).
+
+## Open, carried
+
+My own census work links mints to observations (9 events, 15 links, store-validated) but the
+joshi-surface text render then fails with a derived-surface contract violation at
+crates/joshi-surface/src/reduce.rs:60 — universe.closed is true and the observed mints are not in
+eligible_subjects, which is built at readback.rs:593 from declared_subjects. The census universe is
+genuinely open: two declared programs, nine observed mints. Either the union at :593 must include
+observed event keys, or this profile must derive an open universe. Does NOT block S1, which closed
+through the scene path.
+
 ## S1 clause audit against disk, 2026-08-21 07:50 (verified by me with sqlite3, not lane reports)
 
 Catalog: scratchpad/census-catalog/catalog.sqlite
