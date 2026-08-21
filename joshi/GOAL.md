@@ -1,5 +1,15 @@
 # GOAL — close S1, stage S2
 
+## STATUS 2026-08-21 09:35: S1 CLOSED AND COMMITTED. S2 STAGED, awaiting Ember.
+
+Everything landed. 454 tests across 14 crates, 0 failed. Workspace clippy -D warnings clean, fmt
+clean, rustdoc clean, schema at 24 migrations, analysis 248 passed.
+
+Five slices landed on real mainnet data in one night: S1 census, S3 gesture and cockpit, S4 hot
+lease, S5 authenticated product read, S7 would-quote, S8 the first empirical number. S2 is the only
+one that needs a human, and it is one command away.
+
+
 **Standing goal.** Close S1 (First real census) end to end under the PILLARS.md promotion rule:
 a real observation, acquired from a real source, reaches a rendered surface, and can be read back
 after a restart. All four clauses, same occurrence. Then stage S2 so it is one command away for
