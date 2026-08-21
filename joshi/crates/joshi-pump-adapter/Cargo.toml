@@ -13,9 +13,12 @@ joshi-evidence = { path = "../joshi-evidence" }
 joshi-pump-api = { path = "../joshi-pump-api" }
 joshi-spool = { path = "../joshi-spool" }
 joshi-store = { path = "../joshi-store" }
+clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
 base64.workspace = true

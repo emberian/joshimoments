@@ -461,16 +461,36 @@ pub(crate) fn next_cursor(root: &RawValue) -> Result<Option<String>, NormalizeEr
     Ok(None)
 }
 
+/// Collect the bounded, path-and-type structural signature of a response without scalar values.
+///
+/// The lines are the exact material a schema review reads, so a reviewer can retain them verbatim
+/// and a later run can recompute the same fingerprint from what was actually reviewed.
+///
+/// # Errors
+///
+/// Returns an error for invalid nested JSON or nesting beyond the normalizer limit.
+pub fn schema_shape(root: &RawValue) -> Result<Vec<String>, NormalizeError> {
+    let mut shape = BTreeSet::new();
+    collect_shape(root, "$", 0, &mut shape)?;
+    Ok(shape.into_iter().collect())
+}
+
+/// Hash an already-collected structural signature. Ordering and duplicates are normalized so the
+/// digest depends only on the set of shape lines.
+#[must_use]
+pub fn fingerprint_of_shape(shape: &[String]) -> String {
+    let ordered = shape.iter().cloned().collect::<BTreeSet<_>>();
+    let canonical = ordered.into_iter().collect::<Vec<_>>().join("\n");
+    sha256(canonical.as_bytes())
+}
+
 /// Hash a bounded, path-and-type structural signature without scalar values.
 ///
 /// # Errors
 ///
 /// Returns an error for invalid nested JSON or nesting beyond the normalizer limit.
 pub fn schema_fingerprint(root: &RawValue) -> Result<String, NormalizeError> {
-    let mut shape = BTreeSet::new();
-    collect_shape(root, "$", 0, &mut shape)?;
-    let canonical = shape.into_iter().collect::<Vec<_>>().join("\n");
-    Ok(sha256(canonical.as_bytes()))
+    Ok(fingerprint_of_shape(&schema_shape(root)?))
 }
 
 fn collect_shape(

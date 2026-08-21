@@ -13,16 +13,19 @@ use joshi_admission::{
     source_drafts, strict_json,
 };
 use joshi_domain::{
-    AcquisitionClocks, AcquisitionId, CoverageId, ObservationId, OpenVariant, RequestFingerprint,
-    SourceId, StableString, UtcTimestamp, ValueDigest, WireU64,
+    AcquisitionClocks, AcquisitionId, AssertionId, CoverageId, ObservationId, OpenVariant,
+    RequestFingerprint, SourceId, StableString, UtcTimestamp, ValueDigest, WireU64,
 };
 use joshi_evidence::{
-    AcquisitionRecord, Boundary, CoverageScope, CoverageWindow, EvidenceDraft, MonotonicReading,
-    ObservationDraft, ObservationEventTime, ObservationMetadata, ObservationTiming,
+    AcquisitionRecord, AssertionDraft, AssertionEvidence, Boundary, CoverageScope, CoverageWindow,
+    EventValidInterval, EvidenceDraft, MonotonicReading, ObservationDraft, ObservationEventTime,
+    ObservationMetadata, ObservationTiming,
 };
 use joshi_pump_api::{
-    FetchOutcome, IdentityStore, ParityInputV2, ParityReportV2, PromotionReportV1, PromotionRunV1,
-    compare_v2, evaluate_promotion,
+    Acquisition, AuthenticatedPathDecision, FetchOutcome, IdentityStore, ParityInputV2,
+    ParityReportV2, ProductIdentityClaimV1, PromotionReportV1, PromotionRunV1, SchemaRegistry,
+    SchemaReviewV1, SchemaTrustDecisionV1, SessionPathNoteV1, compare_v2, decide_schema_trust,
+    evaluate_promotion, normalize, product_identity_claim, schema_shape, session_path_note,
 };
 use joshi_spool::EvidenceBatchEntry;
 use joshi_store::{ObservationStorage, SourceRegistration};
@@ -35,6 +38,9 @@ pub const PUMP_MEASUREMENT_RECEIPT_CONTRACT: &str = "joshi.pump_source.measureme
 pub const MAX_DIRECT_INGRESS_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_PUBLIC_RECEIPT_BYTES: usize = 128 * 1024;
 pub const PARITY_MEASUREMENT_SOURCE: &str = "pump.parity.measurement.v2";
+pub const PRODUCT_READ_PRODUCER: &str = "joshi-pump-adapter";
+pub const PRODUCT_READ_PRODUCER_VERSION: &str = "1";
+pub const MAX_SCHEMA_REVIEW_BYTES: usize = 256 * 1024;
 pub const OFFLINE_FIXTURE_SELECTION_CONTRACT: &str =
     "joshi.pump_adapter.offline_fixture_selection.v1";
 const OFFLINE_FIXTURE_SELECTION_AUTHORITY: &str = "offline_fixture_only";
@@ -337,6 +343,427 @@ pub fn prepare_direct_with_offline_fixture_selection(
     .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
     apply_offline_fixture_selection(&mut admission, &selection, selection_bytes, committed_at)?;
     prepared(SourceAdmission::Direct(admission), ingress, bytes)
+}
+
+/// Everything one authenticated-or-public product read needs in order to reach the store with an
+/// explicit trust decision attached. Nothing here is optional-by-default: a missing review is a
+/// refusal, and a refusal simply means no identity assertion is produced.
+pub struct ProductReadInput<'a> {
+    /// Exact serialized [`FetchOutcome`] bytes as written by the source-edge client.
+    pub outcome_bytes: &'a [u8],
+    /// Exact reviewed-schema bytes, or `None` to force a quarantine refusal.
+    pub review_bytes: Option<&'a [u8]>,
+    /// Whether this run actually exercised an authenticated session.
+    pub authenticated_path: AuthenticatedPathDecision,
+    /// Stable reason code for the credential-path decision.
+    pub session_reason_code: &'a str,
+    /// Operator-written description of what actually happened on the credential path.
+    pub session_detail: &'a str,
+    pub durable_batch_id: &'a str,
+    pub committed_at: UtcTimestamp,
+    pub committed_monotonic_ns: u64,
+    /// Canonical six-digit UTC instant at which the decisions below were taken.
+    pub decided_at: &'a str,
+}
+
+/// One prepared product read: the durable batch plus the exact decisions that shaped it.
+pub struct PreparedProductRead {
+    pub prepared: PreparedPumpAdmission,
+    pub acquisition: Acquisition,
+    pub decision: SchemaTrustDecisionV1,
+    pub session_path: SessionPathNoteV1,
+    pub claim: Option<ProductIdentityClaimV1>,
+    /// The exact structural shape lines observed, so a reviewer can author a review from a run.
+    pub observed_shape: Vec<String>,
+}
+
+impl PreparedProductRead {
+    /// Semantic key under which the identity claim can be read back after a restart.
+    #[must_use]
+    pub fn identity_semantic_key(&self) -> Option<String> {
+        self.claim.as_ref().map(identity_semantic_key)
+    }
+
+    /// Semantic key under which the schema-trust decision can be read back after a restart.
+    #[must_use]
+    pub fn trust_semantic_key(&self) -> String {
+        trust_semantic_key(&self.decision)
+    }
+
+    /// Semantic key under which the credential-path note can be read back after a restart.
+    #[must_use]
+    pub fn session_semantic_key(&self) -> String {
+        session_semantic_key(&self.session_path)
+    }
+}
+
+fn identity_semantic_key(claim: &ProductIdentityClaimV1) -> String {
+    format!(
+        "pump.product_identity:{}:{}",
+        claim.subject_kind, claim.subject
+    )
+}
+
+fn trust_semantic_key(decision: &SchemaTrustDecisionV1) -> String {
+    format!(
+        "pump.schema_trust:{}:{}",
+        decision.route_id, decision.acquisition_id
+    )
+}
+
+fn session_semantic_key(note: &SessionPathNoteV1) -> String {
+    format!(
+        "pump.session_path:{}:{}",
+        note.route_id,
+        note.note_id.trim_start_matches("note:pump-session-path:")
+    )
+}
+
+/// Admit one completed direct product read, decide its schema trust explicitly, and attach the
+/// resulting versioned claims to the same immutable batch as the exact provider bytes.
+///
+/// The identity claim exists only when the observed structural schema matched a named review.
+/// A refusal still commits: the exact bytes, the attempt envelope, the coverage window and both
+/// decision assertions are retained, and only the trusted product fact is withheld.
+///
+/// # Errors
+///
+/// Returns an error for oversized/ambiguous ingress, an incomplete fetch outcome, an invalid
+/// decision timestamp, or any canonical admission, identity, or evidence construction failure.
+pub fn prepare_direct_product_read(
+    input: &ProductReadInput<'_>,
+) -> Result<PreparedProductRead, PumpAdapterError> {
+    let outcome: FetchOutcome = strict_json::parse(input.outcome_bytes, MAX_DIRECT_INGRESS_BYTES)
+        .map_err(|error| PumpAdapterError::Strict(error.to_string()))?;
+    if !outcome.completed {
+        return Err(PumpAdapterError::Contract(
+            "a product read requires a completed fetch outcome with one exact success body".into(),
+        ));
+    }
+    let acquisition = outcome
+        .attempts
+        .last()
+        .cloned()
+        .ok_or_else(|| PumpAdapterError::Contract("completed outcome has no attempt".into()))?;
+    let review = match input.review_bytes {
+        Some(bytes) => {
+            if bytes.len() > MAX_SCHEMA_REVIEW_BYTES {
+                return Err(PumpAdapterError::Strict(
+                    "reviewed schema exceeds the adapter ingress bound".into(),
+                ));
+            }
+            Some(
+                SchemaReviewV1::from_slice(bytes)
+                    .map_err(|error| PumpAdapterError::Strict(error.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let decision = decide_schema_trust(&acquisition, review.as_ref(), input.decided_at)
+        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    let session_path = session_path_note(
+        &acquisition,
+        input.authenticated_path,
+        input.session_reason_code,
+        input.session_detail,
+        input.decided_at,
+    )
+    .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    let observed_shape = observed_shape(&acquisition);
+    let claim = derive_identity_claim(&acquisition, &decision)?;
+
+    let ingress = PumpIngressClosureV1 {
+        source_kind: PumpSourceKind::DirectPumpApi,
+        ingress_contract: outcome.contract.clone(),
+        ingress_id: outcome.request_group_id.clone(),
+        exact_ingress: ByteClosureV1::of(input.outcome_bytes),
+        source_declared_digest: None,
+    };
+    let mut admission = admit_pump_outcome(
+        &outcome,
+        input.durable_batch_id,
+        input.committed_at,
+        input.committed_monotonic_ns,
+    )
+    .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
+    apply_product_read_claims(
+        &mut admission,
+        &acquisition,
+        &decision,
+        &session_path,
+        claim.as_ref(),
+        input.committed_at,
+    )?;
+    let prepared = prepared(
+        SourceAdmission::Direct(admission),
+        ingress,
+        input.outcome_bytes,
+    )?;
+    Ok(PreparedProductRead {
+        prepared,
+        acquisition,
+        decision,
+        session_path,
+        claim,
+        observed_shape,
+    })
+}
+
+fn observed_shape(acquisition: &Acquisition) -> Vec<String> {
+    let Some(bytes) = acquisition.body.exact_bytes() else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Box<serde_json::value::RawValue>>(&bytes)
+        .ok()
+        .and_then(|raw| schema_shape(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn derive_identity_claim(
+    acquisition: &Acquisition,
+    decision: &SchemaTrustDecisionV1,
+) -> Result<Option<ProductIdentityClaimV1>, PumpAdapterError> {
+    if !decision.promoted() {
+        return Ok(None);
+    }
+    let fingerprint = decision
+        .observed_schema_fingerprint
+        .clone()
+        .ok_or_else(|| PumpAdapterError::Contract("a promotion must name a fingerprint".into()))?;
+    let registry = SchemaRegistry {
+        contract: "joshi.pump_api.schema_registry.v1".into(),
+        accepted: [(
+            decision.route_id.clone(),
+            [fingerprint].into_iter().collect::<BTreeSet<_>>(),
+        )]
+        .into_iter()
+        .collect(),
+    };
+    let normalization = normalize(acquisition, &registry);
+    let claim = product_identity_claim(acquisition, &normalization)
+        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+    Ok(Some(claim))
+}
+
+fn provider_body_observation_id(
+    admission: &PumpAdmission,
+    acquisition: &Acquisition,
+) -> Result<ObservationId, PumpAdapterError> {
+    let expected = format!("obs:{}:body", acquisition.acquisition_id);
+    admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .iter()
+        .find(|value| value.observation.observation_id.as_str() == expected)
+        .map(|value| value.observation.observation_id.clone())
+        .ok_or_else(|| {
+            PumpAdapterError::Contract("the admitted batch retains no exact provider body".into())
+        })
+}
+
+fn attempt_observation_id(
+    admission: &PumpAdmission,
+    acquisition: &Acquisition,
+) -> Result<ObservationId, PumpAdapterError> {
+    let expected = format!("obs:{}:attempt", acquisition.acquisition_id);
+    admission
+        .batch
+        .store
+        .evidence
+        .observations
+        .iter()
+        .find(|value| value.observation.observation_id.as_str() == expected)
+        .map(|value| value.observation.observation_id.clone())
+        .ok_or_else(|| {
+            PumpAdapterError::Contract("the admitted batch retains no attempt envelope".into())
+        })
+}
+
+#[allow(clippy::too_many_lines)] // The three decision assertions and their evidence stay together.
+fn apply_product_read_claims(
+    admission: &mut PumpAdmission,
+    acquisition: &Acquisition,
+    decision: &SchemaTrustDecisionV1,
+    session_path: &SessionPathNoteV1,
+    claim: Option<&ProductIdentityClaimV1>,
+    committed_at: UtcTimestamp,
+) -> Result<(), PumpAdapterError> {
+    let body_observation = provider_body_observation_id(admission, acquisition)?;
+    let attempt_observation = attempt_observation_id(admission, acquisition)?;
+
+    let mut extension = serde_json::Map::new();
+    extension.insert("decision".into(), serde_json::to_value(decision)?);
+    admission
+        .batch
+        .store
+        .evidence
+        .assertions
+        .push(claim_assertion(
+            &format!("assertion:pump-schema-trust:{}", acquisition.acquisition_id),
+            &trust_semantic_key(decision),
+            "pump_schema_trust_decision",
+            "accepted",
+            &body_observation,
+            "decoded_from",
+            None,
+            serde_json::Value::Object(extension),
+            committed_at,
+        )?);
+
+    let mut extension = serde_json::Map::new();
+    extension.insert("note".into(), serde_json::to_value(session_path)?);
+    admission
+        .batch
+        .store
+        .evidence
+        .assertions
+        .push(claim_assertion(
+            &format!("assertion:pump-session-path:{}", acquisition.acquisition_id),
+            &session_semantic_key(session_path),
+            "pump_credential_path_decision",
+            "accepted",
+            &attempt_observation,
+            "context",
+            None,
+            serde_json::Value::Object(extension),
+            committed_at,
+        )?);
+
+    if let Some(claim) = claim {
+        let received_at: UtcTimestamp =
+            acquisition.clocks.received_at.parse().map_err(|_| {
+                PumpAdapterError::Contract("invalid acquisition receive clock".into())
+            })?;
+        let upper = received_at
+            .as_datetime()
+            .checked_add(time::Duration::microseconds(1))
+            .and_then(|value| UtcTimestamp::new(value).ok())
+            .ok_or_else(|| {
+                PumpAdapterError::Contract("observation instant interval overflows".into())
+            })?;
+        let mut extension = serde_json::Map::new();
+        extension.insert("claim".into(), serde_json::to_value(claim)?);
+        extension.insert(
+            "trust".into(),
+            serde_json::Value::String("provider_asserted_unverified_on_chain".into()),
+        );
+        extension.insert(
+            "schemaTrustDecisionId".into(),
+            serde_json::Value::String(decision.decision_id.clone()),
+        );
+        admission
+            .batch
+            .store
+            .evidence
+            .assertions
+            .push(claim_assertion(
+                &claim.claim_id,
+                &identity_semantic_key(claim),
+                "pump_product_identity_as_of_observation",
+                "candidate",
+                &body_observation,
+                "decoded_from",
+                Some(EventValidInterval {
+                    status: OpenVariant::known("exact")
+                        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?,
+                    lower: Some(received_at),
+                    upper: Some(upper),
+                }),
+                serde_json::Value::Object(extension),
+                committed_at,
+            )?);
+    }
+
+    if decision.promoted() {
+        for observation in &mut admission.batch.store.evidence.observations {
+            if observation.observation.observation_id == body_observation {
+                observation.observation.parse_disposition = OpenVariant::known("decoded")
+                    .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+            }
+        }
+    }
+    admission
+        .batch
+        .store
+        .evidence
+        .assertions
+        .sort_by(|left, right| left.assertion_id.cmp(&right.assertion_id));
+    let mut seen = BTreeSet::new();
+    for value in &admission.batch.store.evidence.assertions {
+        if !seen.insert(value.assertion_id.as_str().to_owned()) {
+            return Err(PumpAdapterError::Contract(
+                "duplicate assertion identity in one product read".into(),
+            ));
+        }
+    }
+    admission.batch.store.evidence.expected_digest =
+        joshi_store::SqliteStore::canonical_batch_digest(&admission.batch.store.evidence)
+            .map_err(|error| PumpAdapterError::Admission(error.to_string()))?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct AssertionValueMaterialV1<'a> {
+    contract: &'static str,
+    assertion_kind: &'a OpenVariant,
+    producer: &'a StableString,
+    producer_version: &'a StableString,
+    extension: &'a serde_json::Value,
+}
+
+#[allow(clippy::too_many_arguments)] // Every evidence and vocabulary choice stays visible at the call site.
+fn claim_assertion(
+    assertion_id: &str,
+    semantic_key: &str,
+    assertion_kind: &str,
+    assertion_status: &str,
+    observation_id: &ObservationId,
+    evidence_role: &str,
+    valid_time: Option<EventValidInterval>,
+    extension: serde_json::Value,
+    available_at: UtcTimestamp,
+) -> Result<AssertionDraft, PumpAdapterError> {
+    let contract =
+        |error: joshi_domain::WireStringError| PumpAdapterError::Contract(error.to_string());
+    let assertion_kind = OpenVariant::known(assertion_kind).map_err(contract)?;
+    let producer = StableString::new(PRODUCT_READ_PRODUCER).map_err(contract)?;
+    let producer_version = StableString::new(PRODUCT_READ_PRODUCER_VERSION).map_err(contract)?;
+    let digest = Sha256Digest::of_bytes(&serde_json::to_vec(&AssertionValueMaterialV1 {
+        contract: "joshi.assertion_value.v1",
+        assertion_kind: &assertion_kind,
+        producer: &producer,
+        producer_version: &producer_version,
+        extension: &extension,
+    })?);
+    let valid_time = match valid_time {
+        Some(value) => value,
+        None => EventValidInterval {
+            status: OpenVariant::known("not_applicable").map_err(contract)?,
+            lower: None,
+            upper: None,
+        },
+    };
+    Ok(AssertionDraft {
+        assertion_id: AssertionId::new(assertion_id.to_owned()).map_err(contract)?,
+        semantic_key: StableString::new(semantic_key).map_err(contract)?,
+        assertion_kind,
+        producer,
+        producer_version,
+        assertion_status: OpenVariant::known(assertion_status).map_err(contract)?,
+        valid_time,
+        evidence: vec![AssertionEvidence {
+            observation_id: observation_id.clone(),
+            role: OpenVariant::known(evidence_role).map_err(contract)?,
+        }],
+        source_events: Vec::new(),
+        command_evidence: Vec::new(),
+        supersedes_assertion_id: None,
+        available_at,
+        value_digest: ValueDigest::new(digest.to_string()).map_err(contract)?,
+        extension,
+    })
 }
 
 /// Strictly parse exact companion batch bytes and prepare their durable/spool closure.

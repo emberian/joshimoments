@@ -12,8 +12,10 @@ pub mod identity;
 pub mod model;
 pub mod normalize;
 pub mod parity;
+pub mod product_identity;
 pub mod projection;
 pub mod promotion;
+pub mod trust;
 
 pub use auth::{CredentialFileSession, NoSession, SessionMaterial, SessionProvider};
 pub use catalog::{AccessClass, PaginationKind, RouteId, RouteSpec, Stability, TransportKind};
@@ -23,8 +25,14 @@ pub use model::{
     Acquisition, BodyCapture, CoverageGap, CoverageScope, CoverageWindow, FetchOutcome,
     FidelityGap, LogicalRequest, RequestParameters,
 };
-pub use normalize::{Normalization, NormalizedRecord, SchemaRegistry, TaggedScalar, normalize};
+pub use normalize::{
+    Normalization, NormalizedRecord, SchemaRegistry, TaggedScalar, fingerprint_of_shape, normalize,
+    schema_fingerprint, schema_shape,
+};
 pub use parity::{ParityInput, ParityReport, compare};
+pub use product_identity::{
+    IdentityClaimError, PRODUCT_IDENTITY_CLAIM_V1, ProductIdentityClaimV1, product_identity_claim,
+};
 pub use projection::{
     PARITY_REQUEST_FINGERPRINT_CONTRACT, ParityRequestProjection, parity_request_projection,
 };
@@ -32,6 +40,12 @@ pub use promotion::{
     AuthDisposition, DirectParityHandoff, MismatchEvidence, ParityInputV2, ParityReportV2,
     ParitySource, PromotionOccurrence, PromotionReportV1, PromotionRunV1, SessionPathDisposition,
     compare_v2, direct_parity_input, evaluate_promotion,
+};
+
+pub use trust::{
+    AuthenticatedPathDecision, SCHEMA_REVIEW_V1, SCHEMA_TRUST_DECISION_V1, SESSION_PATH_NOTE_V1,
+    SchemaReviewV1, SchemaTrustDecisionV1, SchemaTrustOutcome, SessionPathNoteV1, TrustError,
+    decide_schema_trust, session_path_note,
 };
 
 /// Source-native wire contract. A later core adapter maps it into `joshi-evidence` without
