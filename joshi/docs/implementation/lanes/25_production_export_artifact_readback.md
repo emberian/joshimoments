@@ -32,8 +32,8 @@ manifest, table count, row count, and as-known mode.
 The deterministic operational identities are:
 
 - catalog `sha256:b5812f0e6ef903e44049717d572755cdbc94a99721e4c64ed79451c745111e3e`;
-- snapshot `sha256:e9ecd5990b24c88650ebed19b4afa8c3b60d647948865fe3d2cac9df6fd71845`;
-- manifest `sha256:4fb25f95de1568b0c68c0e61ad64aa5b2a9f9b516979caa1075dff9e99c2475f`.
+- snapshot `sha256:667934d19480a9d6e88181e0b374aff07d5dc58864037630699becbb43938fe6`;
+- manifest `sha256:0d6642232bba99d330ca1328f597f930808a0e90c75c56e5e26e7123c4b55cbe`.
 
 ## No green-by-omission
 
@@ -72,7 +72,7 @@ uncertainty, exact Parquet schema/logical/physical bytes, and literal restrictio
 `joshi-artifact-admission` returns a private-field capability only after duplicate-key and
 canonical-JSON checks, safe direct-child closure, independent typed Parquet readback, support and
 coverage closure, and future-known refusal. The checked operational artifact is
-`sha256:759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55`
+`sha256:c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5`
 for `analysis-run-production-fixture-001`.
 
 ## Durable integration contract
