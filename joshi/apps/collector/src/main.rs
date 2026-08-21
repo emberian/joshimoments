@@ -1,5 +1,7 @@
+mod census;
 mod live;
 
+use census::{CensusOptions, PUMP_PROGRAM, PUMPSWAP_PROGRAM, census_readback, run_census};
 use clap::{Parser, Subcommand};
 use joshi_domain::UtcTimestamp;
 use joshi_spool::{
@@ -109,6 +111,33 @@ enum Command {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Take one bounded Pump/PumpSwap census and durably retain its observations, coverage
+    /// window and every gap the bounded reads created.
+    Census {
+        /// Catalog directory; created and migrated when absent.
+        #[arg(long)]
+        root: PathBuf,
+        /// Program address to census. Repeatable; defaults to Pump and `PumpSwap`.
+        #[arg(long = "program", default_values_t = [PUMP_PROGRAM.to_owned(), PUMPSWAP_PROGRAM.to_owned()])]
+        programs: Vec<String>,
+        /// Signature page size requested per program.
+        #[arg(long = "signature-limit", default_value_t = 25)]
+        signature_limit: u32,
+        /// Maximum transactions hydrated from the head of each program's page.
+        #[arg(long = "transactions-per-program", default_value_t = 8)]
+        transactions_per_program: u32,
+        /// Hard ceiling on provider requests for the whole occurrence.
+        #[arg(long = "max-requests", default_value_t = 40)]
+        max_requests: u32,
+        /// Owner-only credential file, read once at adapter startup and never rendered.
+        #[arg(long = "key-file", default_value = DEFAULT_HELIUS_KEY_PATH)]
+        key_file: PathBuf,
+    },
+    /// Reopen a census catalog read-only and re-derive its mints, windows and gaps from the store.
+    CensusReadback {
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 fn main() {
@@ -118,6 +147,8 @@ fn main() {
     }
 }
 
+// One dispatch arm per subcommand; splitting it would only hide the surface.
+#[allow(clippy::too_many_lines)]
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Run {
@@ -206,6 +237,30 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::StoreReadback { root } => {
             require_existing_root(&root)?;
             println!("{}", store_readback(&root)?);
+        }
+        Command::Census {
+            root,
+            programs,
+            signature_limit,
+            transactions_per_program,
+            max_requests,
+            key_file,
+        } => {
+            println!(
+                "{}",
+                run_census(&CensusOptions {
+                    root,
+                    programs,
+                    signature_limit,
+                    transactions_per_program,
+                    max_requests,
+                    key_file,
+                })?
+            );
+        }
+        Command::CensusReadback { root } => {
+            require_existing_root(&root)?;
+            println!("{}", census_readback(&root)?);
         }
     }
     Ok(())

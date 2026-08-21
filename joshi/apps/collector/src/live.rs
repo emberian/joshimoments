@@ -30,7 +30,7 @@ pub(crate) const DEFAULT_HELIUS_KEY_PATH: &str = "~/.helius-key";
 const LIVE_INGEST_RECEIPT_CONTRACT: &str = "joshi.collector.live_ingest_receipt.v1";
 const LIVE_READBACK_CONTRACT: &str = "joshi.collector.live_readback.v1";
 const CATALOG_ID: &str = "joshi-collector-live";
-const INLINE_BLOB_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const INLINE_BLOB_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_OBSERVATIONS_PER_BATCH: usize = 64;
 const MAX_RAW_BYTES_PER_BATCH: u64 = 64 * 1024 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,32 +49,34 @@ pub(crate) struct LiveIngestOptions {
 }
 
 /// One completed provider read: the exact frame plus the local clocks that bracket it.
-struct CapturedRead {
-    frame: RawSourceFrame,
-    method: SolanaReadMethod,
-    fingerprint_material: String,
-    started_at_millis: i64,
-    started_mono_ns: u64,
-    received_mono_ns: u64,
-    rate_limit: Option<RateLimitSignal>,
+pub(crate) struct CapturedRead {
+    pub(crate) frame: RawSourceFrame,
+    pub(crate) method: SolanaReadMethod,
+    pub(crate) fingerprint_material: String,
+    pub(crate) started_at_millis: i64,
+    pub(crate) started_mono_ns: u64,
+    pub(crate) received_mono_ns: u64,
+    pub(crate) rate_limit: Option<RateLimitSignal>,
+    /// Source-native cursor text observed alongside this record; never cursor authority.
+    pub(crate) source_cursor: Option<String>,
 }
 
 /// A hard request ceiling. Exhaustion is an error, never a silent truncation of a planned read.
-struct ReadBudget {
+pub(crate) struct ReadBudget {
     limit: u32,
     used: u32,
 }
 
 impl ReadBudget {
-    const fn new(limit: u32) -> Self {
+    pub(crate) const fn new(limit: u32) -> Self {
         Self { limit, used: 0 }
     }
 
-    const fn remaining(&self) -> u32 {
+    pub(crate) const fn remaining(&self) -> u32 {
         self.limit.saturating_sub(self.used)
     }
 
-    fn claim(&mut self) -> Result<(), Box<dyn Error>> {
+    pub(crate) fn claim(&mut self) -> Result<(), Box<dyn Error>> {
         if self.used >= self.limit {
             return Err(format!(
                 "live ingest exhausted its hard budget of {} provider requests",
@@ -207,7 +209,11 @@ pub(crate) fn store_readback(root: &Path) -> Result<String, Box<dyn Error>> {
     let Some(row) = first else {
         return Err("catalog holds no observation to read back".into());
     };
-    let payload = retained_payload(&config, &row)?;
+    let payload = retained_payload(
+        &config,
+        row.inline_bytes.as_ref(),
+        row.relative_path.as_deref(),
+    )?;
     let envelope: RetainedFrameEnvelope = serde_json::from_slice(&payload)?;
     let rendered = json!({
         "contract": LIVE_READBACK_CONTRACT,
@@ -234,22 +240,24 @@ pub(crate) fn store_readback(root: &Path) -> Result<String, Box<dyn Error>> {
     Ok(serde_json::to_string_pretty(&rendered)?)
 }
 
-struct StoredObservationRow {
-    observation_id: String,
-    source_id: String,
-    commit_seq: i64,
-    received_wall_us: i64,
-    storage_mode: String,
-    content_length: i64,
-    inline_bytes: Option<Vec<u8>>,
-    relative_path: Option<String>,
+pub(crate) struct StoredObservationRow {
+    pub(crate) observation_id: String,
+    pub(crate) source_id: String,
+    pub(crate) commit_seq: i64,
+    pub(crate) received_wall_us: i64,
+    pub(crate) storage_mode: String,
+    pub(crate) content_length: i64,
+    pub(crate) inline_bytes: Option<Vec<u8>>,
+    pub(crate) relative_path: Option<String>,
 }
 
-fn retained_payload(
+/// Read one retained blob back from wherever the catalog physically put it.
+pub(crate) fn retained_payload(
     config: &StoreConfig,
-    row: &StoredObservationRow,
+    inline_bytes: Option<&Vec<u8>>,
+    relative_path: Option<&str>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    match (row.inline_bytes.as_ref(), row.relative_path.as_ref()) {
+    match (inline_bytes, relative_path) {
         (Some(bytes), _) => Ok(bytes.clone()),
         (None, Some(relative)) => {
             let path = config.blob_root.join(relative);
@@ -352,7 +360,7 @@ async fn perform_reads(
     Ok((reads, used))
 }
 
-async fn perform_one(
+pub(crate) async fn perform_one(
     client: &HeliusHttpClient,
     budget: &mut ReadBudget,
     sequence: u64,
@@ -380,6 +388,7 @@ async fn perform_one(
         started_mono_ns,
         received_mono_ns,
         rate_limit,
+        source_cursor: None,
     })
 }
 
@@ -417,7 +426,7 @@ fn commit_reads(
     Ok(batch.commit(store)?)
 }
 
-fn evidence_context(
+pub(crate) fn evidence_context(
     read: &CapturedRead,
     namespace: &str,
     clock_id: &str,
@@ -439,7 +448,7 @@ fn evidence_context(
             "solana_rpc_response:{}",
             read.method.as_str()
         ))?,
-        source_cursor: None,
+        source_cursor: read.source_cursor.clone(),
         source_events: Vec::new(),
         provider_event_time,
         chain_slot,
@@ -530,7 +539,7 @@ fn first_signatures(frame: &RawSourceFrame, wanted: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn ensure_provider_accepted(read: &CapturedRead) -> Result<(), Box<dyn Error>> {
+pub(crate) fn ensure_provider_accepted(read: &CapturedRead) -> Result<(), Box<dyn Error>> {
     let method = read.method.as_str();
     if read.frame.http_status != Some(200) {
         return Err(format!(
@@ -571,7 +580,7 @@ fn sanitized_provider_message(value: &str) -> String {
         .collect()
 }
 
-fn read_summary(read: &CapturedRead) -> Value {
+pub(crate) fn read_summary(read: &CapturedRead) -> Value {
     json!({
         "method": read.method.as_str(),
         "sequence": read.frame.sequence,
@@ -584,21 +593,26 @@ fn read_summary(read: &CapturedRead) -> Value {
 }
 
 fn validate_wallet(value: &str) -> Result<(), Box<dyn Error>> {
+    validate_base58_address(value, "--wallet")
+}
+
+/// A Solana address is exactly 32 base58-decoded bytes. Nothing else about it is asserted here.
+pub(crate) fn validate_base58_address(value: &str, label: &str) -> Result<(), Box<dyn Error>> {
     let decoded = bs58::decode(value)
         .into_vec()
-        .map_err(|_| "--wallet is not valid base58")?;
+        .map_err(|_| format!("{label} is not valid base58"))?;
     if decoded.len() == 32 {
         Ok(())
     } else {
-        Err("--wallet must decode to a 32-byte Solana address".into())
+        Err(format!("{label} must decode to a 32-byte Solana address").into())
     }
 }
 
-fn open_catalog(root: &Path, mode: StoreMode) -> Result<SqliteStore, Box<dyn Error>> {
+pub(crate) fn open_catalog(root: &Path, mode: StoreMode) -> Result<SqliteStore, Box<dyn Error>> {
     Ok(SqliteStore::open(catalog_config(root)?, mode)?)
 }
 
-fn catalog_config(root: &Path) -> Result<StoreConfig, Box<dyn Error>> {
+pub(crate) fn catalog_config(root: &Path) -> Result<StoreConfig, Box<dyn Error>> {
     Ok(StoreConfig {
         catalog_path: root.join("catalog.sqlite"),
         blob_root: root.join("blobs"),
@@ -620,7 +634,7 @@ fn run_namespace() -> Result<String, Box<dyn Error>> {
     ))
 }
 
-fn now_utc() -> Result<UtcTimestamp, Box<dyn Error>> {
+pub(crate) fn now_utc() -> Result<UtcTimestamp, Box<dyn Error>> {
     Ok(UtcTimestamp::new(microsecond_aligned(
         OffsetDateTime::now_utc(),
     )?)?)
@@ -632,7 +646,7 @@ fn microsecond_aligned(value: OffsetDateTime) -> Result<OffsetDateTime, Box<dyn 
     Ok(value.replace_nanosecond(nanosecond - nanosecond % 1_000)?)
 }
 
-fn unix_millis(value: OffsetDateTime) -> Result<i64, Box<dyn Error>> {
+pub(crate) fn unix_millis(value: OffsetDateTime) -> Result<i64, Box<dyn Error>> {
     Ok(i64::try_from(value.unix_timestamp_nanos() / 1_000_000)?)
 }
 
@@ -641,7 +655,7 @@ fn utc_from_millis(millis: i64) -> Result<UtcTimestamp, Box<dyn Error>> {
     Ok(UtcTimestamp::new(value)?)
 }
 
-fn elapsed_nanos(process_start: Instant) -> Result<u64, Box<dyn Error>> {
+pub(crate) fn elapsed_nanos(process_start: Instant) -> Result<u64, Box<dyn Error>> {
     Ok(u64::try_from(process_start.elapsed().as_nanos())?)
 }
 
@@ -675,6 +689,7 @@ mod tests {
             started_mono_ns: sequence * 1_000,
             received_mono_ns: sequence * 1_000 + 500,
             rate_limit: None,
+            source_cursor: None,
         }
     }
 

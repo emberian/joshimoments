@@ -1166,12 +1166,15 @@ dependencies = [
  "clap",
  "joshi-admission",
  "joshi-domain",
+ "joshi-evidence",
  "joshi-sources",
  "joshi-spool",
  "joshi-store",
  "joshi-supervisor",
  "rusqlite",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "time",
  "tokio",
@@ -1277,10 +1280,13 @@ version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "joshi-admission",
  "joshi-domain",
+ "joshi-evidence",
  "joshi-projection",
  "joshi-publication",
  "joshi-scientific-memory",
+ "joshi-store",
  "parquet",
  "rusqlite",
  "serde",
@@ -1446,6 +1452,7 @@ name = "joshi-pump-adapter"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "clap",
  "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
@@ -1456,6 +1463,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -1511,12 +1520,18 @@ dependencies = [
 name = "joshi-sources"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bs58",
  "bytes",
  "futures-util",
+ "joshi-accounting",
+ "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
+ "joshi-liquidity",
+ "joshi-market-math",
  "joshi-source-registry",
+ "joshi-store",
  "reqwest",
  "secrecy",
  "serde",
@@ -1578,19 +1593,25 @@ dependencies = [
 name = "joshi-supervisor"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "bytes",
+ "joshi-acquisition-policy",
  "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
  "joshi-sources",
  "joshi-spool",
  "joshi-store",
+ "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "time",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

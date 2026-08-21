@@ -12,12 +12,15 @@ bytes = "1.12.1"
 clap.workspace = true
 joshi-admission = { path = "../../crates/joshi-admission", features = ["source-edges"] }
 joshi-domain = { path = "../../crates/joshi-domain" }
+joshi-evidence = { path = "../../crates/joshi-evidence" }
 joshi-sources = { path = "../../crates/joshi-sources" }
 joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
 joshi-supervisor = { path = "../../crates/joshi-supervisor" }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2 = "0.10.9"
 time.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "time"] }
 zeroize.workspace = true
