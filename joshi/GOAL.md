@@ -89,3 +89,23 @@ perception at 4am is that failure with money attached.
 **The real prerequisite is on the critical path anyway.** A crackle cannot be tested until it can be
 detected, and it cannot be detected until Pump/PumpSwap trade activity is observed and stored with a
 denominator. That is exactly S1, in flight now.
+
+## S1 clause audit against disk, 2026-08-21 07:50 (verified by me with sqlite3, not lane reports)
+
+Catalog: scratchpad/census-catalog/catalog.sqlite
+
+| Clause | State | Evidence |
+| --- | --- | --- |
+| real observation | **MET** | 19 acquisitions, one 18,376-byte getTransaction body, real signature 5SNq8s81VGj7ZiED... |
+| from a real source | **MET** | all 19 from `helius.http.solana.v1` |
+| reaches a rendered surface | **NOT MET** | `SELECT count(*) FROM scene` = 0 |
+| readable after restart | substrate ready | 3 coverage windows, 4 gap rows durable; nothing to re-render yet |
+
+Clause 3 is the whole remaining gap. apps/core/src/live_surface.rs (S3 lane, in flight) builds a
+ValidatedGlassViewV1 with a derived scene identity from durable observations, which is the correct
+render target: the cockpit serves scenes, not surfaces.
+
+INTEGRATION RISK to check when lanes land: the S1 render lane was pointed at
+joshi-surface/joshi-publication while the S3 lane is building the scene in apps/core. If both
+produced a render, keep the one the cockpit can actually serve and delete the other rather than
+carrying two.
