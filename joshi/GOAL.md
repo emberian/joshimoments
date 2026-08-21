@@ -169,7 +169,40 @@ This independently corroborates what the S3 lane found from the other direction:
 `getTransaction` in the cut is a failed transaction. Two lanes, two paths, same finding. It is also
 exactly why the first rendered surface is mostly nulls, and why that is correct rather than broken.
 
-## Regression under repair, 2026-08-21 08:30
+## Regression FIXED, 2026-08-21 09:30 — and my prime suspect was wrong
+
+joshi-core is back to 0 failed. The cause was not `manifest_declares_g0_profile`.
+
+The S8 lane added `provenance_batch` and wired it into `relation_batches`. `provenance_assertions`
+is one of the fourteen frozen Snapshot V2 relations and had **always been written empty** while the
+rows sat in the store. The V8 witness catalog holds three assertion-to-observation evidence edges,
+so that table went 0 -> 3 rows, which moved the manifest preimage, which moved the self-hashed
+snapshot identity: `sha256:e9ecd599...` -> `sha256:667934d1...`. `apps/core`'s G0 chain performs
+that exact export LIVE and compares it to a derived-artifact golden frozen long ago. Mismatch, in
+all 12 tests. The lane updated its own golden and stopped there.
+
+The export change is right and stays: the Python validator treats `provenance_assertions` as the
+closure source other relations are checked against, so the old always-empty behaviour was silent
+narrowing rather than a contract. The frozen fixture chain was re-baselined with the repo's own
+documented builders instead. Control that makes it trustworthy: rebuilding the V10 catalog BEFORE
+changing anything reproduced the committed bytes exactly, so the builders are deterministic here.
+
+### Three things this exposed, worth more than the fix
+
+1. **The committed artifact golden was ALREADY unreproducible from this tree, invisibly.**
+   `producer.build_digest` is a sha256 over every `analysis/src/joshi_analysis/*.py`, and the census
+   lane added `listing_census.py`. Republishing from the OLD snapshot already produced a different
+   artifact id before anything was touched. Nothing tests that reproduction, so nothing noticed.
+2. **Structural**: `apps/core`'s G0 chain asserts that a LIVE export equals a golden fitted long
+   ago, so every legitimate exporter improvement breaks joshi-core in exactly this way. That is a
+   design smell, not a one-off.
+3. **Residual, deliberately not papered over**: `provenance_batch` inner-joins
+   assertion -> evidence -> observation, and `assertion` is not in the unmapped-facts refusal list,
+   so assertions with no retained observation evidence (4 of the 7 in the V8 witness) are silently
+   absent rather than refused. The frozen relation's primary key cannot represent them. Contract gap
+   for a future slice.
+
+## Superseded: regression under repair, 2026-08-21 08:30
 
 `cargo test -p joshi-core --all-targets` is 26 passed / 12 FAILED after the five slice lanes
 landed. It was green earlier today. Every failure is fixture-restore, pairing, G0 or wave6 shaped,
