@@ -26,12 +26,29 @@ Remaining gaps between that and S1:
 
 Close 1-4 in that order, then stage S2.
 
-## Next 3 moves
+## Thrust, 2026-08-21 06:50 — stop auditing, burn the slices down
 
-1. IN FLIGHT (lane A): census ingest, Pump + PumpSwap -> mints as subjects, coverage windows and
-   explicit gap rows, plus the run/supervisor binding.
-2. IN FLIGHT (lane B): render a surface from the store, prove mint + count + digest survive reopen.
-3. MINE: mount a real catalog behind the ordinary-pairing cockpit path, so S2 reads real numbers.
+Seven lanes in flight, no auditors:
+- S1 census ingest (Pump + PumpSwap -> mints, coverage windows, explicit gaps, run binding)
+- S1 render + restart proof
+- S3 one gesture end to end, plus the cockpit-on-a-real-catalog subcommand
+- S4 one hot lease, bounded window, disconnect produces a typed gap
+- S5 one authenticated Pump product read with a schema trust decision
+- S7 one honest would-quote recomputed from stored bytes, with its age
+- S8 one estimand on real data, denominator beside it, two runtimes
+
+## Known gap in the plan itself
+
+PILLARS.md has 8 slices and none of them produces a trade. S7 is explicitly a would-quote with no
+economic authority. Ember wants a cockpit she can trade from; the plan terminates before the
+product does. This needs a slice S9 and it is not written yet.
+
+## Correction to an earlier overclaim
+
+On 2026-08-20 I told Ember JOSHI was "roughly one honest live-read boundary plus one real ingest run
+away from being able to learn something". Both landed on 2026-08-21 and the distance to a working
+JOSHI did not meaningfully close. The accurate statement was: one wire, then seven more slices, none
+of which trade.
 
 ## Done log
 
