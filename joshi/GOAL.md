@@ -90,6 +90,19 @@ perception at 4am is that failure with money attached.
 detected, and it cannot be detected until Pump/PumpSwap trade activity is observed and stored with a
 denominator. That is exactly S1, in flight now.
 
+## Done log, continued
+
+- 2026-08-21 08:00 CENSUS LANDED (commit). 12 real mints across Pump and PumpSwap, 19 requests of a
+  self-enforced 20, 170,473 bytes, run-registered with supervisor reservation and settlement,
+  catalog v24, tip slot 440678357. 3 coverage windows bounded by the source's OWN signature cursors
+  rather than an invented clock; 4 gap rows with exact windows (2x page-hit-limit, 2x
+  listed-but-not-hydrated: 25 signatures listed, 8 hydrated, 17 accounted for as a row).
+  Subject relation recorded as observed, not as "traded". Wrapped SOL correctly present.
+- 2026-08-21 render lane landed in joshi-surface: render_surface -> head + line-oriented body, pure
+  function of the cut, with an UNRESOLVED section and the line "no subject is eligible at this
+  cutoff: that is the absence of a declared or observed subject row, not evidence that the market
+  was empty". Gating now.
+
 ## S1 clause audit against disk, 2026-08-21 07:50 (verified by me with sqlite3, not lane reports)
 
 Catalog: scratchpad/census-catalog/catalog.sqlite
