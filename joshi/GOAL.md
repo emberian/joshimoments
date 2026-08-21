@@ -129,6 +129,26 @@ both Rust and TypeScript, which chain-only evidence cannot satisfy without inven
 contract was widened to admit no price series at all (one bar is still refused: a single point
 implies an interval it does not have).
 
+## Regression under repair, 2026-08-21 08:30
+
+`cargo test -p joshi-core --all-targets` is 26 passed / 12 FAILED after the five slice lanes
+landed. It was green earlier today. Every failure is fixture-restore, pairing, G0 or wave6 shaped,
+and the one confirmed message is
+`Store(InvalidBatch("restricted registration differs from its strict derived-artifact manifest"))`
+raised at crates/joshi-store/src/wave5.rs:2563.
+
+Ruled out: the glass.rs candle change (a strict widening), the joshi-store changes (a re-export and
+one visibility bump), joshi-artifact-admission (untouched), and any fixture edit (none).
+Prime suspect, unconfirmed: joshi-export/src/production.rs gained a `manifest_declares_g0_profile`
+that moved G0 detection from the schema number to the manifest content.
+
+A dedicated agent is on it, with instructions not to weaken a test to make it pass. Also assigned:
+the one clippy blocker, too_many_lines in the joshi-sources example would_quote_live.
+
+Everything else gates green: collector 16, surface 31, store 37, operator 6, sources 138,
+market-math 13, liquidity 13, acquisition-policy 11, supervisor 55, export 25, pump-api 32, schema
+24 migrations.
+
 ## Open, carried
 
 My own census work links mints to observations (9 events, 15 links, store-validated) but the
