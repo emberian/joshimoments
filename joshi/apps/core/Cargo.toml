@@ -10,7 +10,7 @@ publish.workspace = true
 axum.workspace = true
 clap.workspace = true
 getrandom = "0.3.4"
-joshi-admission = { path = "../../crates/joshi-admission" }
+joshi-admission = { path = "../../crates/joshi-admission", features = ["source-edges"] }
 joshi-domain = { path = "../../crates/joshi-domain" }
 joshi-evidence = { path = "../../crates/joshi-evidence" }
 joshi-export = { path = "../../crates/joshi-export" }
@@ -28,6 +28,7 @@ joshi-supervisor = { path = "../../crates/joshi-supervisor" }
 joshi-wave6-registry = { path = "../../crates/joshi-wave6-registry" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }

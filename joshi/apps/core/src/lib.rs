@@ -2,6 +2,8 @@
 
 pub mod g0_inspector_smoke;
 mod g0_process_fault;
+pub mod live_gesture;
+pub mod live_surface;
 pub mod pairing;
 pub mod readiness;
 pub mod service;

@@ -99,7 +99,8 @@ export function MarketChart({
       <figcaption>
         <span>
           <strong>{candidate.symbol} observed tape</strong>
-          <small>{candles.length} fixture bars · 30-second interval</small>
+          {/* The view carries no bar interval, and an empty series is an absence, not a zero. */}
+          <small>{candles.length === 0 ? "no price series was observed" : `${candles.length} bars`}</small>
         </span>
         <span className={`direction-chip value-${direction === "up" ? "positive" : direction === "down" ? "negative" : "neutral"}`}>
           {direction} in view

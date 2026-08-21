@@ -15,7 +15,7 @@ use joshi_admission::{
     parse_companion, strict_json,
 };
 use joshi_domain::{SceneId, StableString, UtcTimestamp, WireU64};
-use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
+use joshi_operator::{OperatorCommandStatus, ValidatedGlassViewV1, ValidatedOperatorCommandV1};
 use joshi_publication::CockpitPublicationId;
 use joshi_store::{
     IdempotencyStatus, OperatorCaptureMetadata, SceneMode, SceneSourceMode, SqliteStore,
@@ -59,6 +59,9 @@ struct Inner {
     ordinary_pairing: Option<Arc<OrdinaryPairingService>>,
     monotonic_epoch: Instant,
     monotonic_clock_id: String,
+    /// A scene this process derived from the store and is serving, before any act made it
+    /// durable. The first operator act that names it commits the exact bytes it was served.
+    live_surface: Option<Arc<ValidatedGlassViewV1>>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -158,6 +161,7 @@ impl CoreService {
                 ordinary_pairing: None,
                 monotonic_epoch: Instant::now(),
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
+                live_surface: None,
             }),
         }
     }
@@ -167,6 +171,7 @@ impl CoreService {
         companion_installation_id: Option<String>,
         pairing: PairingCapability,
         ordinary_pairing: Arc<OrdinaryPairingService>,
+        live_surface: Option<Arc<ValidatedGlassViewV1>>,
     ) -> Self {
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -179,6 +184,7 @@ impl CoreService {
                 ordinary_pairing: Some(ordinary_pairing),
                 monotonic_epoch: Instant::now(),
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
+                live_surface,
             }),
         }
     }
@@ -198,6 +204,33 @@ impl CoreService {
         origin: PairingOrigin,
         config: PairingConfig,
     ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
+        Self::with_sqlite_pairing_mounting(
+            store,
+            companion_installation_id,
+            pairing,
+            origin,
+            config,
+            None,
+        )
+    }
+
+    /// Opt in to ordinary pairing while serving one scene this process derived from the store.
+    ///
+    /// The mounted view is served byte-for-byte by the snapshot route until an operator act names
+    /// it, at which point the store retains those exact bytes atomically with the act. Nothing
+    /// else can introduce a scene, so no act can ever be bound to bytes nobody was served.
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
+    pub fn with_sqlite_pairing_mounting(
+        store: SqliteStore,
+        companion_installation_id: Option<String>,
+        pairing: PairingCapability,
+        origin: PairingOrigin,
+        config: PairingConfig,
+        live_surface: Option<ValidatedGlassViewV1>,
+    ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
         let store = Arc::new(Mutex::new(store));
         let ordinary = Arc::new(OrdinaryPairingService::production_with_shared_store(
             origin,
@@ -209,6 +242,7 @@ impl CoreService {
             companion_installation_id,
             pairing,
             ordinary.clone(),
+            live_surface.map(Arc::new),
         );
         Ok((service, ordinary))
     }
@@ -1076,15 +1110,27 @@ fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&
             "catalog lock is unavailable",
         );
     };
-    let Ok(scene) = store.load_scene(&scene_id) else {
-        return problem(
-            StatusCode::NOT_FOUND,
-            "scene_not_found",
-            "immutable scene was not found",
-        );
+    let stored = store.load_scene(&scene_id).ok();
+    // A scene this process derived from the store is served from memory only until an operator
+    // act makes it durable; afterwards the durable bytes answer, and they are the same bytes.
+    let mounted = service
+        .inner
+        .live_surface
+        .as_ref()
+        .filter(|view| *view.scene_id() == scene_id);
+    let (view_bytes, mode) = match (&stored, mounted) {
+        (Some(scene), _) => (scene.view_bytes.clone(), mode_name(scene.mode)),
+        (None, Some(view)) => (view.canonical_bytes().to_vec(), glass_mode_name(view)),
+        (None, None) => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "scene_not_found",
+                "immutable scene was not found",
+            );
+        }
     };
-    if let Some(mode) = expected_mode
-        && mode != mode_name(scene.mode)
+    if let Some(expected) = expected_mode
+        && expected != mode
     {
         return problem(
             StatusCode::CONFLICT,
@@ -1092,7 +1138,7 @@ fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&
             "requested replay mode does not match immutable scene",
         );
     }
-    let Some(snapshot) = snapshot_bytes(&scene.view_bytes) else {
+    let Some(snapshot) = snapshot_bytes(&view_bytes) else {
         return problem(
             StatusCode::INTERNAL_SERVER_ERROR,
             "scene_response_too_large",
@@ -1125,6 +1171,14 @@ fn snapshot_bytes(view_bytes: &[u8]) -> Option<Vec<u8>> {
     result.extend_from_slice(view_bytes);
     result.push(b'}');
     Some(result)
+}
+
+fn glass_mode_name(view: &ValidatedGlassViewV1) -> &'static str {
+    match view.mode() {
+        joshi_operator::GlassMode::Witnessed => "witnessed",
+        joshi_operator::GlassMode::KnowledgeCutoff => "knowledge_cutoff",
+        joshi_operator::GlassMode::Retrospective => "retrospective",
+    }
 }
 
 fn mode_name(mode: SceneMode) -> &'static str {
@@ -1200,13 +1254,6 @@ async fn operator_command(
             );
         }
     };
-    let Ok(capture) = operator_capture() else {
-        return problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "capture_metadata_failed",
-            "server capture metadata is unavailable",
-        );
-    };
     let receipt = {
         let Ok(mut store) = service.inner.store.lock() else {
             return problem(
@@ -1215,9 +1262,27 @@ async fn operator_command(
                 "durable writer lock is unavailable",
             );
         };
+        // The act carries the scene it was made over. When that scene is the one this process
+        // derived and served, and nothing has retained it yet, the exact served bytes become
+        // durable in the same transaction as the act. Otherwise the store re-reads the retained
+        // bytes and refuses the act unless they hash to the digest the browser echoed back.
+        let mounted = service
+            .inner
+            .live_surface
+            .as_ref()
+            .filter(|view| view.scene_id() == command.scene_id())
+            .filter(|view| store.load_scene(view.scene_id()).is_err());
+        let Ok(capture) = operator_capture(mounted.is_some(), &service.inner.monotonic_clock_id)
+        else {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "capture_metadata_failed",
+                "server capture metadata is unavailable",
+            );
+        };
         match store.commit_operator_v1(
             &command,
-            None,
+            mounted.map(AsRef::as_ref),
             &capture,
             committed_at,
             StableString::new(service.inner.monotonic_clock_id.clone())
@@ -1242,7 +1307,26 @@ async fn operator_command(
     json_response(status, &receipt)
 }
 
-fn operator_capture() -> Result<OperatorCaptureMetadata, joshi_domain::WireStringError> {
+/// Capture metadata for the scene an act binds.
+///
+/// For an already durable scene this is inert: the store keeps the capture that was recorded when
+/// the scene was retained. For a scene this process derived and served, the metadata says exactly
+/// that: JOSHI rendered it from the catalog on the server clock domain, and no browser render
+/// clock is claimed for bytes the browser did not compose.
+fn operator_capture(
+    mounting_derived_scene: bool,
+    server_clock_id: &str,
+) -> Result<OperatorCaptureMetadata, joshi_domain::WireStringError> {
+    if mounting_derived_scene {
+        return Ok(OperatorCaptureMetadata {
+            client_scene_seq: 0,
+            ui_build: StableString::new(format!("joshi-core-{}", env!("CARGO_PKG_VERSION")))?,
+            source_mode: SceneSourceMode::Observatory,
+            rendered_clock_id: StableString::new(server_clock_id)?,
+            rendered_mono_ns: 0,
+            screenshot_bytes: None,
+        });
+    }
     Ok(OperatorCaptureMetadata {
         client_scene_seq: 0,
         ui_build: StableString::new("existing-scene")?,

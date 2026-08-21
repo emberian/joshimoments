@@ -979,10 +979,14 @@ fn validate_candidate(candidate: &CandidateWire, sources: &BTreeSet<&str>) -> Re
     for evidence in &candidate.evidence {
         validate_evidence(evidence, sources)?;
     }
-    if candidate.candles.len() < 2 {
+    // A candidate may carry no price series at all: chain evidence can name a real mint at a real
+    // slot without any observed fill, and inventing bars to satisfy a shape would be a market
+    // claim the bytes do not support. One sample is still refused, because a single point implies
+    // an interval it does not have.
+    if candidate.candles.len() == 1 {
         return Err(invalid(
             "candidate candles",
-            "must contain at least two samples",
+            "must be empty or contain at least two samples",
         ));
     }
     for candle in &candidate.candles {
@@ -1229,4 +1233,78 @@ fn validate_unix_seconds(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ValidatedGlassViewV1;
+
+    /// One canonical view whose candidate carries no price series, as chain-only evidence does.
+    fn view_with_candles(candles: &str) -> String {
+        format!(
+            concat!(
+                r#"{{"contract":"joshi.glass.view","schemaVersion":1,"mode":"witnessed","#,
+                r#""sceneId":"scene-live-1","basisSceneId":null,"asOf":{{"catalogCommit":"3","#,
+                r#""sources":[{{"sourceId":"source.a","deliveredThrough":"3","cursors":[],"#,
+                r#""receivedThrough":"2026-08-19T21:48:41.182000Z"}}],"chain":null,"#,
+                r#""projections":[],"renderedAt":"2026-08-19T21:48:41.185131Z"}},"#,
+                r#""payload":{{"sources":[{{"id":"source.a","label":"source.a","#,
+                r#""status":"degraded","lastObservedAt":null,"#,
+                r#""lastIngestedAt":"2026-08-19T21:48:41.182000Z","#,
+                r#""coverage":"1 retained observation.","note":"No assertion layer beneath it."}}],"#,
+                r#""candidates":[{{"id":"MintAAAAAAAAAAAAAAAA","mint":"MintAAAAAAAAAAAAAAAA","#,
+                r#""symbol":"unobserved","name":"MintAAAAAAAAAAAAAAAA","board":"watch","#,
+                r#""lifecycle":"unknown","firstKnownAt":"2026-08-19T21:45:21.000000Z","#,
+                r#""lastObservedAt":"2026-08-19T21:45:21.000000Z","rank":"1","#,
+                r#""metrics":{{"priceSol":null,"marketCapUsd":null,"change5mBps":null,"#,
+                r#""ageSeconds":"200","activity":"unknown","quoteSizeSol":null,"#,
+                r#""executableExitSol":null}},"attentionReason":"Named by one observation.","#,
+                r#""socialSummary":"No social source was acquired.","tags":["chain_observed"],"#,
+                r#""watched":false,"episodeId":null,"evidence":[{{"id":"obs:source.a:1","#,
+                r#""sourceId":"source.a","field":"mint","evidenceClass":"observed","#,
+                r#""observedAt":"2026-08-19T21:45:21.000000Z","#,
+                r#""ingestedAt":"2026-08-19T21:48:40.663000Z","#,
+                r#""knownAt":"2026-08-19T21:48:41.183518Z","status":"available","#,
+                r#""note":"Named by retained bytes."}}],"candles":{}}}],"episodes":[],"#,
+                r#""socialEvents":[]}}}}"#
+            ),
+            candles
+        )
+    }
+
+    fn candle(time_unix: &str) -> String {
+        format!(
+            concat!(
+                r#"{{"timeUnix":"{}","knownAt":"2026-08-19T21:48:41.183518Z","open":"0.000000001","#,
+                r#""high":"0.000000001","low":"0.000000001","close":"0.000000001","#,
+                r#""volumeTokens":"0"}}"#
+            ),
+            time_unix
+        )
+    }
+
+    #[test]
+    fn a_candidate_with_no_observed_price_series_is_exact() {
+        let bytes = view_with_candles("[]");
+        let view = ValidatedGlassViewV1::parse_exact(bytes.as_bytes(), None)
+            .expect("chain-only candidate with no price series");
+        assert_eq!(view.scene_id().as_str(), "scene-live-1");
+        assert!(view.contains_candidate("MintAAAAAAAAAAAAAAAA"));
+    }
+
+    #[test]
+    fn a_single_bar_is_not_a_price_series() {
+        let bytes = view_with_candles(&format!("[{}]", candle("1787175921")));
+        assert!(ValidatedGlassViewV1::parse_exact(bytes.as_bytes(), None).is_err());
+    }
+
+    #[test]
+    fn two_bars_remain_a_price_series() {
+        let bytes = view_with_candles(&format!(
+            "[{},{}]",
+            candle("1787175921"),
+            candle("1787175951")
+        ));
+        assert!(ValidatedGlassViewV1::parse_exact(bytes.as_bytes(), None).is_ok());
+    }
 }

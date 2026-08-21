@@ -3966,7 +3966,7 @@ fn parse_scene_mode(value: &str) -> Result<SceneMode> {
     }
 }
 
-fn load_blob_object(
+pub(crate) fn load_blob_object(
     connection: &Connection,
     root: &Path,
     blob_id: &str,

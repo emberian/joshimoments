@@ -8,6 +8,7 @@ mod blob;
 mod browser_presentation;
 mod error;
 mod g0;
+mod live_observation;
 mod migration;
 mod model;
 mod operational;
@@ -34,6 +35,9 @@ pub use g0::{
     StoredWave5SourceOccurrence, Wave5G0BackupOccurrence, Wave5G0BackupRestoreOccurrence,
     Wave5G0ExportOccurrence, Wave5G0ImportOccurrence, Wave5G0OccurrencePorts,
     Wave5G0StatusOccurrence, Wave5SourceOccurrenceV1,
+};
+pub use live_observation::{
+    DurableSourceObservation, DurableSourceObservations, StoredOperatorCommandV1,
 };
 pub use migration::{MigrationReport, RuntimeStatus};
 pub use model::{

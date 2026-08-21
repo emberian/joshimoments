@@ -140,6 +140,33 @@ enum Command {
         #[arg(long, requires = "ordinary_pairing_origin")]
         ordinary_pairing_evidence_write: bool,
     },
+    /// Serve one real catalog's derived Glass scene through durable ordinary pairing.
+    LiveSurfaceInspect {
+        #[arg(long, default_value = "127.0.0.1:43119")]
+        listen: SocketAddr,
+        #[arg(long, default_value = "http://127.0.0.1:4173")]
+        glass_origin: String,
+        /// Directory holding the real catalog (`catalog.sqlite`, `blobs/`, `exports/`).
+        #[arg(long)]
+        catalog: PathBuf,
+        /// Directory for this process's writable overlay; the real catalog is never written.
+        #[arg(long)]
+        state: PathBuf,
+        /// Registered source identity to derive the surface from.
+        #[arg(long, default_value = "helius.http.solana.v1")]
+        source_id: String,
+    },
+    /// Mark one real mint over a real catalog through the paired route and reopen after restart.
+    LiveGestureWalk {
+        #[arg(long)]
+        catalog: PathBuf,
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long, default_value = "helius.http.solana.v1")]
+        source_id: String,
+        #[arg(long, default_value = "http://127.0.0.1:4173")]
+        glass_origin: String,
+    },
     /// Serve the exact offline G0 fixture through durable ordinary pairing for local inspection.
     Wave5G0Inspect {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -351,6 +378,61 @@ async fn main() -> Result<(), CliError> {
             );
             axum::serve(listener, core.router()).await?;
         }
+        Some(Command::LiveSurfaceInspect {
+            listen,
+            glass_origin,
+            catalog,
+            state,
+            source_id,
+        }) => {
+            if !listen.ip().is_loopback() {
+                return Err(CliError::NonLoopback(listen));
+            }
+            let mounted =
+                joshi_core::live_gesture::mount_live_surface(&catalog, &state, &source_id)?;
+            let scene_id = mounted.surface.scene_id.clone();
+            let surface = serde_json::to_string(&mounted.surface)?;
+            let origin = loopback_pairing_origin(glass_origin)?;
+            let (core, launcher) = CoreService::with_sqlite_pairing_mounting(
+                mounted.store,
+                None,
+                PairingCapability::generate_os_random()?,
+                origin,
+                PairingConfig::default(),
+                Some(mounted.view),
+            )?;
+            let listener = tokio::net::TcpListener::bind(listen).await?;
+            let issued = launcher.issue_code(vec![
+                PairingScope::CockpitRead,
+                PairingScope::OperatorEvidenceWrite,
+            ])?;
+            println!("{surface}");
+            eprintln!(
+                "live surface mounted from {}: scene {scene_id}\n\
+                 Glass needs: VITE_JOSHI_CORE_URL=http://{listen} \
+                 VITE_JOSHI_LAUNCH_SCENE_ID={scene_id}\n\
+                 one-time pairing code (Cockpit read + operator evidence; no signing or \
+                 execution): {}",
+                catalog.display(),
+                issued.code.as_str()
+            );
+            axum::serve(listener, core.router()).await?;
+        }
+        Some(Command::LiveGestureWalk {
+            catalog,
+            state,
+            source_id,
+            glass_origin,
+        }) => {
+            let report = joshi_core::live_gesture::run_live_gesture_walk(
+                &catalog,
+                &state,
+                &source_id,
+                &glass_origin,
+            )
+            .await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
         Some(Command::Fixture(fixture)) => run_fixture_command(fixture).await?,
         None => run_fixture_command(arguments.fixture).await?,
     }
@@ -497,6 +579,8 @@ enum CliError {
     Wave6StoreInput(#[from] joshi_core::wave6_store_input::Wave6StoreInputCensusError),
     #[error(transparent)]
     Wave6OperatorInput(#[from] joshi_core::wave6_operator_input::Wave6OperatorEvidenceInputError),
+    #[error(transparent)]
+    LiveGesture(#[from] joshi_core::live_gesture::LiveGestureError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]

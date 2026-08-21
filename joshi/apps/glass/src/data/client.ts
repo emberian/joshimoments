@@ -3,6 +3,8 @@ import { validate as validateJsonWithoutDuplicateKeys } from "json-dup-key-valid
 import type { GlassSnapshotV1, ReplayMode } from "../contract/v1";
 import { parseGlassSnapshotV1 } from "../contract/v1";
 import type { ExplorationBundleV1, PresentationPolicyV1 } from "../presentation/contract";
+import { defaultPresentationPolicy, explorationBundleFor } from "../presentation/fixtures";
+import { glassPairingSession, type MemoryOnlyPairingSession } from "../security/pairing";
 import { mockSnapshots } from "./mockSnapshot";
 
 export const MAX_GLASS_SNAPSHOT_BYTES = 4 * 1024 * 1024;
@@ -19,7 +21,7 @@ export interface GlassDataSource {
   presentationMaterials?(snapshot: GlassSnapshotV1): {
     policy: PresentationPolicyV1;
     bundle: ExplorationBundleV1;
-    publication: { cockpitPublicationId: string; cockpitPublicationDigest: string };
+    publication: { cockpitPublicationId: string; cockpitPublicationDigest: string } | null;
   } | null;
 }
 
@@ -75,8 +77,13 @@ export class LoopbackDataSource implements GlassDataSource {
   readonly kind = "loopback" as const;
   private readonly baseUrl: URL;
   private readonly launchSceneId: string | null;
+  private readonly pairingSession: MemoryOnlyPairingSession;
 
-  constructor(baseUrl: string, launchSceneId: string | null = null) {
+  constructor(
+    baseUrl: string,
+    launchSceneId: string | null = null,
+    pairingSession: MemoryOnlyPairingSession = glassPairingSession,
+  ) {
     const parsed = new URL(baseUrl);
     const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
     if (parsed.protocol !== "http:" || !loopbackHosts.has(parsed.hostname)) {
@@ -84,6 +91,16 @@ export class LoopbackDataSource implements GlassDataSource {
     }
     this.baseUrl = parsed;
     this.launchSceneId = launchSceneId;
+    this.pairingSession = pairingSession;
+  }
+
+  /**
+   * Ordering, salience and omission plan for exactly the items this snapshot served. It is a
+   * presentation plan over served bytes, never an extra evidence claim: it adds no field, no
+   * number and no subject that the snapshot did not already carry.
+   */
+  presentationMaterials(snapshot: GlassSnapshotV1) {
+    return { policy: defaultPresentationPolicy, bundle: explorationBundleFor(snapshot), publication: null };
   }
 
   async loadSnapshot(request: SnapshotRequest): Promise<GlassSnapshotV1> {
@@ -97,10 +114,17 @@ export class LoopbackDataSource implements GlassDataSource {
     }
     url.searchParams.set("basisSceneId", selectedSceneId);
 
+    // The paired snapshot route is capability-gated. An unpaired source still reads an
+    // unpaired core, so the header is attached only when a live session actually holds one.
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.pairingSession.paired()) {
+      headers["X-Joshi-Pairing-Token"] = this.pairingSession.authorizationHeader("cockpit_read");
+    }
     const response = await fetch(url, {
       ...(request.signal ? { signal: request.signal } : {}),
       credentials: "omit",
-      headers: { Accept: "application/json" },
+      cache: "no-store",
+      headers,
     });
     if (!response.ok) throw new Error(`glass snapshot request failed (${response.status})`);
 

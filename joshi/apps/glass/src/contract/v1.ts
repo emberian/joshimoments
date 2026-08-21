@@ -104,7 +104,9 @@ export const candidateSchema = z.object({
   watched: z.boolean(),
   episodeId: z.string().min(1).nullable(),
   evidence: sortedArray(evidenceRefSchema, (value) => value.id).min(1),
-  candles: z.array(candleSchema).min(2),
+  // Empty is legal and means "no price series was observed for this mint". A single bar is not:
+  // one point implies an interval it does not have. Bars are never invented to fill the shape.
+  candles: z.array(candleSchema).refine((value) => value.length !== 1, "must be empty or contain at least two samples"),
 }).strict();
 
 export const socialEventSchema = z.object({

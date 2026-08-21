@@ -62,10 +62,10 @@ const DIRECT_C0_FILE: &[u8] =
 const OFFLINE_SELECTION_FILE: &[u8] =
     include_bytes!("../../../fixtures/pump-api/offline-fixture-selection-v1.json");
 const BASELINE_ARTIFACT_MANIFEST: &[u8] = include_bytes!(
-    "../../../fixtures/artifact/derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55/manifest.json"
+    "../../../fixtures/artifact/derived-c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5/manifest.json"
 );
 const BASELINE_ARTIFACT_PART: &[u8] = include_bytes!(
-    "../../../fixtures/artifact/derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55/descriptive_chart_shapes.parquet"
+    "../../../fixtures/artifact/derived-c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5/descriptive_chart_shapes.parquet"
 );
 const BASELINE_EXPORT_BINDING_ID: &str = "export-binding:wave5-g0-baseline-0001";
 const BASELINE_IMPORT_ID: &str = "import:wave5-g0-baseline-0001";
@@ -1666,7 +1666,7 @@ fn bootstrap_baseline_import(
         export_binding_id: BASELINE_EXPORT_BINDING_ID.into(),
         export_request_id: export.export_request_id.to_string(),
         analysis_run_id: "analysis-run-production-fixture-001".into(),
-        artifact_id: "sha256:759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55"
+        artifact_id: "sha256:c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5"
             .into(),
         artifact_contract: "joshi.analysis.derived-artifact/v2".into(),
         manifest_digest: Sha256Digest::of_bytes(BASELINE_ARTIFACT_MANIFEST).to_string(),
