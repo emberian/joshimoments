@@ -129,6 +129,46 @@ both Rust and TypeScript, which chain-only evidence cannot satisfy without inven
 contract was widened to admit no price series at all (one bar is still refused: a single point
 implies an interval it does not have).
 
+## What the five wide lanes delivered, 2026-08-21
+
+All on real mainnet bytes. Held uncommitted until joshi-core is green again.
+
+- **S3, gesture + cockpit wiring.** `live-surface-inspect` derives a Glass scene from store rows and
+  mounts it behind ordinary pairing; `live-gesture-walk` proves the whole loop headless. This is
+  what closed S1. Also found that `LoopbackDataSource` sent no pairing token, so the ordinary
+  cockpit could never have read a paired core — live data had never appeared in Glass because it
+  could not.
+- **S5, authenticated product read.** `GET /coins-v2/{mint}` on
+  `14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump` — the SAME mint S1 observed, which appears 27x in
+  those 13 Helius observations. Two lanes joined on one real coin without being told to. 5 GETs
+  total, schema promoted through an explicit review, read back after restart.
+- **S7, would-quote.** PumpSwap pool `FnzKY6x7entQ1eR3D225dQyT7ybfka4PskBMQhb8L3CC` at slot
+  440676107, discovered from a landed swap's account list rather than assumed. Quote recomputed from
+  the STORED bytes: 38,581,426,272 lamports in for 12,250,328,664 base atoms, fees broken out
+  20/5/5 bps, with the chain-time-to-receipt age attached. No fill inferred, no PnL.
+- **S4, hot lease.** Real resource measurement via statvfs and an fs walk, one subject, bounded
+  window, refuses any scope carrying spending permission. Run live three times.
+- **S8, the first empirical number JOSHI has ever produced.**
+
+## THE NUMBER: 13
+
+Of the 13 finalized Solana transactions Helius listed for account
+`BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh` across the three pages JOSHI retained on 2026-08-19,
+**13 carried a non-null on-chain execution error and 0 carried a null error.**
+
+Denominator 13, stated beside it. 19 provenance edges exported: 13 listing edges plus 6 corroborating
+full-`getTransaction` edges whose `meta.err` agree with their listing entry — the census refuses on
+disagreement, so that agreement is checked rather than assumed.
+
+The subject address is not stored in plaintext anywhere in the catalog, only the sha256 of the
+redacted request material. It was recovered by exact preimage search over addresses in the retained
+bodies and verified against `acquisition.request_fingerprint`; a failed recovery reports
+`listing_subject_unrecovered` rather than guessing.
+
+This independently corroborates what the S3 lane found from the other direction: every
+`getTransaction` in the cut is a failed transaction. Two lanes, two paths, same finding. It is also
+exactly why the first rendered surface is mostly nulls, and why that is correct rather than broken.
+
 ## Regression under repair, 2026-08-21 08:30
 
 `cargo test -p joshi-core --all-targets` is 26 passed / 12 FAILED after the five slice lanes
