@@ -56,6 +56,14 @@ of which trade.
 - 2026-08-21 S2 precondition verified: ordinary pairing mounts, prints a one-time code, health
   responds; Glass built with deps installed. Runbook at docs/implementation/S2_RUNBOOK.md.
 - 2026-08-21 S2 gap named: wave5-g0-inspect serves the G0 fixture, not the census. Wiring is move 3.
+- 2026-08-21 11:05 census lane has REAL MINTS in a store: 3NQcporBGYhuBRF7fX4hiNvDUcgQZSca85bFS65Fpump
+  at slot 440672542, 19 observations, 19 requests, 181,872 bytes, catalog v24, 3 coverage windows and
+  4 explicit gap rows (e.g. signature_page_hit_its_requested_limit). The subject relation is stated
+  honestly as "mint appears in the token balances of a transaction returned for this program address"
+  with programRelations account_key_only, rather than claiming the mint traded. Lane still running;
+  not integrated yet.
+- 2026-08-21 S5 lane has run-promoted and run-quarantine catalogs with real reads, i.e. a schema
+  trust decision is actually being exercised in both directions.
 
 ## Declined, 2026-08-21 — live trading while Ember sleeps
 
