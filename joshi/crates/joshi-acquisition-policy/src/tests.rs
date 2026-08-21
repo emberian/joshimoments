@@ -477,3 +477,145 @@ fn assert_no_numbers(value: &Value) {
         Value::Null | Value::Bool(_) | Value::String(_) => {}
     }
 }
+
+#[test]
+fn exactly_one_subject_is_promoted_and_its_ceilings_are_the_reducers_own() {
+    let scenario = scenario();
+    let journal = PolicyJournal::new(scenario.journal.clone()).unwrap();
+    let decision = evaluate(&journal, &scenario.evaluation).unwrap();
+
+    let subject = crate::ScopeSubject {
+        kind: crate::SubjectKind::Mint,
+        key: stable("mint-high-activity"),
+    };
+    let terms = crate::promote_one(&decision, &subject).unwrap();
+    assert_eq!(terms.contract.as_str(), crate::HOT_LEASE_TERMS_CONTRACT);
+    assert_eq!(terms.authority.as_str(), "read_only_no_execution");
+    assert_eq!(terms.subject, subject);
+    assert_eq!(terms.source_key.as_str(), "helius-main");
+    assert_eq!(terms.operation_key.as_str(), "mint-hot-observation");
+    assert!(!terms.is_degraded());
+
+    // Every ceiling is the exact budget the reducer emitted, never a local default.
+    let scope = decision
+        .new_records
+        .iter()
+        .find_map(|record| match record {
+            HotScopeRecordV1::Desired(value) if value.scope.subject == subject => {
+                Some(&value.scope)
+            }
+            _ => None,
+        })
+        .expect("the subject has a desired scope");
+    assert_eq!(terms.max_connections, scope.budget.max_requests);
+    assert_eq!(terms.max_frames, scope.budget.max_pages);
+    assert_eq!(terms.max_ingress_bytes, scope.budget.max_response_bytes);
+    assert_eq!(terms.expires_at, scope.expires_at);
+    assert_eq!(terms.opened_at, scenario.evaluation.evaluated_at);
+    assert_eq!(
+        terms.window_us.get(),
+        u64::try_from(
+            (scope.expires_at.as_datetime() - scenario.evaluation.evaluated_at.as_datetime())
+                .whole_microseconds()
+        )
+        .unwrap()
+    );
+    assert_eq!(terms.window_ms(), terms.window_us.get() / 1_000);
+    assert_eq!(terms.census_ids.len(), 1);
+
+    // Terms are inert wire values: they round-trip and carry no JSON number tokens.
+    let encoded = serde_json::to_value(&terms).unwrap();
+    assert_no_numbers(&encoded);
+    assert_eq!(
+        serde_json::from_value::<crate::HotLeaseTermsV1>(encoded).unwrap(),
+        terms
+    );
+}
+
+#[test]
+fn a_subject_the_reducer_did_not_activate_is_refused_with_its_reasons() {
+    let scenario = scenario();
+    let journal = PolicyJournal::new(scenario.journal.clone()).unwrap();
+    let decision = evaluate(&journal, &scenario.evaluation).unwrap();
+
+    // The model proposal is visible in the journal but has no active scope.
+    let proposal = crate::ScopeSubject {
+        kind: crate::SubjectKind::Mint,
+        key: stable("mint-model-proposal"),
+    };
+    let refusal = crate::promote_one(&decision, &proposal).unwrap_err();
+    assert!(
+        format!("{refusal}").contains("ModelProposalNonactivating"),
+        "refusal must name the reducer's own reason: {refusal}"
+    );
+
+    // A subject that was never named at all is refused, not defaulted.
+    let stranger = crate::ScopeSubject {
+        kind: crate::SubjectKind::Mint,
+        key: stable("mint-never-considered"),
+    };
+    assert!(crate::promote_one(&decision, &stranger).is_err());
+}
+
+#[test]
+fn overload_refuses_every_promotion_while_the_denominator_survives() {
+    let mut scenario = scenario();
+    let journal = PolicyJournal::new(scenario.journal.clone()).unwrap();
+    scenario.evaluation.resources = scenario.overload_resources.clone();
+    scenario.evaluation.decision_occurrence_id = stable("decision-overload");
+    let overloaded = evaluate(&journal, &scenario.evaluation).unwrap();
+    assert!(!crate::pressure_permits_hot_acquisition(
+        overloaded.pressure_stage
+    ));
+    for key in [
+        "mint-high-activity",
+        "mint-cold-market",
+        "mint-losing-market",
+        "mint-model-proposal",
+    ] {
+        let subject = crate::ScopeSubject {
+            kind: crate::SubjectKind::Mint,
+            key: stable(key),
+        };
+        assert!(
+            crate::promote_one(&overloaded, &subject).is_err(),
+            "{key} must not be promoted under overload"
+        );
+    }
+    assert!(!overloaded.retained_census_denominators.is_empty());
+}
+
+#[test]
+fn a_degraded_but_active_scope_is_promoted_carrying_its_degradations() {
+    let mut scenario = scenario();
+    // Raise queue record utilization past the 90% shorten-hot-lease threshold without reaching
+    // the denominator-only cut, so the reducer keeps the scope active but shortens its expiry.
+    let capacity = scenario.evaluation.resources.queue_record_capacity.get();
+    let reserve = scenario
+        .evaluation
+        .resources
+        .queue_record_control_reserve
+        .get();
+    let usable = capacity - reserve;
+    scenario.evaluation.resources.queue_records_used = WireU64::new(usable * 95 / 100);
+    scenario.evaluation.decision_occurrence_id = stable("decision-shortened");
+    let journal = PolicyJournal::new(scenario.journal.clone()).unwrap();
+    let decision = evaluate(&journal, &scenario.evaluation).unwrap();
+    assert_eq!(decision.pressure_stage, PressureStage::ShortenHotLeases);
+
+    let subject = crate::ScopeSubject {
+        kind: crate::SubjectKind::Mint,
+        key: stable("mint-high-activity"),
+    };
+    let terms = crate::promote_one(&decision, &subject).unwrap();
+    assert!(terms.is_degraded());
+    assert!(
+        terms
+            .degradations
+            .iter()
+            .any(|change| change.reason == DegradationReason::HotLeaseShortened)
+    );
+    // The shortened lease is strictly shorter than the intent's own two-hour interval.
+    assert!(terms.expires_at < instant("2026-08-17T02:00:00.000000Z"));
+    assert!(terms.window_us.get() > 0);
+}

@@ -7,6 +7,7 @@
 mod budget;
 mod error;
 mod harness;
+pub mod hot_lease;
 pub mod ingest;
 mod journal;
 mod model;

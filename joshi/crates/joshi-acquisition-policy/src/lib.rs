@@ -7,6 +7,7 @@
 
 mod control;
 mod error;
+mod hot_lease;
 mod model;
 mod policy;
 
@@ -16,6 +17,10 @@ pub use control::{
     adapt_supervisor_control_reservation, pending_control_commands, receipt_to_applied,
 };
 pub use error::PolicyError;
+pub use hot_lease::{
+    HOT_LEASE_AUTHORITY, HOT_LEASE_TERMS_CONTRACT, HotLeaseTermsV1,
+    pressure_permits_hot_acquisition, promote_one,
+};
 pub use model::{
     ActivationAuthority, AsOfCutoff, BudgetEnvelope, CensusDenominatorRef, CensusKind,
     ChainNativeBudget, CollectorGeneration, DegradationChange, DegradationReason, EffectiveScope,

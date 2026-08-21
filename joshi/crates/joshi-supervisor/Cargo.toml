@@ -7,18 +7,24 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bs58 = "0.5.1"
 bytes = "1.12.1"
-joshi-admission = { path = "../joshi-admission" }
+joshi-acquisition-policy = { path = "../joshi-acquisition-policy" }
+joshi-admission = { path = "../joshi-admission", features = ["source-edges"] }
 joshi-domain = { path = "../joshi-domain" }
 joshi-evidence = { path = "../joshi-evidence" }
 joshi-sources = { path = "../joshi-sources" }
 joshi-spool = { path = "../joshi-spool" }
 joshi-store = { path = "../joshi-store" }
+rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled", "extra_check"] }
+rustix = { version = "1.1.4", features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
