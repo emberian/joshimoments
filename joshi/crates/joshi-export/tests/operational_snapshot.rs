@@ -110,8 +110,18 @@ fn migrated_operational_catalog_produces_cross_runtime_snapshot_v2() {
     .expect("production export");
     assert_eq!(
         value.snapshot_id().as_str(),
-        "sha256:e9ecd5990b24c88650ebed19b4afa8c3b60d647948865fe3d2cac9df6fd71845"
+        "sha256:667934d19480a9d6e88181e0b374aff07d5dc58864037630699becbb43938fe6"
     );
+    // The catalog holds seven assertions joined to their retained observations by three exact
+    // evidence edges. Before the provenance adapter existed the export emitted this relation
+    // empty while the rows sat in the store, which is the Wave 5 "refuses every populated table"
+    // ceiling; the snapshot identity above moved when that stopped being true.
+    let provenance = value
+        .tables()
+        .iter()
+        .find(|table| table.name().as_str() == "provenance_assertions")
+        .expect("provenance relation");
+    assert_eq!(provenance.row_count(), 3);
     assert_eq!(
         value.export_request_id().as_str(),
         "export-production-fixture-001"
@@ -349,4 +359,38 @@ fn insert_wall_recovery(connection: &Connection) {
                      2900000);",
         )
         .expect("insert representable coverage");
+}
+
+#[test]
+fn from_commit_seq_narrows_provenance_and_moves_snapshot_identity() {
+    let temporary = tempfile::tempdir().expect("temporary export root");
+    let catalog = workspace().join("fixtures/export/operational_catalog_v8.sqlite");
+    let wide =
+        export_operational_snapshot_v2(&request(catalog.clone(), temporary.path().join("wide")))
+            .expect("wide export");
+
+    // The catalog carries three assertion/observation evidence edges: two produced at commit 1 and
+    // one at commit 8. Raising the lower bound past the first two must remove exactly those rows.
+    let mut narrow = request(catalog, temporary.path().join("narrow"));
+    narrow.from_commit_seq = CommitSeq::new(8);
+    narrow.export_request_id = stable("export-production-fixture-002");
+    narrow.coverage_window_ids = Vec::new();
+    let narrow = export_operational_snapshot_v2(&narrow).expect("narrow export");
+
+    assert_eq!(provenance_rows(&wide), 3);
+    assert_eq!(provenance_rows(&narrow), 1);
+    assert_ne!(wide.snapshot_id(), narrow.snapshot_id());
+    assert_eq!(
+        (wide.commit_range().0.get(), narrow.commit_range().0.get()),
+        (1, 8)
+    );
+}
+
+fn provenance_rows(snapshot: &joshi_export::ValidatedProductionSnapshotV2) -> u64 {
+    snapshot
+        .tables()
+        .iter()
+        .find(|table| table.name().as_str() == "provenance_assertions")
+        .expect("provenance relation")
+        .row_count()
 }

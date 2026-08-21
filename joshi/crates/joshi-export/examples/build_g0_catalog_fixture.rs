@@ -614,7 +614,7 @@ fn main() {
         )
         .expect("insert ready export status");
     let artifact_fixture = workspace.join(
-        "fixtures/artifact/derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55",
+        "fixtures/artifact/derived-c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5",
     );
     let artifact_part = fs::read(artifact_fixture.join("descriptive_chart_shapes.parquet"))
         .expect("validated artifact Parquet");

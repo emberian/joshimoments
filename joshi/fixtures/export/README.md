@@ -39,8 +39,8 @@ Python fixture.
 The exact identities are:
 
 - catalog bytes: `sha256:b5812f0e6ef903e44049717d572755cdbc94a99721e4c64ed79451c745111e3e`;
-- snapshot: `sha256:e9ecd5990b24c88650ebed19b4afa8c3b60d647948865fe3d2cac9df6fd71845`;
-- manifest bytes: `sha256:4fb25f95de1568b0c68c0e61ad64aa5b2a9f9b516979caa1075dff9e99c2475f`.
+- snapshot: `sha256:667934d19480a9d6e88181e0b374aff07d5dc58864037630699becbb43938fe6`;
+- manifest bytes: `sha256:0d6642232bba99d330ca1328f597f930808a0e90c75c56e5e26e7123c4b55cbe`.
 
 Regenerate into absent temporary destinations and compare the exact bytes:
 
@@ -59,12 +59,13 @@ ledger, catalog digest before/after, explicit cutoff, publication semantic and e
 fourteen Arrow schemas, logical and physical Parquet digests, and an independent locked Python
 receipt before immutable rename.
 
-This witness contains two stored scene rows plus one selected, closed Wall-bounded coverage window
-and one open-ended Wall-lower gap. Open/source-cursor/commit/unknown boundaries and partial or
-unrecoverable recoveries refuse because Snapshot V2 cannot carry them losslessly. It is not a
-prospective decision-study witness. Source/fact artifacts, protocol/launch/session rows, nominations,
-abstentions, outcomes, and interviews remain fail-closed until a successor relation set represents
-their frozen DTOs.
+This witness contains two stored scene rows, three assertion/observation provenance edges — two
+first observations and one later correction of the same semantic key — plus one selected, closed
+Wall-bounded coverage window and one open-ended Wall-lower gap, for `total_row_count=7`.
+Open/source-cursor/commit/unknown boundaries and partial or unrecoverable recoveries refuse
+because Snapshot V2 cannot carry them losslessly. It is not a prospective decision-study witness.
+Source/fact artifacts, protocol/launch/session rows, nominations, abstentions, outcomes, and
+interviews remain fail-closed until a successor relation set represents their frozen DTOs.
 
 ## Wave 5 G0 V10 exact-byte witness
 
@@ -79,9 +80,9 @@ relations and parsed again after restart by both Rust and locked offline Python.
 G0 relations. Pairing and backup are deliberately absent; they are separate store/root witnesses,
 not analysis relations. Exact fixture identities are:
 
-- catalog: `sha256:c3857f874eda776c15cf3d6bd6bc225ce674275645f2c591d20f3c539cf1f0d0`;
-- snapshot: `sha256:7027d8751401ff0eff8f2d0a76ade9ac3204d53a9f5b47b046608001e934b0a2`;
-- manifest: `sha256:b639eb93ed95dd3c5488ccc84c735d4a8675dfea1eddd9d76ea01e7cc5b2dec3`.
+- catalog: `sha256:47fd336ae56b2f3f9acebd5198b096d96f36b54b6cf46e50564762d405a33ce9`;
+- snapshot: `sha256:acaed49221b40e4dbd81f99f9c7c24ef4e96414179424d8415921e0c86f8ae6f`;
+- manifest: `sha256:45ba8f6abcca8d30fe5f141060d6618bfc79badad1d5bdcfb8af3e56f53eec2b`.
 
 Regenerate only into absent paths:
 
@@ -94,7 +95,7 @@ uv run --locked --offline --directory analysis joshi-analysis validate --snapsho
   /tmp/joshi-g0-snapshot
 ```
 
-The expected validation receipt reports `table_count=24` and `total_row_count=10`. The public CAS
+The expected validation receipt reports `table_count=24` and `total_row_count=11`. The public CAS
 readback descriptor is neutral and cannot establish store authority; only store-owned orchestration
 may resolve it from private state and durably qualify/commit the resulting export.
 The analysis snapshot intentionally exports the act and episode semantic relations only. The six

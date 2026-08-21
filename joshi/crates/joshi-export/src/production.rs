@@ -1,5 +1,6 @@
 use crate::{
     ExportError, Result, ValidatedTableArtifactV1,
+    assertions::provenance_batch,
     coverage::selected_coverage_batches,
     snapshot::{
         logical_table_digest, parse_json_without_duplicate_keys, qualified_sha256,
@@ -30,8 +31,8 @@ const SNAPSHOT_V2: &str = "joshi.analysis.snapshot/v2";
 const VALIDATION_RECEIPT: &str = "joshi.export.snapshot-validation-receipt/v2";
 const MAXIMUM_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MINIMUM_CATALOG_SCHEMA: i64 = 8;
-const MAXIMUM_CATALOG_SCHEMA: i64 = 10;
-const MIGRATIONS: [(i64, &str, &str); 10] = [
+const MAXIMUM_CATALOG_SCHEMA: i64 = 24;
+const MIGRATIONS: [(i64, &str, &str); 24] = [
     (
         1,
         "0001_evidence.sql",
@@ -81,6 +82,76 @@ const MIGRATIONS: [(i64, &str, &str); 10] = [
         10,
         "0010_wave5_g0_store_spine.sql",
         include_str!("../../../schema/migrations/0010_wave5_g0_store_spine.sql"),
+    ),
+    (
+        11,
+        "0011_wave6_program_registry.sql",
+        include_str!("../../../schema/migrations/0011_wave6_program_registry.sql"),
+    ),
+    (
+        12,
+        "0012_wave6_artifact_schemas.sql",
+        include_str!("../../../schema/migrations/0012_wave6_artifact_schemas.sql"),
+    ),
+    (
+        13,
+        "0013_wave6_fixture_artifacts.sql",
+        include_str!("../../../schema/migrations/0013_wave6_fixture_artifacts.sql"),
+    ),
+    (
+        14,
+        "0014_wave6_artifact_dag.sql",
+        include_str!("../../../schema/migrations/0014_wave6_artifact_dag.sql"),
+    ),
+    (
+        15,
+        "0015_wave6_fixture_decisions.sql",
+        include_str!("../../../schema/migrations/0015_wave6_fixture_decisions.sql"),
+    ),
+    (
+        16,
+        "0016_wave6_campaign_bundle.sql",
+        include_str!("../../../schema/migrations/0016_wave6_campaign_bundle.sql"),
+    ),
+    (
+        17,
+        "0017_wave6_research_proposal.sql",
+        include_str!("../../../schema/migrations/0017_wave6_research_proposal.sql"),
+    ),
+    (
+        18,
+        "0018_wave6_research_disposition.sql",
+        include_str!("../../../schema/migrations/0018_wave6_research_disposition.sql"),
+    ),
+    (
+        19,
+        "0019_wave6_market_atlas_fixture.sql",
+        include_str!("../../../schema/migrations/0019_wave6_market_atlas_fixture.sql"),
+    ),
+    (
+        20,
+        "0020_wave6_store_input_census.sql",
+        include_str!("../../../schema/migrations/0020_wave6_store_input_census.sql"),
+    ),
+    (
+        21,
+        "0021_cockpit_v2_browser_presentation.sql",
+        include_str!("../../../schema/migrations/0021_cockpit_v2_browser_presentation.sql"),
+    ),
+    (
+        22,
+        "0022_wave6_operator_evidence_input.sql",
+        include_str!("../../../schema/migrations/0022_wave6_operator_evidence_input.sql"),
+    ),
+    (
+        23,
+        "0023_wave5_c1_activation.sql",
+        include_str!("../../../schema/migrations/0023_wave5_c1_activation.sql"),
+    ),
+    (
+        24,
+        "0024_retire_wave5_c1_activation.sql",
+        include_str!("../../../schema/migrations/0024_retire_wave5_c1_activation.sql"),
     ),
 ];
 
@@ -150,7 +221,8 @@ pub struct OperationalExportRequestV2 {
     pub destination: PathBuf,
     /// Independent locked Python semantic validator.
     pub python_validator: PythonValidatorV2,
-    /// Required neutral import/CAS readback descriptor for V10; absent before V10.
+    /// Required neutral import/CAS readback descriptor whenever the window holds a G0
+    /// occurrence closure; absent when it does not.
     pub g0_import_artifact: Option<G0ImportArtifactReadbackV1>,
 }
 
@@ -359,16 +431,88 @@ struct PublicationClosure {
     publication_ids: Vec<StableString>,
 }
 
-fn table_specs(catalog_version: i64) -> Vec<&'static TableSpec> {
+/// Decides the readback profile the way an independent reader must: from the manifest alone.
+///
+/// A V10 catalog always carries the G0 occurrence profile, which is what the frozen V10 contract
+/// says. Later catalog generations carry it only when the export declared it, and the exact
+/// name/cardinality closure below then refuses any partial G0 table set.
+fn manifest_declares_g0_profile(version: i64, tables: &[Value]) -> bool {
+    if version == 10 {
+        return true;
+    }
+    version > 10
+        && tables.iter().any(|table| {
+            table["name"]
+                .as_str()
+                .is_some_and(|name| G0_TABLE_SPECS.iter().any(|spec| spec.name == name))
+        })
+}
+
+fn table_specs(g0_profile: bool) -> Vec<&'static TableSpec> {
     TABLE_SPECS
         .iter()
-        .chain(
-            (catalog_version >= 10)
-                .then_some(G0_TABLE_SPECS)
-                .into_iter()
-                .flatten(),
-        )
+        .chain(g0_profile.then_some(G0_TABLE_SPECS).into_iter().flatten())
         .collect()
+}
+
+/// Every table whose rows the G0 occurrence profile is the only adapter for.
+const G0_OCCURRENCE_TABLES: [(&str, &str); 8] = [
+    ("wave5_source_occurrence_v1", "created_commit_seq"),
+    ("cockpit_v2_publication_v1", "created_commit_seq"),
+    ("scientific_memory_occurrence_v1", "created_commit_seq"),
+    ("wave5_run_registration_v1", "created_commit_seq"),
+    ("wave5_spool_catalog_binding_v1", "created_commit_seq"),
+    ("wave5_operational_record_v1", "created_commit_seq"),
+    ("wave5_export_validation_binding_v1", "created_commit_seq"),
+    ("wave5_restricted_artifact_v1", "created_commit_seq"),
+];
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        params![table],
+        |row| row.get(0),
+    )?;
+    Ok(count == 1)
+}
+
+fn rows_in_range(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    from: i64,
+    cutoff: i64,
+) -> Result<i64> {
+    if !table_exists(connection, table)? {
+        return Ok(0);
+    }
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE {column} BETWEEN ?1 AND ?2");
+    Ok(connection.query_row(&sql, params![from, cutoff], |row| row.get(0))?)
+}
+
+/// Decides the snapshot profile from what the catalog actually holds in the requested window.
+///
+/// Before this the profile was keyed on the catalog schema number alone, which made every
+/// catalog at V10 or later demand the complete ten-relation G0 occurrence closure and refuse
+/// outright when the store held raw evidence and no Wave 5 ceremony. The schema number says what
+/// a catalog *can* record; only its rows say what it *did*.
+fn g0_occurrences_present(
+    connection: &Connection,
+    from: CommitSeq,
+    cutoff: CommitSeq,
+    catalog_version: i64,
+) -> Result<bool> {
+    if catalog_version < 10 {
+        return Ok(false);
+    }
+    let from = sql_commit(from)?;
+    let cutoff = sql_commit(cutoff)?;
+    for (table, column) in G0_OCCURRENCE_TABLES {
+        if rows_in_range(connection, table, column, from, cutoff)? != 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Query an immutable operational catalog backup at an explicit cutoff, materialize the exact
@@ -381,7 +525,8 @@ fn table_specs(catalog_version: i64) -> Vec<&'static TableSpec> {
 ///
 /// # Errors
 ///
-/// Refuses mutable/symlinked inputs, non-V8 catalogs, cutoffs/publications that do not close,
+/// Refuses mutable/symlinked inputs, out-of-range catalog schemas, cutoffs/publications that do
+/// not close,
 /// malformed exact publication bytes, future rows, schema/logical drift, Python disagreement,
 /// destination replacement, or any catalog mutation during the read.
 #[allow(clippy::too_many_lines)]
@@ -402,9 +547,15 @@ pub fn export_operational_snapshot_v2(
     )?;
     connection.pragma_update(None, "query_only", true)?;
     let catalog_version = validate_catalog(&connection, request)?;
-    if (catalog_version >= 10) != request.g0_import_artifact.is_some() {
+    let g0_profile = g0_occurrences_present(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+        catalog_version,
+    )?;
+    if g0_profile != request.g0_import_artifact.is_some() {
         return Err(invalid(
-            "V10 requires exactly one neutral G0 import artifact readback",
+            "a G0 occurrence closure in range requires exactly one neutral import artifact readback",
         ));
     }
     refuse_unmapped_operational_facts(
@@ -413,7 +564,7 @@ pub fn export_operational_snapshot_v2(
         request.through_commit_seq,
         catalog_version,
     )?;
-    let publications = load_publications(&connection, request, catalog_version)?;
+    let publications = load_publications(&connection, request, g0_profile)?;
     let producer_projection = publications
         .projections
         .iter()
@@ -425,11 +576,7 @@ pub fn export_operational_snapshot_v2(
             )
         })
         .ok_or_else(|| invalid("primary producer projection is absent from publication closure"))?;
-    let sources = source_as_of(
-        &connection,
-        request.from_commit_seq,
-        request.through_commit_seq,
-    )?;
+    let sources = source_as_of(&connection, request.through_commit_seq)?;
     if sources.is_empty() {
         return Err(invalid(
             "operational snapshot requires at least one represented source",
@@ -463,9 +610,14 @@ pub fn export_operational_snapshot_v2(
         request.through_commit_seq,
         &publications,
     )?;
-    let specs = table_specs(catalog_version);
-    let mut relations = relation_batches(&scenes, &coverage.windows, &coverage.gaps);
-    if catalog_version >= 10 {
+    let provenance = provenance_batch(
+        &connection,
+        request.from_commit_seq,
+        request.through_commit_seq,
+    )?;
+    let specs = table_specs(g0_profile);
+    let mut relations = relation_batches(&scenes, &provenance, &coverage.windows, &coverage.gaps);
+    if g0_profile {
         relations.extend(crate::g0::relation_batches(
             &connection,
             request.from_commit_seq,
@@ -727,7 +879,11 @@ pub fn validate_operational_snapshot_v2_directory(root: &Path) -> Result<Validat
     if !(MINIMUM_CATALOG_SCHEMA..=MAXIMUM_CATALOG_SCHEMA).contains(&version) {
         return Err(invalid("catalog schema is unsupported"));
     }
-    let specs = table_specs(version);
+    let table_values = manifest["tables"]
+        .as_array()
+        .ok_or_else(|| invalid("snapshot tables must be an array"))?;
+    let g0_profile = manifest_declares_g0_profile(version, table_values);
+    let specs = table_specs(g0_profile);
     let from_commit_seq = manifest["catalog"]["from_commit_seq"]
         .as_str()
         .ok_or_else(|| invalid("catalog lower commit is absent"))?;
@@ -739,9 +895,6 @@ pub fn validate_operational_snapshot_v2_directory(root: &Path) -> Result<Validat
     if from_commit == 0 || from_commit > through_commit {
         return Err(invalid("catalog commit range is invalid"));
     }
-    let table_values = manifest["tables"]
-        .as_array()
-        .ok_or_else(|| invalid("snapshot tables must be an array"))?;
     if table_values.len() != specs.len() {
         return Err(invalid(
             "snapshot table set has the wrong exact cardinality",
@@ -892,11 +1045,11 @@ pub fn validate_operational_snapshot_v2_directory(root: &Path) -> Result<Validat
         total_rows = total_rows
             .checked_add(rows)
             .ok_or_else(|| invalid("snapshot total row count exceeds u64"))?;
-        if version >= 10 && G0_TABLE_SPECS.iter().any(|g0| g0.name == spec.name) {
+        if g0_profile && G0_TABLE_SPECS.iter().any(|g0| g0.name == spec.name) {
             g0_rows.insert(spec.name, relation_rows(&batches)?);
         }
     }
-    if version >= 10 {
+    if g0_profile {
         crate::g0::validate_connected_closure(&g0_rows)?;
         crate::g0::validate_manifest_publication(&g0_rows, &manifest["publications"])?;
     }
@@ -1006,6 +1159,59 @@ fn validate_catalog(connection: &Connection, request: &OperationalExportRequestV
     Ok(version)
 }
 
+/// Row families introduced after V10 that no frozen Snapshot V2 relation represents.
+///
+/// Every one of these is refused when populated inside the window, so raising the accepted
+/// catalog schema ceiling can never turn into a silently narrower snapshot.
+const UNMAPPED_AFTER_V10: [(&str, &str); 13] = [
+    (
+        "wave6_program_registration_v1",
+        "Wave 6 program registration",
+    ),
+    (
+        "wave6_registered_artifact_schema_v1",
+        "Wave 6 registered artifact schema",
+    ),
+    (
+        "wave6_fixture_artifact_content_v1",
+        "Wave 6 fixture artifact content",
+    ),
+    (
+        "wave6_fixture_artifact_dag_v1",
+        "Wave 6 fixture artifact DAG",
+    ),
+    (
+        "wave6_fixture_decision_ledger_v1",
+        "Wave 6 fixture decision ledger",
+    ),
+    (
+        "wave6_fixture_campaign_bundle_v1",
+        "Wave 6 fixture campaign bundle",
+    ),
+    (
+        "wave6_fixture_research_proposal_v1",
+        "Wave 6 fixture research proposal",
+    ),
+    (
+        "wave6_fixture_research_disposition_v1",
+        "Wave 6 fixture research disposition",
+    ),
+    (
+        "wave6_fixture_market_atlas_v1",
+        "Wave 6 fixture market atlas",
+    ),
+    ("wave6_store_input_census_v1", "Wave 6 store input census"),
+    (
+        "cockpit_v2_browser_presentation_v1",
+        "Cockpit V2 browser presentation",
+    ),
+    (
+        "wave6_operator_evidence_input_v1",
+        "Wave 6 operator evidence input",
+    ),
+    ("wave5_c1_activation_v1", "Wave 5 C1 activation"),
+];
+
 fn refuse_unmapped_operational_facts(
     connection: &Connection,
     from: CommitSeq,
@@ -1027,11 +1233,11 @@ fn refuse_unmapped_operational_facts(
     if catalog_version < 10 {
         unmapped.push(("source_fact_artifact", "typed source/fact artifact"));
     }
+    if catalog_version > 10 {
+        unmapped.extend(UNMAPPED_AFTER_V10);
+    }
     for (table, label) in unmapped {
-        let sql =
-            format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq BETWEEN ?1 AND ?2");
-        let count: i64 = connection.query_row(&sql, params![from, cutoff], |row| row.get(0))?;
-        if count != 0 {
+        if rows_in_range(connection, table, "created_commit_seq", from, cutoff)? != 0 {
             return Err(invalid(format!(
                 "catalog contains {label} rows without a frozen Snapshot V2 relation adapter"
             )));
@@ -1051,10 +1257,7 @@ fn refuse_unmapped_operational_facts(
             ),
             ("wave5_restricted_artifact_v1", "Wave 5 restricted artifact"),
         ] {
-            let sql =
-                format!("SELECT COUNT(*) FROM {table} WHERE created_commit_seq BETWEEN ?1 AND ?2");
-            let count: i64 = connection.query_row(&sql, params![from, cutoff], |row| row.get(0))?;
-            if count != 0 {
+            if rows_in_range(connection, table, "created_commit_seq", from, cutoff)? != 0 {
                 return Err(invalid(format!(
                     "catalog contains {label} rows without a frozen Snapshot V2 relation adapter"
                 )));
@@ -1068,7 +1271,7 @@ fn refuse_unmapped_operational_facts(
 fn load_publications(
     connection: &Connection,
     request: &OperationalExportRequestV2,
-    catalog_version: i64,
+    g0_profile: bool,
 ) -> Result<PublicationClosure> {
     let from = sql_commit(request.from_commit_seq)?;
     let cutoff = sql_commit(request.through_commit_seq)?;
@@ -1210,7 +1413,7 @@ fn load_publications(
             }
         }
     }
-    if catalog_version >= 10 {
+    if g0_profile {
         let mut statement = connection.prepare(
             "SELECT p.publication_id,p.publication_contract,p.publication_sha256,
                     p.publication_bytes_sha256,p.publication_bytes,p.source_occurrence_id,
@@ -1314,13 +1517,19 @@ fn load_publications(
     })
 }
 
-fn source_as_of(connection: &Connection, from: CommitSeq, cutoff: CommitSeq) -> Result<Vec<Value>> {
+/// The as-known source vector at the cutoff.
+///
+/// This is a knowledge statement about the catalog at `cutoff`, not a row selection, so it is
+/// deliberately not narrowed by `from_commit_seq`. Narrowing it made a window that excluded a
+/// source's first observations report that source as absent, while the same window still carried
+/// that source's assertions and coverage.
+fn source_as_of(connection: &Connection, cutoff: CommitSeq) -> Result<Vec<Value>> {
     let mut statement = connection.prepare(
         "SELECT o.source_id,MAX(o.commit_seq),MAX(o.received_wall_us)
          FROM observation o WHERE o.commit_seq BETWEEN ?1 AND ?2
          GROUP BY o.source_id ORDER BY o.source_id",
     )?;
-    let from = sql_commit(from)?;
+    let from = 1_i64;
     let cutoff = sql_commit(cutoff)?;
     let source_rows = statement.query_map(params![from, cutoff], |row| {
         Ok((
@@ -1427,6 +1636,7 @@ fn scene_batch(connection: &Connection, from: CommitSeq, cutoff: CommitSeq) -> R
 
 fn relation_batches(
     scenes: &RecordBatch,
+    provenance_assertions: &RecordBatch,
     coverage_windows: &RecordBatch,
     coverage_gaps: &RecordBatch,
 ) -> BTreeMap<&'static str, Vec<RecordBatch>> {
@@ -1434,6 +1644,7 @@ fn relation_batches(
     for spec in TABLE_SPECS {
         let batch = match spec.name {
             "scenes" => scenes.clone(),
+            "provenance_assertions" => provenance_assertions.clone(),
             "coverage_windows" => coverage_windows.clone(),
             "coverage_gaps" => coverage_gaps.clone(),
             _ => RecordBatch::new_empty(Arc::new(spec.schema())),
@@ -1734,4 +1945,50 @@ fn parse_manifest_commit(value: &str, context: &str) -> Result<i64> {
     value
         .parse::<i64>()
         .map_err(|_| invalid(format!("{context} exceeds SQLite i64")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAXIMUM_CATALOG_SCHEMA, MIGRATIONS, MINIMUM_CATALOG_SCHEMA, manifest_declares_g0_profile,
+        table_specs,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn the_compiled_migration_ledger_reaches_the_accepted_schema_ceiling() {
+        // A catalog is refused unless every migration it recorded is one this build compiled in,
+        // so the ceiling and the ledger have to move together. When they drifted apart the
+        // exporter refused every current-generation store outright.
+        assert_eq!(
+            usize::try_from(MAXIMUM_CATALOG_SCHEMA).expect("ceiling fits a length"),
+            MIGRATIONS.len()
+        );
+        assert_eq!(MINIMUM_CATALOG_SCHEMA, 8);
+        for (index, (id, name, sql)) in MIGRATIONS.into_iter().enumerate() {
+            assert_eq!(id, i64::try_from(index).expect("index fits") + 1);
+            assert!(
+                name.starts_with(&format!("{id:04}_")),
+                "{name} is misordered"
+            );
+            assert!(!sql.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_g0_profile_follows_the_manifest_rather_than_the_schema_number() {
+        let v2_only = [json!({"name": "scenes"}), json!({"name": "coverage_gaps"})];
+        let with_g0 = [
+            json!({"name": "scenes"}),
+            json!({"name": "run_occurrences"}),
+        ];
+        assert!(!manifest_declares_g0_profile(9, &v2_only));
+        assert!(!manifest_declares_g0_profile(9, &with_g0));
+        // V10 is the frozen twenty-four-table contract and stays that way whatever it declares.
+        assert!(manifest_declares_g0_profile(10, &v2_only));
+        assert!(!manifest_declares_g0_profile(24, &v2_only));
+        assert!(manifest_declares_g0_profile(24, &with_g0));
+        assert_eq!(table_specs(false).len(), 14);
+        assert_eq!(table_specs(true).len(), 24);
+    }
 }

@@ -12,6 +12,7 @@ from .derived_artifacts import (
 from .exocortex import descriptive_analog_job, materialize_dataset_job
 from .field_models import run_field_prototype_job
 from .job import run_descriptive_chart_job
+from .listing_census import read_listing_census
 from .response_kernels import run_kernel_prototype_job
 from .snapshot import validate_snapshot
 from .wave6_market_atlas import validate_store_input_census_report
@@ -74,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="validate a V20 discovery census and refuse unsupported market-atlas admission",
     )
     assess_market_atlas_input.add_argument("--report", required=True, type=Path)
+    listing_census = commands.add_parser(
+        "listing-census",
+        help="count the model-free listing census an installed snapshot carries",
+    )
+    listing_census.add_argument("--snapshot", required=True, type=Path)
     return parser
 
 
@@ -124,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "artifact_id": artifact.artifact_id,
             "row_count": artifact.table.num_rows,
         }
+    elif args.command == "listing-census":
+        payload = read_listing_census(args.snapshot).payload
     elif args.command == "validate-operator-evidence":
         operator_input = validate_store_operator_evidence_report(args.report)
         payload = operator_input.validation_receipt()

@@ -22,6 +22,11 @@ tempfile = "3.27.0"
 thiserror.workspace = true
 time.workspace = true
 
+[dev-dependencies]
+joshi-admission = { path = "../joshi-admission", features = ["source-edges"] }
+joshi-evidence = { path = "../joshi-evidence" }
+joshi-store = { path = "../joshi-store" }
+
 [lints]
 workspace = true
 
@@ -36,3 +41,7 @@ path = "examples/build_operational_fixture.rs"
 [[example]]
 name = "build_operational_catalog_fixture"
 path = "examples/build_operational_catalog_fixture.rs"
+
+[[example]]
+name = "pillar7_estimand"
+path = "examples/pillar7_estimand.rs"

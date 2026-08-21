@@ -81,10 +81,10 @@ def test_operational_v2_artifact_is_reproducible_and_publication_closed(
         "catalog_commit_seq": "13",
         "publication_ids": ["publication-001"],
         "snapshot_contract": "joshi.analysis.snapshot/v2",
-        "snapshot_id": "sha256:e9ecd5990b24c88650ebed19b4afa8c3b60d647948865fe3d2cac9df6fd71845",
+        "snapshot_id": "sha256:667934d19480a9d6e88181e0b374aff07d5dc58864037630699becbb43938fe6",
         "snapshot_manifest_digest": (
-            "sha256:4fb25f95de1568b0c68c0e61ad64aa5"
-            "b2a9f9b516979caa1075dff9e99c2475f"
+            "sha256:0d6642232bba99d330ca1328f597f93"
+            "0808a0e90c75c56e5e26e7123c4b55cbe"
         ),
         "source_class": "operational_store",
     }

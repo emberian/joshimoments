@@ -351,11 +351,32 @@ def _validate_manifest_shape(manifest: dict[str, Any]) -> dict[str, dict[str, An
     return by_name
 
 
+def _catalog_schema_version(schema: Any) -> int | None:
+    if not isinstance(schema, str) or not schema.startswith("joshi.sqlite.v"):
+        return None
+    suffix = schema.removeprefix("joshi.sqlite.v")
+    if not suffix.isascii() or not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
 def _contracts_for_manifest(manifest: dict[str, Any]) -> dict[str, TableContract]:
     catalog = manifest.get("catalog")
     schema = catalog.get("catalog_schema") if isinstance(catalog, dict) else None
-    if schema == "joshi.sqlite.v10":
+    version = _catalog_schema_version(schema)
+    if version == 10:
         return {**TABLE_CONTRACTS, **G0_TABLE_CONTRACTS}
+    if version is not None and version > 10:
+        # A catalog generation after V10 can record the G0 occurrence families and can also hold
+        # nothing but raw evidence. The profile is therefore whatever the export declared, and the
+        # exact-name closure below refuses any partial G0 table set.
+        declared = {
+            table.get("name")
+            for table in manifest.get("tables", [])
+            if isinstance(table, dict)
+        }
+        if declared & set(G0_TABLE_CONTRACTS):
+            return {**TABLE_CONTRACTS, **G0_TABLE_CONTRACTS}
     return TABLE_CONTRACTS
 
 

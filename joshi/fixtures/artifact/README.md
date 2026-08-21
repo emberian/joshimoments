@@ -1,6 +1,6 @@
 # Restricted derived-analysis goldens
 
-`derived-759c5d7d2be1f318fcbc213db9759a3a4653d139ea29b6f55d47403e5d030e55/`
+`derived-c3bdb466464f40bd262500641b152320a4d2f4d404928e054be7fb9bd0c1ffa5/`
 is the exact operational derived V2 witness. It is deterministically generated from
 `fixtures/export/operational_snapshot_v2` under the preregisterable analysis occurrence
 `analysis-run-production-fixture-001`:

@@ -108,9 +108,9 @@ publication/memory builders and a real independently validated Parquet artifact,
 semantic JSON or fake Parquet bytes.
 
 The frozen fixture identities after the censored-memory store migration are catalog
-`sha256:c3857f874eda776c15cf3d6bd6bc225ce674275645f2c591d20f3c539cf1f0d0`, snapshot
-`sha256:7027d8751401ff0eff8f2d0a76ade9ac3204d53a9f5b47b046608001e934b0a2`, and manifest
-`sha256:b639eb93ed95dd3c5488ccc84c735d4a8675dfea1eddd9d76ea01e7cc5b2dec3`. The 24-table profile
+`sha256:47fd336ae56b2f3f9acebd5198b096d96f36b54b6cf46e50564762d405a33ce9`, snapshot
+`sha256:acaed49221b40e4dbd81f99f9c7c24ef4e96414179424d8415921e0c86f8ae6f`, and manifest
+`sha256:45ba8f6abcca8d30fe5f141060d6618bfc79badad1d5bdcfb8af3e56f53eec2b`. The 24-table profile
 continues to carry only act/episode memory relations; later censored closure rows remain
 store/restart evidence until a separate analysis contract is frozen.
 
