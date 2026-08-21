@@ -14,9 +14,11 @@ pub mod health;
 pub mod helius;
 pub mod ingress;
 pub mod provider_plan;
+pub mod pump_swap;
 pub mod pumpportal;
 pub mod runner_port;
 pub mod scope;
+pub mod solana_account;
 pub mod solana_json_rpc;
 pub mod websocket;
 
@@ -51,6 +53,12 @@ pub use provider_plan::{
     ValidatedProviderOperation, ValidatedProviderRunPlan, parse_provider_run_plan_exact,
     validate_provider_run_plan,
 };
+pub use pump_swap::{
+    FEE_CONFIG_ACCOUNT_LEN, FeeRatesBps, FeeTierRow, POOL_ACCOUNT_LEN, POOL_ATTRIBUTED_LEN,
+    PUMP_AMM_PROGRAM_ID, PUMP_FEE_CONFIG_ADDRESS, PUMP_FEE_PROGRAM_ID, PumpDecodeError,
+    PumpFeeConfig, PumpSwapPool, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, TokenExtension,
+    TokenMint, TokenVault, WRAPPED_SOL_MINT, anchor_account_discriminator,
+};
 pub use pumpportal::{
     PumpPortalCommand, PumpPortalControl, PumpPortalFrameKind, PumpPortalFrameMetadata,
     PumpPortalMethod, PumpPortalSession, PumpPortalWsAdapter,
@@ -63,6 +71,10 @@ pub use runner_port::{
     SyntheticStep,
 };
 pub use scope::{HotLease, LeaseKey, LeaseKind, ScopeBook, ScopeDelta};
+pub use solana_account::{
+    AccountEntry, AccountResponseError, AccountSetResponse, BlockClock, RetainedAccount,
+    read_account_info, read_block_clock, read_multiple_accounts,
+};
 pub use solana_json_rpc::{
     CanonicalSolanaRequest, INGEST_MAX_RESPONSE_BYTES, JsonRpcRefusal, RawSignaturePage,
     RawSignatureRow, SOLANA_JSON_RPC_ID, SOLANA_JSON_RPC_MAX_REQUEST_BYTES,

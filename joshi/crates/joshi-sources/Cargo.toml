@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
 bs58 = "0.5.1"
 bytes = { version = "1.12.1", features = ["serde"] }
 futures-util = { version = "0.3.34", features = ["sink"] }
@@ -27,6 +28,11 @@ tracing = "0.1.44"
 url = "2.5.8"
 
 [dev-dependencies]
+joshi-accounting = { path = "../joshi-accounting" }
+joshi-admission = { path = "../joshi-admission", features = ["source-edges"] }
+joshi-liquidity = { path = "../joshi-liquidity" }
+joshi-market-math = { path = "../joshi-market-math" }
+joshi-store = { path = "../joshi-store" }
 tempfile = "3"
 
 [lints]

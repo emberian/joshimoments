@@ -11,6 +11,7 @@ pub mod profile;
 pub mod pump;
 pub mod quote;
 pub mod wide;
+pub mod would_quote;
 
 /// Stable semantic contract implemented by the current exact quote kernel.
 pub const MARKET_MATH_CONTRACT_VERSION: &str = "joshi.market-math.v1";
