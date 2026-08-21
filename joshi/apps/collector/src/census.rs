@@ -30,7 +30,9 @@ use joshi_admission::{
     source_drafts, source_frames,
 };
 use joshi_domain::{CoverageId, OpenVariant, StableString, UtcTimestamp};
-use joshi_evidence::{Boundary, CoverageGap, CoverageScope, CoverageWindow, EvidenceDraft};
+use joshi_evidence::{
+    Boundary, CoverageGap, CoverageScope, CoverageWindow, EvidenceDraft, SourceEventRecord,
+};
 use joshi_sources::{
     CredentialFile, HeliusConfig, HeliusHttpClient, SolanaReadMethod, SolanaReadRequest,
 };
@@ -837,7 +839,7 @@ fn commit_coverage(
     let batch = source_drafts(SourceDraftBatch {
         batch_id: StableString::new(format!("{}-coverage", context.run_id))?,
         drafts,
-        source_events: Vec::new(),
+        source_events: mint_source_events(state)?,
         cursor_advances: Vec::new(),
         // The source row this coverage references is registered by the committed read batches;
         // `commit_coverage` refuses to run before one exists rather than registering a second
@@ -1086,6 +1088,42 @@ fn absorb_transaction(
 }
 
 /// Every mint named by the retained token-balance rows. Nothing is inferred from anything else.
+/// Name every observed mint as a durable source event so a surface can render it.
+///
+/// Without this the census is only a receipt. The mints would exist in the JSON this process
+/// prints and inside the retained response bytes, and nowhere that a renderer can reach: a
+/// surface derives its population from declared coverage subjects and from source-event natural
+/// keys, so a mint with neither is a mint no surface can name. That is the difference between
+/// having observed something and having recorded that you observed it.
+///
+/// The namespace is `solana.token_mint` and the natural key is the mint address exactly as the
+/// provider spelled it. The event kind carries the same relation the receipt states and no
+/// stronger one: the mint appeared in the token balances of a transaction whose resolved account
+/// keys included a census program address. It is not a launch, a trade, or a price.
+///
+/// `source_order_key` is the highest slot the mint was observed in, zero-padded so the source's
+/// own ordering survives lexicographic comparison. It orders these events against each other and
+/// asserts nothing about completeness between them.
+fn mint_source_events(state: &CensusState) -> Result<Vec<SourceEventRecord>, Box<dyn Error>> {
+    let source_id = joshi_domain::SourceId::new(DOMAIN_SOURCE_ID)?;
+    let namespace = StableString::new("solana.token_mint")?;
+    let mut events = Vec::with_capacity(state.mints.len());
+    for (mint, census) in &state.mints {
+        events.push(SourceEventRecord {
+            source_event_id: joshi_domain::SourceEventId::new(format!("mint:{mint}"))?,
+            source_id: source_id.clone(),
+            namespace: namespace.clone(),
+            natural_key: StableString::new(mint.clone())?,
+            source_order_key: census
+                .highest_slot
+                .map(|slot| StableString::new(format!("{slot:020}")))
+                .transpose()?,
+            event_kind: OpenVariant::known("observed_in_program_transaction_token_balances")?,
+        });
+    }
+    Ok(events)
+}
+
 fn transaction_mints(result: &Value) -> BTreeSet<String> {
     let mut mints = BTreeSet::new();
     for field in ["preTokenBalances", "postTokenBalances"] {
