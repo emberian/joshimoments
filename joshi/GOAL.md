@@ -189,6 +189,36 @@ Everything else gates green: collector 16, surface 31, store 37, operator 6, sou
 market-math 13, liquidity 13, acquisition-policy 11, supervisor 55, export 25, pump-api 32, schema
 24 migrations.
 
+## Surface render FIXED and committed, 2026-08-21 09:10
+
+The census renders. 9 mints as `observed_undeclared`, 2 program addresses as
+`denominator_only reason="not_observed_by_cutoff"` — the two facts on separate lines so nobody has
+to infer one from the other.
+
+Three findings worth keeping:
+1. **The error was masked.** `SurfaceReadbackError::Surface` printed one fixed string for every
+   variant, so my whole candidate-site list was an inference from a wrapper. Adding `{0}` named the
+   real error instantly. A diagnostic that cannot distinguish its own causes costs hours.
+2. **Identity was wrong, not the closure check.** One observation names several subjects, because a
+   Solana transaction touches every mint in its token balances. `(surface_id, observation_id)`
+   collided; it is now `(surface_id, subject, observation_id)`.
+3. **A silent inversion.** Observed-but-undeclared subjects were labelled `DenominatorOnly` — the
+   opposite fact — and such rows are dropped, so the mints could never have rendered at all.
+
+`closed` is now false and `sample_only` true for this adapter, with the reasoning at the site:
+closure over "declared union whatever we observed" is self-satisfying, but it invites reading
+eligibleCount as a denominator, and for a census it is not one.
+
+## Handed back, not mine to fix here
+
+- **joshi-store latent trap**: `insert_source_event` (store.rs:2752) does `INSERT OR IGNORE` then
+  looks the row up by `source_event_id`, while the table is UNIQUE on
+  `(source_id, event_namespace, natural_key)`. A batch declaring a new id for a known natural key
+  silently no-ops and returns a bare `QueryReturnedNoRows` instead of `IdentityConflict`.
+- **wSOL is a first-class census subject**, because it appears in every swap's token balances. That
+  is honest at the surface layer; if it should not be in the population it has to be excluded at
+  the collector, deliberately, not filtered out at render time.
+
 ## Open, carried
 
 My own census work links mints to observations (9 events, 15 links, store-validated) but the
