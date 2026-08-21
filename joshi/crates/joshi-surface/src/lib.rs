@@ -11,6 +11,11 @@
 //! rows, so a cut no longer depends on a caller projecting its own inputs. Read
 //! [`readback`]'s module documentation for the exact list of inputs that still cannot be derived
 //! from the catalog schema; that list, not a green test, is what bounds this package's ceiling.
+//!
+//! [`render`] closes the other half of that path: it turns one derived cut into exact,
+//! deterministic bytes a person reads -- every eligible subject named, every count, the cutoff,
+//! every derived cell, and every coverage gap with the exact window the producer authored -- under
+//! a sha256 body digest that is identical in any process that renders the same cut.
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +24,8 @@ mod model;
 #[cfg(feature = "store-readback")]
 pub mod readback;
 mod reduce;
+#[cfg(feature = "store-readback")]
+pub mod render;
 
 pub use error::*;
 pub use model::*;
@@ -26,11 +33,17 @@ pub use model::*;
 pub use readback::{
     DerivedSurfaceV1, SURFACE_FIELD_ASSERTION_DOMAIN, SURFACE_READBACK_CONTRACT,
     SURFACE_READBACK_SCHEMA_VERSION, SurfaceCatalogReadback, SurfaceDerivationReceiptV1,
-    SurfaceOpenGapV1, SurfaceReadbackError, SurfaceSourceBindingV1, UnresolvedSurfaceInput,
-    derive_surface_cut, parse_surface_derivation_receipt, surface_event_identity,
-    surface_field_semantic_key,
+    SurfaceGapBoundaryV1, SurfaceOpenGapV1, SurfaceReadbackError, SurfaceSourceBindingV1,
+    UnresolvedSurfaceInput, derive_surface_cut, parse_surface_derivation_receipt,
+    surface_event_identity, surface_field_semantic_key,
 };
 pub use reduce::*;
+#[cfg(feature = "store-readback")]
+pub use render::{
+    RenderedSurfaceV1, SURFACE_RENDER_CONTRACT, SURFACE_RENDER_HEAD_DOMAIN,
+    SURFACE_RENDER_MEDIA_TYPE, SURFACE_RENDER_SCHEMA_VERSION, SurfaceRenderHeadV1,
+    parse_surface_render_head, render_surface,
+};
 
 /// Versioned semantic contract for the S track.
 pub const SURFACE_CONTRACT: &str = "joshi.daily_use_surface";
@@ -57,3 +70,9 @@ mod tests;
 
 #[cfg(all(test, feature = "store-readback"))]
 mod readback_tests;
+
+#[cfg(all(test, feature = "store-readback"))]
+mod render_tests;
+
+#[cfg(all(test, feature = "store-readback"))]
+mod test_catalog;

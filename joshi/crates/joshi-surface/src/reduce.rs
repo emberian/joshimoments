@@ -118,16 +118,19 @@ impl SurfaceReducer {
                 });
             }
         }
-        if universe.closed {
-            let present: BTreeSet<_> = all_values.iter().map(|item| item.subject.clone()).collect();
-            for subject in &universe.eligible_subjects {
-                if !present.contains(subject) {
-                    omissions.push(SurfaceOmissionV1 {
-                        subject: subject.clone(),
-                        reason: stable("not_observed_by_cutoff")?,
-                        membership: SurfaceMembership::DenominatorOnly,
-                    });
-                }
+        // Every declared eligible subject that carried no admitted row is named with that exact
+        // reason, whether or not the universe claims to be closed. Closure is a claim about what
+        // else could exist; it is not a licence to drop a subject the universe itself declared.
+        // Without this, an open universe silently loses the difference between "in the
+        // denominator and not observed" and "never in the denominator at all".
+        let present: BTreeSet<_> = all_values.iter().map(|item| item.subject.clone()).collect();
+        for subject in &universe.eligible_subjects {
+            if !present.contains(subject) {
+                omissions.push(SurfaceOmissionV1 {
+                    subject: subject.clone(),
+                    reason: stable("not_observed_by_cutoff")?,
+                    membership: SurfaceMembership::DenominatorOnly,
+                });
             }
         }
         values.retain(|item| {
@@ -173,17 +176,15 @@ impl SurfaceReducer {
             values.iter().map(|item| item.subject.clone()).collect();
         omissions.retain(|omission| !rendered_subjects.contains(&omission.subject));
         omissions.dedup_by(|a, b| a.subject == b.subject);
-        if universe.closed {
-            let omitted_subjects: BTreeSet<_> =
-                omissions.iter().map(|item| item.subject.clone()).collect();
-            for subject in &universe.eligible_subjects {
-                if !rendered_subjects.contains(subject) && !omitted_subjects.contains(subject) {
-                    omissions.push(SurfaceOmissionV1 {
-                        subject: subject.clone(),
-                        reason: stable("not_observed_by_cutoff")?,
-                        membership: SurfaceMembership::DenominatorOnly,
-                    });
-                }
+        let omitted_subjects: BTreeSet<_> =
+            omissions.iter().map(|item| item.subject.clone()).collect();
+        for subject in &universe.eligible_subjects {
+            if !rendered_subjects.contains(subject) && !omitted_subjects.contains(subject) {
+                omissions.push(SurfaceOmissionV1 {
+                    subject: subject.clone(),
+                    reason: stable("not_observed_by_cutoff")?,
+                    membership: SurfaceMembership::DenominatorOnly,
+                });
             }
         }
         omissions.sort_by(|a, b| {

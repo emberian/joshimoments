@@ -266,6 +266,10 @@ impl DeclaredObservedUniverseV1 {
 }
 
 /// Membership in the broad sensorium. `DenominatorOnly` is intentionally not rendered.
+///
+/// `DenominatorOnly` and [`SurfaceMembership::ObservedUndeclared`] are opposite facts and must
+/// never stand in for one another: the first is a subject that was in the denominator and was not
+/// observed, the second is a subject that was observed and was never in any denominator.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfaceMembership {
@@ -275,6 +279,10 @@ pub enum SurfaceMembership {
     Episode,
     ColdControl,
     DenominatorOnly,
+    /// The subject carries a committed observation but no coverage declaration put it in scope
+    /// beforehand. It is a real observed subject, so it is rendered; it is not a denominator
+    /// member, so its presence proves nothing about what else was there.
+    ObservedUndeclared,
 }
 
 /// Explicit field-level epistemic state.

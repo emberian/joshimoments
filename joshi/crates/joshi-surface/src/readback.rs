@@ -29,7 +29,13 @@
 //!   both clocks. Per-field coverage comes from effective, unsuperseded assertions under the
 //!   canonical [`surface_field_semantic_key`].
 //! * **Gaps** -- `coverage_gap` rows detected at or before the cutoff with no terminal
-//!   `coverage_gap_recovery` at or before the cutoff.
+//!   `coverage_gap_recovery` at or before the cutoff. Each one carries the exact window the
+//!   producer authored, read losslessly from `coverage_gap_contract`, including the boundary
+//!   kinds that are not wall clocks and the absent upper boundary of a gap that is still open.
+//! * **Observation census** -- the number of observations committed at or before the cutoff for
+//!   the bound sources, and how many of them name no subject at all. Without those two counts an
+//!   empty population is indistinguishable from an empty catalog, which is exactly the absence
+//!   claim this project refuses to make.
 //! * **Stale age** -- recomputed as `cutoff - observed_at` against the profile's approved cadence
 //!   bound. It is never read from an input.
 //!
@@ -43,10 +49,13 @@
 //!   lifecycle is package-local DTO validation and stays that way.
 //! * Ember-use qualification sessions have no table; [`crate::qualify_cockpit`] remains fixed at
 //!   `UnverifiedSemantic`.
-//! * World eligibility is not knowable from a catalog. The derived universe is *catalog-closed*:
-//!   it is exactly the subject set the catalog knows at the cutoff, which is what makes the
-//!   rendered/omitted partition meaningful. It is not a claim that the world contains no other
-//!   subject.
+//! * World eligibility is not knowable from a catalog. The derived universe is exactly the subject
+//!   set the catalog knows at the cutoff -- declared coverage scope union observed subjects -- and
+//!   it is therefore declared `sample_only` and **not** `closed`. A list a subject can join by
+//!   being observed is not a denominator, so `eligibleCount` is not the bottom of a coverage
+//!   ratio. Every declared subject that carried no observation is still named as an explicit
+//!   omission, so the difference between *declared and unobserved* and *observed and undeclared*
+//!   survives the open universe rather than depending on it.
 //! * Gap cells for a subject with no observation row cannot be expressed: the cut carries field
 //!   state per observation, and inventing an event identity to hang a gap on would be exactly the
 //!   caller projection this module exists to remove. Those gaps are carried explicitly on the
@@ -91,13 +100,16 @@ pub fn surface_field_semantic_key(surface_id: &str, subject: &str, field: &str) 
 
 /// Canonical event identity for one derived cut row.
 ///
-/// One committed observation can satisfy cells on more than one profile surface, so the exact
-/// catalog observation identity alone is not a unique row identity inside a cut. The pair is a
-/// canonical JSON array of two identities that both exist -- the approved surface entry and the
-/// exact committed observation. Nothing is synthesized.
+/// A cut row is one surface's view of one subject, so neither the observation identity nor the
+/// surface/observation pair identifies it. One committed observation satisfies cells on more than
+/// one profile surface, and it also names more than one subject whenever the provider bytes it
+/// retained mention several -- a single Solana transaction touches every mint in its token
+/// balances, and the first real Helius census committed exactly that shape. The triple is a
+/// canonical JSON array of three identities that all exist -- the approved surface entry, the
+/// subject's own natural key, and the exact committed observation. Nothing is synthesized.
 #[must_use]
-pub fn surface_event_identity(surface_id: &str, observation_id: &str) -> String {
-    serde_json::to_string(&[surface_id, observation_id]).unwrap_or_default()
+pub fn surface_event_identity(surface_id: &str, subject: &str, observation_id: &str) -> String {
+    serde_json::to_string(&[surface_id, subject, observation_id]).unwrap_or_default()
 }
 
 /// A named input this adapter could not derive from the catalog.
@@ -110,7 +122,7 @@ pub enum UnresolvedSurfaceInput {
     /// No Ember-use session, acknowledgment or qualification-evidence table exists.
     QualificationSessions,
     /// The catalog cannot witness that the world holds no further eligible subject. The derived
-    /// universe is catalog-closed, not world-closed.
+    /// universe is bounded by the catalog and is declared `sample_only`, never `closed`.
     WorldEligibility,
     /// A profile surface's declared source matched no registered catalog source, so every cell of
     /// that surface is unknown for structural rather than evidential reasons.
@@ -127,12 +139,39 @@ pub enum UnresolvedSurfaceInput {
     /// A subject carries an open gap but no observation row, so its cells cannot carry
     /// [`FieldState::Gap`]. Those gaps are on the receipt instead.
     GapCellsForUnobservedSubjects,
-    /// A subject was observed with no coverage window declaring it in scope, so it enters the
-    /// denominator only and is never rendered.
+    /// A subject was observed with no coverage window declaring it in scope, so no coverage level
+    /// exists to resolve its product membership from. The row is rendered under
+    /// [`SurfaceMembership::ObservedUndeclared`]: it was seen, and it was never in a denominator.
     UndeclaredObservedSubject,
     /// A subject's coverage level has no product membership in the S0 surface vocabulary, so it
     /// enters the denominator only.
     CoverageLevelMembership,
+    /// Observations are committed at the cutoff whose source events name no subject, so their
+    /// content cannot enter the population at all. The rows exist; the surface cannot see them.
+    SubjectsForCommittedObservations,
+}
+
+impl UnresolvedSurfaceInput {
+    /// Exact stable name of this input, for a rendered surface that must say it out loud.
+    ///
+    /// This is spelled out rather than derived from the serde attribute so that a rendered body
+    /// and the wire cannot drift apart silently.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::HotLeaseReceipts => "hot_lease_receipts",
+            Self::QualificationSessions => "qualification_sessions",
+            Self::WorldEligibility => "world_eligibility",
+            Self::SurfaceSourceNotRegistered => "surface_source_not_registered",
+            Self::FieldAssertionsAbsent => "field_assertions_absent",
+            Self::RenderOrderingPolicy => "render_ordering_policy",
+            Self::CadenceStalenessBound => "cadence_staleness_bound",
+            Self::GapCellsForUnobservedSubjects => "gap_cells_for_unobserved_subjects",
+            Self::UndeclaredObservedSubject => "undeclared_observed_subject",
+            Self::CoverageLevelMembership => "coverage_level_membership",
+            Self::SubjectsForCommittedObservations => "subjects_for_committed_observations",
+        }
+    }
 }
 
 /// Resolution of one profile surface's declared source against the catalog.
@@ -147,6 +186,43 @@ pub struct SurfaceSourceBindingV1 {
     pub catalog_source_id: Option<StableString>,
 }
 
+/// Exact boundary of a gap's affected window, as the producer authored it.
+///
+/// A gap boundary is not always a wall clock. A provider may only be able to say "from this
+/// cursor", or that it had no usable boundary at all, and the catalog retains that distinction in
+/// `coverage_gap_contract`. This mirror keeps it rather than projecting every boundary onto a
+/// timestamp no source ever sent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "clock", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SurfaceGapBoundaryV1 {
+    /// Local wall-clock boundary.
+    Wall {
+        /// Exact retained instant.
+        value: UtcTimestamp,
+    },
+    /// Durable knowledge-order boundary.
+    Commit {
+        /// Exact retained commit sequence.
+        value: WireU64,
+    },
+    /// Source-native opaque cursor boundary.
+    SourceCursor {
+        /// Exact retained cursor.
+        value: StableString,
+    },
+    /// The source explicitly did not provide a usable boundary.
+    Unknown {
+        /// Exact retained reason discriminator.
+        reason: StableString,
+    },
+    /// The stored boundary is not a shape this schema version recognizes. It is named, and its
+    /// exact stored encoding is retained, rather than being projected onto a clock.
+    Unrecognized {
+        /// Exact stored boundary JSON.
+        stored: StableString,
+    },
+}
+
 /// One coverage gap that is open at the cutoff.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -157,7 +233,12 @@ pub struct SurfaceOpenGapV1 {
     pub catalog_source_id: StableString,
     /// Affected subject; absent for a source-wide gap.
     pub subject: Option<StableString>,
-    /// Knowledge time at which the gap became durable.
+    /// Exact lower boundary of the affected window, as the producer authored it.
+    pub window_lower: SurfaceGapBoundaryV1,
+    /// Exact upper boundary of the affected window. `None` is the producer's own open end: the
+    /// gap is not bounded above by anything the source said.
+    pub window_upper: Option<SurfaceGapBoundaryV1>,
+    /// Knowledge time at which the gap became durable. This is the commit clock, not the window.
     pub since: UtcTimestamp,
     /// Stored severity.
     pub severity: StableString,
@@ -191,6 +272,12 @@ pub struct SurfaceDerivationReceiptV1 {
     pub declared_subjects: WireU64,
     /// Subjects a committed observation named at the cutoff.
     pub observed_subjects: WireU64,
+    /// Observations committed at or before the cutoff for the bound catalog sources.
+    pub committed_observations: WireU64,
+    /// How many of those observations name no subject through a `contains` or `revision` source
+    /// event. They are durable evidence the surface cannot see, and an empty population with a
+    /// nonzero count here is a gap in the adapter above, not an empty market.
+    pub observations_without_subject: WireU64,
     /// Size of the derived eligible universe.
     pub eligible_count: WireU64,
     /// Observation rows promoted to surface facts.
@@ -219,6 +306,8 @@ struct ReceiptMaterial<'a> {
     bindings: &'a [SurfaceSourceBindingV1],
     declared_subjects: WireU64,
     observed_subjects: WireU64,
+    committed_observations: WireU64,
+    observations_without_subject: WireU64,
     eligible_count: WireU64,
     fact_rows: WireU64,
     field_assertion_rows: WireU64,
@@ -244,6 +333,8 @@ impl SurfaceDerivationReceiptV1 {
             bindings: &self.bindings,
             declared_subjects: self.declared_subjects,
             observed_subjects: self.observed_subjects,
+            committed_observations: self.committed_observations,
+            observations_without_subject: self.observations_without_subject,
             eligible_count: self.eligible_count,
             fact_rows: self.fact_rows,
             field_assertion_rows: self.field_assertion_rows,
@@ -316,8 +407,11 @@ pub enum SurfaceReadbackError {
     /// The underlying catalog rejected a read.
     #[error("catalog read failed")]
     Sqlite(#[from] rusqlite::Error),
-    /// A derived value violated a surface contract.
-    #[error("derived surface contract violation")]
+    /// A derived value violated a surface contract. The inner refusal is part of the message:
+    /// every [`SurfaceError`] arrives through this one variant, so a message that named only the
+    /// wrapper turned a specific refusal -- a conflicting event identity, an unclosed universe, a
+    /// cutoff violation -- into an unattributable "contract violation".
+    #[error("derived surface contract violation: {0}")]
     Surface(#[from] SurfaceError),
     /// A stored JSON value could not be decoded.
     #[error("stored JSON is not decodable")]
@@ -390,6 +484,25 @@ impl SurfaceCatalogReadback {
         Self { connection }
     }
 
+    /// Highest commit sequence the catalog has committed, or `None` for an empty catalog.
+    ///
+    /// A caller that wants "everything the store knows" must ask the store for its own durable
+    /// knowledge order rather than typing a number: that is the whole point of a derived cutoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the catalog cannot be read or the stored sequence is out of range.
+    pub fn latest_commit_seq(&self) -> Result<Option<u64>, SurfaceReadbackError> {
+        let value: Option<i64> =
+            self.connection
+                .query_row("SELECT MAX(commit_seq) FROM ingest_commit", [], |row| {
+                    row.get(0)
+                })?;
+        value
+            .map(|seq| as_u64(seq, "ingest_commit.commit_seq"))
+            .transpose()
+    }
+
     /// Derive a complete point-in-time surface from committed rows at `cutoff_commit_seq`.
     ///
     /// # Errors
@@ -460,6 +573,19 @@ pub fn derive_surface_cut(
     }
 
     // 2. Derive the population: declared coverage scope union observed source-event subjects.
+    // Two declared source strings can bind to one catalog source, so the census counts distinct
+    // bound sources rather than bindings.
+    let bound_sources: BTreeSet<String> = resolved.values().flatten().cloned().collect();
+    let mut committed_observations = 0_u64;
+    let mut observations_without_subject = 0_u64;
+    for source in &bound_sources {
+        let (total, unsubjected) = observation_census(connection, source, cutoff_commit_seq)?;
+        committed_observations = committed_observations.saturating_add(total);
+        observations_without_subject = observations_without_subject.saturating_add(unsubjected);
+    }
+    if observations_without_subject > 0 {
+        unresolved.insert(UnresolvedSurfaceInput::SubjectsForCommittedObservations);
+    }
     let mut coverage_level: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut observed: BTreeMap<(String, String), ObservedFact> = BTreeMap::new();
     let mut declared_subjects: BTreeSet<String> = BTreeSet::new();
@@ -533,9 +659,15 @@ pub fn derive_surface_cut(
                         SurfaceMembership::DenominatorOnly
                     }
                 },
+                // A census names where it looked and the market answers with what was there. A
+                // subject that turned up inside a declared scope without having been declared
+                // itself is observed, not denominator-only: those are opposite facts, and
+                // labelling it `DenominatorOnly` would both invert it and drop the row the
+                // catalog actually holds. Its product membership is still unresolved, because no
+                // coverage level was ever declared for it, and the receipt says so.
                 None => {
                     unresolved.insert(UnresolvedSurfaceInput::UndeclaredObservedSubject);
-                    SurfaceMembership::DenominatorOnly
+                    SurfaceMembership::ObservedUndeclared
                 }
             };
             let mut fields = BTreeMap::new();
@@ -548,6 +680,7 @@ pub fn derive_surface_cut(
             observations.push(SurfaceObservationV1 {
                 event_id: wire("derived event identity")(&surface_event_identity(
                     surface.surface_id.as_str(),
+                    subject.as_str(),
                     fact.observation_id.as_str(),
                 ))?,
                 subject: wire("source_event.natural_key")(subject.as_str())?,
@@ -587,8 +720,28 @@ pub fn derive_surface_cut(
         eligible_count: WireU64::new(eligible_count),
         eligible_digest: digest(&serde_json::to_vec(&subjects)?)?,
         eligible_subjects: subjects,
-        closed: true,
-        sample_only: false,
+        // A catalog-derived population is a sample, never a closed denominator, and the wire says
+        // so rather than leaving it to a footnote.
+        //
+        // `closed` on this DTO is the claim "this list is the whole universe; nothing outside it
+        // can appear". Over a set defined as *declared scope union everything we happened to
+        // observe*, that claim is self-satisfying: subjects enter the list by being seen, so the
+        // closure can never fail and carries no information. What it does carry is a reading --
+        // that `eligibleCount` is a denominator, and that observed-over-eligible is a coverage
+        // ratio. For a census neither is true: here two subjects were declared and nine arrived
+        // by turning up in someone else's transaction.
+        //
+        // `sample_only` is the field the constitution provides for exactly this, and it is
+        // unconditionally true of this adapter: `WorldEligibility` is always unresolved because
+        // no catalog can witness that the world holds no further subject. Declaring it keeps the
+        // population honest in the direction that cannot mislead.
+        //
+        // Nothing is lost by the flip: `SurfaceReducer::reduce` names every declared eligible
+        // subject that carried no admitted row with the exact reason `not_observed_by_cutoff`
+        // whether or not the universe is closed, so a declared-and-unobserved subject is still an
+        // explicit omission rather than a silence.
+        closed: false,
+        sample_only: true,
     };
     let cut = SurfaceReducer::reduce(profile, universe, &observations, cutoff, render_limit)?;
 
@@ -614,6 +767,8 @@ pub fn derive_surface_cut(
                     .as_deref()
                     .map(wire("coverage_gap_contract.scope_subject"))
                     .transpose()?,
+                window_lower: row.window_lower.clone(),
+                window_upper: row.window_upper.clone(),
                 since: row.since,
                 severity: wire("coverage_gap.severity")(row.severity.as_str())?,
                 cause: wire("coverage_gap.cause_code")(row.cause.as_str())?,
@@ -639,6 +794,8 @@ pub fn derive_surface_cut(
         bindings,
         declared_subjects: WireU64::new(count(declared_subjects.len(), "declared subjects")?),
         observed_subjects: WireU64::new(count(observed_subjects.len(), "observed subjects")?),
+        committed_observations: WireU64::new(committed_observations),
+        observations_without_subject: WireU64::new(observations_without_subject),
         eligible_count: WireU64::new(eligible_count),
         fact_rows: WireU64::new(fact_rows),
         field_assertion_rows: WireU64::new(field_assertion_rows),
@@ -664,6 +821,8 @@ struct ObservedFact {
 struct GapRow {
     gap_id: String,
     subject: Option<String>,
+    window_lower: SurfaceGapBoundaryV1,
+    window_upper: Option<SurfaceGapBoundaryV1>,
     since: UtcTimestamp,
     severity: String,
     cause: String,
@@ -830,7 +989,8 @@ fn open_gaps(
     cutoff_commit_seq: u64,
 ) -> Result<Vec<GapRow>, SurfaceReadbackError> {
     let mut statement = connection.prepare(
-        "SELECT g.gap_id,k.scope_subject,c.committed_wall_us,g.severity,g.cause_code
+        "SELECT g.gap_id,k.scope_subject,c.committed_wall_us,g.severity,g.cause_code,
+                k.lower_boundary_json,k.upper_boundary_json
          FROM coverage_gap g
          JOIN coverage_gap_contract k ON k.gap_id=g.gap_id
          JOIN ingest_commit c ON c.commit_seq=g.detected_commit_seq
@@ -854,21 +1014,89 @@ fn open_gaps(
                 row.get::<_, i64>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         },
     )?;
     let mut result = Vec::new();
     for row in rows {
-        let (gap_id, subject, committed, severity, cause) = row?;
+        let (gap_id, subject, committed, severity, cause, lower, upper) = row?;
         result.push(GapRow {
             gap_id,
             subject,
+            window_lower: gap_boundary(&lower, "coverage_gap_contract.lower_boundary_json")?,
+            window_upper: upper
+                .as_deref()
+                .map(|value| gap_boundary(value, "coverage_gap_contract.upper_boundary_json"))
+                .transpose()?,
             since: timestamp_from_us(committed, "ingest_commit.committed_wall_us")?,
             severity,
             cause,
         });
     }
     Ok(result)
+}
+
+/// Reads one stored boundary back without projecting it onto a clock it does not carry.
+fn gap_boundary(
+    stored: &str,
+    field: &'static str,
+) -> Result<SurfaceGapBoundaryV1, SurfaceReadbackError> {
+    #[derive(Deserialize)]
+    struct StoredVariant {
+        discriminator: StableString,
+    }
+    #[derive(Deserialize)]
+    #[serde(tag = "clock", rename_all = "snake_case")]
+    enum Stored {
+        Wall { value: UtcTimestamp },
+        Commit { value: WireU64 },
+        SourceCursor { value: StableString },
+        Unknown { reason: StoredVariant },
+    }
+    Ok(match serde_json::from_str::<Stored>(stored) {
+        Ok(Stored::Wall { value }) => SurfaceGapBoundaryV1::Wall { value },
+        Ok(Stored::Commit { value }) => SurfaceGapBoundaryV1::Commit { value },
+        Ok(Stored::SourceCursor { value }) => SurfaceGapBoundaryV1::SourceCursor { value },
+        Ok(Stored::Unknown { reason }) => SurfaceGapBoundaryV1::Unknown {
+            reason: reason.discriminator,
+        },
+        Err(_) => SurfaceGapBoundaryV1::Unrecognized {
+            stored: wire(field)(stored)?,
+        },
+    })
+}
+
+/// Counts observations committed at the cutoff, and how many of them name no subject.
+fn observation_census(
+    connection: &Connection,
+    source: &str,
+    cutoff_commit_seq: u64,
+) -> Result<(u64, u64), SurfaceReadbackError> {
+    let (total, unsubjected): (i64, i64) = connection.query_row(
+        "SELECT COUNT(*),
+                SUM(CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM observation_source_event l
+                    WHERE l.observation_id=o.observation_id
+                      AND l.relation IN ('contains','revision')
+                ) THEN 1 ELSE 0 END)
+         FROM observation o WHERE o.source_id=?1 AND o.commit_seq<=?2",
+        params![
+            source,
+            sqlite_u64(cutoff_commit_seq, "cutoff commit sequence")?
+        ],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get::<_, Option<i64>>(1)?.unwrap_or_default(),
+            ))
+        },
+    )?;
+    Ok((
+        as_u64(total, "observation count")?,
+        as_u64(unsubjected, "observation without subject count")?,
+    ))
 }
 
 fn field_assertions(
