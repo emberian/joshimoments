@@ -412,7 +412,7 @@ fn derive_from_catalog(store: &SqliteStore, root: &Path) -> Result<WouldQuote, B
         slot: WireU64::new(context_slot),
         base_atoms: AtomQty::new(base_vault.amount),
         raw_quote_atoms: AtomQty::new(quote_vault.amount),
-        virtual_quote_reserves: pool.virtual_quote_reserves,
+        virtual_quote_reserves: i128::from(pool.unattributed_quote_side_reserve_atoms),
     };
     let effective_quote = depth.effective_quote_atoms()?;
     let size = depth.base_fraction_atoms(DepthFractionBps::new(size_bps)?)?;
@@ -485,7 +485,7 @@ fn derive_from_catalog(store: &SqliteStore, root: &Path) -> Result<WouldQuote, B
         lifecycle: VenueLifecycle::Trading,
         base_reserves: depth.base_atoms,
         raw_quote_reserves: depth.raw_quote_atoms,
-        virtual_quote_reserves: pool.virtual_quote_reserves,
+        virtual_quote_reserves: i128::from(pool.unattributed_quote_side_reserve_atoms),
         base_mint_supply: AtomQty::new(base_mint.supply),
         fee_policy,
     };

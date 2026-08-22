@@ -13,6 +13,7 @@ pub mod frame;
 pub mod health;
 pub mod helius;
 pub mod ingress;
+pub mod pda;
 pub mod provider_plan;
 pub mod pump_swap;
 pub mod pumpportal;
@@ -42,6 +43,10 @@ pub use helius::{
     PublicSolanaHttpClient, RateLimitSignal, SolanaReadMethod, SolanaReadRequest,
 };
 pub use ingress::{BoundedIngress, IngressError};
+pub use pda::{
+    MAX_SEED_LEN, MAX_SEEDS, PROGRAM_DERIVED_ADDRESS_MARKER, decode_address,
+    derivation_bump as program_derivation_bump, derive_program_address, descending_bump_candidates,
+};
 pub use provider_plan::{
     BuiltInExecutionDisposition, CanaryProfilePort, MAX_PROVIDER_RUN_PLAN_BYTES,
     PROVIDER_RUN_PLAN_DIGEST_DOMAIN, PROVIDER_RUN_PLAN_PORT_VERSION,
@@ -54,10 +59,18 @@ pub use provider_plan::{
     validate_provider_run_plan,
 };
 pub use pump_swap::{
-    FEE_CONFIG_ACCOUNT_LEN, FeeRatesBps, FeeTierRow, POOL_ACCOUNT_LEN, POOL_ATTRIBUTED_LEN,
-    PUMP_AMM_PROGRAM_ID, PUMP_FEE_CONFIG_ADDRESS, PUMP_FEE_PROGRAM_ID, PumpDecodeError,
-    PumpFeeConfig, PumpSwapPool, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, TokenExtension,
+    BONDING_CURVE_CORE_LEN, BONDING_CURVE_CREATOR_OFFSET, BONDING_CURVE_LOCATED_LEN,
+    BONDING_CURVE_SEED, BONDING_CURVE_UNNAMED_BYTES_RANGE, BONDING_CURVE_UNNAMED_PUBKEY_RANGE,
+    BONDING_CURVE_WITH_CREATOR_LEN, FEE_CONFIG_ACCOUNT_LEN, FEE_CONFIG_SEED, FeeRatesBps,
+    FeeTierRow, GLOBAL_ACCOUNT_LEN, GLOBAL_NAMED_LEN, GLOBAL_SEED, POOL_ACCOUNT_LEN,
+    POOL_NAMED_LEN, POOL_REQUIRED_ZERO_RANGES, POOL_SEED, POOL_UNATTRIBUTED_QUOTE_SIDE_LEN,
+    POOL_UNATTRIBUTED_QUOTE_SIDE_OFFSET, POOL_UNNAMED_BYTE_OFFSET, PUMP_AMM_PROGRAM_ID,
+    PUMP_BONDING_CURVE_PROGRAM_ID, PUMP_CURVE_FEE_CONFIG_ADDRESS, PUMP_FEE_CONFIG_ADDRESS,
+    PUMP_FEE_PROGRAM_ID, PUMP_GLOBAL_ADDRESS, PumpBondingCurve, PumpDecodeError, PumpFeeConfig,
+    PumpGlobal, PumpSwapPool, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, TokenExtension,
     TokenMint, TokenVault, WRAPPED_SOL_MINT, anchor_account_discriminator,
+    bonding_curve_candidates, bonding_curve_derivation_bump, fee_config_derivation_bump,
+    global_derivation_bump,
 };
 pub use pumpportal::{
     PumpPortalCommand, PumpPortalControl, PumpPortalFrameKind, PumpPortalFrameMetadata,

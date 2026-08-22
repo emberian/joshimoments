@@ -88,7 +88,7 @@ fn decode() -> Decoded {
         slot: WireU64::new(response.context_slot),
         base_atoms: AtomQty::new(base_vault.amount),
         raw_quote_atoms: AtomQty::new(quote_vault.amount),
-        virtual_quote_reserves: pool.virtual_quote_reserves,
+        virtual_quote_reserves: i128::from(pool.unattributed_quote_side_reserve_atoms),
     };
     let effective = depth.effective_quote_atoms().expect("effective quote");
     let market_cap = mul_div_u128(

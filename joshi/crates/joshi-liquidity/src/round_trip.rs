@@ -404,9 +404,21 @@ pub fn feasible_clips_within_declared_lift(
 }
 
 /// Smallest quote budget the venue will turn into at least one base atom, at this state.
-fn smallest_quotable_clip(state: &ExactCurveState, ceiling: u128) -> Result<u128, RoundTripError> {
+///
+/// This is the left wall of every size question on the venue, and it is a venue fact rather than a
+/// preference: below it the deployed formula rounds the whole trade to nothing. `ceiling` bounds
+/// the search and is the caller's, because how much of a reserve is worth searching is not a
+/// property of the pool.
+///
+/// # Errors
+///
+/// Refuses when even `ceiling` does not quote, which means no clip in the searched range does.
+pub fn smallest_quotable_clip(
+    state: &ExactCurveState,
+    ceiling: u128,
+) -> Result<u128, RoundTripError> {
     if state.buy_with_quote_in(ceiling).is_err() {
-        return Err(RoundTripError::NoClipFitsDeclaredLift);
+        return Err(RoundTripError::NoQuotableClipInRange);
     }
     let mut low = 1_u128;
     let mut high = ceiling;
@@ -449,6 +461,8 @@ pub enum RoundTripError {
     ZeroDeclaredLift,
     #[error("no clip, however small, breaks even inside the declared lift")]
     NoClipFitsDeclaredLift,
+    #[error("no clip inside the searched range is turned into even one base atom")]
+    NoQuotableClipInRange,
     #[error("no inflow inside the searched range breaks even")]
     NoInflowInRangeBreaksEven,
     #[error("an immediate round trip returned more than it consumed, which the venue cannot do")]
