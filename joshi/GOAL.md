@@ -76,6 +76,39 @@ curve-price identity. Every one of those facts was independently re-derived toni
 corpus was composted along with a repo that had already mined it. Correct framing is PORT AND
 RE-VERIFY, never first read. I asserted "nobody has ever read them" in a deputy brief and to Ember.
 
+## THE OPERATIONAL FINDING — venue choice dominates everything
+
+Largest clip an 8% crackle can gross-break-even on:
+  live bonding curve (42 SOL reserve):  **1.12 SOL ~ $108**
+  graduated PumpSwap (1,493 SOL):       **54.1 SOL ~ $5,250**
+At 20%: 3.47 SOL ($337) and 137.9 SOL ($13,400). ~50x difference in tradeable clip, from 4x on fees
+and 35x on depth. **Choosing a graduated pool over a mid-curve coin is worth more than any execution
+refinement this project could build.** With a real network fee it is an INTERVAL not a ceiling —
+below ~0.0004 SOL the tx fee eats the trade — so the hurdle is U-shaped.
+
+Two different things get called "round-trip cost":
+  ABORT COST (buy then sell back) is FLAT at every size, because traversal reverses exactly.
+    247 bps curve / 60 bps pool.
+  CRACKLE HURDLE (how far the mark must lift to break even) CLIMBS.
+    254->5,672 bps curve / 61->1,451 bps pool.
+The 190.03 bps figure was neither: 190.03/2 = 95.015 = exactly the on-chain protocol
+fee_basis_points of 95, so it caught the protocol fee and MISSED the 30 bps creator fee. True
+pump-curve floor is 246.91 bps. Dimensionless law: hurdle_bps ~= 2*fee_bps + 2*(clip/Qe), knee at
+clip ~= fee_rate * Qe.
+
+Validated against SIX LANDED FILLS TO THE ATOM. M0 continue/stop: CONTINUE scoped to PumpSwap;
+for the bonding curve STOP or scope hard. Binding uncertainty is STATE AGE, not quote error — pool
+mark drifted 35.6 bps in 49s, curve marginal price fell ~3,575 bps in 13.6 min.
+
+## Handed back, not fixed here
+
+- `joshi-sources::PumpSwapPool::decode` would REFUSE the measured pool and MISPRICE it: requires
+  bytes 243..301 zero (they are not) and hardcodes virtual_quote_reserves 0. Omitting the offset-245
+  field overstates base-out by 119 bps — 4x the entire round-trip fee, in the FLATTERING direction.
+- Global account `creator_fee_basis_points = 5` is STALE; the program applies 30.
+- frontend-api-v3 /coins is UNUSABLE AS STATE: 8 of 12 rows marked incomplete were complete on chain
+  with zero reserves; of the 4 genuinely live, one was off by 158x. Candidate addresses only.
+
 ## Done log
 
 - 2026-08-22 00:55 CORPUS READ AND CENSUSED. 106,639,238 rows / 449,723 mints / 2.5M owners /
