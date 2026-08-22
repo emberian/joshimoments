@@ -136,6 +136,30 @@ mark drifted 35.6 bps in 49s, curve marginal price fell ~3,575 bps in 13.6 min.
 
 ## Done log
 
+- 2026-08-22 00:34 ROW-PROJECTION GATE + CANDIDATE FINDER, 100 tests (69 at start of night).
+  All three discovery routes now promote, live, on fresh bodies whose document fingerprints had
+  already drifted while the row gate correctly held.
+  - My gate spec needed one correction, made after three live pages refused within minutes: v1
+    required every leaf seen on every row of 1,308 rows, which included leaves the crate never
+    reads. All three refusals were genuine catches (a coin with NO metadata at all, a nested
+    mayhem/complete_reason nobody had read, a search row for a coin that has NEVER traded) but
+    requiring an unread field protects nothing and costs a refusal on every rare row — "which is how
+    a fail-closed gate becomes noise a tired reader waves through". Required is now exactly the
+    projection the code reads, and a review requiring more is itself refused.
+  - It added a rule I did not ask for and should have: AN EMPTY PAGE REFUSES. Every per-row check
+    passes vacuously over zero rows, and this provider answers past-the-end with a bare [] identical
+    to matched-nothing, so promoting it would certify a row shape from no rows.
+  - THE DEPUTY CAUGHT ITS OWN FABRICATION: it had reported no-term search pages returning
+    volume_1h_usd "of exactly 0". They carry NO volume key at all — the zero was its own readout
+    defaulting an absent field. It corrected the catalog, the review rationales, and made the field
+    optional rather than required.
+  - Carrying BOTH market caps with tags naming each other paid immediately: a coin surfaced whose two
+    provider values disagree by NINE PERCENTAGE POINTS, not the 0.31% of the census. Visible only
+    because neither was picked.
+  - CANDIDATE FINDER LIVE: 92-second window, 159 -> 153 mints, 58 in both. Top of slate
+    **+274%, -96%, +63%, +40%, -27% over ~92 seconds.** 11 of 58 carried measured volume; the other
+    47 say "the flow sweep's terms did not reach this mint; this is not a volume of zero".
+
 - 2026-08-22 00:55 CORPUS READ AND CENSUSED. 106,639,238 rows / 449,723 mints / 2.5M owners /
   220,475,360 signed balance changes, queryable in 30-50ms per mint over 107M rows.
   **THE HUNTING GROUND IS DENSE: 174,192 mints (38.7% of corpus, 54.9% of those that traded) had at
