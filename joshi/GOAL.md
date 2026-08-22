@@ -67,6 +67,26 @@ approach entirely.
 
 ## Done log
 
+- 2026-08-21 23:47 DISCOVERY MEASURED, 81 tests green. Headline: two 5-page sweeps of
+  /coins?sort=last_trade_timestamp 97 SECONDS apart, joined on mint -> 64 of ~200 mints persisted
+  (the persisting third is approximately "coins with continuous flow"), and **10 of those moved
+  >=8%, 5 moved >=20%, inside 97 seconds**. That is exactly Ember's crackle magnitude, in a feed we
+  can poll. Snapshot differencing is the candidate finder.
+  - /callout/recent is a PHANTOM: 400 "Validation failed (uuid is expected)" because /callout/{uuid}
+    catches it. Catalogued for 3 days as a real global feed. Refutation retained as a fixture.
+  - The trust gate CANNOT promote any listing route: schema_fingerprint collapses array elements, so
+    a fingerprint is the union of key sets of whichever coins landed in the page. 11 reads -> 8
+    fingerprints. All three routes quarantined by named refusal. Decision made: replace with a
+    per-row required-leaf + closed-optional-leaf gate (narrows, does not widen). Deputy implementing.
+  - Fields silently dropped from FOUR coin routes including one already promoted: ath_market_cap
+    (only within-lifetime peak) and volume_1h_usd (only realised-flow number in the catalog).
+  - updated_at is epoch SECONDS while its siblings are MILLISECONDS -> reads as January 1970.
+  - market_cap_usd vs usd_market_cap disagree up to 0.31%; neither preferred.
+  - Reserves go STALE on graduation: a bonded coin kept launch-constant virtual_sol_reserves while
+    its market cap fell 97%. Price cannot be derived from reserves post-bonding. Flagged to M0.
+  - /coins/search-unrestricted is a live-volume leaderboard wearing a search route's name: rows
+    strictly descending by volume_1h_usd on every page tested.
+
 - 2026-08-21 23:43 P2 signature instrument landed (analysis/src/joshi_analysis/signature.py, 5
   tests, 181 analysis tests green). First microstructure statistic JOSHI has computed from its own
   durably retained provider bytes. On the retained 200-bar window: event-time signature falls
