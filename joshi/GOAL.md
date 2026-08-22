@@ -247,6 +247,22 @@ these bytes. That is exactly what the hold gesture committed tonight begins to c
 
 ## Done log
 
+- 2026-08-22 05:55 CALLOUT OUTCOMES FETCHED LIVE, and they are directly usable. `callout_top/{mint}`
+  returns per callout: `createdAt`, `peakTimestamp`, `calloutPrice`, `maxPriceSol`, `multiple`,
+  `marketCap`, and **`thesis` — the caller's own words**. Two real callouts read tonight:
+  multiple 4.5 with 11.36 h to peak, and multiple 1 with no peak yet.
+  - **`multiple` reconciles with maxPriceSol/calloutPrice** (4.5 vs 4.548). The provider's headline
+    number is derivable from its own fields, so it can be CHECKED rather than trusted. Do that at
+    scale before relying on it.
+  - **`multiple = 1` with the two prices equal is a FLOOR, not an unknown** — it means the coin never
+    exceeded its callout price. Treating it as missing would silently drop every failed callout,
+    which is exactly the survivorship error this project keeps finding.
+  - `peakTimestamp = null` genuinely is unknown-so-far and must not be read as "no peak".
+  - `/callout/list/{user}` is keyed by USER, not mint. That resolves the "unexplained empty array"
+    from the discovery lane: it was called with a mint where a user id belongs. Not a provider
+    oddity — a parameter mismatch.
+  - Caveat: 2 callouts on 1 mint. This is the instrument working, not a result.
+
 - 2026-08-22 05:11 CALLOUT CLOCK FOUND. Salvaged from a lane that stalled mid-write. The callout
   routes carry `createdAt` (the t=0 that aligns coins), plus `peakTimestamp` on callout_top and
   `maxMultiplier` + `maxMultiplierAt` on callout_by_user. **The provider already states, per callout,
