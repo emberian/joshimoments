@@ -76,6 +76,31 @@ curve-price identity. Every one of those facts was independently re-derived toni
 corpus was composted along with a repo that had already mined it. Correct framing is PORT AND
 RE-VERIFY, never first read. I asserted "nobody has ever read them" in a deputy brief and to Ember.
 
+## THE REAL BOTTLENECK, clarified by Ember 2026-08-22 00:30
+
+When Ember said she "cannot execute on her trades efficiently" she did NOT mean cost, slippage or
+strategy. She meant, verbatim: **"i literally couldn't push buttons fast enough to capture the
+opportunity before it scrolled past me."**
+
+That is an interface problem, and it is the founding problem of the project: she uses a screen reader
+and works keyboard-only, and JOSHI exists because pointer-heavy tools hurt her hands. I spent most of
+tonight on microstructure and never touched the thing actually stopping her.
+
+Her own August spec already said it: "i select coins that the automation will watch for a microdip,
+buy it, scalp as soon as a extremely minimal +PnL is taken. IT'S GOTTA BE REACTIVE AFTER MY
+DECISION." She was never meant to press the buttons. She decides; the machine reacts. Today no
+mechanism exists to hand a coin to anything, so she does selection AND reaction AND execution by hand
+against a feed that discards.
+
+**The key asymmetry: pump.fun's feed FORGETS, and JOSHI is a retention machine.** A coin that
+scrolled past is an opportunity that existed and was lost because nothing held it. Fixing that needs
+NO execution authority and is buildable read-only. Deputy dispatched: one keystroke to hold, held
+means held across feed refreshes, the mark commits durably through the existing gesture route bound
+to exact scene bytes, and NO taxonomy at capture time.
+
+Tonight's microstructure work is not wasted — M0 says what size to take once she can act, the
+census says the supply is there — but neither addresses the bottleneck she named.
+
 ## THE OPERATIONAL FINDING — venue choice dominates everything
 
 Largest clip an 8% crackle can gross-break-even on:
