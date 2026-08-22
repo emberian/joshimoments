@@ -101,7 +101,30 @@ to exact scene bytes, and NO taxonomy at capture time.
 Tonight's microstructure work is not wasted — M0 says what size to take once she can act, the
 census says the supply is there — but neither addresses the bottleneck she named.
 
-## THE OPERATIONAL FINDING — venue choice dominates everything
+## CORRECTED 2026-08-22 01:08 — the FEE TIER dominates, not the venue
+
+I told Ember "choosing a graduated pool over a mid-curve coin is worth more than any execution
+refinement". That is one step short of true and I should not have said it that way.
+
+A freshly graduated PumpSwap pool read tonight: **249 bps fee floor, 0.81 SOL max clip at 8%** —
+indistinguishable from the bonding curve and 4x worse than the other pool. Its 42.8 SOL market cap
+selects the fee program's FIRST TIER ROW at (lp 2, protocol 93, creator 30) = 125 bps a leg, the
+same as the curve. **"Graduated" alone predicts nothing.** The lever is WHICH TIER ROW THE MARKET CAP
+SELECTS, and the readout now prints it. Next increment worth having: how far she is from the next
+threshold, since the tables are steep (creator 30 -> 95 -> 90 -> ... -> 5 bps) and proximity to a
+boundary is actionable.
+
+Also: the two PumpSwap tier tables DISAGREE over a wide populated band (second threshold at 420 SOL
+vs 59 SOL of market cap) and no retained byte says which applies. The readout uses the WORSE of the
+two and says so — errs against the trade, never for it. The fix is reading the fee program's GetFees
+return from a landed swap's inner instructions.
+
+**State age is bigger than any arithmetic in this whole lane.** Chain-to-receipt was 11-13 seconds,
+mostly `finalized` commitment depth rather than slowness. The graduated pool moved 9-10 bps in 30
+seconds (~17-29 bps/min), so **its entire 60 bps fee floor is two to four minutes of drift.** The
+commitment choice is a priced decision, not a default.
+
+## THE ORIGINAL M0 FINDING (superseded in part by the above)
 
 Largest clip an 8% crackle can gross-break-even on:
   live bonding curve (42 SOL reserve):  **1.12 SOL ~ $108**
