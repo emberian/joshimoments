@@ -884,3 +884,79 @@ th { color: var(--muted); }
   .operational-session-bar button, .operational-session-bar button + button { margin-left: 0; width: 100%; }
   .prospective-decision { grid-template-columns: 1fr; margin: .75rem; }
 }
+
+/* Held coins: the rail that refuses to forget.
+   It spans the whole layout row and sits above the feed so it is early in the tab order and
+   never moves when the feed re-sorts underneath it. */
+.held-panel { grid-column: 1 / -1; }
+.held-refusal {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  background: var(--red-dim);
+  color: var(--ink);
+  font-size: 12px;
+}
+.held-empty { margin: 0; padding: 14px 15px; color: var(--muted); font-size: 12px; }
+.held-scope { margin: 0; padding: 0 15px 4px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.held-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 12px 15px 15px;
+  max-height: 46vh;
+  overflow-y: auto;
+  list-style: none;
+}
+.held-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  height: 100%;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mint);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.held-card[data-carried="false"] { border-left-color: var(--amber); }
+.held-card[data-retention="rejected"] { border-left-color: var(--red); }
+.held-card > header { display: flex; flex-direction: column; gap: 3px; }
+.held-card h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
+.held-name { color: var(--muted); font-size: 11px; }
+.held-retention { color: var(--faint); font-size: 11px; }
+.held-card[data-retention="committed"] .held-retention { color: var(--mint); }
+.held-card[data-retention="rejected"] .held-retention { color: var(--red); }
+.held-absence {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: var(--amber-dim);
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.held-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 7px; margin: 0; }
+.held-venue dl { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.held-venue dl p { margin: 2px 0 0; }
+.held-venue-refusal { color: var(--amber); }
+.held-facts dt, .held-venue dt { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+.held-facts dd, .held-venue dd { margin: 2px 0 0; font-size: 12px; font-weight: 650; }
+.held-venue { padding: 9px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.held-venue h4 { margin: 0 0 7px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.held-venue[data-measured="false"] dd { color: var(--faint); font-weight: 500; font-style: italic; }
+.held-venue p { margin: 8px 0 0; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.held-notes { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.held-notes li { display: flex; flex-direction: column; gap: 2px; padding: 7px 8px; border-radius: 8px; background: var(--surface-3); font-size: 12px; }
+.held-notes small { color: var(--faint); font-size: 10px; }
+.held-actions { display: flex; gap: 8px; margin-top: auto; }
+.held-note-form summary { min-height: var(--target); display: flex; align-items: center; cursor: pointer; font-size: 12px; font-weight: 650; color: var(--aqua); }
+.held-note-form form { display: flex; flex-direction: column; gap: 7px; padding-top: 4px; }
+.held-note-form label { font-size: 11px; color: var(--muted); }
+.held-note-form textarea { padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-3); color: var(--ink); font-size: 12px; resize: vertical; }
+.skip-link-second { top: 62px; }

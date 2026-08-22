@@ -5,6 +5,7 @@ import { AttentionFeed, type BoardFilter } from "./components/AttentionFeed";
 import { CoinWorkbench } from "./components/CoinWorkbench";
 import { CommandPalette, type ShellCommand } from "./components/CommandPalette";
 import { EpisodeRail } from "./components/EpisodeRail";
+import { HeldCoins, type HeldVenueLookup, type RetainedObservation } from "./components/HeldCoins";
 import { HypothesisLab } from "./components/HypothesisLab";
 import { emptyCaptureContext, OperatorCaptureDialog, OperatorPanel, type CapturePreset, type ChoiceSets } from "./components/OperatorCapture";
 import { ReplaySwitch } from "./components/ReplaySwitch";
@@ -12,8 +13,11 @@ import { ReplayInterviewQueue } from "./components/ReplayInterviewQueue";
 import { SceneInspector } from "./components/SceneInspector";
 import { SourcePanel } from "./components/SourcePanel";
 import type { GlassSnapshotV1, ReplayMode } from "./contract/v1";
+import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
+import { exactUtcNow } from "./operator/contract";
+import { holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
 import { useOperatorJournal } from "./operator/useOperatorJournal";
 import type { PendingOperatorCommandQueue } from "./operator/pendingQueue";
 import { configuredPresentationSink, type PresentationSink } from "./presentation/client";
@@ -41,6 +45,7 @@ export function GlassApp({
   onPresentationBinding,
   prospectiveProtocol = false,
   pendingOperatorQueue,
+  venueReadout,
 }: {
   dataSource?: GlassDataSource;
   operatorSink?: OperatorCommandSink;
@@ -51,6 +56,14 @@ export function GlassApp({
   onPresentationBinding?: (binding: { presentationId: string; presentationDigest: string; assignmentId: string } | null) => void;
   prospectiveProtocol?: boolean;
   pendingOperatorQueue?: PendingOperatorCommandQueue;
+  /**
+   * The measured venue-and-clip readout for a held coin, when something has measured it.
+   *
+   * Left unset on purpose: `joshi-market-math` and `joshi-liquidity` are the only things allowed
+   * to produce those numbers, and until one of them reaches this cockpit every held coin says
+   * "not yet measured" rather than showing a figure Glass invented.
+   */
+  venueReadout?: HeldVenueLookup;
 }) {
   const [snapshot, setSnapshot] = useState<GlassSnapshotV1 | null>(null);
   const [pendingMode, setPendingMode] = useState<ReplayMode | null>(null);
@@ -66,6 +79,8 @@ export function GlassApp({
   const [sceneInspectorOpen, setSceneInspectorOpen] = useState(false);
   const [viewportIds, setViewportIds] = useState<string[]>([]);
   const [interactedIds, setInteractedIds] = useState<string[]>([]);
+  const [heldObservations, setHeldObservations] = useState<Record<string, RetainedObservation>>({});
+  const [holdAnnouncement, setHoldAnnouncement] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const commandButtonRef = useRef<HTMLButtonElement>(null);
   const replayAbortRef = useRef<AbortController | null>(null);
@@ -212,6 +227,71 @@ export function GlassApp({
     }
   }, [selectCandidate, selectedId, visibleCandidates]);
 
+  const recordCommand = operatorJournal.record;
+
+  /**
+   * Keep the retained copy of every held coin as fresh as the feed actually made it.
+   *
+   * The copy exists so that a coin the feed later stops carrying still has something true to
+   * show. That is only worth anything if it is the last observation this cockpit really saw, so
+   * it is refreshed from each served scene and never recomputed from anything else.
+   */
+  useEffect(() => {
+    if (!snapshot) return;
+    const served = snapshot.view.payload.candidates;
+    setHeldObservations((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const candidate of served) {
+        const existing = next[candidate.id];
+        if (!existing) continue;
+        next[candidate.id] = { ...existing, candidate };
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [snapshot]);
+
+  /**
+   * One keystroke, committed immediately.
+   *
+   * No dialog, no confirmation, no field to fill: the whole defect being fixed is that the coin
+   * is gone by the time a form has been answered. The act itself is an ordinary evidence command
+   * on the ordinary route, so it is durable the moment the store answers, and it is retained in
+   * the local pending cache before that.
+   */
+  const holdSelected = useCallback(() => {
+    // Deliberately no fallback to "the first one". Holding a coin she did not choose is worse
+    // than holding none, and it would be indistinguishable to her from having held the right one.
+    const candidate = candidates.find((item) => item.id === selectedId);
+    if (!snapshot || !candidate) {
+      setHoldAnnouncement("Nothing was held: no candidate in this scene is selected.");
+      return;
+    }
+    const label = candidateSymbol(candidate.symbol, candidate.mint);
+    try {
+      recordCommand(holdIntent(candidate.id));
+    } catch (error) {
+      setHoldAnnouncement(`${label} was not held: ${error instanceof Error ? error.message : "the mark could not be recorded"}`);
+      return;
+    }
+    setHeldObservations((current) => current[candidate.id]
+      ? current
+      : { ...current, [candidate.id]: { candidate, sceneId: snapshot.view.sceneId, heldAt: exactUtcNow() } });
+    setHoldAnnouncement(`Held ${label}. It is pinned in held coins and will not scroll away.`);
+  }, [candidates, recordCommand, selectedId, snapshot]);
+
+  const appendHoldNote = useCallback((subjectKey: string, note: string) => {
+    recordCommand(holdNoteIntent(subjectKey, note));
+    const candidate = candidates.find((item) => item.id === subjectKey) ?? heldObservations[subjectKey]?.candidate;
+    setHoldAnnouncement(`Note appended to ${candidate ? candidateSymbol(candidate.symbol, candidate.mint) : subjectKey}.`);
+  }, [candidates, heldObservations, recordCommand]);
+
+  const refusedHold = useMemo(
+    () => operatorJournal.entries.find((entry) => isHoldCommand(entry.command) && entry.status === "rejected") ?? null,
+    [operatorJournal.entries],
+  );
+
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
   const cycleReplay = useCallback(() => {
     if (snapshot && pendingMode === null) requestMode(nextMode(snapshot.view.mode));
@@ -233,8 +313,9 @@ export function GlassApp({
     onToggleProvenance: toggleProvenance,
     onOpenInspector: openInspector,
     onRecordFocus: recordFocus,
+    onHoldCandidate: holdSelected,
     onOpenHypothesisLab: openHypothesisLab,
-  }), [cycleReplay, focusSearch, moveSelection, openCommands, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]));
+  }), [cycleReplay, focusSearch, holdSelected, moveSelection, openCommands, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]));
 
   const shellCommands: ShellCommand[] = useMemo(() => [
     { id: "search", label: "Focus market search", detail: "Filter only this immutable view", shortcut: "/", run: focusSearch },
@@ -242,10 +323,11 @@ export function GlassApp({
     { id: "density", label: "Toggle density", detail: "Keep large targets; reduce surrounding detail", shortcut: "D", run: toggleDensity },
     { id: "provenance", label: "Toggle provenance", detail: "Inspect field lineage and the full as-of vector", shortcut: "P", run: toggleProvenance },
     { id: "scene-inspector", label: "Inspect current scene", detail: "Review exact digest, choice context, clocks, and receipts", shortcut: "I", run: openInspector },
+    { id: "hold", label: "Hold the selected coin", detail: "One keystroke; it stops scrolling away and the mark is retained", shortcut: ";", run: holdSelected },
     { id: "record-focus", label: "Record deliberate focus", detail: "Append an explicit research gesture for the selected coin", shortcut: "F", run: recordFocus },
     { id: "hypothesis-lab", label: "Focus presentation hypothesis lab", detail: "Compare wallet, attention, liquidity, topology, and coupled-field views", shortcut: "H", run: openHypothesisLab },
     { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
-  ], [cycleReplay, focusSearch, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]);
+  ], [cycleReplay, focusSearch, holdSelected, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]);
 
   const closeCommands = useCallback(() => {
     setCommandsOpen(false);
@@ -282,7 +364,15 @@ export function GlassApp({
 
   return (
     <div className="app" data-density={density}>
-      <a className="skip-link" href="#selected-coin">Skip to selected coin</a>
+      <a className="skip-link" href="#held-coins">Skip to held coins</a>
+      <a className="skip-link skip-link-second" href="#selected-coin">Skip to selected coin</a>
+      {/*
+        Mounted from the first render so a hold announcement is an update to an existing live
+        region rather than an insertion, which several screen readers drop. Polite on purpose:
+        a hold is confirmation, and interrupting her mid-row while she is racing costs more than
+        it gives. A refused hold is separately assertive below, because that one she must hear.
+      */}
+      <p className="sr-only" role="status">{holdAnnouncement}</p>
       <header className="app-header">
         <a className="brand" href="#top" aria-label="Joshi glass home">
           <span className="brand-mark" aria-hidden="true">J</span>
@@ -326,7 +416,21 @@ export function GlassApp({
       </section>
 
       <main className="glass-layout">
-        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest} onViewportChange={updateViewport}
+        {refusedHold && (
+          <p className="held-refusal" role="alert">
+            A hold was refused by the local core and is not retained: {refusedHold.error} The coin
+            stays listed below so it is not lost, but nothing has committed it.
+          </p>
+        )}
+        <HeldCoins
+          entries={operatorJournal.entries}
+          candidates={candidates}
+          retained={heldObservations}
+          {...(venueReadout ? { venueReadout } : {})}
+          onSelect={selectCandidate}
+          onAppendNote={appendHoldNote}
+        />
+        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={setSelectedId} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest} onViewportChange={updateViewport}
           orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder} />
         <div id="selected-coin" tabIndex={-1}>
           <CoinWorkbench candidate={selected} episode={episode} socialEvents={snapshot.view.payload.socialEvents} onAnnotate={annotateChart} />

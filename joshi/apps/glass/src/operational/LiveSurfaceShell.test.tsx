@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -226,6 +226,66 @@ describe("live surface shell", () => {
     expect(posted?.token).toMatch(/^jpc1_/);
     expect(posted?.body).toBe(canonicalOperatorCommand(command));
     expect(await screen.findByText(/commit 7/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The gesture this cockpit exists for, on the live route.
+   *
+   * One key. No dialog, no confirm step, no tab to a submit button, and not one pointer event in
+   * the whole path -- because the defect being fixed is that the coin is gone by the time any of
+   * those have happened. What lands in the store is an ordinary evidence act bound to the exact
+   * bytes the snapshot route served.
+   */
+  it("holds a real mint from one keystroke, bound to the served scene, with no dialog in the way", async () => {
+    const attempts: Attempt[] = [];
+    stubCore(attempts);
+    const user = userEvent.setup();
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+
+    await user.keyboard(";");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /append evidence record/i })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands"))).toBe(true);
+    });
+    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands"));
+    const command = operatorCommandSchema.parse(JSON.parse(posted?.body ?? "{}"));
+    expect(posted?.body).toBe(canonicalOperatorCommand(command));
+    expect(posted?.token).toMatch(/^jpc1_/);
+    expect(command.commandKind).toBe("record_focus");
+    expect(command.subject).toEqual({ kind: "candidate", key: MINT });
+    expect(command.scene.sceneId).toBe(SCENE_ID);
+    expect(command.scene.viewDigest).toBe(liveSnapshot.snapshotDigest);
+    expect(command.authorityClass).toBe("evidence_only");
+    expect(command.effectCeiling).toBe("observe_only");
+    if (command.commandKind !== "record_focus") throw new Error("a hold is a record_focus act");
+    // Exactly the bytes apps/core/src/live_gesture.rs replays and proves across a restart.
+    expect(command.payload).toEqual({
+      context: {
+        uiLabel: "Hold coin",
+        uiLabelVersion: "1",
+        confidencePpm: null,
+        urgency: null,
+        whyNow: null,
+        note: null,
+      },
+      dwellMilliseconds: null,
+    });
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+    expect(await within(rail).findByText(/retained by the catalog at commit 7/i)).toBeInTheDocument();
+    // Nothing was measured about this venue, so nothing about it is claimed.
+    expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(3);
   });
 
   it("keeps the live surface free of axe-detectable violations", async () => {

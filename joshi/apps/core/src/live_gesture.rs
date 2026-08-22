@@ -1,9 +1,11 @@
 //! One operator gesture over a real, store-derived surface, proved across a restart.
 //!
-//! The walk mounts a copy of a real catalog, derives the exact Glass scene from the observations
-//! a provider actually sent, serves it through the ordinary paired loopback route, marks one real
-//! mint through the same HTTP route the browser uses, then drops everything and reopens the
-//! catalog read-only to show the act coming back bound to the same scene bytes.
+//! The gesture is the hold: the single keystroke Glass binds to `;`, which marks the coin on
+//! screen so a feed that forgets cannot take it away again. The walk mounts a copy of a real
+//! catalog, derives the exact Glass scene from the observations a provider actually sent, serves
+//! it through the ordinary paired loopback route, holds one real mint through the same HTTP route
+//! and with the same canonical payload bytes the browser sends, then drops everything and reopens
+//! the catalog read-only to show the act coming back bound to the same scene bytes.
 //!
 //! What this walk does not claim: that a human saw pixels. It proves byte identity between what
 //! the route served, what the act named, and what the store retained. An attached-browser witness
@@ -165,6 +167,8 @@ pub struct LiveGestureReport {
     pub subject_mint: String,
     pub command_id: String,
     pub command_kind: &'static str,
+    /// The frozen operator label that makes this act a hold rather than any other focus record.
+    pub command_ui_label: &'static str,
     pub command_commit_seq: String,
     pub command_status: u16,
     pub retry_status: u16,
@@ -184,7 +188,7 @@ pub struct LiveGestureReport {
     pub ceiling: &'static str,
 }
 
-/// Mount a real catalog, mark one real mint through the paired route, restart, and read it back.
+/// Mount a real catalog, hold one real mint through the paired route, restart, and read it back.
 ///
 /// # Errors
 ///
@@ -355,6 +359,7 @@ pub async fn run_live_gesture_walk(
         subject_mint,
         command_id,
         command_kind: "record_focus",
+        command_ui_label: HOLD_UI_LABEL,
         command_commit_seq: receipt.commit_seq.clone(),
         command_status,
         retry_status,
@@ -385,7 +390,18 @@ fn first_candidate(view: &ValidatedGlassViewV1) -> Result<String, LiveGestureErr
         ))
 }
 
-/// Builds exactly the canonical operator command bytes the Glass keyboard journal emits.
+/// The frozen label that distinguishes a hold from every other `record_focus` act.
+///
+/// Mirrors `HOLD_UI_LABEL` in `apps/glass/src/operator/holds.ts`. The label is the whole
+/// discriminator: change it on one side only and every hold already in a catalog is orphaned.
+const HOLD_UI_LABEL: &str = "Hold coin";
+
+/// Builds exactly the canonical operator command bytes one Glass hold keystroke emits.
+///
+/// Every optional field is null on purpose, and that is the point of the gesture rather than an
+/// omission in this walk. Asking for confidence, urgency, a reason or a note at the moment of
+/// noticing is what made the coin unreachable in the first place; words come later, as their own
+/// act, or never.
 fn mark_command_bytes(
     command_id: &str,
     scene_id: &str,
@@ -400,13 +416,19 @@ fn mark_command_bytes(
             r#""scene":{{"sceneId":"{}","viewDigest":"{}"}},"issuedAt":"{}","#,
             r#""clientClock":{{"clockId":"live-gesture-walk-clock","monotonicNs":"1"}},"#,
             r#""commandKind":"record_focus","subject":{{"kind":"candidate","key":"{}"}},"#,
-            r#""payload":{{"context":{{"uiLabel":"Record deliberate focus","uiLabelVersion":"1","#,
-            r#""confidencePpm":null,"urgency":null,"whyNow":"Keyboard mark over the live surface."#,
-            r#"","note":"Operator evidence only; no economic effect."}},"#,
+            r#""payload":{{"context":{{"uiLabel":"{}","uiLabelVersion":"1","#,
+            r#""confidencePpm":null,"urgency":null,"whyNow":null,"note":null}},"#,
             r#""dwellMilliseconds":null}},"#,
             r#""authorityClass":"evidence_only","effectCeiling":"observe_only"}}"#
         ),
-        command_id, command_id, command_id, scene_id, view_digest, issued_at, subject
+        command_id,
+        command_id,
+        command_id,
+        scene_id,
+        view_digest,
+        issued_at,
+        subject,
+        HOLD_UI_LABEL
     )
     .into_bytes()
 }
@@ -700,7 +722,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_keyboard_mark_binds_the_exact_served_scene_and_survives_restart() {
+    async fn one_hold_keystroke_binds_the_exact_served_scene_and_survives_restart() {
         let root = tempfile::tempdir().expect("temporary live gesture root");
         let catalog = root.path().join("catalog");
         let state = root.path().join("state");
@@ -712,6 +734,8 @@ mod tests {
                 .expect("live gesture walk");
 
         assert_eq!(report.subject_mint, FIXTURE_MINT);
+        assert_eq!(report.command_kind, "record_focus");
+        assert_eq!(report.command_ui_label, "Hold coin");
         assert_eq!(report.command_status, 202);
         assert_eq!(report.retry_status, 200);
         assert_eq!(report.command_commit_seq, report.retry_commit_seq);

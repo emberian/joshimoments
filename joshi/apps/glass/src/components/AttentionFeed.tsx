@@ -21,6 +21,7 @@ export const AttentionFeed = memo(function AttentionFeed({
   candidates,
   selectedId,
   onSelect,
+  onFocusCandidate,
   board,
   onBoardChange,
   density,
@@ -33,6 +34,15 @@ export const AttentionFeed = memo(function AttentionFeed({
   candidates: Candidate[];
   selectedId: string;
   onSelect(id: string): void;
+  /**
+   * Keeps "what she is on" and "what a keystroke acts on" the same thing.
+   *
+   * Without it the app only learns about a candidate when the card is activated, so a row reached
+   * with Tab or with a screen reader's own navigation is focused and read aloud while the hold
+   * key still acts on some other coin. That is a silent wrong-coin bug, and holding the wrong
+   * coin is worse than not holding one.
+   */
+  onFocusCandidate?(id: string): void;
   board: BoardFilter;
   onBoardChange(board: BoardFilter): void;
   density: Density;
@@ -163,6 +173,8 @@ export const AttentionFeed = memo(function AttentionFeed({
                     data-selected={selectedId === candidate.id}
                     data-candidate-id={candidate.id}
                     aria-current={selectedId === candidate.id ? "true" : undefined}
+                    aria-keyshortcuts=";"
+                    onFocus={() => onFocusCandidate?.(candidate.id)}
                     onClick={() => onSelect(candidate.id)}
                   >
                     <span

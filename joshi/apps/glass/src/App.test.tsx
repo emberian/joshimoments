@@ -575,3 +575,194 @@ describe("accessibility-first glass", () => {
     });
   });
 });
+
+/** Reaches a control with Tab alone. No pointer event exists anywhere in these paths. */
+async function tabTo(user: ReturnType<typeof userEvent.setup>, target: HTMLElement): Promise<void> {
+  for (let step = 0; step < 400 && document.activeElement !== target; step += 1) {
+    await user.tab();
+  }
+  expect(document.activeElement).toBe(target);
+}
+
+describe("holding a coin before it scrolls away", () => {
+  /**
+   * The bottleneck this replaces, in Ember's words: "i literally couldn't push buttons fast
+   * enough to capture the opportunity before it scrolled past me". So the gate is not that a
+   * mark can be made -- it is that exactly one keystroke makes it, with no dialog to answer, no
+   * field to fill and no pointer event anywhere in the test.
+   */
+  it("commits a hold from one keystroke with no dialog and no pointer event", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} operatorSink={sink} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+
+    await user.keyboard("k");
+    await waitFor(() => expect(screen.getByRole("heading", { name: /fable fable market/i })).toBeInTheDocument());
+    await user.keyboard(";");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(await within(rail).findByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();
+
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(1));
+    const command = JSON.parse(sink.attemptBodies[0] ?? "{}") as OperatorCommandV1;
+    expect(command.commandKind).toBe("record_focus");
+    expect(command.subject).toEqual({ kind: "candidate", key: "fable" });
+    expect(command.effectCeiling).toBe("observe_only");
+    expect(command.authorityClass).toBe("evidence_only");
+    expect(command.scene.sceneId).toBe(mockSnapshots.witnessed.view.sceneId);
+    expect(command.scene.viewDigest).toBe(mockSnapshots.witnessed.snapshotDigest);
+    if (command.commandKind !== "record_focus") throw new Error("hold must be a record_focus act");
+    expect(command.payload.context.uiLabel).toBe("Hold coin");
+    // Nothing was asked of her at the moment of noticing, so nothing was answered.
+    expect(command.payload.context.whyNow).toBeNull();
+    expect(command.payload.context.note).toBeNull();
+    expect(command.payload.context.urgency).toBeNull();
+    expect(command.payload.context.confidencePpm).toBeNull();
+  });
+
+  it("keeps a held coin, and its last observation, after the feed stops carrying it", async () => {
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+
+    await user.keyboard("k");
+    await waitFor(() => expect(screen.getByRole("heading", { name: /fable fable market/i })).toBeInTheDocument());
+    await user.keyboard(";");
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(await within(rail).findByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();
+    expect(within(rail).queryByText(/stopped carrying this coin/i)).not.toBeInTheDocument();
+
+    // Two loads later the served scene no longer carries this coin at all.
+    await user.keyboard("r");
+    await screen.findByText(/separate later reconstruction/i);
+    await user.keyboard("r");
+    await screen.findByText(/separate as-known reconstruction/i);
+    expect(screen.queryByRole("button", { name: /\$FABLE/ })).not.toBeInTheDocument();
+
+    const afterReload = screen.getByRole("region", { name: /held coins/i });
+    expect(within(afterReload).getByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();
+    expect(within(afterReload).getByText(/the feed stopped carrying this coin/i)).toBeInTheDocument();
+    expect(within(afterReload).getByText(/not a claim about what the coin is doing now/i)).toBeInTheDocument();
+    expect(within(afterReload).getByRole("button", { name: /not in this view/i })).toBeDisabled();
+  });
+
+  it("states that the venue and clip lines are unmeasured rather than printing a number", async () => {
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    const venue = within(rail).getByRole("heading", { name: /venue and clip/i }).parentElement;
+    if (!venue) throw new Error("venue block did not render");
+    expect(within(venue).getAllByText(/not yet measured/i)).toHaveLength(3);
+    expect(within(venue).getByText(/nothing here is estimated/i)).toBeInTheDocument();
+    expect(venue.textContent).not.toMatch(/\d/);
+  });
+
+  /**
+   * The seam a sibling lane fills. It renders `joshi_liquidity::readout::PreTradeReadout` field
+   * for field, including the two things a single headline number would destroy: that the answer
+   * is an interval rather than a ceiling, and that "no clip breaks even" is an answer.
+   */
+  it("renders a measured readout as an interval, and a refusal as an answer", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={(subjectKey) => subjectKey !== "radon" ? null : {
+          venueKind: "Pump bonding curve",
+          venueAccount: "CurveAcct1111111111111111111111111111111111",
+          venueBinding: "recomputed PDA(['bonding-curve', mint]) at bump 255",
+          feeFloorBps: "247",
+          feeFloorProbeSol: "0.010000000",
+          declaredLiftBps: "800",
+          breakEvenClip: { smallestSol: "0.031000000", largestSol: "1.120000000" },
+          stateAge: "slot 440345975, finalized, 1.4s before local receipt",
+          unsupported: ["creator fee share disagreement between Global and the fee program"],
+        }}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByText(/pump bonding curve/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/247 bps/)).toBeInTheDocument();
+    expect(within(rail).getByText(/0.031000000 SOL to 1.120000000 SOL/)).toBeInTheDocument();
+    expect(within(rail).getByText(/an interval, not a ceiling/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/recomputed PDA/)).toBeInTheDocument();
+    expect(within(rail).getByText(/creator fee share disagreement/)).toBeInTheDocument();
+    expect(within(rail).queryByText(/not yet measured/i)).not.toBeInTheDocument();
+  });
+
+  it("renders a lift with no break-even clip as an answer rather than a blank", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={() => ({
+          venueKind: "Pump bonding curve",
+          venueAccount: "CurveAcct1111111111111111111111111111111111",
+          venueBinding: "recomputed PDA(['bonding-curve', mint]) at bump 255",
+          feeFloorBps: "247",
+          feeFloorProbeSol: "0.010000000",
+          declaredLiftBps: "800",
+          breakEvenClip: { refusal: "the fee floor alone exceeds the declared lift at every size" },
+          stateAge: "slot 440345975, finalized, 1.4s before local receipt",
+          unsupported: [],
+        })}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByText(/none\. the fee floor alone exceeds the declared lift/i)).toBeInTheDocument();
+    // An empty "could not reconstruct" list is a claim of completeness, and is doubted out loud.
+    expect(within(rail).getByText(/worth doubting rather than trusting/i)).toBeInTheDocument();
+  });
+
+  it("appends a later free-text note as its own act, and refuses a blank one", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} operatorSink={sink} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(1));
+
+    // Keyboard only, like every path in this cockpit: a disclosure, a field, a submit.
+    await tabTo(user, within(rail).getByText(/add a note/i));
+    await user.keyboard("{Enter}");
+    await tabTo(user, within(rail).getByRole("button", { name: /append note/i }));
+    await user.keyboard("{Enter}");
+    expect(within(rail).getByRole("alert")).toHaveTextContent(/a note with no words is not recorded/i);
+    expect(sink.attemptBodies.length).toBe(1);
+
+    await tabTo(user, within(rail).getByLabelText(/in your own words/i));
+    await user.keyboard("same wick as the one that ran yesterday");
+    await tabTo(user, within(rail).getByRole("button", { name: /append note/i }));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(2));
+    const note = JSON.parse(sink.attemptBodies[1] ?? "{}") as OperatorCommandV1;
+    if (note.commandKind !== "record_focus") throw new Error("a note must be a record_focus act");
+    expect(note.subject).toEqual({ kind: "candidate", key: "radon" });
+    expect(note.payload.context.uiLabel).toBe("Note on held coin");
+    expect(note.payload.context.note).toBe("same wick as the one that ran yesterday");
+  });
+
+  it("keeps the held rail free of axe-detectable violations", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<GlassApp dataSource={new OfflineFixtureDataSource()} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+    await screen.findByRole("region", { name: /held coins/i });
+    const results = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(results.violations).toEqual([]);
+  });
+});
