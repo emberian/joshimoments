@@ -175,7 +175,18 @@ Historical corpus has no callout data (on-chain only), so the available t=0 is F
 is the sequel and needs callout capture we do not yet retain (CalloutTop/CalloutByMint are real
 routes; CalloutRecent is a phantom).
 
-## Thrust, 2026-08-22 01:15
+## Thrust, 2026-08-22 01:35
+
+- COCKPIT WIRING (apps/core, apps/glass, joshi-liquidity): connect the hold gesture to the pre-trade
+  readout so a held coin shows fee floor + break-even clip interval, plus tier proximity.
+- LIVE CLOCK (joshi-pump-api, joshi-pump-adapter, joshi-sources): the sequel both studies ended at.
+  Callout capture gives the t=0 that aligns coins; SubscribeTokenTrade gives the per-coin EVENT tape.
+  The decisive question: can a live event-resolution tape see the dip that candles miss? The corpus
+  says the gap is enormous (57.7% of no-drawdown-on-candles coins had one at event resolution);
+  verifying it live on bytes we retained ourselves is the difference between a finding about a
+  BigQuery export and a finding about the instrument Ember would actually use.
+
+## Superseded thrust, 2026-08-22 01:15
 
 Two deputies live:
 - COHORT GEOMETRY (analysis/): align every mint on first observed trade, characterize first
