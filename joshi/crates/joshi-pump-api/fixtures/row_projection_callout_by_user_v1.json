@@ -1,0 +1,42 @@
+{
+  "contract": "joshi.pump_api.row_projection_review.v1",
+  "schemaVersion": "1",
+  "reviewId": "review:pump-callout-by-user-rows:2026-08-22:v1",
+  "routeId": "callout_by_user",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "requiredLeaves": [
+    "$/calloutId:string",
+    "$/calloutPrice:number",
+    "$/calloutPriceUsd:number",
+    "$/coinMint:string",
+    "$/commentCount:number",
+    "$/createdAt:number",
+    "$/likes:number",
+    "$/marketCap:number",
+    "$/maxMultiplier:number",
+    "$/maxPriceSol:number",
+    "$/maxPriceUsd:number",
+    "$/multiple:number",
+    "$/quoteCount:number",
+    "$/replyCount:number",
+    "$/repostCount:number",
+    "$/updateCount:number",
+    "$/userId:string",
+    "$/user_uuid:string"
+  ],
+  "optionalLeaves": [
+    "$/hasLiked:null",
+    "$/hasReposted:null",
+    "$/maxMultiplierAt:null",
+    "$/maxMultiplierAt:string",
+    "$/mediaUrl:null",
+    "$/mediaUrl:string",
+    "$/thesis:string",
+    "$/updates:array",
+    "$/viewCount:number"
+  ],
+  "reviewer": "claude-opus-5 acting as the joshi live-clock deputy, autonomously, without Ember present",
+  "reviewedAt": "2026-08-22T07:10:00.000000Z",
+  "decision": "promoted",
+  "rationale": "PROMOTED for /callout/list/{user}. THE ROUTE IS NOT WHAT THE CATALOG CALLED IT. It was catalogued as /callout/list/{mint} and the standing puzzle was that it answered {\"callouts\":[], \"nextPageToken\":\"\"} for a mint /callout/top had just returned three callouts for. Supplying a caller's userId wallet, and separately that same caller's user_uuid, each returned TEN of that caller's callouts across many different coins. The path segment is a USER. The empty answer was not censoring, a default sort or a window: it was an identifier no user has. The catalog entry is renamed callout_by_user accordingly, and an empty answer here is still not evidence of absence - the reason is simply ordinary now. REVIEWED MATERIAL: 26 live response bodies and 190 rows fetched 2026-08-22 between 05:57Z and 07:05Z through the bounded source-edge client, covering 10 distinct callers, including repeat reads of the same callers minutes apart. ENVELOPE: {\"callouts\":[...],\"nextPageToken\":\"...\"}. A bare read returns at most 10 rows and the token, when present, base64-decodes to {\"v\":2,\"page\":1} - a PAGE COUNTER, not a keyset, so paging it walks a population that can move underneath the walk. Every one of the 26 documents was strictly DESCENDING by createdAt, which makes this the only live callout clock in the catalog: poll a caller and a new calloutId appears at the head. THE CLOCK. `createdAt` is epoch MILLISECONDS and is an OCCURRENCE time. `maxMultiplierAt` is an ISO-8601 UTC string - a second encoding of an instant on the SAME ROW as an epoch-millis one - and is a retrospective outcome time. There is NO availability time anywhere: no publishedAt, no indexedAt, no updatedAt, and `updates` was an empty array on all 190 rows so even the revision concept the row exposes carries no clock. Availability has to be measured by polling and recorded as our own receive instant. THE TRAP THIS REVIEW EXISTS TO WRITE DOWN. Two reads of the same caller two seconds apart returned TEN common calloutIds. `calloutPrice` and `maxPriceSol` differed on ALL TEN; `calloutPriceUsd` and `maxPriceUsd` were identical on all ten, as were marketCap, multiple, maxMultiplier, maxMultiplierAt and every counter. Within one response every row divides by exactly one SOL price (94.29407300044383 at 05:57:16Z, 94.29057673846087 at 05:57:18Z, constant to 14 significant digits across all rows of each read). The SOL-denominated callout numbers are RECOMPUTED AT READ TIME against the current SOL price. They are not the SOL price at the callout, and a backtest that treats calloutPrice as an entry price is wrong by however far SOL has moved since. The USD pair is the as-of-event quantity, and marketCap equals calloutPriceUsd times 1e9 to the last digit, so the provider's supply assumption is exactly one billion. crate::normalize tags all four accordingly. REQUIRED SET: 18 leaves, every one a field the normalizer reads, each present on all 190 rows. `viewCount` was missing on 2 of the first 58 rows and is optional for that measured reason. `hasLiked` and `hasReposted` were null on all 190 because they are relative to a viewer this client deliberately does not have; they stay optional and null-typed, so the day this client acquires a session they will REFUSE rather than silently change meaning. `thesis` and `updates` are on every row and are optional because nothing here reads them. The optional set is CLOSED and lists only observed leaf lines. This review was made by an agent, not by Ember."
+}

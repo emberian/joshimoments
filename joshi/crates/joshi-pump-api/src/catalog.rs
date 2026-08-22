@@ -15,7 +15,7 @@ pub enum RouteId {
     CoinSearch,
     CalloutRecent,
     CalloutTop,
-    CalloutByMint,
+    CalloutByUser,
     UserSearch,
     UserProfile,
     Following,
@@ -37,7 +37,7 @@ impl RouteId {
         Self::CoinSearch,
         Self::CalloutRecent,
         Self::CalloutTop,
-        Self::CalloutByMint,
+        Self::CalloutByUser,
         Self::UserSearch,
         Self::UserProfile,
         Self::Following,
@@ -61,7 +61,7 @@ impl fmt::Display for RouteId {
             Self::CoinSearch => "coin_search",
             Self::CalloutRecent => "callout_recent",
             Self::CalloutTop => "callout_top",
-            Self::CalloutByMint => "callout_by_mint",
+            Self::CalloutByUser => "callout_by_user",
             Self::UserSearch => "user_search",
             Self::UserProfile => "user_profile",
             Self::Following => "following",
@@ -366,13 +366,21 @@ impl RouteSpec {
                 &["pageToken"],
                 false,
             ),
-            // Measured live 2026-08-22 against a busy mint: this one is real, and the predicted
+            // Measured live 2026-08-22 against six busy mints: this one is real, and the predicted
             // envelope was right. It returns {"callouts":[...]} whose rows carry calloutId,
             // userId, user_uuid, coinMint, marketCap, calloutPrice, multiple, createdAt,
             // maxPriceSol, thesis, peakTimestamp, username, profileImage and xUsername. `multiple`
-            // and `peakTimestamp` are outcomes as of the read, never pre-event features. It stays
-            // un-collectable because it is mint-scoped and retrospective: it can score a coin
-            // already chosen, and can never originate a candidate.
+            // and `peakTimestamp` are outcomes as of the read, never pre-event features.
+            //
+            // CLOCK, measured: `createdAt` and `peakTimestamp` are both epoch MILLISECONDS, and
+            // both are OCCURRENCE times. No row of this route, and no response header of it,
+            // states when the provider learned of a callout or when it became visible. The only
+            // availability instant available is our own receive clock, so a t=0 built from this
+            // route is "the callout says it happened then", never "we could have known then".
+            //
+            // It is collectable now because it is the only route that maps a COIN to the callers
+            // who called it; two of six busy mints answered with zero callouts, which is retained
+            // as an absent record and never as evidence that nobody called them.
             RouteId::CalloutTop => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
@@ -384,25 +392,50 @@ impl RouteSpec {
                 &["mint"],
                 &["limit"],
                 &[],
-                false,
+                true,
             ),
-            // Measured live 2026-08-22 against the same busy mint that /callout/top answered for:
-            // real route, predicted envelope correct, and it returned
-            // {"callouts":[],"nextPageToken":""} — an EMPTY list for a coin that demonstrably has
-            // callouts. Whether that is a default sort, a window, or censoring is unresolved, so
-            // an empty answer here is emphatically not evidence that a mint has no callouts.
-            RouteId::CalloutByMint => Self::http(
+            // RESOLVED 2026-08-22, and the resolution renamed the route. The earlier reading was
+            // that /callout/list/{mint} answered {"callouts":[],"nextPageToken":""} for a coin
+            // that /callout/top had just returned three callouts for, and that the empty answer
+            // was an unexplained default sort, window or censoring. It is none of those: this
+            // path segment is not a mint at all. Supplying a caller's `userId` wallet, and
+            // separately that same caller's `user_uuid`, each returned TEN of that caller's
+            // callouts spanning many different coins. The path is a USER, the feed is one
+            // caller's callout history newest-first, and a mint in that slot is simply an
+            // identifier no user has — which is why it answered empty. An empty answer here still
+            // is not evidence of absence, but the reason is now ordinary rather than mysterious.
+            //
+            // Measured over 58 rows from 8 callers: `createdAt` is epoch MILLISECONDS and every
+            // document was strictly descending by it, so this is the only live callout clock this
+            // catalog has. `nextPageToken` decodes to {"v":2,"page":N} — a page counter, not a
+            // keyset. Its rows carry MORE than /callout/top's: calloutPriceUsd, maxPriceUsd,
+            // maxMultiplier, maxMultiplierAt (an ISO-8601 string, not epoch millis, on the same
+            // row as an epoch-millis createdAt), likes, viewCount and the reply/repost/quote
+            // counters.
+            //
+            // THE TRAP, measured on two reads two seconds apart: calloutPrice and maxPriceSol
+            // DIFFERED on all ten common rows while calloutPriceUsd and maxPriceUsd were
+            // byte-identical. Every row in one response divides by exactly one SOL price, and that
+            // divisor moved between reads. The SOL-denominated callout numbers are recomputed at
+            // READ time against the current SOL price; they are not the SOL price at the callout.
+            // The USD pair is the as-of-event quantity, and marketCap is calloutPriceUsd times a
+            // 1e9 supply to the last digit.
+            //
+            // There is NO discovery-side callout feed: /callout/recent is a phantom and both real
+            // routes need a subject already in hand, so nothing here can originate a t=0.
+            RouteId::CalloutByUser => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
-                "/callout/list/{mint}",
+                "/callout/list/{user}",
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
                 PaginationKind::PageToken,
-                "sortBy/sortOrder; observed window may be censored",
-                &["mint"],
+                "measured 2026-08-22: one caller's callouts, strictly descending by createdAt; \
+                 pageToken is a page counter",
+                &["user"],
                 &["limit", "sortBy", "sortOrder", "pageToken"],
                 &["pageToken"],
-                false,
+                true,
             ),
             RouteId::UserSearch => Self::http(
                 id,

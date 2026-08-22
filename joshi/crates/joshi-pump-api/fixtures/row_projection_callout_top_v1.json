@@ -1,0 +1,31 @@
+{
+  "contract": "joshi.pump_api.row_projection_review.v1",
+  "schemaVersion": "1",
+  "reviewId": "review:pump-callout-top-rows:2026-08-22:v1",
+  "routeId": "callout_top",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "requiredLeaves": [
+    "$/calloutId:string",
+    "$/calloutPrice:number",
+    "$/coinMint:string",
+    "$/createdAt:number",
+    "$/marketCap:number",
+    "$/maxPriceSol:number",
+    "$/multiple:number",
+    "$/peakTimestamp:number",
+    "$/userId:string",
+    "$/user_uuid:string"
+  ],
+  "optionalLeaves": [
+    "$/mediaUrl:string",
+    "$/profileImage:null",
+    "$/profileImage:string",
+    "$/thesis:string",
+    "$/username:string",
+    "$/xUsername:null"
+  ],
+  "reviewer": "claude-opus-5 acting as the joshi live-clock deputy, autonomously, without Ember present",
+  "reviewedAt": "2026-08-22T07:10:00.000000Z",
+  "decision": "promoted",
+  "rationale": "PROMOTED for /callout/top/{mint}. REVIEWED MATERIAL: 7 live response bodies and 61 rows fetched 2026-08-22 between 05:56Z and 06:14Z through the bounded source-edge client, against six busy mints. Two of those six answered {\"callouts\":[]} for coins that plainly have callers; that is retained as an absent record and is never read as evidence that nobody called them. ENVELOPE, measured: {\"callouts\":[...]} with no continuation token of any kind, so a bare read is the whole answer this route will give; `limit` is allowlisted and one mint returned exactly 50 rows, which looks like a ceiling rather than a coincidence. THE CLOCK, which is the reason this review exists. `createdAt` and `peakTimestamp` are both epoch MILLISECONDS - a sampled createdAt of 1779159859390 is 2026-05-19 as milliseconds and 1970 as seconds, so the unit is not in doubt - and BOTH ARE OCCURRENCE TIMES. Nothing on this row, and no response header of this route, states when the provider learned of a callout or when it became visible to a reader. There is exactly ONE clock here and it is the one the caller's own action stamped. An availability instant therefore has to come from our acquisition's receivedAt, which is a fact about our polling and not about the provider, and a study that needs 'when could we have known' must measure that rather than read it off a row. WHAT IS RETROSPECTIVE. `multiple`, `maxPriceSol` and `peakTimestamp` are outcomes as of the read. They move for a callout that has not changed, and using them as features of the callout is look-ahead. THE SOL TRAP, measured on the sibling route and true of this one's fields too: `calloutPrice` and `maxPriceSol` are recomputed at READ time against the current SOL price rather than retained as the SOL price at the callout. /callout/top does not expose the USD twins that made this visible, so on THIS route the SOL numbers are the only price available and they carry a read-time divisor that the row does not name. crate::normalize tags them accordingly. REQUIRED SET. Ten leaves, each of them a field this crate's projection actually reads and each present on all 61 rows. Requiring an unread leaf buys nothing and costs a refusal whenever the provider omits it on a rare row, so `thesis`, `username`, `xUsername` and `profileImage` are in the CLOSED optional set even though `thesis` and `username` were on every row and `xUsername` was null on every row. The optional set lists only leaf lines actually observed: a caller who has an X handle will produce `$/xUsername:string`, which is unobserved and will REFUSE the page. That refusal is correct and is a finding to read and amend, never something to pre-widen away. This review was made by an agent, not by Ember."
+}

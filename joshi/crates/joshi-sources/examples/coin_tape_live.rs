@@ -55,7 +55,10 @@ use tokio_tungstenite::tungstenite::Message;
 const ENDPOINT: &str = "wss://pumpportal.fun/api/data";
 const SOURCE_ID: &str = "pumpportal.websocket.data.v1";
 const SOURCE_NAMESPACE: &str = "read_only_market_source";
-const COVERAGE_FAMILY: &str = "coin_event_tape";
+/// The durable catalog indexes coverage by level and recognises exactly two families. A per-coin
+/// trade subscription is a leased hot scope, so it claims coverage under the same family a Helius
+/// hot lease does rather than inventing a third the index cannot rank.
+const COVERAGE_FAMILY: &str = "hot_lane";
 const CATALOG_ID: &str = "joshi-coin-tape";
 const FEED_LOCATOR: &str = "subscribeTokenTrade";
 const INLINE_BLOB_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -352,6 +355,11 @@ async fn record(
         }
     };
     let closed_at_millis = now_millis()?;
+    // Say why before doing anything that could fail, so a later refusal cannot hide the stop.
+    eprintln!(
+        "coin_tape_live: stopped after {inbound_frames} inbound frames: {}",
+        stop.as_str()
+    );
     if !pending.is_empty() {
         receipts.push(commit_frames(
             &mut store,

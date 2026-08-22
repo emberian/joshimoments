@@ -49,6 +49,11 @@ struct Cli {
     /// Allowlisted query parameter, as `name=value`. Repeat for each one.
     #[arg(long = "query", value_name = "NAME=VALUE")]
     queries: Vec<String>,
+    /// Path parameter, as `name=value`, for a route whose path segment is not a mint —
+    /// `/callout/list/{user}`, for instance. Repeat for each one. `--mint X` is exactly
+    /// `--path mint=X`, and supplying both forms of the same name is refused.
+    #[arg(long = "path", value_name = "NAME=VALUE")]
+    paths: Vec<String>,
     /// Durable working root: identity reservations, catalog, blobs, exports.
     #[arg(long)]
     state_dir: PathBuf,
@@ -148,7 +153,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let request = LogicalRequest {
         route,
         parameters: RequestParameters {
-            path: path_parameters(spec, cli.mint.as_deref())?,
+            path: path_parameters(spec, cli.mint.as_deref(), &cli.paths)?,
             query,
         },
     };
@@ -313,30 +318,43 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 /// rather than by the assumption that every product read is about one coin. A collection route
 /// such as `/coins` requires nothing, and handing it a mint anyway is a caller error the client
 /// would refuse on the next line; saying so here keeps the refusal legible.
+/// Settle every path segment the catalogued route declares, from `--mint` and `--path`.
+///
+/// The catalog is the authority on which segments exist: an argument naming a segment this route
+/// does not declare is refused rather than dropped, and a declared segment left unsupplied is
+/// refused rather than filled in. `/callout/list/{user}` is why this is not hard-wired to a mint.
 fn path_parameters(
     spec: RouteSpec,
     mint: Option<&str>,
+    paths: &[String],
 ) -> Result<std::collections::BTreeMap<String, String>, Box<dyn std::error::Error>> {
-    if spec.required_path.iter().any(|name| *name != "mint") {
-        return Err(format!(
-            "route {} needs a path parameter this binary cannot supply: {:?}",
-            spec.id, spec.required_path
-        )
-        .into());
+    let mut supplied = std::collections::BTreeMap::new();
+    if let Some(value) = mint {
+        supplied.insert("mint".to_owned(), value.to_owned());
     }
-    let takes_mint = spec.required_path.contains(&"mint");
-    match (takes_mint, mint) {
-        (true, Some(value)) => Ok([("mint".to_owned(), value.to_owned())]
-            .into_iter()
-            .collect()),
-        (true, None) => Err(format!("route {} needs --mint", spec.id).into()),
-        (false, None) => Ok(std::collections::BTreeMap::new()),
-        (false, Some(_)) => Err(format!(
-            "route {} takes no mint; it reads a collection, not one coin",
-            spec.id
-        )
-        .into()),
+    for entry in paths {
+        let (name, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("path parameter {entry:?} is not name=value"))?;
+        if supplied.insert(name.to_owned(), value.to_owned()).is_some() {
+            return Err(format!("path parameter {name:?} was supplied twice").into());
+        }
     }
+    for name in supplied.keys() {
+        if !spec.required_path.contains(&name.as_str()) {
+            return Err(format!(
+                "route {} declares no path segment {name:?}; it declares {:?}",
+                spec.id, spec.required_path
+            )
+            .into());
+        }
+    }
+    for name in spec.required_path {
+        if !supplied.contains_key(*name) {
+            return Err(format!("route {} needs --path {name}=<value>", spec.id).into());
+        }
+    }
+    Ok(supplied)
 }
 
 /// Parse repeated `name=value` query arguments. The client still refuses any name the pinned

@@ -305,7 +305,7 @@ pub(crate) fn records(
         // {"callouts":[...]} and /callout/list/{mint} answers {"callouts":[],"nextPageToken":""},
         // so the envelope key was predicted correctly for both. /callout/recent is not a route at
         // all — see the catalog — and can never reach this arm with a body to read.
-        RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByMint => {
+        RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByUser => {
             nested_array(root, &["callouts", "data"])
         }
         RouteId::BalanceTokens => nested_array(root, &["tokens", "data"]),
@@ -374,7 +374,7 @@ fn normalize_record(
             .filter_map(|field| {
                 object
                     .get(*field)
-                    .and_then(|value| tagged_scalar(field, value, bonded))
+                    .and_then(|value| tagged_scalar(route, field, value, bonded))
             })
             .collect()
     } else {
@@ -489,30 +489,66 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "totalValue",
             "updatedAt",
         ],
-        RouteId::CalloutRecent
-        | RouteId::CalloutTop
-        | RouteId::CalloutByMint
-        | RouteId::CommunityCallouts => &[
+        // MEASURED 2026-08-22 over 3 rows of /callout/top/{mint} and 58 rows of
+        // /callout/list/{user} from 8 callers. Every name below was seen on at least one of those
+        // routes; extraction is presence-filtered, so a route that does not carry one simply has
+        // no such field. `walletAddress`, `calloutTimestamp` and `calledOutAtMcap` were in the
+        // earlier guessed list and appear on NEITHER route, so they are gone.
+        //
+        // Deliberately NOT extracted, and all of it still in the retained exact bytes: `thesis`
+        // (untrusted free text and the one thing a caller controls), `mediaUrl`, `username`,
+        // `xUsername` and `profileImage` (user content), `updates` (an array, never a scalar), and
+        // `hasLiked`/`hasReposted`, which were null on all 58 rows because they are relative to a
+        // viewer this client deliberately does not have.
+        RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByUser => &[
             "calloutId",
             "userId",
             "user_uuid",
-            "walletAddress",
-            "username",
-            "xUsername",
             "coinMint",
-            "thesis",
             "createdAt",
-            "calloutTimestamp",
             "calloutPrice",
+            "calloutPriceUsd",
             "marketCap",
-            "calledOutAtMcap",
             "multiple",
-            "maxMultiplier",
             "maxPriceSol",
+            "maxPriceUsd",
+            "maxMultiplier",
+            "maxMultiplierAt",
             "peakTimestamp",
             "likes",
+            "viewCount",
             "commentCount",
             "replyCount",
+            "repostCount",
+            "quoteCount",
+            "updateCount",
+        ],
+        // The same names under a route NOTHING has ever called. It is a separate arm so that a
+        // later reader cannot mistake this list for a measurement: `profile-api.pump.fun` is a
+        // different host behind a different session class, and its callout rows have never been
+        // seen. The first live call must re-measure this before anything believes a field of it.
+        RouteId::CommunityCallouts => &[
+            "calloutId",
+            "userId",
+            "user_uuid",
+            "coinMint",
+            "createdAt",
+            "calloutPrice",
+            "calloutPriceUsd",
+            "marketCap",
+            "multiple",
+            "maxPriceSol",
+            "maxPriceUsd",
+            "maxMultiplier",
+            "maxMultiplierAt",
+            "peakTimestamp",
+            "likes",
+            "viewCount",
+            "commentCount",
+            "replyCount",
+            "repostCount",
+            "quoteCount",
+            "updateCount",
         ],
         RouteId::UserSearch | RouteId::UserProfile | RouteId::Following => &[
             "address",
@@ -566,7 +602,17 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
     }
 }
 
-fn tagged_scalar(field: &str, raw: &RawValue, bonded: Option<bool>) -> Option<TaggedScalar> {
+/// Tag one leaf with what it MEANS on the route it arrived from.
+///
+/// The route is a parameter and not an afterthought: `createdAt` is measured epoch milliseconds on
+/// the callout routes and has never been measured on the community routes, and a tag that cannot
+/// tell those apart has to stay silent on both — which is how a unit error survives.
+fn tagged_scalar(
+    route: RouteId,
+    field: &str,
+    raw: &RawValue,
+    bonded: Option<bool>,
+) -> Option<TaggedScalar> {
     let source = raw.get().trim();
     let (encoding, value) = match source.as_bytes().first().copied()? {
         b'"' => ("utf8", Some(serde_json::from_str::<String>(source).ok()?)),
@@ -579,7 +625,7 @@ fn tagged_scalar(field: &str, raw: &RawValue, bonded: Option<bool>) -> Option<Ta
         field: field.to_owned(),
         encoding: encoding.to_owned(),
         value,
-        semantics: semantics(field, bonded).to_owned(),
+        semantics: semantics(route, field, bonded).to_owned(),
     })
 }
 
@@ -605,7 +651,44 @@ fn reserve_semantics(field: &str, bonded: Option<bool>) -> Option<&'static str> 
     })
 }
 
-fn semantics(field: &str, bonded: Option<bool>) -> &'static str {
+/// What a callout leaf means, MEASURED 2026-08-22 on `/callout/top/{mint}` and
+/// `/callout/list/{user}` and true of neither community route.
+///
+/// Two measurements are encoded here rather than written down somewhere a reader might not reach.
+///
+/// THE CLOCK. `createdAt` and `peakTimestamp` are epoch MILLISECONDS and `maxMultiplierAt` is an
+/// ISO-8601 UTC string — two encodings of an instant on ONE row. Every one of them is an
+/// OCCURRENCE time. Nothing on either route says when the provider learned of a callout or when
+/// it became visible, so an availability clock has to come from our own receive instant and is
+/// never read off the row.
+///
+/// THE SOL TRAP. Two reads of the same ten callouts two seconds apart returned identical
+/// `calloutPriceUsd` and `maxPriceUsd` and DIFFERENT `calloutPrice` and `maxPriceSol` on all ten.
+/// Within one response every row divides by exactly one SOL price, and that divisor moved between
+/// the reads. The SOL-denominated numbers are recomputed at READ time against the current SOL
+/// price; they are not what the coin cost in SOL when the caller called it, and a backtest that
+/// treats them that way is off by however far SOL has moved since.
+fn callout_semantics(route: RouteId, field: &str) -> Option<&'static str> {
+    if !matches!(
+        route,
+        RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByUser
+    ) {
+        return None;
+    }
+    Some(match field {
+        "createdAt" => "callout_occurrence_time_epoch_millis_no_availability_time_exists",
+        "peakTimestamp" => "retrospective_peak_time_epoch_millis_as_of_acquisition",
+        "maxMultiplierAt" => "retrospective_peak_time_iso8601_utc_string_as_of_acquisition",
+        "calloutPrice" | "maxPriceSol" => {
+            "provider_sol_price_recomputed_at_read_never_the_sol_price_at_the_callout"
+        }
+        "calloutPriceUsd" | "maxPriceUsd" => "callout_usd_price_as_of_the_callout_event",
+        "marketCap" => "callout_usd_market_cap_as_of_the_callout_event",
+        _ => return None,
+    })
+}
+
+fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str {
     // MEASURED 2026-08-22, and the reason this function takes the row's `complete` flag at all: a
     // coin with complete=true was observed carrying virtual_sol_reserves=30000000000 and
     // real_sol_reserves=0 — the launch constants, untouched — while its market cap fell 97 percent
@@ -614,6 +697,9 @@ fn semantics(field: &str, bonded: Option<bool>) -> &'static str {
     // a coin that no longer trades on that curve. The tag says so on the field itself, and
     // `crate::reserves` is the accessor that refuses outright.
     if let Some(tag) = reserve_semantics(field, bonded) {
+        return tag;
+    }
+    if let Some(tag) = callout_semantics(route, field) {
         return tag;
     }
     match field {
@@ -683,7 +769,7 @@ fn semantics(field: &str, bonded: Option<bool>) -> &'static str {
         "market_cap" | "market_cap_quote" => "provider_quote_denominated_market_cap_assertion",
         "program" => "provider_execution_venue",
         "type" => "provider_trade_direction",
-        "multiple" | "maxMultiplier" | "maxPriceSol" | "peakTimestamp" => {
+        "multiple" | "maxMultiplier" | "maxPriceSol" | "peakTimestamp" | "maxPriceUsd" => {
             "retrospective_outcome_as_of_acquisition_never_pre_event_feature"
         }
         "thesis" | "content" => "untrusted_user_content",
@@ -917,10 +1003,59 @@ mod tests {
         assert!(error.to_string().contains("duplicate object key"));
     }
 
+    /// The 2026-08-22 measurement, defended: reading `calloutPrice` as the SOL price at the
+    /// callout is wrong by however far SOL has moved since, and the tag has to say so.
+    #[test]
+    fn callout_sol_prices_are_tagged_as_recomputed_at_read() {
+        for field in ["calloutPrice", "maxPriceSol"] {
+            assert_eq!(
+                semantics(RouteId::CalloutByUser, field, None),
+                "provider_sol_price_recomputed_at_read_never_the_sol_price_at_the_callout"
+            );
+        }
+        for field in ["calloutPriceUsd", "maxPriceUsd"] {
+            assert_eq!(
+                semantics(RouteId::CalloutTop, field, None),
+                "callout_usd_price_as_of_the_callout_event"
+            );
+        }
+    }
+
+    /// `createdAt` was measured as epoch milliseconds on the callout routes and has never been
+    /// measured anywhere else, so the tag must stay silent everywhere else.
+    #[test]
+    fn the_callout_clock_is_typed_only_where_it_was_measured() {
+        assert_eq!(
+            semantics(RouteId::CalloutTop, "createdAt", None),
+            "callout_occurrence_time_epoch_millis_no_availability_time_exists"
+        );
+        assert_eq!(
+            semantics(RouteId::CommunityMessages, "createdAt", None),
+            "provider_event_time_unparsed"
+        );
+        assert_eq!(
+            semantics(RouteId::CommunityCallouts, "createdAt", None),
+            "provider_event_time_unparsed"
+        );
+    }
+
+    /// A leaf may only be REQUIRED by a row-projection review if the normalizer reads it. These
+    /// three were in the guessed callout projection and appear on neither measured route.
+    #[test]
+    fn the_callout_projection_drops_names_that_were_never_observed() {
+        let read = extracted_fields(RouteId::CalloutByUser);
+        for absent in ["walletAddress", "calloutTimestamp", "calledOutAtMcap", "thesis"] {
+            assert!(!read.contains(&absent), "{absent} is not a measured callout leaf");
+        }
+        for present in ["calloutId", "coinMint", "createdAt", "calloutPriceUsd", "viewCount"] {
+            assert!(read.contains(&present), "{present} was measured on a callout row");
+        }
+    }
+
     #[test]
     fn tagged_numbers_keep_the_exact_json_lexeme() {
         let raw: Box<RawValue> = serde_json::from_str("1.2300e-7").unwrap();
-        let value = tagged_scalar("calloutPrice", &raw, None).unwrap();
+        let value = tagged_scalar(RouteId::CalloutTop, "calloutPrice", &raw, None).unwrap();
         assert_eq!(value.encoding, "json_number_lexeme");
         assert_eq!(value.value.as_deref(), Some("1.2300e-7"));
     }

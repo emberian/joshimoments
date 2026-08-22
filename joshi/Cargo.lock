@@ -1194,6 +1194,8 @@ dependencies = [
  "joshi-evidence",
  "joshi-export",
  "joshi-g0-harness",
+ "joshi-liquidity",
+ "joshi-market-math",
  "joshi-operational-status",
  "joshi-operator",
  "joshi-pairing",

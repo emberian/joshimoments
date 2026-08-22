@@ -616,7 +616,7 @@ fn ordered_membership(route: RouteId, root: &RawValue) -> Result<Vec<String>, ()
                 | RouteId::BalanceTokens => &["mint"],
                 RouteId::CalloutRecent
                 | RouteId::CalloutTop
-                | RouteId::CalloutByMint
+                | RouteId::CalloutByUser
                 | RouteId::CommunityCallouts => &["calloutId", "id"],
                 RouteId::UserSearch | RouteId::UserProfile | RouteId::Following => {
                     &["address", "userId"]
