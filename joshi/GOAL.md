@@ -32,6 +32,26 @@ Its research program is already numbered M0-M4 with falsifiers and "useful resid
   8-20% excursions actually are.
 - **Phase 3 discovery**: turn on DiscoveryCoins/CalloutRecent so Ember can find coins inside JOSHI.
 
+## Two findings from reading FORMAL_MODEL.md myself
+
+**1. JOSHI has ZERO of the six types the corpus calls the minimum semantic boundary.**
+`MarketObservation`, `PriceObservation` (kind: mark|marginal|size_quote|fill_average|liquidation),
+`SignedFlowEvent`, `ImpactStudyRow`, `LiquidityProviderEpisode`, `OperatorEpisode` — 0 files each
+across 38 crates and 177k lines. What exists instead is five registration/receipt ceremony types
+around "episode" (EpisodeBasisV1, EpisodeProtocolRegistrationV1, EpisodeProtocolReceiptV1,
+EpisodeLaunchRegistrationV1, EpisodeLaunchReceiptV1) and no type saying what an episode IS —
+inventory epochs, partial exit, runner, flat watch, re-entry. The apparatus grew the paperwork
+around every concept and never the concept. The corpus's own line: "Anything substantially more
+should be earned by one concrete JOSHI study." 38 crates is substantially more and none was earned.
+
+**2. The adaptive timescale instrument already exists as Definition P2.**
+Signature volatility sigma^2(tau) := V(tau)/(tau*pbar^2) over the variogram V(tau) := E[(p_{t+tau}-p_t)^2].
+The curve RISES with net positive serial dependence and FALLS with net mean reversion. So you do not
+pick an interval — you sweep tau and read where structure lives. A crackle is dip-then-recover, i.e.
+mean reversion, i.e. the signature curve falling at the crackle's characteristic lag. Comparing the
+signature of a coin Ember would work against one she would not IS a direct measurement of her
+selection, and it needs no taxonomy from her. This replaces the 1-second-bar approach entirely.
+
 ## Done log
 
 - 2026-08-21 23:07 committed the three deputy lanes: pump tap measured (candles is a bare array, the
