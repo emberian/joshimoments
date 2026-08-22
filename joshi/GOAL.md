@@ -247,6 +247,32 @@ these bytes. That is exactly what the hold gesture committed tonight begins to c
 
 ## Done log
 
+- 2026-08-22 05:11 CALLOUT CLOCK FOUND. Salvaged from a lane that stalled mid-write. The callout
+  routes carry `createdAt` (the t=0 that aligns coins), plus `peakTimestamp` on callout_top and
+  `maxMultiplier` + `maxMultiplierAt` on callout_by_user. **The provider already states, per callout,
+  when it was made, how far the coin ran, and how long that took.** The entry-window study is one
+  route away rather than a corpus rebuild. NOT answered and must not be assumed: an availability
+  time — a callout is a clean origin only if we know both when it happened and when it became
+  visible, and nothing states the second. Also discovered `callout_by_user`, which was not in the
+  catalog.
+- 2026-08-22 04:00 COCKPIT WIRING + LIVE CAPTURE. A held coin now shows fee floor, break-even clip
+  INTERVAL, and which fee tier row its market cap selects with distance to the next. Route is
+  per-mint deliberately: a scene is what the feed carried at one commit, a readout is what an
+  account read said at one slot. I added `--write-capture` to the live driver and exercised it
+  against a real pool at finalized slot 440866559, so the route serves live numbers not a fixture.
+  THIRD INSTANCE of one gap: a JSON-RPC account response is POSITIONAL and names no address, like
+  the candle window that names no coin and the curve account that names no mint. The capture carries
+  what the body cannot state and renders the address list as a DECLARATION BY THE READER.
+- 2026-08-22 02:00 Operator runbook rewritten against what actually runs (five new tools tonight).
+
+## Known-not-real: Glass test failures under load
+
+The Glass suite reports 1, 4 or 10 failures depending on the run, every one timing out at a uniform
+~7100-7400 ms, including pure logic tests that should be instant. `MarketChart.test.tsx` passes 7/7
+in isolation and the text it could not find exists at MarketChart.tsx:234. **Machine load average
+was 77 / 94 / 70.** These are contention timeouts, not defects. Re-verify on a quiet machine before
+believing any Glass failure tonight. Rust gates are unaffected (103 pump, 41 liquidity, 157 sources).
+
 - 2026-08-22 01:08 VENUE DECODER + PRE-TRADE READOUT, 207 tests (was 179), workspace clippy clean.
   The 119 bps overstatement is fixed and independently reproduced from retained bytes. Offset-245
   named `unattributed_quote_side_reserve_atoms` after a 42-pool survey found the SAME value on 29 of
