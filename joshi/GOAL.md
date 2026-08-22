@@ -187,6 +187,53 @@ Two deputies live:
   (which fee row the market cap selects and how far to the next). This closes the loop between the
   two lanes that landed tonight and have never met.
 
+## THE ANSWER TO EMBER'S DIP QUESTION, 2026-08-22 01:30
+
+**Of 113,859 mints whose MINUTE CANDLES SHOW NO DRAWDOWN AT ALL, 57.7% had one at event
+resolution.** Median event drawdown 0.182 log (~ -16.7%); median candle drawdown exactly ZERO.
+**That is the dip she watches for, and the chart she would be looking at does not render it.**
+
+And there is usually no chart at all: **77.1% of the cohort has <=3 candles in its entire first
+hour** (median 2). For most coins in the window that matters, a candle view is not thin — it is
+absent.
+
+CANDLES ARE A RELABELLING OF FLOW, measured not assumed: slope of log-price on log-reserve is
+EXACTLY -2.0 with r^2 EXACTLY 1.0 over 21M events; signed flow telescopes into reserve displacement
+on 99.89% of mints; corr(log return, reserve displacement) = 1.0 to twelve decimals. Spearman
+0.9963 / 0.99996 / **1.000000** for the three candle features against their flow counterparts, with
+identical single-feature AUCs to four decimals. My prior was right and is now a measurement.
+
+## What a coin's life looks like (226,760 standard-supply curve mints, aligned on BIRTH)
+
+- Intensity decays as **t^-1.35, r^2 = 0.996**, 30s to 12h — an aftershock shape over four orders of
+  magnitude inside a day.
+- **80% of every account a coin will ever touch in 24h has touched it by minute 5.**
+- Survival: 80.5% @1s, 63.4% @1min, 36.8% @5min, 20.7% @1h, 8.0% @24h, 1.2% @6d.
+  **Nearly one in five is finished within a second of creation.**
+- Death threshold EARNED from a measured resurrection hazard: a 1h silence resolves into a further
+  trade 31% of the time (a pause); a 24h silence 6.1%.
+- **"Goes to zero" is mechanical here**: the launch price is a hard floor pre-migration and 83.4% of
+  coins end with >=99.9% of supply back on the curve — every token bought was sold back. Of mints
+  that ever sold >=0.1% of supply, 80.4% came all the way back, median 48 seconds.
+
+## Predictive: yes, but the strongest predictor is arithmetic
+
+At 5 min, coins with NOTHING OUTSTANDING are alive at 1h 2.6% of the time vs 61.4% with tokens
+outstanding — AUC 0.889, and it is an accounting identity (a coin nobody holds cannot produce a
+sell, and a sell is the event predicted). Flow structure adds +0.055 AUC over that state
+(0.873->0.928); **adding candles to flow NEVER helps on any target.** Most of what is knowable is
+knowable in the first minute (60s 0.844 / 300s 0.888 / 1800s 0.921).
+
+Held out by birth day with a buffer; negative control returns chance. **Not tradeable and nothing
+has an action attached**, because this corpus structurally cannot score cost, failure, capacity or
+residual inventory — every fill in it landed.
+
+## The deputy's push-back that points at tonight's other lane
+
+**"Ember's current policy is not a baseline and cannot be, because there is no record of which coins
+she looked at."** Capturing what was on screen and when is worth more than further modelling on
+these bytes. That is exactly what the hold gesture committed tonight begins to capture.
+
 ## Done log
 
 - 2026-08-22 01:08 VENUE DECODER + PRE-TRADE READOUT, 207 tests (was 179), workspace clippy clean.
