@@ -2,8 +2,18 @@ import { lazy, memo, Suspense } from "react";
 import { AlertTriangle, CircleDot, Clock3, Eye, Radio, WalletCards } from "lucide-react";
 
 import type { Candidate, Episode, SocialEvent } from "../contract/v1";
-import { basisPoints, clock, compactUsd, priceSol, sentenceCase, sol } from "../format";
+import { basisPoints, candidateName, candidateSymbol, clock, compactUsd, priceSol, sentenceCase, sol } from "../format";
 import type { ChartAnchor } from "../operator/contract";
+
+/**
+ * The lineage this exact view carries for one metric field, or an explicit absence. Nothing here
+ * names a provider, a projection or a fixture that the served evidence list does not name.
+ */
+function fieldLineage(candidate: Candidate, field: string): string {
+  const reference = candidate.evidence.find((item) => item.field === field);
+  if (!reference) return "This view carries no lineage for this field";
+  return `${sentenceCase(reference.evidenceClass)} · ${reference.sourceId}`;
+}
 
 const MarketChart = lazy(() => import("./MarketChart").then((module) => ({ default: module.MarketChart })));
 
@@ -25,12 +35,12 @@ export const CoinWorkbench = memo(function CoinWorkbench({
       <header className="coin-header panel">
         <div className="coin-identity">
           <span className="coin-mark" aria-hidden="true">
-            {candidate.symbol.slice(0, 2)}
+            {(candidate.symbol ?? candidate.mint).slice(0, 2)}
           </span>
           <div>
             <p className="eyebrow">Selected observation</p>
             <h1 id="coin-title">
-              ${candidate.symbol} <span>{candidate.name}</span>
+              {candidateSymbol(candidate.symbol, candidate.mint)} <span>{candidateName(candidate.name)}</span>
             </h1>
             <p className="mint" title={candidate.mint}>{candidate.mint}</p>
           </div>
@@ -48,12 +58,12 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         <article className="metric-card">
           <span>Observed price</span>
           <strong>{priceSol(candidate.metrics.priceSol)}</strong>
-          <small>Derived observation, not a quote</small>
+          <small>{candidate.metrics.priceSol === null ? "No price was observed in this view" : `${fieldLineage(candidate, "metrics.priceSol")} · not a quote`}</small>
         </article>
         <article className="metric-card">
           <span>Market cap</span>
           <strong>{compactUsd(candidate.metrics.marketCapUsd)}</strong>
-          <small>Fixture projection</small>
+          <small>{candidate.metrics.marketCapUsd === null ? "No market cap was observed in this view" : fieldLineage(candidate, "metrics.marketCapUsd")}</small>
         </article>
         <article className="metric-card">
           <span>5-minute move</span>
@@ -63,7 +73,11 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         <article className="metric-card quote-card">
           <span>Observed exit value</span>
           <strong>{sol(candidate.metrics.executableExitSol, 5)}</strong>
-          <small>{candidate.metrics.executableExitSol ? `at ${sol(candidate.metrics.quoteSizeSol, 2)} fixture size` : "No observed inventory exit"}</small>
+          <small>{candidate.metrics.executableExitSol === null
+            ? "No observed inventory exit"
+            : candidate.metrics.quoteSizeSol === null
+              ? "This view carries no quote size for that exit"
+              : `at the ${sol(candidate.metrics.quoteSizeSol, 2)} quote size this view carries`}</small>
         </article>
       </div>
 

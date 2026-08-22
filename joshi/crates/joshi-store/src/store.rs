@@ -742,7 +742,7 @@ impl SqliteStore {
                     set_kind: rendered.clone(),
                     subject_kind: candidate_kind.clone(),
                     subject_key: choice.candidate_id().clone(),
-                    source_rank: Some(choice.source_rank()),
+                    source_rank: choice.source_rank(),
                     rendered_ordinal: Some(choice.rendered_ordinal()),
                     evidence_assertion_id: None,
                 })

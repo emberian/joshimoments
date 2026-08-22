@@ -1,7 +1,13 @@
 import { Eye, Layers3, PauseCircle, Target } from "lucide-react";
 
 import type { Candidate, Episode } from "../contract/v1";
-import { sentenceCase, sol } from "../format";
+import { accountedSol, candidateSymbol, sentenceCase } from "../format";
+
+/** An accounting figure, with its absence stated rather than shown as a zero. */
+function Amount({ value }: { value: string | null }) {
+  if (value === null) return <span className="amount-absent">Not reconciled</span>;
+  return <>{accountedSol(value)}</>;
+}
 
 export function EpisodeRail({
   episodes,
@@ -42,14 +48,14 @@ export function EpisodeRail({
                   {flat ? <PauseCircle aria-hidden="true" /> : <Layers3 aria-hidden="true" />}
                   {flat ? "Flat · watching" : sentenceCase(episode.state)}
                 </span>
-                <strong>${candidate.symbol}</strong>
+                <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
               </header>
               <span className="episode-disposition">{episode.disposition}</span>
               <p>{episode.latestNote}</p>
               <dl className="episode-accounting">
-                <div><dt>Current exposure</dt><dd>{sol(episode.accounting.currentExposureSol, 5)}</dd></div>
-                <div><dt>Realized net</dt><dd>{sol(episode.accounting.realizedNetSol, 5)}</dd></div>
-                <div><dt>Observed liquidation</dt><dd>{sol(episode.accounting.executableLiquidationSol, 5)}</dd></div>
+                <div><dt>Current exposure</dt><dd><Amount value={episode.accounting.currentExposureSol} /></dd></div>
+                <div><dt>Realized net</dt><dd><Amount value={episode.accounting.realizedNetSol} /></dd></div>
+                <div><dt>Observed liquidation</dt><dd><Amount value={episode.accounting.executableLiquidationSol} /></dd></div>
                 <div><dt>Inventory intervals</dt><dd>{episode.clips.length}</dd></div>
               </dl>
               <div className="next-attention">
@@ -57,7 +63,7 @@ export function EpisodeRail({
                 <span><strong>Next attention</strong>{episode.nextAttention}</span>
               </div>
               <button type="button" className="focus-button" onClick={() => onFocus(candidate.id)}>
-                Focus ${candidate.symbol}
+                Focus {candidateSymbol(candidate.symbol, candidate.mint)}
               </button>
               {selectedId === candidate.id && (
                 <details className="episode-recording-actions">

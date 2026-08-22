@@ -1,6 +1,7 @@
 import { EyeOff, History, MessageSquareText } from "lucide-react";
 
 import type { Candidate, Episode, ReplayMode } from "../contract/v1";
+import { candidateSymbol } from "../format";
 import type { CapturePreset } from "./OperatorCapture";
 import type { JournalEntry } from "../operator/useOperatorJournal";
 
@@ -41,7 +42,7 @@ export function ReplayInterviewQueue({
           return (
             <li key={episode.id}>
               <div>
-                <strong>${candidate.symbol}</strong>
+                <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
                 <span>{episode.state.replaceAll("_", " ")} · changed {episode.lastChangedAt}</span>
               </div>
               <div className="replay-queue-actions">

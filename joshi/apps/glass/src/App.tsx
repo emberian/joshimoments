@@ -17,7 +17,8 @@ import { configuredOperatorSink, type OperatorCommandSink } from "./operator/cli
 import { useOperatorJournal } from "./operator/useOperatorJournal";
 import type { PendingOperatorCommandQueue } from "./operator/pendingQueue";
 import { configuredPresentationSink, type PresentationSink } from "./presentation/client";
-import { defaultPresentationPolicy, explorationBundleFor, presentationPolicies } from "./presentation/fixtures";
+import { explorationBundleFor } from "./presentation/fixtures";
+import { defaultPresentationPolicy, presentationPolicies } from "./presentation/policies";
 import { usePresentationWitness } from "./presentation/usePresentationWitness";
 import { useStableCandidateOrder } from "./sensorium/useStableCandidateOrder";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
@@ -173,7 +174,7 @@ export function GlassApp({
     return stableOrder.orderedCandidates
       .filter((candidate) => {
         const matchesBoard = board === "all" || candidate.board === board;
-        const searchable = `${candidate.mint} ${candidate.id} ${candidate.symbol} ${candidate.name} ${candidate.attentionReason} ${candidate.socialSummary} ${candidate.tags.join(" ")}`.toLowerCase();
+        const searchable = `${candidate.mint} ${candidate.id} ${candidate.symbol ?? ""} ${candidate.name ?? ""} ${candidate.attentionReason} ${candidate.socialSummary} ${candidate.tags.join(" ")}`.toLowerCase();
         return matchesBoard && (normalized.length === 0 || searchable.includes(normalized));
       });
   }, [board, query, stableOrder.orderedCandidates]);

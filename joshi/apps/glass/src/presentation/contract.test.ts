@@ -17,7 +17,9 @@ import {
   presentationSceneReceiptV1Schema,
   presentationSceneV1Schema,
 } from "./contract";
-import { buildPresentationScene, defaultPresentationPolicy, explorationBundleFor, initialManifest, presentationPolicies } from "./fixtures";
+import { explorationBundleFor } from "./fixtures";
+import { buildPresentationScene, initialManifest } from "./manifest";
+import { defaultPresentationPolicy, presentationPolicies } from "./policies";
 import {
   GOLDEN_EXPLORATION_BUNDLE_V1_BYTES,
   GOLDEN_EXPLORATION_BUNDLE_V1_DIGEST,

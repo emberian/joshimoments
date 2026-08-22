@@ -1,5 +1,6 @@
 import { mockSnapshots } from "../data/mockSnapshot";
-import { defaultPresentationPolicy, explorationBundleFor } from "../presentation/fixtures";
+import { explorationBundleFor } from "../presentation/fixtures";
+import { defaultPresentationPolicy } from "../presentation/policies";
 import { digestExplorationBundle, digestPresentationPolicy } from "../presentation/contract";
 import {
   cockpitLaunchEnvelopeV1Schema,

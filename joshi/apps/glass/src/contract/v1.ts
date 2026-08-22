@@ -40,11 +40,16 @@ function sortedArray<T extends z.ZodType>(schema: T, identity: (value: z.infer<T
   return z.array(schema).superRefine((values, context) => sortedBy(values, identity, context));
 }
 
+// `unknown` exists because this enum drives the evidence badge a reader trusts. A field whose
+// class was never established is not "interpreted"; forcing one of the four positive classes
+// makes the badge assert a provenance nobody determined. `status` below already had `unobserved`;
+// the class did not, and that asymmetry is the defect.
 export const evidenceClassSchema = z.enum([
   "observed",
   "derived",
   "attested",
   "interpreted",
+  "unknown",
 ]);
 
 export const evidenceRefSchema = z.object({
@@ -62,7 +67,10 @@ export const evidenceRefSchema = z.object({
 export const sourceHealthSchema = z.object({
   id: stableIdentity,
   label: z.string().min(1),
-  status: z.enum(["fresh", "degraded", "gap", "fixture"]),
+  // `unknown` exists because "no complaint was recorded" is not the same fact as "this source
+  // is fresh". Without it a producer with no health signal has to claim one of four positive
+  // states, and the cheapest claim to reach for is `fresh`.
+  status: z.enum(["fresh", "degraded", "gap", "fixture", "unknown"]),
   lastObservedAt: instant.nullable(),
   lastIngestedAt: instant.nullable(),
   coverage: z.string().min(1),
@@ -82,13 +90,22 @@ export const candleSchema = z.object({
 export const candidateSchema = z.object({
   id: stableIdentity,
   mint: z.string().min(16),
-  symbol: z.string().min(1),
-  name: z.string().min(1),
+  // Null when the source named the mint but no ticker or display name. A non-nullable string
+  // forces a producer to invent a placeholder ("unobserved"), and a placeholder that reaches a
+  // render is indistinguishable from a real short ticker. Empty string stays illegal: an absent
+  // name is null, never "".
+  symbol: z.string().min(1).nullable(),
+  name: z.string().min(1).nullable(),
   board: z.enum(["new", "trending", "live", "callouts", "watch"]),
   lifecycle: z.enum(["bonding", "migrating", "graduated", "unknown"]),
   firstKnownAt: instant,
-  lastObservedAt: instant,
-  rank: wireU64,
+  // An EVENT clock, and null when the source supplied none. Non-nullable, this field obliged a
+  // producer to substitute the knowledge clock, which silently converts "when we found out" into
+  // "when it happened" and makes a freshly ingested mint read as freshly created.
+  lastObservedAt: instant.nullable(),
+  // Null means this view states no rank. A rank derived from an arbitrary sort order is not a
+  // rank, and there was previously no way to say so on the wire.
+  rank: wireU64.nullable(),
   metrics: z.object({
     priceSol: exactDecimal.nullable(),
     marketCapUsd: exactDecimal.nullable(),
@@ -101,7 +118,8 @@ export const candidateSchema = z.object({
   attentionReason: z.string().min(1),
   socialSummary: z.string().min(1),
   tags: z.array(z.string().min(1)),
-  watched: z.boolean(),
+  // Null means this view records no watch state. `false` is a claim that it is not watched.
+  watched: z.boolean().nullable(),
   episodeId: z.string().min(1).nullable(),
   evidence: sortedArray(evidenceRefSchema, (value) => value.id).min(1),
   // Empty is legal and means "no price series was observed for this mint". A single bar is not:
@@ -128,13 +146,18 @@ export const episodeSchema = z.object({
   latestNote: z.string().min(1),
   openedAt: instant,
   lastChangedAt: instant,
+  // Every figure is nullable, because for money the difference between "zero" and "not
+  // reconciled" is the difference between flat and unknown, and a reader cannot recover it from a
+  // rendered "0". `remainingCostBasisSol` and `executableLiquidationSol` were already nullable;
+  // the other four were not, so the same document could express one absence and not the other.
+  // Glass never computes these: they arrive from a reconciled accounting projection or not at all.
   accounting: z.object({
-    totalSpentSol: exactDecimal,
-    totalProceedsSol: exactDecimal,
-    realizedNetSol: exactDecimal,
+    totalSpentSol: exactDecimal.nullable(),
+    totalProceedsSol: exactDecimal.nullable(),
+    realizedNetSol: exactDecimal.nullable(),
     remainingCostBasisSol: exactDecimal.nullable(),
     executableLiquidationSol: exactDecimal.nullable(),
-    currentExposureSol: exactDecimal,
+    currentExposureSol: exactDecimal.nullable(),
   }).strict(),
   clips: sortedArray(
     z.object({
@@ -142,7 +165,7 @@ export const episodeSchema = z.object({
       label: z.string().min(1),
       openedAt: instant,
       closedAt: instant.nullable(),
-      realizedNetSol: exactDecimal,
+      realizedNetSol: exactDecimal.nullable(),
     }).strict(),
     (value) => value.id,
   ),

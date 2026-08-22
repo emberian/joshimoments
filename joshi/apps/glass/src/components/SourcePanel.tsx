@@ -1,11 +1,13 @@
 import { AlertTriangle, CheckCircle2, Database, Eye, RadioTower } from "lucide-react";
 
 import type { AsOfVector, Candidate, ReplayMode, SourceHealth } from "../contract/v1";
-import { clock, sentenceCase } from "../format";
+import { candidateSymbol, clock, instantOrAbsent, sentenceCase } from "../format";
 
+// Only `fresh` is a healthy delivery. `fixture` is a source whose bytes were authored rather
+// than observed, and it must never render with the same mark as a live source.
 function HealthIcon({ status }: { status: SourceHealth["status"] }) {
-  if (status === "gap" || status === "degraded") return <AlertTriangle aria-hidden="true" />;
-  return <CheckCircle2 aria-hidden="true" />;
+  if (status === "fresh") return <CheckCircle2 aria-hidden="true" />;
+  return <AlertTriangle aria-hidden="true" />;
 }
 
 export function SourcePanel({
@@ -26,6 +28,8 @@ export function SourcePanel({
   mode: ReplayMode;
 }) {
   const gapCount = sources.filter((source) => source.status === "gap" || source.status === "degraded").length;
+  const fixtureCount = sources.filter((source) => source.status === "fixture").length;
+  const freshCount = sources.filter((source) => source.status === "fresh").length;
   return (
     <section className="panel source-panel" aria-labelledby="source-title">
       <div className="panel-header">
@@ -45,9 +49,13 @@ export function SourcePanel({
           <kbd>P</kbd>
         </button>
       </div>
-      <div className={`health-summary ${gapCount > 0 ? "health-warning" : "health-good"}`} role="status">
+      <div className={`health-summary ${freshCount < sources.length ? "health-warning" : "health-good"}`} role="status">
         <RadioTower aria-hidden="true" />
-        <span><strong>{sources.length - gapCount} of {sources.length} fixture sources healthy</strong>{gapCount} explicit coverage gap{gapCount === 1 ? "" : "s"}; silence is not converted to zero.</span>
+        <span>
+          <strong>{freshCount} of {sources.length} source{sources.length === 1 ? "" : "s"} report fresh delivery</strong>
+          {gapCount} explicit coverage gap{gapCount === 1 ? "" : "s"}; silence is not converted to zero.
+          {fixtureCount > 0 && <strong className="fixture-warning">{fixtureCount} of these source{fixtureCount === 1 ? " is" : "s are"} fixture-backed: its bytes were authored, not observed.</strong>}
+        </span>
       </div>
       <dl className="asof-grid" aria-label="Snapshot as-of vector summary">
         <div><dt>Mode</dt><dd>{sentenceCase(mode)}</dd></div>
@@ -67,7 +75,7 @@ export function SourcePanel({
 
       {expanded && (
         <div id="provenance-details" className="provenance-details">
-          <h3>${candidate.symbol} field provenance</h3>
+          <h3>{candidateSymbol(candidate.symbol, candidate.mint)} field provenance</h3>
           <p>Separate clocks and evidence classes are preserved. Equal numbers do not imply equal truth conditions.</p>
           <div className="evidence-list">
             {candidate.evidence.map((item) => (
@@ -78,7 +86,7 @@ export function SourcePanel({
                 </header>
                 <dl>
                   <div><dt>Source</dt><dd>{item.sourceId}</dd></div>
-                  <div><dt>Observed</dt><dd>{clock(item.observedAt)}Z</dd></div>
+                  <div><dt>Observed</dt><dd>{instantOrAbsent(item.observedAt)}</dd></div>
                   <div><dt>Ingested</dt><dd>{clock(item.ingestedAt)}Z</dd></div>
                   <div><dt>Known</dt><dd>{clock(item.knownAt)}Z</dd></div>
                 </dl>
@@ -105,7 +113,7 @@ export function SourcePanel({
             {asOf.sources.map((source) => (
               <article key={source.sourceId}>
                 <h4>{source.sourceId}</h4>
-                <p>Delivered through commit {source.deliveredThrough}; {source.cursors.length} scoped cursor{source.cursors.length === 1 ? "" : "s"}; received {clock(source.receivedThrough)}Z.</p>
+                <p>Delivered through commit {source.deliveredThrough}; {source.cursors.length} scoped cursor{source.cursors.length === 1 ? "" : "s"}; received {instantOrAbsent(source.receivedThrough)}.</p>
                 {source.cursors.map((cursor) => (
                   <small className="cursor-line" key={`${cursor.family}:${cursor.subject ?? ""}:${cursor.cursorKind}`}>
                     {cursor.family} / {cursor.subject ?? "all subjects (null)"} / {cursor.cursorKind}: {cursor.value} through {cursor.advancedThrough}

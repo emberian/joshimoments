@@ -201,8 +201,10 @@ describe("live surface shell", () => {
     const snapshotAttempt = attempts.find((attempt) => attempt.url.includes("/api/v1/glass/snapshot"));
     expect(snapshotAttempt?.url).toContain(`basisSceneId=${SCENE_ID}`);
     expect(snapshotAttempt?.token).toMatch(/^jpc1_/);
-    // The lazy chart resolves after the feed; an empty series must read as an absence.
-    expect(await screen.findByText(/no price series was observed/i)).toBeInTheDocument();
+    // The lazy chart resolves after the feed; an empty series must read as an absence. It says
+    // "not attached", not "not observed": a retained candle window that reached no candidate is
+    // an absence on this screen without being an absence in the catalog.
+    expect(await screen.findByText(/no price series is attached to this coin/i)).toBeInTheDocument();
     expect(screen.getByText(/no bars are knowable in this lens/i)).toBeInTheDocument();
 
     await user.keyboard("f");

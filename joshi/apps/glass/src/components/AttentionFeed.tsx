@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Activity, Bookmark, RefreshCw, Radio, Users } from "lucide-react";
 
 import type { Candidate } from "../contract/v1";
-import { basisPoints, compactUsd, duration, sentenceCase, signedTone } from "../format";
+import { basisPoints, candidateName, candidateSymbol, compactUsd, duration, sentenceCase, signedTone } from "../format";
 import type { Density } from "../App";
 
 export type BoardFilter = "all" | Candidate["board"];
@@ -165,14 +165,18 @@ export const AttentionFeed = memo(function AttentionFeed({
                     aria-current={selectedId === candidate.id ? "true" : undefined}
                     onClick={() => onSelect(candidate.id)}
                   >
-                    <span className="candidate-rank" aria-label={`Rank ${rank}`}>
-                      {rank}
+                    <span
+                      className="candidate-rank"
+                      data-absent={rank === null}
+                      aria-label={rank === null ? "This view states no rank for this candidate" : `Rank ${rank}`}
+                    >
+                      {rank ?? "—"}
                     </span>
                     <span className="candidate-main">
                       <span className="candidate-title-row">
-                        <strong>${candidate.symbol}</strong>
-                        <span>{candidate.name}</span>
-                        {candidate.watched && (
+                        <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
+                        <span>{candidateName(candidate.name)}</span>
+                        {candidate.watched === true && (
                           <span className="icon-label" title="Watched">
                             <Bookmark aria-hidden="true" size={15} />
                             <span className="sr-only">Watched</span>

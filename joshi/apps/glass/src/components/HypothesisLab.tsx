@@ -12,7 +12,7 @@ import type {
   PresentationViewKind,
 } from "../presentation/contract";
 import type { PresentationEventIntent } from "../presentation/usePresentationWitness";
-import { presentationItemIdForView } from "../presentation/fixtures";
+import { presentationItemIdForView } from "../presentation/manifest";
 
 const VIEW_ORDER: PresentationViewKind[] = [
   "wallet_cluster_flow",
@@ -52,6 +52,9 @@ function PanelTable({ panel, visibleEvidence }: { panel: ExplorationPanel; visib
   const relations = panel.relations.filter((item) => visibleEvidence.has(item.lineage.evidenceClass));
   const marks = panel.marks.filter((item) => visibleEvidence.has(item.lineage.evidenceClass));
   const hidden = panel.signals.length + panel.relations.length + panel.marks.length - signals.length - relations.length - marks.length;
+  // A panel the evidence cut produced no row for must say so. Rendering the header and then
+  // nothing reads as a load failure, and a blank is exactly the shape a reader fills in.
+  const empty = panel.signals.length === 0 && panel.relations.length === 0 && panel.marks.length === 0;
 
   return <article className="field-view" aria-labelledby={`${panel.panelId}-title`} data-presentation-item={panel.panelId}>
     <header className="field-view-header">
@@ -64,6 +67,7 @@ function PanelTable({ panel, visibleEvidence }: { panel: ExplorationPanel; visib
     <p className="field-question"><strong>Question:</strong> {panel.question}</p>
     <p className="claim-boundary"><ShieldCheck aria-hidden="true" /><span><strong>Claim boundary.</strong> {panel.claimBoundary}</span></p>
     {hidden > 0 && <p className="lab-omission" role="status">{hidden} row{hidden === 1 ? "" : "s"} intentionally hidden by the current evidence toggle; the presentation event records that omission.</p>}
+    {empty && <p className="lab-absence" role="status"><strong>No rows in this evidence cut.</strong> This view carries no signal, relation, or mark for the served scene. That is an absent record, not a zero and not a finding.</p>}
 
     {signals.length > 0 && <div className="field-table-wrap">
       <table className="field-table">
@@ -321,7 +325,7 @@ export const HypothesisLab = memo(function HypothesisLab({
     </div>
     <details className="lab-artifact-closure">
       <summary>Exact exploration artifact closure · {bundle.sourceArtifacts.length} source artifacts</summary>
-      <div className="field-table-wrap"><table className="field-table"><caption>Source artifacts bound into this fixture bundle</caption><thead><tr><th scope="col">Artifact</th><th scope="col">Admission</th><th scope="col">Available</th><th scope="col">Digest</th></tr></thead><tbody>{bundle.sourceArtifacts.map((artifact) => <tr key={artifact.artifactId}><th scope="row">{artifact.artifactId}<small>{artifact.contract}</small></th><td>{artifact.admissionStatus.replaceAll("_", " ")}<small>{artifact.coverageBinding.replaceAll("_", " ")}</small></td><td><time dateTime={artifact.availableAt}>{artifact.availableAt}</time></td><td>{artifact.artifactDigest}</td></tr>)}</tbody></table></div>
+      <div className="field-table-wrap"><table className="field-table"><caption>Source artifacts bound into this exploration bundle · claim {bundle.claim.replaceAll("_", " ")}</caption><thead><tr><th scope="col">Artifact</th><th scope="col">Admission</th><th scope="col">Available</th><th scope="col">Digest</th></tr></thead><tbody>{bundle.sourceArtifacts.map((artifact) => <tr key={artifact.artifactId}><th scope="row">{artifact.artifactId}<small>{artifact.contract}</small></th><td>{artifact.admissionStatus.replaceAll("_", " ")}<small>{artifact.coverageBinding.replaceAll("_", " ")}</small></td><td><time dateTime={artifact.availableAt}>{artifact.availableAt}</time></td><td>{artifact.artifactDigest}</td></tr>)}</tbody></table></div>
     </details>
     <footer className="lab-footer">
       <span>Policy {activePolicy.policyId} v{activePolicy.policyVersion}</span>

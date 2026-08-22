@@ -13,7 +13,7 @@ import {
   type PresentationSceneV1,
 } from "./contract";
 import type { PresentationSink } from "./client";
-import { buildPresentationScene } from "./fixtures";
+import { buildPresentationScene } from "./manifest";
 
 export type PresentationEventIntent = PresentationEventV1 extends infer Event
   ? Event extends PresentationEventV1

@@ -9,6 +9,34 @@ export function compactUsd(value: string | null): string {
   }).format(numeric);
 }
 
+/**
+ * A reconciled accounting figure, or its absence.
+ *
+ * Deliberately not `sol()`. For money the difference between "zero" and "not reconciled" is the
+ * difference between flat and unknown, and a rendered `0.00000 SOL` cannot carry it -- a trader
+ * reads that as flat. Glass never computes these figures; they arrive from a reconciled
+ * accounting projection or they do not arrive.
+ */
+export function accountedSol(value: string | null, digits = 5): string {
+  return value === null ? "Not reconciled" : `${Number(value).toFixed(digits)} SOL`;
+}
+
+/**
+ * What to call a candidate the view names no ticker for.
+ *
+ * The mint is the identity the source actually supplied, so its leading characters stand in --
+ * never a placeholder word, and never behind a `$`. The `$` prefix is reserved for a ticker the
+ * view really carries, so an abbreviated mint can never be misread as one.
+ */
+export function candidateSymbol(symbol: string | null, mint: string): string {
+  return symbol === null ? `${mint.slice(0, 6)}…` : `$${symbol}`;
+}
+
+/** A candidate display name, or an explicit statement that this view carries none. */
+export function candidateName(name: string | null): string {
+  return name ?? "No name in this view";
+}
+
 export function sol(value: string | null, digits = 4): string {
   if (value === null) return "Not observed";
   return `${Number(value).toFixed(digits)} SOL`;
@@ -34,8 +62,16 @@ export function duration(seconds: string | null): string {
   return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
 }
 
+/**
+ * An instant this view does carry, plus its explicit absence. A null instant means the view
+ * recorded none; it is never evidence that the moment did not happen, so it must not read as one.
+ */
+export function instantOrAbsent(value: string | null): string {
+  return value === null ? "Not recorded" : `${clock(value)}Z`;
+}
+
 export function clock(value: string | null): string {
-  if (value === null) return "Never";
+  if (value === null) return "Not recorded";
   return new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     minute: "2-digit",

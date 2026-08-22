@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Command, Search, X } from "lucide-react";
 
 import type { Candidate } from "../contract/v1";
+import { candidateName, candidateSymbol } from "../format";
 
 export type ShellCommand = {
   id: string;
@@ -64,7 +65,7 @@ export function CommandPalette({
     [commands, normalized],
   );
   const matchingCandidates = useMemo(
-    () => candidates.filter((item) => `${item.symbol} ${item.name} ${item.tags.join(" ")}`.toLowerCase().includes(normalized)).slice(0, 6),
+    () => candidates.filter((item) => `${item.symbol ?? ""} ${item.name ?? ""} ${item.mint} ${item.tags.join(" ")}`.toLowerCase().includes(normalized)).slice(0, 6),
     [candidates, normalized],
   );
 
@@ -103,7 +104,7 @@ export function CommandPalette({
             <h3 id="coin-command-heading">Focus a coin</h3>
             {matchingCandidates.map((candidate) => (
               <button type="button" key={candidate.id} onClick={() => { onSelectCandidate(candidate.id); onClose(); }}>
-                <span><strong>${candidate.symbol}</strong><small>{candidate.name} · {candidate.attentionReason}</small></span>
+                <span><strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong><small>{candidateName(candidate.name)} · {candidate.attentionReason}</small></span>
               </button>
             ))}
           </section>

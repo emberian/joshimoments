@@ -1,86 +1,19 @@
 import type { GlassSnapshotV1 } from "../contract/v1";
 import {
   explorationBundleV1Schema,
-  presentationPolicyV1Schema,
-  presentationSceneV1Schema,
   type ExplorationBundleV1,
-  type PresentationEvidenceClass,
-  type PresentationPolicyV1,
-  type PresentationSceneV1,
-  type PresentationViewKind,
 } from "./contract";
-import { digestExplorationBundle, digestPresentationPolicy } from "./contract";
 
-const OUTCOMES: PresentationPolicyV1["outcomes"] = [
-  { measure: "attention_cost", authority: "operator_report", note: "Ask whether the representation reduced or increased cognitive work." },
-  { measure: "decision_latency", authority: "event_timestamps", note: "Derive from exact scene and gesture clocks; never ask Ember to run a stopwatch." },
-  { measure: "missed_opportunity", authority: "choice_set_analysis", note: "Assess retrospectively against the exact served and visible alternatives." },
-  { measure: "overtrading", authority: "episode_analysis", note: "Assess only after episode actions are reconciled; display changes are not trades." },
-  { measure: "pnl", authority: "reconciled_accounting_projection", note: "Link a versioned accounting projection; Glass never computes PnL." },
-  { measure: "regret", authority: "operator_report", note: "Keep contemporaneous and outcome-aware reports distinct." },
-];
-
-const SHELL_ORDER = [
-  "attention-feed",
-  "coin-workbench",
-  "hypothesis-lab",
-  "operator-panel",
-  "episode-rail",
-  "source-provenance",
-];
-
-const makePolicy = (
-  policyId: string,
-  title: string,
-  hypothesis: string,
-  primaryView: PresentationViewKind,
-  salienceItems: Array<{ itemId: string; value: "ambient" | "normal" | "prominent" | "urgent" }>,
-): PresentationPolicyV1 => presentationPolicyV1Schema.parse({
-  contract: "joshi.presentation.policy",
-  schemaVersion: 1,
-  policyId,
-  policyVersion: "1",
-  title,
-  hypothesis,
-  assignmentMode: "operator_selected",
-  primaryView,
-  panelOrder: SHELL_ORDER,
-  salience: [...salienceItems].sort((a, b) => a.itemId < b.itemId ? -1 : 1),
-  visibleOverlays: ["derived", "inferred", "observed", "uncertain"],
-  safetyRules: {
-    neverOmitItemIds: ["episode-rail", "source-provenance"],
-    liveRandomization: "forbidden",
-    informationPolicy: "preserve_rich_information",
-  },
-  outcomes: OUTCOMES,
-});
-
-export const presentationPolicies = [
-  makePolicy(
-    "policy-coupled-fields-v1",
-    "Coupled field bundle",
-    "Keeping flow, attention, topology, liquidity, and lifecycle together may expose disagreement that a scalar score would erase.",
-    "field_bundle",
-    [{ itemId: "hypothesis-lab", value: "prominent" }, { itemId: "source-provenance", value: "normal" }],
-  ),
-  makePolicy(
-    "policy-flow-first-v1",
-    "Flow before story",
-    "Putting exact wallet and venue flow before cluster or social interpretation may reduce hollow-motion entries without withholding the social field.",
-    "wallet_cluster_flow",
-    [{ itemId: "hypothesis-lab", value: "prominent" }, { itemId: "source-provenance", value: "prominent" }],
-  ),
-  makePolicy(
-    "policy-social-first-v1",
-    "Arrival before return",
-    "Showing callout occurrence, audience arrival, and competing events before price response may improve recognition of social transitions without implying causality.",
-    "attention_arrival",
-    [{ itemId: "attention-feed", value: "prominent" }, { itemId: "hypothesis-lab", value: "prominent" }],
-  ),
-].sort((a, b) => a.policyId < b.policyId ? -1 : 1);
-
-export const defaultPresentationPolicy = presentationPolicies.find((policy) => policy.policyId === "policy-flow-first-v1") ?? presentationPolicies[0]!;
-
+/**
+ * The offline fixture exploration bundle: authored wallet-flow, attention, liquidity and topology
+ * rows for the demonstration coin.
+ *
+ * THIS IS AUTHORED DATA. Every number below was written by hand and describes no real market. It
+ * may only be reached from the offline fixture data source. A loopback or publication-backed
+ * session must never render it: on 2026-08-21 it did, because a live code path imported it from
+ * here, and roughly fifteen invented figures rendered behind a green "Observed" badge. The live
+ * path is `servedSceneBundle.ts`.
+ */
 type Lineage = {
   evidenceClass: "observed" | "derived" | "inferred" | "uncertain";
   epistemicLabel: "protocol_fact" | "provider_assertion" | "first_party_statement" | "operator_annotation" | "derived_measure" | "model_inference";
@@ -264,115 +197,5 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
     claim: "descriptive_noncausal_fixture",
     sourceArtifacts,
     panels,
-  });
-}
-
-const VIEW_ITEM_BY_KIND: Record<PresentationViewKind, string> = {
-  attention_arrival: "lab-attention-arrival",
-  caller_response_kernel: "lab-caller-response",
-  field_bundle: "lab-field-bundle",
-  lifecycle_topology: "lab-lifecycle-topology",
-  liquidity_susceptibility_resilience: "lab-liquidity-resilience",
-  marked_order_timing_size: "lab-marked-orders",
-  pvp_compression_churn: "lab-pvp-churn",
-  wallet_cluster_flow: "lab-wallet-cluster-flow",
-};
-
-export function presentationItemIdForView(kind: PresentationViewKind): string {
-  return VIEW_ITEM_BY_KIND[kind];
-}
-
-const SHELL_ITEMS = ["attention-feed", "coin-workbench", "episode-rail", "hypothesis-lab", "operator-panel", "source-provenance"];
-const OVERLAY_ITEMS = ["overlay-derived", "overlay-inferred", "overlay-observed", "overlay-uncertain"];
-const VIEW_ITEMS = Object.values(VIEW_ITEM_BY_KIND).sort();
-
-export function initialManifest(policy: PresentationPolicyV1): PresentationSceneV1["manifest"] {
-  const primaryItem = VIEW_ITEM_BY_KIND[policy.primaryView];
-  const eligibleItemIds = [...SHELL_ITEMS, ...OVERLAY_ITEMS, ...VIEW_ITEMS].sort();
-  const items = eligibleItemIds.map((itemId) => {
-    const isView = itemId.startsWith("lab-");
-    const isOverlay = itemId.startsWith("overlay-");
-    const isPrimary = itemId === primaryItem;
-    const visible = !isView || isPrimary;
-    const shellOrdinal = policy.panelOrder.indexOf(itemId);
-    const viewOrdinal = VIEW_ITEMS.indexOf(itemId);
-    const overlayOrdinal = OVERLAY_ITEMS.indexOf(itemId);
-    const evidenceClass = (isOverlay ? itemId.replace("overlay-", "") : isView ? "mixed" : "observed") as PresentationEvidenceClass;
-    return {
-      itemId,
-      itemKind: isOverlay ? "overlay" as const : isView ? "exploration_view" as const : "shell_panel" as const,
-      placement: isOverlay ? "overlay" as const : itemId === "attention-feed" ? "left" as const : ["operator-panel", "episode-rail", "source-provenance"].includes(itemId) ? "right" as const : "center" as const,
-      ordinal: String(isOverlay ? overlayOrdinal : shellOrdinal >= 0 ? shellOrdinal : 100 + viewOrdinal),
-      visibility: visible ? "visible" as const : "omitted" as const,
-      omissionReason: visible ? null : "policy" as const,
-      salience: policy.salience.find((entry) => entry.itemId === itemId)?.value ?? "normal" as const,
-      pinned: false,
-      evidenceClass,
-      safetyCritical: policy.safetyRules.neverOmitItemIds.includes(itemId),
-    };
-  });
-  const selectedItemIds = items.filter((item) => item.visibility !== "omitted").map((item) => item.itemId);
-  const plannedRenderItemIds = [...selectedItemIds];
-  return {
-    eligibleItemIds,
-    selectedItemIds,
-    plannedRenderItemIds,
-    plannedInitialViewportItemIds: [],
-    items,
-    filters: [
-      { filterId: "evidence-class", value: "all" },
-      { filterId: "subject-scope", value: "scene-wide" },
-    ],
-    toggles: [
-      { toggleId: "derived", state: true },
-      { toggleId: "inferred", state: true },
-      { toggleId: "observed", state: true },
-      { toggleId: "text-equivalent", state: true },
-      { toggleId: "uncertain", state: true },
-    ],
-    initialFocusItemId: null,
-    comparisonItemIds: [],
-  };
-}
-
-export function buildPresentationScene(
-  snapshot: GlassSnapshotV1,
-  bundle: ExplorationBundleV1,
-  policy: PresentationPolicyV1,
-  identity: {
-    presentationId: string;
-    idempotencyKey: string;
-    assignmentId: string;
-    clientSessionId: string;
-    presentationSeq: string;
-    capturedAt: string;
-    clockId: string;
-    monotonicNs: string;
-  },
-): PresentationSceneV1 {
-  return presentationSceneV1Schema.parse({
-    contract: "joshi.presentation.scene",
-    schemaVersion: 1,
-    presentationId: identity.presentationId,
-    idempotencyKey: identity.idempotencyKey,
-    clientSessionId: identity.clientSessionId,
-    presentationSeq: identity.presentationSeq,
-    scene: { sceneId: snapshot.view.sceneId, viewDigest: snapshot.snapshotDigest },
-    policy: {
-      policyId: policy.policyId,
-      policyVersion: policy.policyVersion,
-      assignmentId: identity.assignmentId,
-      policyDigest: digestPresentationPolicy(policy),
-    },
-    artifacts: [{
-      contract: bundle.contract,
-      artifactId: bundle.bundleId,
-      artifactDigest: digestExplorationBundle(bundle),
-    }],
-    manifest: initialManifest(policy),
-    capturedAt: identity.capturedAt,
-    clientClock: { clockId: identity.clockId, monotonicNs: identity.monotonicNs },
-    authorityClass: "evidence_only",
-    effectCeiling: "observe_only",
   });
 }

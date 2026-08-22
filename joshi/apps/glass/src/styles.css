@@ -386,7 +386,17 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .market-chart figcaption small { color: var(--muted); font-size: 10px; }
 .direction-chip { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .chart-canvas { width: 100%; height: 308px; }
-.chart-summary { margin: 9px 0 0; color: var(--muted); font-size: 11px; }
+.chart-summary { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.chart-mode { margin: 9px 0 7px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.chart-mode button {
+  border: 1px solid var(--line); border-radius: 999px; background: #16201f; color: var(--ink);
+  padding: 4px 11px; font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace; cursor: pointer;
+}
+.chart-mode button[aria-pressed="true"] { border-color: #55716a; background: #21302d; }
+.chart-mode button:disabled { opacity: 0.45; cursor: not-allowed; }
+.chart-mode small { flex: 1 1 220px; min-width: 200px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.market-chart .row-after-silence td { border-top: 1px dashed #c8a45c; }
+.market-chart .exact-decimal { font: 400 10px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; }
 .chart-annotation-actions { margin-top: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .chart-annotation-actions button, .table-action {
   min-height: 44px;
@@ -513,6 +523,20 @@ th { color: var(--muted); }
 .source-list li { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 7px; display: flex; align-items: center; gap: 7px; }
 .source-list svg { flex: 0 0 auto; width: 16px; color: var(--mint); }
 .source-list li[data-status="gap"] svg, .source-list li[data-status="degraded"] svg { color: var(--amber); }
+/* A fixture-backed source is authored, not observed; it never wears the fresh mint mark. */
+.source-list li[data-status="fixture"] svg { color: var(--amber); }
+.source-list li[data-status="fixture"] { border-color: #5f512c; background: #211b0f; }
+.source-list li[data-status="unknown"] svg { color: var(--muted); }
+/* An accounting figure the projection did not reconcile, and a rank the view does not state:
+   stated as words, and never styled like a number a reader could act on. */
+.amount-absent { color: var(--muted); font-style: italic; }
+.candidate-rank[data-absent="true"] { color: var(--muted); opacity: .7; }
+
+.health-summary .fixture-warning { color: #d3bd83; }
+/* An exploration view with no rows states its absence; it never renders as a blank. */
+.lab-absence { margin: 0 0 10px; padding: 9px 11px; border: 1px dashed #40504f; border-radius: 8px;
+  color: var(--muted); font-size: 10px; line-height: 1.45; display: grid; gap: 2px; }
+.lab-absence strong { color: #a7b1b2; }
 .source-list span { min-width: 0; display: grid; }
 .source-list strong { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-list small { color: var(--muted); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -526,6 +550,10 @@ th { color: var(--muted); }
 .evidence-observed { color: var(--mint); background: var(--mint-dim); }
 .evidence-derived { color: var(--blue); background: #192d3b; }
 .evidence-interpreted { color: var(--amber); background: var(--amber-dim); }
+/* An evidence class the view never established, and a source whose health was never stated.
+   Both must read as absence, never as a fourth flavour of confidence. */
+.evidence-unknown { color: var(--muted); background: #171d1e; }
+
 .evidence-list dl { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .evidence-list dl div { min-width: 0; }
 .evidence-list dt { color: var(--muted); font-size: 8px; }

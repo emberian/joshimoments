@@ -4,7 +4,9 @@ import { mockSnapshots } from "../data/mockSnapshot";
 import { digestPresentationScene, presentationEventV1Schema } from "./contract";
 import { OfflineFixturePresentationSink } from "./client";
 import { LoopbackPresentationSink } from "./client";
-import { buildPresentationScene, defaultPresentationPolicy, explorationBundleFor } from "./fixtures";
+import { explorationBundleFor } from "./fixtures";
+import { buildPresentationScene } from "./manifest";
+import { defaultPresentationPolicy } from "./policies";
 import { MemoryOnlyPairingSession } from "../security/pairing";
 
 afterEach(() => vi.unstubAllGlobals());

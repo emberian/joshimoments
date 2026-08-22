@@ -129,7 +129,7 @@ impl GlassProjectionIndex {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlassChoiceIndex {
     pub(crate) candidate_id: StableString,
-    pub(crate) source_rank: u64,
+    pub(crate) source_rank: Option<u64>,
     pub(crate) rendered_ordinal: u64,
 }
 
@@ -184,9 +184,9 @@ impl GlassChoiceIndex {
         &self.candidate_id
     }
 
-    /// Rank printed in the rendered candidate DTO.
+    /// Rank printed in the rendered candidate DTO, when the view states one.
     #[must_use]
-    pub const fn source_rank(&self) -> u64 {
+    pub const fn source_rank(&self) -> Option<u64> {
         self.source_rank
     }
 
@@ -276,7 +276,11 @@ impl ValidatedGlassViewV1 {
                 Ok(GlassChoiceIndex {
                     candidate_id: StableString::new(candidate.id.clone())
                         .map_err(|error| invalid("candidate id", error.to_string()))?,
-                    source_rank: parse_wire_u64(&candidate.rank, "candidate rank")?,
+                    source_rank: candidate
+                        .rank
+                        .as_deref()
+                        .map(|value| parse_wire_u64(value, "candidate rank"))
+                        .transpose()?,
                     rendered_ordinal: u64::try_from(ordinal)
                         .map_err(|_| invalid("candidate ordinal", "exceeds u64"))?,
                 })
@@ -583,18 +587,24 @@ struct CandidateMetricsWire {
 struct CandidateWire {
     id: String,
     mint: String,
-    symbol: String,
-    name: String,
+    // Null when the source named the mint but no ticker or display name. A required string
+    // forced a placeholder, and a placeholder that reaches a render reads as a real ticker.
+    symbol: Option<String>,
+    name: Option<String>,
     board: String,
     lifecycle: String,
     first_known_at: String,
-    last_observed_at: String,
-    rank: String,
+    // An event clock. Null when the source supplied none, so a producer no longer has to
+    // substitute the knowledge clock and turn "when we found out" into "when it happened".
+    last_observed_at: Option<String>,
+    // Null means this view states no rank at all.
+    rank: Option<String>,
     metrics: CandidateMetricsWire,
     attention_reason: String,
     social_summary: String,
     tags: Vec<String>,
-    watched: bool,
+    // Null records no watch state; `false` claims it is not watched.
+    watched: Option<bool>,
     episode_id: Option<String>,
     evidence: Vec<EvidenceRefWire>,
     candles: Vec<CandleWire>,
@@ -616,13 +626,16 @@ struct SocialEventWire {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(clippy::struct_field_names)] // Exact frozen wire names all carry the SOL unit suffix.
+// Every figure is optional: for money, "zero" and "not reconciled" are different facts and a
+// rendered `0` cannot carry the difference. Two of these were already optional; the split was
+// the defect.
 struct EpisodeAccountingWire {
-    total_spent_sol: String,
-    total_proceeds_sol: String,
-    realized_net_sol: String,
+    total_spent_sol: Option<String>,
+    total_proceeds_sol: Option<String>,
+    realized_net_sol: Option<String>,
     remaining_cost_basis_sol: Option<String>,
     executable_liquidation_sol: Option<String>,
-    current_exposure_sol: String,
+    current_exposure_sol: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -632,7 +645,7 @@ struct ClipWire {
     label: String,
     opened_at: String,
     closed_at: Option<String>,
-    realized_net_sol: String,
+    realized_net_sol: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -789,7 +802,7 @@ fn validate_view(view: &GlassViewWire) -> Result<()> {
         nonempty(&source.label, "source label")?;
         one_of(
             &source.status,
-            &["fresh", "degraded", "gap", "fixture"],
+            &["fresh", "degraded", "gap", "fixture", "unknown"],
             "source status",
         )?;
         optional_instant(source.last_observed_at.as_ref(), "lastObservedAt")?;
@@ -882,7 +895,9 @@ fn validate_temporal_closure(view: &GlassViewWire, rendered_at: UtcTimestamp) ->
     }
     for candidate in &view.payload.candidates {
         check(&candidate.first_known_at, "candidate firstKnownAt")?;
-        check(&candidate.last_observed_at, "candidate lastObservedAt")?;
+        if let Some(value) = &candidate.last_observed_at {
+            check(value, "candidate lastObservedAt")?;
+        }
         for evidence in &candidate.evidence {
             if let Some(value) = &evidence.observed_at {
                 check(value, "evidence observedAt")?;
@@ -924,8 +939,13 @@ fn validate_candidate(candidate: &CandidateWire, sources: &BTreeSet<&str>) -> Re
             "must contain at least 16 characters",
         ));
     }
-    nonempty(&candidate.symbol, "candidate symbol")?;
-    nonempty(&candidate.name, "candidate name")?;
+    // Absent is null, never "": an empty string would render as a blank that reads like a value.
+    if let Some(value) = &candidate.symbol {
+        nonempty(value, "candidate symbol")?;
+    }
+    if let Some(value) = &candidate.name {
+        nonempty(value, "candidate name")?;
+    }
     one_of(
         &candidate.board,
         &["new", "trending", "live", "callouts", "watch"],
@@ -937,14 +957,20 @@ fn validate_candidate(candidate: &CandidateWire, sources: &BTreeSet<&str>) -> Re
         "candidate lifecycle",
     )?;
     let first = parse_instant(&candidate.first_known_at, "candidate firstKnownAt")?;
-    let last = parse_instant(&candidate.last_observed_at, "candidate lastObservedAt")?;
-    if first.as_datetime() > last.as_datetime() {
-        return Err(invalid(
-            "candidate clocks",
-            "firstKnownAt exceeds lastObservedAt",
-        ));
+    // Ordering is only checkable when an observation clock exists. An absent one is not a
+    // violation; it is the honest state for a source that supplied no event time.
+    if let Some(value) = &candidate.last_observed_at {
+        let last = parse_instant(value, "candidate lastObservedAt")?;
+        if first.as_datetime() > last.as_datetime() {
+            return Err(invalid(
+                "candidate clocks",
+                "firstKnownAt exceeds lastObservedAt",
+            ));
+        }
     }
-    parse_wire_u64(&candidate.rank, "candidate rank")?;
+    if let Some(value) = &candidate.rank {
+        parse_wire_u64(value, "candidate rank")?;
+    }
     optional_decimal(candidate.metrics.price_sol.as_ref(), "priceSol")?;
     optional_decimal(candidate.metrics.market_cap_usd.as_ref(), "marketCapUsd")?;
     optional_integer(candidate.metrics.change_5m_bps.as_ref(), "change5mBps")?;
@@ -1017,7 +1043,7 @@ fn validate_evidence(value: &EvidenceRefWire, sources: &BTreeSet<&str>) -> Resul
     nonempty(&value.field, "evidence field")?;
     one_of(
         &value.evidence_class,
-        &["observed", "derived", "attested", "interpreted"],
+        &["observed", "derived", "attested", "interpreted", "unknown"],
         "evidenceClass",
     )?;
     optional_instant(value.observed_at.as_ref(), "evidence observedAt")?;
@@ -1049,12 +1075,12 @@ fn validate_episode(value: &EpisodeWire) -> Result<()> {
     parse_instant(&value.opened_at, "episode openedAt")?;
     parse_instant(&value.last_changed_at, "episode lastChangedAt")?;
     for (field, decimal) in [
-        ("totalSpentSol", Some(&value.accounting.total_spent_sol)),
+        ("totalSpentSol", value.accounting.total_spent_sol.as_ref()),
         (
             "totalProceedsSol",
-            Some(&value.accounting.total_proceeds_sol),
+            value.accounting.total_proceeds_sol.as_ref(),
         ),
-        ("realizedNetSol", Some(&value.accounting.realized_net_sol)),
+        ("realizedNetSol", value.accounting.realized_net_sol.as_ref()),
         (
             "remainingCostBasisSol",
             value.accounting.remaining_cost_basis_sol.as_ref(),
@@ -1065,7 +1091,7 @@ fn validate_episode(value: &EpisodeWire) -> Result<()> {
         ),
         (
             "currentExposureSol",
-            Some(&value.accounting.current_exposure_sol),
+            value.accounting.current_exposure_sol.as_ref(),
         ),
     ] {
         if let Some(decimal) = decimal {
@@ -1081,7 +1107,9 @@ fn validate_episode(value: &EpisodeWire) -> Result<()> {
         nonempty(&clip.label, "clip label")?;
         parse_instant(&clip.opened_at, "clip openedAt")?;
         optional_instant(clip.closed_at.as_ref(), "clip closedAt")?;
-        validate_decimal(&clip.realized_net_sol, "clip realizedNetSol")?;
+        if let Some(decimal) = &clip.realized_net_sol {
+            validate_decimal(decimal, "clip realizedNetSol")?;
+        }
     }
     nonempty(&value.next_attention, "episode nextAttention")
 }
@@ -1238,6 +1266,67 @@ fn validate_unix_seconds(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::ValidatedGlassViewV1;
+
+    /// The TypeScript half of this same contract. Both halves must accept the same bytes.
+    const VIEW_GOLDEN: &str = include_str!("../../../apps/glass/src/contract/golden.ts");
+
+    /// Splits one exported golden constant out of the TypeScript module.
+    fn golden(prefix: &str, suffix: &str) -> &'static str {
+        let Some((_, rest)) = VIEW_GOLDEN.split_once(prefix) else {
+            panic!("golden export {prefix} is missing");
+        };
+        let Some((value, _)) = rest.split_once(suffix) else {
+            panic!("golden terminator for {prefix} is missing");
+        };
+        value
+    }
+
+    fn absence_golden() -> (&'static str, &'static str) {
+        (
+            golden(
+                "export const ABSENCE_GOLDEN_VIEW_V1_JSON = `",
+                "`;\n\nexport const ABSENCE_GOLDEN_VIEW_V1_DIGEST = \"",
+            ),
+            golden("export const ABSENCE_GOLDEN_VIEW_V1_DIGEST = \"", "\";"),
+        )
+    }
+
+    /// The widening is only real if Rust accepts a document that *uses* every absence, at the
+    /// exact digest TypeScript computed for the same bytes. A nullable field that neither half
+    /// was ever handed a null for is a nullable field nobody verified.
+    #[test]
+    fn rust_accepts_the_typescript_absence_golden_at_the_same_digest() {
+        let (json, expected_digest) = absence_golden();
+        let view = ValidatedGlassViewV1::parse_exact(json.as_bytes(), None)
+            .expect("a view whose widened fields are all null must be accepted");
+        assert_eq!(view.digest().to_string(), expected_digest);
+        assert_eq!(view.canonical_bytes(), json.as_bytes());
+        // A candidate that states no rank yields no rank, rather than a silent zero.
+        assert_eq!(
+            view.choices().first().expect("one candidate").source_rank(),
+            None
+        );
+    }
+
+    /// The standard this widening was held to: `candles` already refused a lone bar, because one
+    /// point implies an interval it does not have. Making absence expressible must not loosen it.
+    #[test]
+    fn a_single_bar_is_still_refused_in_a_view_full_of_absences() {
+        let (json, _) = absence_golden();
+        let with_one_bar = json.replace(
+            "\"candles\":[]",
+            "\"candles\":[{\"timeUnix\":\"1786905720\",\"knownAt\":\"2026-08-16T18:42:02.000000Z\",\"open\":\"0.000000001\",\"high\":\"0.000000002\",\"low\":\"0.000000001\",\"close\":\"0.000000002\",\"volumeTokens\":\"100\"}]",
+        );
+        assert!(ValidatedGlassViewV1::parse_exact(with_one_bar.as_bytes(), None).is_err());
+    }
+
+    /// Absence is null, never "". An empty string renders as a blank that reads like a value.
+    #[test]
+    fn an_empty_symbol_is_still_refused() {
+        let (json, _) = absence_golden();
+        let empty = json.replace("\"symbol\":null", "\"symbol\":\"\"");
+        assert!(ValidatedGlassViewV1::parse_exact(empty.as_bytes(), None).is_err());
+    }
 
     /// One canonical view whose candidate carries no price series, as chain-only evidence does.
     fn view_with_candles(candles: &str) -> String {

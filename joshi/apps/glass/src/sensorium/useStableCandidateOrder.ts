@@ -2,12 +2,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Candidate } from "../contract/v1";
 
+function byIdentity(left: Candidate, right: Candidate): number {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 function rankedIds(candidates: Candidate[]): string[] {
   return [...candidates]
     .sort((left, right) => {
+      // A candidate the view states no rank for sorts after every ranked one, by identity. It is
+      // not silently treated as rank 0, which would promote an unranked row to the top of the
+      // feed, and it is not dropped, which would hide a served candidate.
+      if (left.rank === null || right.rank === null) {
+        if (left.rank === right.rank) return byIdentity(left, right);
+        return left.rank === null ? 1 : -1;
+      }
       const leftRank = BigInt(left.rank);
       const rightRank = BigInt(right.rank);
-      return leftRank < rightRank ? -1 : leftRank > rightRank ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+      return leftRank < rightRank ? -1 : leftRank > rightRank ? 1 : byIdentity(left, right);
     })
     .map((candidate) => candidate.id);
 }

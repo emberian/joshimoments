@@ -3,6 +3,7 @@ import { BookOpenCheck, Crosshair, Flame, Focus, History, ListChecks, MessageSqu
 import { useEffect, useState } from "react";
 
 import type { Candidate, Episode, ReplayMode } from "../contract/v1";
+import { candidateSymbol } from "../format";
 import type { ChartAnchor, CaptureContext } from "../operator/contract";
 import type { JournalEntry, OperatorIntent } from "../operator/useOperatorJournal";
 
@@ -229,7 +230,7 @@ export function OperatorCaptureDialog({
             <Dialog.Close className="icon-button" aria-label="Close capture form"><X aria-hidden="true" /></Dialog.Close>
           </header>
           <Dialog.Description id="capture-description">
-            This appends evidence about your interpretation of ${candidate.symbol} in the exact {mode.replaceAll("_", " ")} scene. It cannot place or claim a trade.
+            This appends evidence about your interpretation of {candidateSymbol(candidate.symbol, candidate.mint)} in the exact {mode.replaceAll("_", " ")} scene. It cannot place or claim a trade.
           </Dialog.Description>
           <form onSubmit={(event) => {
             event.preventDefault();
@@ -349,7 +350,7 @@ export function OperatorPanel({
         <button type="button" className="disclosure-button" onClick={onInspectScene}><History aria-hidden="true" /> Inspect scene</button>
       </div>
       <p className="operator-boundary">Records are append-only evidence. Controls below cannot construct, sign, submit, or verify a transaction.</p>
-      <div className="operator-actions" aria-label={`Record observations for ${candidate.symbol}`}>
+      <div className="operator-actions" aria-label={`Record observations for ${candidateSymbol(candidate.symbol, candidate.mint)}`}>
         <button type="button" onClick={() => onCapture({ type: "focus" })}><Focus aria-hidden="true" /><span><strong>Deliberate focus</strong><small>Explicit research gesture</small></span></button>
         <button type="button" disabled={!nominationQualifies} aria-describedby={!nominationQualifies ? "protocol-nomination-block" : undefined} onClick={() => onCapture({ type: "nominate" })}><Tag aria-hidden="true" /><span><strong>Nominate</strong><small>{nominationQualifies ? "Left-truncated discovery is honest" : "No qualifying protocol nomination contract"}</small></span></button>
         <button type="button" onClick={() => onCapture({ type: "hot_scope" })}><Flame aria-hidden="true" /><span><strong>Request hot scope</strong><small>Ask sensing planner for richer observation</small></span></button>

@@ -43,13 +43,38 @@ globalThis.requestAnimationFrame = (callback: FrameRequestCallback) => {
 globalThis.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
 HTMLElement.prototype.scrollTo = () => undefined;
 
+/**
+ * jsdom has no canvas, so the chart library is stubbed. The stub records what it was *asked* to
+ * draw, because the honesty of MarketChart lives in exactly that: whether an omitted interval
+ * reached the chart as a blank column, and whether a packed series carried its silence strip.
+ */
+export const chartCalls: {
+  series: { kind: string; data: unknown[] }[];
+  markers: unknown[][];
+} = { series: [], markers: [] };
+
 vi.mock("lightweight-charts", () => ({
-  CandlestickSeries: {},
+  CandlestickSeries: { kind: "candlestick" },
+  HistogramSeries: { kind: "histogram" },
   ColorType: { Solid: "solid" },
+  createSeriesMarkers: (_series: unknown, markers: unknown[]) => {
+    chartCalls.markers.push(markers);
+    return { setMarkers: vi.fn() };
+  },
   createChart: () => ({
-    addSeries: () => ({ setData: vi.fn() }),
+    addSeries: (definition: { kind: string }) => ({
+      setData: (data: unknown[]) => {
+        chartCalls.series.push({ kind: definition.kind, data });
+      },
+    }),
     applyOptions: vi.fn(),
+    priceScale: () => ({ applyOptions: vi.fn() }),
     remove: vi.fn(),
     timeScale: () => ({ fitContent: vi.fn() }),
   }),
 }));
+
+afterEach(() => {
+  chartCalls.series = [];
+  chartCalls.markers = [];
+});

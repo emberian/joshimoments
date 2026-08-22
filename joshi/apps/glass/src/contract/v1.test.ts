@@ -6,9 +6,15 @@ import {
   glassSnapshotV1Schema,
   glassViewV1Schema,
   parseGlassSnapshotV1,
+  type GlassViewV1,
 } from "./v1";
 import { mockSnapshot } from "../data/mockSnapshot";
-import { GOLDEN_VIEW_V1_DIGEST, GOLDEN_VIEW_V1_JSON } from "./golden";
+import {
+  ABSENCE_GOLDEN_VIEW_V1_DIGEST,
+  ABSENCE_GOLDEN_VIEW_V1_JSON,
+  GOLDEN_VIEW_V1_DIGEST,
+  GOLDEN_VIEW_V1_JSON,
+} from "./golden";
 
 describe("glass snapshot v1 contract", () => {
   it("accepts one digest-bound immutable witnessed view", () => {
@@ -105,5 +111,49 @@ describe("glass snapshot v1 contract", () => {
     const goldenView = JSON.parse(GOLDEN_VIEW_V1_JSON) as typeof view;
     expect(new TextDecoder().decode(canonicalGlassViewBytes(goldenView))).toBe(GOLDEN_VIEW_V1_JSON);
     expect(digestGlassView(goldenView)).toBe(GOLDEN_VIEW_V1_DIGEST);
+  });
+});
+
+describe("absence is expressible", () => {
+  it("accepts a view whose every widened field is null, at the exact published digest", () => {
+    const view = JSON.parse(ABSENCE_GOLDEN_VIEW_V1_JSON) as GlassViewV1;
+    const parsed = glassViewV1Schema.parse(view);
+    expect(new TextDecoder().decode(canonicalGlassViewBytes(parsed))).toBe(ABSENCE_GOLDEN_VIEW_V1_JSON);
+    expect(digestGlassView(parsed)).toBe(ABSENCE_GOLDEN_VIEW_V1_DIGEST);
+
+    const candidate = parsed.payload.candidates[0];
+    expect(candidate?.symbol).toBeNull();
+    expect(candidate?.name).toBeNull();
+    expect(candidate?.lastObservedAt).toBeNull();
+    expect(candidate?.rank).toBeNull();
+    expect(candidate?.watched).toBeNull();
+    expect(candidate?.evidence[0]?.evidenceClass).toBe("unknown");
+    expect(parsed.payload.sources[0]?.status).toBe("unknown");
+    const accounting = parsed.payload.episodes[0]?.accounting;
+    expect(accounting?.realizedNetSol).toBeNull();
+    expect(accounting?.currentExposureSol).toBeNull();
+    expect(accounting?.totalSpentSol).toBeNull();
+    expect(accounting?.totalProceedsSol).toBeNull();
+    expect(parsed.payload.episodes[0]?.clips[0]?.realizedNetSol).toBeNull();
+  });
+
+  it("still refuses an empty string where absence must be null", () => {
+    const view = JSON.parse(ABSENCE_GOLDEN_VIEW_V1_JSON) as GlassViewV1;
+    const candidate = view.payload.candidates[0];
+    if (candidate) candidate.symbol = "";
+    expect(() => glassViewV1Schema.parse(view)).toThrow();
+  });
+
+  it("still refuses a single bar, the rule the rest of this widening was held to", () => {
+    const view = JSON.parse(ABSENCE_GOLDEN_VIEW_V1_JSON) as GlassViewV1;
+    const candidate = view.payload.candidates[0];
+    if (candidate) {
+      candidate.candles = [{
+        timeUnix: "1786905720", knownAt: "2026-08-16T18:42:02.000000Z",
+        open: "0.000000001", high: "0.000000002", low: "0.000000001",
+        close: "0.000000002", volumeTokens: "100",
+      }];
+    }
+    expect(() => glassViewV1Schema.parse(view)).toThrow();
   });
 });

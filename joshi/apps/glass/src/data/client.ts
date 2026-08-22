@@ -3,7 +3,8 @@ import { validate as validateJsonWithoutDuplicateKeys } from "json-dup-key-valid
 import type { GlassSnapshotV1, ReplayMode } from "../contract/v1";
 import { parseGlassSnapshotV1 } from "../contract/v1";
 import type { ExplorationBundleV1, PresentationPolicyV1 } from "../presentation/contract";
-import { defaultPresentationPolicy, explorationBundleFor } from "../presentation/fixtures";
+import { defaultPresentationPolicy } from "../presentation/policies";
+import { explorationBundleForServedScene } from "../presentation/servedSceneBundle";
 import { glassPairingSession, type MemoryOnlyPairingSession } from "../security/pairing";
 import { mockSnapshots } from "./mockSnapshot";
 
@@ -95,12 +96,35 @@ export class LoopbackDataSource implements GlassDataSource {
   }
 
   /**
-   * Ordering, salience and omission plan for exactly the items this snapshot served. It is a
-   * presentation plan over served bytes, never an extra evidence claim: it adds no field, no
-   * number and no subject that the snapshot did not already carry.
+   * Materials for the hypothesis lab over a scene a local core served.
+   *
+   * Read this before changing it. Until 2026-08-21 this method returned the offline *fixture*
+   * bundle, so a live session rendered roughly fifteen authored numbers about a coin the operator
+   * had not selected -- "Observed gross in 384000000 lamports", wallet arrival intensities,
+   * liquidity recovery percentages -- each behind a green `Observed` badge and stamped with the
+   * live scene's own render clock. The docstring that used to sit here asserted the bundle "adds
+   * no field, no number and no subject that the snapshot did not already carry", which was false
+   * and is the reason the defect survived review. Do not restate an invariant here; state what the
+   * code does and let the code be checkable.
+   *
+   * What it does: `explorationBundleForServedScene` copies the scene identity, the verified view
+   * digest, and the render clock out of `snapshot`, and emits the eight panels the bundle contract
+   * demands with every signal, relation, and mark array empty. JOSHI has no derivation from a
+   * served Glass view to wallet flow, response kernels, liquidity geometry, or cluster topology,
+   * so the lab shows those views as explicitly empty rather than filled.
+   *
+   * The `policy` is an authored presentation plan -- panel order, salience, and a stated
+   * hypothesis -- not an evidence claim, and it is labelled as a hypothesis where it renders.
+   * `publication` is null because a loopback scene is not a durable cockpit publication; the
+   * publication-backed path is `CockpitPublicationDataSource`, which reads its bundle from the
+   * publication and must keep doing so.
    */
   presentationMaterials(snapshot: GlassSnapshotV1) {
-    return { policy: defaultPresentationPolicy, bundle: explorationBundleFor(snapshot), publication: null };
+    return {
+      policy: defaultPresentationPolicy,
+      bundle: explorationBundleForServedScene(snapshot),
+      publication: null,
+    };
   }
 
   async loadSnapshot(request: SnapshotRequest): Promise<GlassSnapshotV1> {
