@@ -32,4 +32,4 @@ con.execute(f"""CREATE OR REPLACE TABLE births AS
 for r in con.execute("""SELECT b.std_create, count(*) mints,
    count(*) FILTER (abs(o.voff - 73000000000000) <= 1000000) AS off_is_std
  FROM (SELECT mint, median(v_tok-ata) AS voff FROM m GROUP BY mint) o JOIN births b USING (mint)
- GROUP BY 1""").fetchall(): print("   std_create=%s mints=%s offset_is_standard=%s" % r)
+ GROUP BY 1""").fetchall(): print("   std_create={} mints={} offset_is_standard={}".format(*r))

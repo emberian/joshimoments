@@ -76,7 +76,8 @@ if __name__ == "__main__":
                     build(con, p, W, 4, THR)
                     s = summary(con, p, W, 4, THR)
                     out.append(s); print(json.dumps(s), flush=True)
-        json.dump(out, open(f"{SP}/out/census_grid.json","w"), indent=1)
+        with open(f"{SP}/out/census_grid.json", "w") as handle:
+            json.dump(out, handle, indent=1)
     else:
         bars = f"{SP}/out/bars_sol01.parquet"; W, MT, THR = 30, 4, 0.08
         build(con, bars, W, MT, THR)

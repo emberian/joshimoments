@@ -15,7 +15,9 @@ OUT = "/private/tmp/claude-501/-Users-you-dev-joshi/5f1f382e-9398-4b86-86af-a0ea
 
 mint=[]; t=[]; vs=[]; vt=[]; lt=[]; comp=[]
 seen=set()
-for line in open(SRC):
+with open(SRC) as handle:
+    lines = list(handle)
+for line in lines:
     d = json.loads(line)
     if d.get("kind") != "board_snapshot":
         continue

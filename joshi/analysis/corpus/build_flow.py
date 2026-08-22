@@ -3,6 +3,7 @@
 GRAIN: one row per (transaction, owner, pump-mint) whose token balance CHANGED.
 Amounts are exact integers in the mint's raw base units; never floats.
 """
+import os
 import sys
 import time
 
@@ -102,7 +103,6 @@ WHERE b.mint LIKE '%pump' AND b.post_raw <> b.pre_raw
 n = con.execute("SELECT count(*) FROM flow").fetchone()[0]
 print("flow rows", n, round(time.time()-t0,1), flush=True)
 
-import os
 
 os.makedirs(out, exist_ok=True)
 con.execute(f"""

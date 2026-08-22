@@ -37,3 +37,13 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+# corpus/ holds the build and census scripts for the ten-day bulk_pump corpus. They are
+# exploratory and SQL-heavy: their value is that they reproduce the numbers, and wrapping embedded
+# SQL to 100 columns makes them harder to read against the queries they encode, not easier.
+# E501 (line length), E701/E702 (compound statements) are relaxed there for that reason and no
+# other. Everything else still applies, and anything in corpus/ that becomes a reusable instrument
+# rather than a one-off probe should be brought up to the full standard -- signature_regimes.py
+# already is.
+[tool.ruff.lint.per-file-ignores]
+"corpus/*.py" = ["E501", "E701", "E702"]

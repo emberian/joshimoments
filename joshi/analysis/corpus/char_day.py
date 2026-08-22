@@ -43,7 +43,7 @@ SELECT
 FROM read_parquet('{path}')
 """).fetchone()
 cols = [d[0] for d in con.description]
-out = dict(zip(cols, tx))
+out = dict(zip(cols, tx, strict=False))
 out["day"] = day
 out["_t_tx_s"] = round(time.time()-t0, 1)
 
@@ -69,7 +69,7 @@ SELECT
 FROM legs
 """).fetchone()
 cols = [d[0] for d in con.description]
-out.update(dict(zip(cols, leg)))
+out.update(dict(zip(cols, leg, strict=False)))
 out["_t_leg_s"] = round(time.time()-t1, 1)
 
 # ---- how many transactions carry a wSOL leg at all
@@ -95,7 +95,7 @@ FROM (
 )
 """).fetchone()
 cols = [d[0] for d in con.description]
-out.update({("tx_"+c if c=="rows" else c): v for c, v in zip(cols, w)})
+out.update({("tx_"+c if c=="rows" else c): v for c, v in zip(cols, w, strict=False)})
 out["_t_wsol_s"] = round(time.time()-t2, 1)
 
 print(json.dumps(out, default=str))
