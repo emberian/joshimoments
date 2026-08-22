@@ -175,7 +175,29 @@ Historical corpus has no callout data (on-chain only), so the available t=0 is F
 is the sequel and needs callout capture we do not yet retain (CalloutTop/CalloutByMint are real
 routes; CalloutRecent is a phantom).
 
+## Thrust, 2026-08-22 01:15
+
+Two deputies live:
+- COHORT GEOMETRY (analysis/): align every mint on first observed trade, characterize first
+  hour/day/week, decompose "goes to zero" into an outcome vocabulary with right-censoring stated,
+  candles as a control against flow, and only then ask whether anything is predictive against a real
+  baseline with a TIME-based holdout. Gated by the corpus's own "Promotion questions before ML".
+- COCKPIT WIRING (apps/core, apps/glass, joshi-liquidity): connect the hold gesture to the pre-trade
+  readout so a held coin shows its fee floor and break-even clip INTERVAL, plus new tier-proximity
+  (which fee row the market cap selects and how far to the next). This closes the loop between the
+  two lanes that landed tonight and have never met.
+
 ## Done log
+
+- 2026-08-22 01:08 VENUE DECODER + PRE-TRADE READOUT, 207 tests (was 179), workspace clippy clean.
+  The 119 bps overstatement is fixed and independently reproduced from retained bytes. Offset-245
+  named `unattributed_quote_side_reserve_atoms` after a 42-pool survey found the SAME value on 29 of
+  them — a protocol-wide constant, not per-pool state, consistent with a virtual reserve and not
+  proof of one. Byte 244 was the identical bug forming again (0 on 37 pools, 1 on 5). Bonding curves
+  are NOT fixed length (49/115/150/151/256 bytes across 96 curves) so the old decoder would have
+  refused most of the market. Fee-config addresses are now RECOMPUTED as PDAs rather than carried as
+  observed values, which matters because a bonding curve account never names its mint. Global is
+  refused as a fee source with the shortfall named (declares creator 5, program applies 30).
 
 - 2026-08-22 00:39 SIGNATURE REGIMES, two negative results and one that matters.
   (a) The signature slope does NOT separate worked coins from quiet ones (median 1.245 vs 1.095,
