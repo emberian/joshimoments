@@ -307,7 +307,10 @@ impl CoreService {
                 "/api/v1/glass/venue-readouts/{mint}",
                 get(venue_readout_for_mint),
             )
-            .route("/api/v1/operator/commands", post(operator_command))
+            .route(
+                "/api/v1/operator/commands",
+                post(operator_command).get(operator_command_readback),
+            )
             .route("/api/v1/session/launch", get(prospective_session_launch))
             .route(
                 "/api/v1/operator/prospective-nominations",
@@ -1394,6 +1397,207 @@ async fn operator_command(
         OperatorCommandStatus::Idempotent => StatusCode::OK,
     };
     json_response(status, &receipt)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperatorReadbackQuery {
+    scene_id: String,
+}
+
+/// One stored command as the readback route serves it. `None` only when the retained payload is
+/// not exact canonical JSON, which the caller reports as corruption rather than skipping.
+fn readback_command(
+    scene_id: &SceneId,
+    command: joshi_store::StoredOperatorCommandV1,
+) -> Option<OperatorReadbackCommand> {
+    let payload = String::from_utf8(command.payload).ok()?;
+    let payload = serde_json::value::RawValue::from_string(payload).ok()?;
+    Some(OperatorReadbackCommand {
+        command_id: command.command_id.to_string(),
+        commit_seq: WireU64::new(command.commit_seq.get()),
+        scene: OperatorReadbackScene {
+            scene_id: command
+                .scene_id
+                .as_ref()
+                .map_or_else(|| scene_id.to_string(), ToString::to_string),
+            view_digest: command
+                .scene_view_sha256
+                .map(|digest| format!("sha256:{digest}")),
+        },
+        client_session_id: command.client_session_id.to_string(),
+        client_command_seq: WireU64::new(command.client_command_seq),
+        idempotency_key: command.idempotency_key.to_string(),
+        command_kind: command.command_kind,
+        subject: OperatorReadbackSubject {
+            kind: command.subject_kind,
+            key: command.subject_key,
+        },
+        issued_at: command.issued_at,
+        received_at: command.received_at,
+        client_clock_id: command.client_clock_id,
+        authority_class: command.authority_class,
+        effect_ceiling: command.effect_ceiling,
+        payload,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorReadbackSubject {
+    kind: String,
+    key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorReadbackScene {
+    scene_id: String,
+    /// Digest of the exact retained view bytes the command is bound to. `null` only when the
+    /// stored command names a scene whose row the catalog no longer joins, which the surface
+    /// must render as a stated gap rather than as a digest.
+    view_digest: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorReadbackCommand {
+    command_id: String,
+    commit_seq: WireU64,
+    scene: OperatorReadbackScene,
+    client_session_id: String,
+    client_command_seq: WireU64,
+    idempotency_key: String,
+    command_kind: String,
+    subject: OperatorReadbackSubject,
+    issued_at: UtcTimestamp,
+    received_at: UtcTimestamp,
+    client_clock_id: String,
+    authority_class: String,
+    effect_ceiling: String,
+    /// The exact retained canonical payload bytes, spliced without re-encoding.
+    payload: Box<serde_json::value::RawValue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorReadback {
+    contract: &'static str,
+    schema_version: u16,
+    authority: &'static str,
+    scene_id: String,
+    /// `durable` when the store retains the scene; `served_not_yet_durable` when this process
+    /// derived and is serving it but no act has yet made it durable. The two are kept apart so
+    /// an empty command list is never mistaken for a claim that nothing was ever said.
+    scene_retention: &'static str,
+    commands: Vec<OperatorReadbackCommand>,
+}
+
+/// Reads back every durable operator command bound to one immutable scene, in commit order.
+///
+/// This is the journal's query path and the held rail's reload path in one route: a hold, a
+/// note, a journal entry, a disposition — every evidence act travels the same POST above, so one
+/// read route returns all of them with their exact retained payload bytes. Serving stored bytes
+/// unre-encoded keeps the operator's words verbatim; nothing is summarized or normalized here.
+async fn operator_command_readback(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+    Query(query): Query<OperatorReadbackQuery>,
+) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
+    let Ok(scene_id) = SceneId::new(query.scene_id) else {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_scene",
+            "scene identity is invalid",
+        );
+    };
+    let Ok(store) = service.inner.store.lock() else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reader_unavailable",
+            "catalog lock is unavailable",
+        );
+    };
+    let scene_retention = match store.load_scene(&scene_id) {
+        Ok(_) => "durable",
+        Err(joshi_store::StoreError::MissingIdentity { .. }) => {
+            let mounted = service
+                .inner
+                .live_surface
+                .as_ref()
+                .is_some_and(|view| *view.scene_id() == scene_id);
+            if !mounted {
+                return problem(
+                    StatusCode::NOT_FOUND,
+                    "scene_not_found",
+                    "immutable scene was not found",
+                );
+            }
+            "served_not_yet_durable"
+        }
+        Err(_) => {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "scene_readback_failed",
+                "retained scene failed durable readback",
+            );
+        }
+    };
+    let Ok(stored) = store.operator_commands_for_scene_v1(&scene_id) else {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "command_readback_failed",
+            "durable operator commands failed exact readback",
+        );
+    };
+    let mut commands = Vec::with_capacity(stored.len());
+    for command in stored {
+        let Some(command) = readback_command(&scene_id, command) else {
+            return problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "command_payload_unreadable",
+                "a retained command payload is not exact canonical JSON",
+            );
+        };
+        commands.push(command);
+    }
+    let body = OperatorReadback {
+        contract: "joshi.core.operator_command_readback",
+        schema_version: 1,
+        authority: "read_only_no_execution",
+        scene_id: scene_id.to_string(),
+        scene_retention,
+        commands,
+    };
+    let Ok(bytes) = serde_json::to_vec(&body) else {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "readback_encoding_failed",
+            "operator command readback response failed to encode",
+        );
+    };
+    if bytes.len() > MAX_GLASS_RESPONSE_BYTES {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "readback_response_too_large",
+            "operator command readback exceeds the bounded Glass response contract",
+        );
+    }
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Capture metadata for the scene an act binds.

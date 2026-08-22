@@ -219,6 +219,32 @@ function commandVariantV2<const Kind extends string, Payload extends z.ZodType>(
   }).strict();
 }
 
+/**
+ * The eleven frozen kind-specific payload shapes, addressable by wire kind.
+ *
+ * Exported so the durable read-back path (`operator/readback.ts`) validates a payload the store
+ * returns against the exact same schema the write path validated it with, instead of growing a
+ * second, drifting description of the same bytes.
+ */
+export const operatorPayloadSchemas = {
+  record_focus: recordFocusPayload,
+  nominate_candidate: nominateCandidatePayload,
+  request_hot_scope: requestHotScopePayload,
+  record_disposition: recordDispositionPayload,
+  record_crackle_family: recordCrackleFamilyPayload,
+  record_gesture: recordGesturePayload,
+  record_annotation: recordAnnotationPayload,
+  record_choice_set: recordChoiceSetPayload,
+  record_post_action_report: recordPostActionReportPayload,
+  link_interview: linkInterviewPayload,
+  compensate_command: compensateCommandPayload,
+} as const;
+
+/** Wire building blocks shared with the read-back contract. */
+export const wireIdentitySchema = asciiIdentity;
+export const wireDigestSchema = digest;
+export const wireU64Schema = wireU64;
+
 export const operatorCommandV1Schema = z.discriminatedUnion("commandKind", [
   commandVariant("record_focus", recordFocusPayload),
   commandVariant("nominate_candidate", nominateCandidatePayload),

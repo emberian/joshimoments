@@ -160,7 +160,7 @@ describe("accessibility-first glass", () => {
     expect(await screen.findByText(/waiting for a durable receipt/i)).toBeInTheDocument();
     expect(screen.queryByText(/commit 1001/i)).not.toBeInTheDocument();
     await act(async () => { await release?.(); });
-    expect(await screen.findByText(/commit 1001/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
   });
 
   it("recovers exact pending bytes after reload and a fresh pairing context", async () => {
@@ -243,7 +243,7 @@ describe("accessibility-first glass", () => {
 
     sink.setOnline(true);
     act(() => window.dispatchEvent(new Event("online")));
-    expect(await screen.findByText(/commit 1001/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
     expect(sink.attemptBodies).toHaveLength(2);
     expect(sink.attemptBodies[1]).toBe(sink.attemptBodies[0]);
   });
@@ -255,9 +255,9 @@ describe("accessibility-first glass", () => {
     await screen.findByRole("heading", { name: /radon radon/i });
     await user.click(screen.getByRole("button", { name: /deliberate focus/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    expect(await screen.findByText(/commit 1001/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: /compensate/i }));
-    expect(await screen.findByText(/commit 1002/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1002/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/compensated by a later append-only record/i)).toBeInTheDocument();
 
     const first = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
@@ -274,13 +274,13 @@ describe("accessibility-first glass", () => {
     await screen.findByRole("heading", { name: /radon radon/i });
     await user.click(screen.getByRole("button", { name: /deliberate focus/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    expect(await screen.findByText(/commit 1001/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("radio", { name: /later/i }));
     await screen.findByText(/separate later reconstruction/i);
     expect(screen.queryByText(/commit 1001/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: /witnessed/i }));
-    expect(await screen.findByText(/commit 1001/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
   });
 
   it("provides an accessible capture dialog and semantic point annotation without display price duplication", async () => {
@@ -294,7 +294,7 @@ describe("accessibility-first glass", () => {
     expect(results.violations).toEqual([]);
     await user.type(within(dialog).getByLabelText(/free-text fragment/i), "This pivot is the shape I meant.");
     await user.click(within(dialog).getByRole("button", { name: /append evidence record/i }));
-    await screen.findByText(/commit 1001/i);
+    await screen.findAllByText(/commit 1001/i);
 
     const command = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
     expect(command.commandKind).toBe("record_annotation");
@@ -327,7 +327,7 @@ describe("accessibility-first glass", () => {
     await user.click(screen.getByRole("button", { name: /capture choices/i }));
     await user.selectOptions(screen.getByLabelText(/which honest set/i), "interacted");
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    await screen.findByText(/commit 1001/i);
+    await screen.findAllByText(/commit 1001/i);
 
     const command = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
     expect(command.commandKind).toBe("record_choice_set");
@@ -347,11 +347,11 @@ describe("accessibility-first glass", () => {
     await user.click(screen.getByRole("button", { name: /quick report/i }));
     await user.type(screen.getByLabelText(/free-text fragment/i), "I clipped this outside Joshi because the bounce weakened.");
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    await screen.findByText(/commit 1001/i);
+    await screen.findAllByText(/commit 1001/i);
 
     await user.click(screen.getByRole("button", { name: /later interview/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    await screen.findByText(/commit 1002/i);
+    await screen.findAllByText(/commit 1002/i);
     const report = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
     const interview = JSON.parse(sink.attemptBodies[1] ?? "null") as OperatorCommandV1;
     expect(report.commandKind).toBe("record_post_action_report");
@@ -369,7 +369,7 @@ describe("accessibility-first glass", () => {
     await user.click(screen.getByText(/record episode meaning/i));
     await user.click(screen.getByRole("button", { name: /record partial recognition/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    await screen.findByText(/commit 1001/i);
+    await screen.findAllByText(/commit 1001/i);
 
     const command = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
     expect(command.commandKind).toBe("record_gesture");

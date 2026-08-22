@@ -6,6 +6,7 @@ import { CoinWorkbench } from "./components/CoinWorkbench";
 import { CommandPalette, type ShellCommand } from "./components/CommandPalette";
 import { EpisodeRail } from "./components/EpisodeRail";
 import { HeldCoins, type HeldVenueLookup, type RetainedObservation } from "./components/HeldCoins";
+import { JournalRail } from "./components/JournalRail";
 import { HypothesisLab } from "./components/HypothesisLab";
 import { emptyCaptureContext, OperatorCaptureDialog, OperatorPanel, type CapturePreset, type ChoiceSets } from "./components/OperatorCapture";
 import { ReplaySwitch } from "./components/ReplaySwitch";
@@ -18,6 +19,9 @@ import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
 import { exactUtcNow } from "./operator/contract";
 import { heldSubjectKeys, holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
+import { journalEntryIntent } from "./operator/journal";
+import { configuredOperatorReader, type OperatorCommandReader } from "./operator/readback";
+import { useDurableSceneCommands } from "./operator/useDurableSceneCommands";
 import { useOperatorJournal } from "./operator/useOperatorJournal";
 import type { PendingOperatorCommandQueue } from "./operator/pendingQueue";
 import { configuredPresentationSink, type PresentationSink } from "./presentation/client";
@@ -40,6 +44,7 @@ function nextMode(mode: ReplayMode): ReplayMode {
 export function GlassApp({
   dataSource,
   operatorSink,
+  operatorReader,
   presentationSink,
   launchMode = "witnessed",
   requireOperationalWitness = false,
@@ -51,6 +56,8 @@ export function GlassApp({
 }: {
   dataSource?: GlassDataSource;
   operatorSink?: OperatorCommandSink;
+  /** Read-back for durable operator acts; defaults to the configured loopback/fixture reader. */
+  operatorReader?: OperatorCommandReader;
   presentationSink?: PresentationSink;
   launchMode?: ReplayMode;
   requireOperationalWitness?: boolean;
@@ -88,6 +95,7 @@ export function GlassApp({
   const replayAbortRef = useRef<AbortController | null>(null);
   const resolvedDataSource = useMemo(() => dataSource ?? configuredDataSource(), [dataSource]);
   const resolvedOperatorSink = useMemo(() => operatorSink ?? configuredOperatorSink(), [operatorSink]);
+  const resolvedOperatorReader = useMemo(() => operatorReader ?? configuredOperatorReader(), [operatorReader]);
   const resolvedPresentationSink = useMemo(() => presentationSink ?? configuredPresentationSink(), [presentationSink]);
   const presentationMaterials = useMemo(() => {
     if (!snapshot) return null;
@@ -114,6 +122,7 @@ export function GlassApp({
     };
   }, [presentationMaterials?.publication, presentationWitness.receipt]);
   const operatorJournal = useOperatorJournal(resolvedOperatorSink, snapshot, presentationCompleteBinding, requireOperationalWitness, pendingOperatorQueue);
+  const durableJournal = useDurableSceneCommands(resolvedOperatorReader, snapshot?.view.sceneId ?? null);
 
   useEffect(() => {
     onPresentationBinding?.(presentationCompleteBinding?.presentation ?? null);
@@ -283,6 +292,13 @@ export function GlassApp({
     setHoldAnnouncement(`Held ${label}. It is pinned in held coins and will not scroll away.`);
   }, [candidates, recordCommand, selectedId, snapshot]);
 
+  const appendJournalEntry = useCallback((words: string) => {
+    if (!snapshot) throw new Error("a journal entry needs a loaded scene to bind to");
+    // Throws on blank or oversized words; the composer renders the refusal as its own alert.
+    recordCommand(journalEntryIntent(snapshot.view.sceneId, words));
+    setHoldAnnouncement("Journal entry appended for this scene.");
+  }, [recordCommand, snapshot]);
+
   const appendHoldNote = useCallback((subjectKey: string, note: string) => {
     recordCommand(holdNoteIntent(subjectKey, note));
     const candidate = candidates.find((item) => item.id === subjectKey) ?? heldObservations[subjectKey]?.candidate;
@@ -344,6 +360,7 @@ export function GlassApp({
   const recordFocus = useCallback(() => setCapturePreset({ type: "focus" }), []);
   const focusSearch = useCallback(() => searchRef.current?.focus(), []);
   const openHypothesisLab = useCallback(() => document.querySelector<HTMLElement>("#hypothesis-lab")?.focus(), []);
+  const openJournal = useCallback(() => document.querySelector<HTMLElement>("#journal")?.focus(), []);
   const annotateChart = useCallback((anchor: import("./operator/contract").ChartAnchor) => setCapturePreset({ type: "annotation", anchor }), []);
 
   useGlobalShortcuts(useMemo(() => ({
@@ -368,8 +385,10 @@ export function GlassApp({
     { id: "hold", label: "Hold the selected coin", detail: "One keystroke; it stops scrolling away and the mark is retained", shortcut: ";", run: holdSelected },
     { id: "record-focus", label: "Record deliberate focus", detail: "Append an explicit research gesture for the selected coin", shortcut: "F", run: recordFocus },
     { id: "hypothesis-lab", label: "Focus presentation hypothesis lab", detail: "Compare wallet, attention, liquidity, topology, and coupled-field views", shortcut: "H", run: openHypothesisLab },
+    // Deliberately no single-letter shortcut: the journal is reached by tab order or from here.
+    { id: "journal", label: "Open the journal", detail: "Read what was said over this scene, verbatim, and append an entry", run: openJournal },
     { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
-  ], [cycleReplay, focusSearch, holdSelected, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]);
+  ], [cycleReplay, focusSearch, holdSelected, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
 
   const closeCommands = useCallback(() => {
     setCommandsOpen(false);
@@ -501,6 +520,14 @@ export function GlassApp({
             nominationQualifies={!prospectiveProtocol}
             pendingReadbackError={operatorJournal.pendingReadbackError}
             currentClientSessionId={operatorJournal.clientSessionId}
+          />
+          <JournalRail
+            sceneId={snapshot.view.sceneId}
+            candidates={candidates}
+            readback={durableJournal.readback}
+            sessionEntries={operatorJournal.entries}
+            onReread={durableJournal.reread}
+            onAppendEntry={appendJournalEntry}
           />
           <EpisodeRail episodes={snapshot.view.payload.episodes} candidates={candidates} selectedId={selected.id} onFocus={selectCandidate} onRecordGesture={(candidateId, episodeId, gestureLabel) => {
             selectCandidate(candidateId);

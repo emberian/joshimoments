@@ -381,7 +381,7 @@ pub async fn run_live_gesture_walk(
     })
 }
 
-fn first_candidate(view: &ValidatedGlassViewV1) -> Result<String, LiveGestureError> {
+pub(crate) fn first_candidate(view: &ValidatedGlassViewV1) -> Result<String, LiveGestureError> {
     view.choices()
         .first()
         .map(|choice| choice.candidate_id().to_string())
@@ -449,11 +449,11 @@ fn snapshot_envelope(view_bytes: &[u8]) -> Vec<u8> {
     result
 }
 
-fn qualified_digest(bytes: &[u8]) -> String {
+pub(crate) fn qualified_digest(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_digest(bytes))
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let mut hex = String::with_capacity(64);
@@ -488,15 +488,15 @@ fn copy_blob_tree(source: &Path, destination: &Path) -> Result<(), LiveGestureEr
     Ok(())
 }
 
-fn now() -> Result<UtcTimestamp, LiveGestureError> {
+pub(crate) fn now() -> Result<UtcTimestamp, LiveGestureError> {
     crate::wave5_readiness::now().map_err(|_| LiveGestureError::Invariant("clock is unavailable"))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ExchangeResponse {
-    session_id: String,
-    capability: String,
+pub(crate) struct ExchangeResponse {
+    pub(crate) session_id: String,
+    pub(crate) capability: String,
 }
 
 #[derive(Deserialize)]
@@ -513,7 +513,7 @@ struct SceneReferenceBody {
     view_digest: String,
 }
 
-async fn exchange(
+pub(crate) async fn exchange(
     app: &Router,
     origin: &str,
     code: &str,
@@ -543,7 +543,7 @@ async fn exchange(
     Ok(serde_json::from_slice(&response_bytes(response).await?)?)
 }
 
-fn authorized(
+pub(crate) fn authorized(
     origin: &str,
     method: &str,
     uri: &str,
@@ -573,14 +573,14 @@ fn authority(origin: &str) -> String {
         .map_or_else(|| origin.to_owned(), |(_, authority)| authority.to_owned())
 }
 
-async fn send(app: &Router, request: Request<Body>) -> Response<Body> {
+pub(crate) async fn send(app: &Router, request: Request<Body>) -> Response<Body> {
     match app.clone().oneshot(request).await {
         Ok(response) => response,
         Err(error) => match error {},
     }
 }
 
-async fn response_bytes(response: Response<Body>) -> Result<Vec<u8>, LiveGestureError> {
+pub(crate) async fn response_bytes(response: Response<Body>) -> Result<Vec<u8>, LiveGestureError> {
     to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
         .await
         .map(|bytes| bytes.to_vec())
@@ -611,8 +611,9 @@ pub enum LiveGestureError {
     Invariant(&'static str),
 }
 
+/// Offline fixture material shared by the live gesture and live journal restart walks.
 #[cfg(test)]
-mod tests {
+pub(crate) mod live_fixture {
     use super::*;
     use joshi_admission::{SourceFrameInput, source_frames};
     use joshi_domain::OpenVariant;
@@ -621,10 +622,10 @@ mod tests {
         SourceId as FrameSourceId, StreamClass, Transport, UnixMillis,
     };
 
-    const FIXTURE_SOURCE: &str = "source.other.fixture";
-    const FIXTURE_MINT: &str = "FixtureMint1111111111111111111111111111111111";
+    pub(crate) const FIXTURE_SOURCE: &str = "source.other.fixture";
+    pub(crate) const FIXTURE_MINT: &str = "FixtureMint1111111111111111111111111111111111";
 
-    fn instant(value: &str) -> UtcTimestamp {
+    pub(crate) fn instant(value: &str) -> UtcTimestamp {
         value.parse().expect("fixture instant")
     }
 
@@ -698,7 +699,7 @@ mod tests {
         }
     }
 
-    fn seed_catalog(catalog: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn seed_catalog(catalog: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut store =
             SqliteStore::open(source_catalog_config(catalog)?, StoreMode::SingleWriter)?;
         store.migrate(instant("2026-08-19T21:45:30.000000Z"))?;
@@ -720,6 +721,14 @@ mod tests {
         batch.commit(&mut store)?;
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        live_fixture::{FIXTURE_MINT, FIXTURE_SOURCE, instant, seed_catalog},
+        *,
+    };
 
     #[tokio::test]
     async fn one_hold_keystroke_binds_the_exact_served_scene_and_survives_restart() {

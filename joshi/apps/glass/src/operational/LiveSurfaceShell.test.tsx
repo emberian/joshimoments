@@ -112,14 +112,16 @@ function pairedSession(): MemoryOnlyPairingSession {
   return session;
 }
 
-type Attempt = { url: string; token: string | null; body: string | null };
+type Attempt = { url: string; method: string; token: string | null; body: string | null };
 
 function stubCore(attempts: Attempt[]) {
   const fetchStub = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = input instanceof URL ? input.toString() : String(input);
+    const method = init?.method ?? "GET";
     const headers = new Headers(init?.headers ?? {});
     attempts.push({
       url,
+      method,
       token: headers.get("X-Joshi-Pairing-Token"),
       body: typeof init?.body === "string" ? init.body : null,
     });
@@ -128,6 +130,18 @@ function stubCore(attempts: Attempt[]) {
         status: 200,
         headers: { "content-type": "application/json" },
       });
+    }
+    if (url.includes("/api/v1/operator/commands") && method === "GET") {
+      // The journal's readback of a scene no act has yet made durable: an explicit empty
+      // answer with its retention stated, exactly as the live core serves it.
+      return new Response(JSON.stringify({
+        contract: "joshi.core.operator_command_readback",
+        schemaVersion: 1,
+        authority: "read_only_no_execution",
+        sceneId: SCENE_ID,
+        sceneRetention: "served_not_yet_durable",
+        commands: [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.includes("/api/v1/operator/commands")) {
       const command = operatorCommandSchema.parse(JSON.parse(String(init?.body)));
@@ -214,9 +228,9 @@ describe("live surface shell", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => {
-      expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands"))).toBe(true);
+      expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST")).toBe(true);
     });
-    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands"));
+    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST");
     const command = operatorCommandSchema.parse(JSON.parse(posted?.body ?? "{}"));
     expect(command.scene.sceneId).toBe(SCENE_ID);
     expect(command.scene.viewDigest).toBe(liveSnapshot.snapshotDigest);
@@ -225,7 +239,7 @@ describe("live surface shell", () => {
     expect(command.effectCeiling).toBe("observe_only");
     expect(posted?.token).toMatch(/^jpc1_/);
     expect(posted?.body).toBe(canonicalOperatorCommand(command));
-    expect(await screen.findByText(/commit 7/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/commit 7/i)).length).toBeGreaterThan(0);
   });
 
   /**
@@ -255,9 +269,9 @@ describe("live surface shell", () => {
     expect(screen.queryByRole("button", { name: /append evidence record/i })).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands"))).toBe(true);
+      expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST")).toBe(true);
     });
-    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands"));
+    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST");
     const command = operatorCommandSchema.parse(JSON.parse(posted?.body ?? "{}"));
     expect(posted?.body).toBe(canonicalOperatorCommand(command));
     expect(posted?.token).toMatch(/^jpc1_/);

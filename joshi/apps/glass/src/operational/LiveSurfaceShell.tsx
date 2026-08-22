@@ -4,6 +4,7 @@ import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 import { GlassApp } from "../App";
 import { LoopbackDataSource } from "../data/client";
 import { LoopbackOperatorSink } from "../operator/client";
+import { LoopbackOperatorReader } from "../operator/readback";
 import { LoopbackPresentationSink } from "../presentation/client";
 import {
   glassPairingSession,
@@ -71,6 +72,7 @@ export function LiveSurfaceShell({
     return {
       source: new LoopbackDataSource(origin, launchSceneId, session),
       operatorSink: new LoopbackOperatorSink(origin, session, true),
+      operatorReader: new LoopbackOperatorReader(origin, session, true),
       presentationSink: new LoopbackPresentationSink(origin, session, true),
     };
   }, [launchSceneId, paired, session, sessionVersion]);
@@ -160,6 +162,7 @@ export function LiveSurfaceShell({
         key={launchSceneId}
         dataSource={runtime.source}
         operatorSink={runtime.operatorSink}
+        operatorReader={runtime.operatorReader}
         presentationSink={runtime.presentationSink}
         launchMode="witnessed"
         {...(pendingOperatorQueue ? { pendingOperatorQueue } : {})}

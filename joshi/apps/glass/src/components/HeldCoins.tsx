@@ -318,12 +318,15 @@ export function HeldCoins({
       {/*
         The reach of this list, said out loud. An empty rail is the exact shape a reader fills in
         with "nothing was held", and after a reload that reading would be false: the catalog still
-        holds every accepted mark, this cockpit just has no route to ask for them back.
+        holds every accepted mark. The journal panel reads those back per scene through the core's
+        operator readback route; this rail itself still lists only this session's marks, and says
+        so rather than borrowing the journal's answer and re-sorting it.
       */}
       <p className="held-scope">
         This list covers the current browser session, plus any mark still waiting to reach the
-        store. A hold the catalog has already accepted is not read back here, because the core
-        serves no route for that yet, so an empty list is never evidence that nothing was held.
+        store. A hold the catalog has already accepted is read back verbatim in the journal panel
+        for its scene, not restored here — so an empty list is never evidence that nothing was
+        held.
       </p>
 
       {held.length === 0 ? (

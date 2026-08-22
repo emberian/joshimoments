@@ -29,7 +29,7 @@ joshi-store = { path = "../../crates/joshi-store" }
 joshi-supervisor = { path = "../../crates/joshi-supervisor" }
 joshi-wave6-registry = { path = "../../crates/joshi-wave6-registry" }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true

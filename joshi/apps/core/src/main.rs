@@ -186,6 +186,21 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:4173")]
         glass_origin: String,
     },
+    /// Journal real words over a real catalog through the paired route and read them back after
+    /// restart through the operator readback route.
+    LiveJournalWalk {
+        #[arg(long)]
+        catalog: PathBuf,
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long, default_value = "helius.http.solana.v1")]
+        source_id: String,
+        #[arg(long, default_value = "http://127.0.0.1:4173")]
+        glass_origin: String,
+        /// The exact words of the entry, kept verbatim. Blank words are refused, never stored.
+        #[arg(long)]
+        words: String,
+    },
     /// Serve the exact offline G0 fixture through durable ordinary pairing for local inspection.
     Wave5G0Inspect {
         #[arg(long, default_value = "127.0.0.1:43119")]
@@ -494,6 +509,23 @@ async fn main() -> Result<(), CliError> {
             .await?;
             println!("{}", serde_json::to_string(&report)?);
         }
+        Some(Command::LiveJournalWalk {
+            catalog,
+            state,
+            source_id,
+            glass_origin,
+            words,
+        }) => {
+            let report = joshi_core::live_journal::run_live_journal_walk(
+                &catalog,
+                &state,
+                &source_id,
+                &glass_origin,
+                &words,
+            )
+            .await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
         Some(Command::Fixture(fixture)) => run_fixture_command(fixture).await?,
         None => run_fixture_command(arguments.fixture).await?,
     }
@@ -655,6 +687,8 @@ enum CliError {
     Wave6OperatorInput(#[from] joshi_core::wave6_operator_input::Wave6OperatorEvidenceInputError),
     #[error(transparent)]
     LiveGesture(#[from] joshi_core::live_gesture::LiveGestureError),
+    #[error(transparent)]
+    LiveJournal(#[from] joshi_core::live_journal::LiveJournalError),
     #[error(transparent)]
     Store(#[from] joshi_store::StoreError),
     #[error(transparent)]
