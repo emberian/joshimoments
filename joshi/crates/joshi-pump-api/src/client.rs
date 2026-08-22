@@ -37,14 +37,13 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            enabled_routes: [
-                RouteId::CoinExact,
-                RouteId::SolPrice,
-                RouteId::BalanceSummary,
-                RouteId::BalanceTokens,
-            ]
-            .into_iter()
-            .collect(),
+            // One source of truth: a route is on by default exactly when the pinned catalog
+            // says it is collectable. A second hand-maintained list here would silently drift
+            // away from the catalog bit that operators actually read and edit.
+            enabled_routes: RouteId::ALL
+                .into_iter()
+                .filter(|route| RouteSpec::for_id(*route).collection_enabled)
+                .collect(),
             request_budget: 20,
             response_limit_bytes: 2 * 1024 * 1024,
             request_timeout: Duration::from_secs(15),

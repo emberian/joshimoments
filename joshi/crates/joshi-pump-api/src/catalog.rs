@@ -374,19 +374,55 @@ impl RouteSpec {
                 &["cursor"],
                 false,
             ),
+            // Measured live 2026-08-22 against a real mainnet mint. The provider itself
+            // enumerates the accepted intervals in its 400 body: 1s, 15s, 30s, 1m, 5m, 15m, 30m,
+            // 1h, 4h, 6h, 12h, 24h. `limit` is rejected above 1000. Omitting `currency` returns a
+            // USD-denominated series; `currency=SOL` returns a separately computed SOL series
+            // whose volume did not agree with the USD one under scalar conversion.
+            //
+            // `before` was supplied as both epoch milliseconds and epoch seconds and changed
+            // nothing: the window still ended at the present instant. It stays allowlisted so
+            // that inertia can be re-measured without editing this catalog, not because it
+            // paginates. With no working `before` and a hard limit of 1000, the reachable history
+            // on this route is one newest-anchored window per interval, and deeper history has to
+            // come from the trades route or from our own accumulated tap.
+            //
+            // The `ordering` string below is deliberately short: joshi-admission concatenates it
+            // into a 512-byte coverage-scope subject, so this field is a scope key and not a
+            // place for the measurement. The measurement lives in the reviewed-schema rationale
+            // at crates/joshi-pump-api/fixtures/schema_review_candles_v1.json.
             RouteId::Candles => Self::http(
                 id,
                 "https://swap-api.pump.fun",
                 "/v1/coins/{mint}/candles",
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
-                PaginationKind::VendorWindow,
-                "ascending/descending must be remeasured per response",
+                PaginationKind::None,
+                "measured 2026-08-22: ascending by timestamp; intervals with no trade are omitted, so the \
+                 series is a gap-compressed path; newest-anchored, limit<=1000, `before` inert",
                 &["mint"],
                 &["interval", "limit", "currency", "before"],
                 &["before"],
-                false,
+                true,
             ),
+            // Measured live 2026-08-22. `limit` is rejected above 100, ten times tighter than the
+            // candle route's 1000, so the cost of contiguous tape is fixed by arithmetic:
+            // requests per hour of tape equals trades per hour divided by 100. A coin printing
+            // two trades a minute costs about one request per hour of history; one printing
+            // ninety costs about fifty.
+            //
+            // `before` is inert here exactly as it is on candles, in both epoch-millisecond and
+            // epoch-second form. The cursor is what reaches the past, and it reaches further than
+            // a walk: its `slotIndexId` prefix is not validated, and seeking with an all-zero
+            // prefix and an arbitrary epoch-millisecond suffix returns the newest rows before
+            // that instant. A cursor is therefore a random-access seek to a wall-clock time, not
+            // only a continuation of the page that produced it, which is what makes the history
+            // horizon measurable by bisection instead of by walking.
+            //
+            // Reaching past the beginning of a mint's retained history returns
+            // `{"trades":[],"pagination":{"hasMore":false,"limit":n}}` with no cursor key at all.
+            // That is a different structural shape and the reviewed schema refuses it, which is
+            // intended: see crates/joshi-pump-api/fixtures/trades_terminal_page_v1.json.
             RouteId::Trades => Self::http(
                 id,
                 "https://swap-api.pump.fun",
@@ -394,11 +430,12 @@ impl RouteSpec {
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
                 PaginationKind::Cursor,
-                "provider trade order/cursor; revisions unknown",
+                "measured 2026-08-22: descending by slotIndexId, newest first; nextCursor is the \
+                 exclusive keyset `slotIndexId-epochMillis` of the last row; revisions unknown",
                 &["mint"],
                 &["limit", "cursor", "before"],
                 &["cursor", "before"],
-                false,
+                true,
             ),
             RouteId::LiveChat => Self {
                 id,

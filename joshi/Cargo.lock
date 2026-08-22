@@ -1199,6 +1199,7 @@ dependencies = [
  "joshi-pairing",
  "joshi-publication",
  "joshi-pump-adapter",
+ "joshi-pump-api",
  "joshi-scientific-memory",
  "joshi-sources",
  "joshi-spool",

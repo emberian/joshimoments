@@ -22,16 +22,31 @@ use joshi_evidence::{
     ObservationMetadata, ObservationTiming,
 };
 use joshi_pump_api::{
-    Acquisition, AuthenticatedPathDecision, FetchOutcome, IdentityStore, ParityInputV2,
-    ParityReportV2, ProductIdentityClaimV1, PromotionReportV1, PromotionRunV1, SchemaRegistry,
-    SchemaReviewV1, SchemaTrustDecisionV1, SessionPathNoteV1, compare_v2, decide_schema_trust,
-    evaluate_promotion, normalize, product_identity_claim, schema_shape, session_path_note,
+    Acquisition, AuthenticatedPathDecision, FetchOutcome, IdentityClaimError, IdentityStore,
+    ParityInputV2, ParityReportV2, ProductIdentityClaimV1, PromotionReportV1, PromotionRunV1,
+    SchemaRegistry, SchemaReviewV1, SchemaTrustDecisionV1, SessionPathNoteV1, compare_v2,
+    decide_schema_trust, evaluate_promotion, normalize, product_identity_claim, schema_shape,
+    session_path_note,
 };
 use joshi_spool::EvidenceBatchEntry;
 use joshi_store::{ObservationStorage, SourceRegistration};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod backfill;
+pub mod crackle;
+
+pub use crackle::{
+    CRACKLE_REPORT_V1, CrackleReportV1, EXCURSION_CENSUS_V1, ExcursionCensusV1, FEE_FLOOR_V1,
+    FeeFloorV1, crackle_report, excursion_census, fee_floor,
+};
+
+pub use backfill::{
+    Adjacency, PageFacts, TradesBackfillPageV1, TradesBackfillWalkV1, WalkStop, page_record,
+    requests_per_hour_of_tape, span_millis,
+};
+
+pub const TRADES_BACKFILL_WALK_V1: &str = "joshi.pump_adapter.trades_backfill_walk.v1";
 pub const PUMP_POLICY_CONTRACT: &str = "joshi.pump_source.physical_policy.v1";
 pub const PUMP_RECEIPT_CONTRACT: &str = "joshi.pump_source.admission_receipt.v1";
 pub const PUMP_MEASUREMENT_RECEIPT_CONTRACT: &str = "joshi.pump_source.measurement_receipt.v1";
@@ -433,9 +448,40 @@ fn session_semantic_key(note: &SessionPathNoteV1) -> String {
 pub fn prepare_direct_product_read(
     input: &ProductReadInput<'_>,
 ) -> Result<PreparedProductRead, PumpAdapterError> {
+    prepare_product_read_inner(input, true, None)
+}
+
+/// Admit one page of a backwards trade walk and, on the page the walk stopped at, the durable
+/// record of why it stopped.
+///
+/// Unlike [`prepare_direct_product_read`] this accepts a failed page. A walk that stops because
+/// the provider refused must still be able to write down *that* it refused, and an error channel
+/// is not a durable record. The refusal reaches the store as an ordinary schema-trust refusal
+/// beside the retained bytes and coverage gap the client already produced.
+///
+/// # Errors
+///
+/// Returns an error for oversized/ambiguous ingress, an outcome with no attempt at all, an
+/// invalid decision timestamp, a walk record whose own arithmetic does not close, or any
+/// canonical admission failure.
+pub fn prepare_trades_backfill_page(
+    input: &ProductReadInput<'_>,
+    walk: Option<&TradesBackfillWalkV1>,
+) -> Result<PreparedProductRead, PumpAdapterError> {
+    if let Some(walk) = walk {
+        walk.validate()?;
+    }
+    prepare_product_read_inner(input, false, walk)
+}
+
+fn prepare_product_read_inner(
+    input: &ProductReadInput<'_>,
+    require_completed: bool,
+    walk: Option<&TradesBackfillWalkV1>,
+) -> Result<PreparedProductRead, PumpAdapterError> {
     let outcome: FetchOutcome = strict_json::parse(input.outcome_bytes, MAX_DIRECT_INGRESS_BYTES)
         .map_err(|error| PumpAdapterError::Strict(error.to_string()))?;
-    if !outcome.completed {
+    if require_completed && !outcome.completed {
         return Err(PumpAdapterError::Contract(
             "a product read requires a completed fetch outcome with one exact success body".into(),
         ));
@@ -492,6 +538,7 @@ pub fn prepare_direct_product_read(
         &decision,
         &session_path,
         claim.as_ref(),
+        walk,
         input.committed_at,
     )?;
     let prepared = prepared(
@@ -540,9 +587,16 @@ fn derive_identity_claim(
         .collect(),
     };
     let normalization = normalize(acquisition, &registry);
-    let claim = product_identity_claim(acquisition, &normalization)
-        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
-    Ok(Some(claim))
+    match product_identity_claim(acquisition, &normalization) {
+        Ok(claim) => Ok(Some(claim)),
+        // A promoted schema on a route with no reviewed identity projection is a normal
+        // outcome, not a failure: a candle window or a trade page identifies no subject. The
+        // bytes, the coverage window and both decisions are still admitted; only the identity
+        // assertion is absent. Every other identity failure stays an error so that a route
+        // which *is* supposed to yield a claim cannot quietly stop yielding one.
+        Err(IdentityClaimError::UnsupportedRoute(_)) => Ok(None),
+        Err(error) => Err(PumpAdapterError::Contract(error.to_string())),
+    }
 }
 
 fn provider_body_observation_id(
@@ -588,10 +642,14 @@ fn apply_product_read_claims(
     decision: &SchemaTrustDecisionV1,
     session_path: &SessionPathNoteV1,
     claim: Option<&ProductIdentityClaimV1>,
+    walk: Option<&TradesBackfillWalkV1>,
     committed_at: UtcTimestamp,
 ) -> Result<(), PumpAdapterError> {
-    let body_observation = provider_body_observation_id(admission, acquisition)?;
+    // A refused or failed page retains no promoted body, so decisions bind to the attempt
+    // envelope in that case. The attempt envelope always exists; the body may not.
     let attempt_observation = attempt_observation_id(admission, acquisition)?;
+    let body_observation = provider_body_observation_id(admission, acquisition)
+        .unwrap_or_else(|_| attempt_observation.clone());
 
     let mut extension = serde_json::Map::new();
     extension.insert("decision".into(), serde_json::to_value(decision)?);
@@ -671,6 +729,44 @@ fn apply_product_read_claims(
                     lower: Some(received_at),
                     upper: Some(upper),
                 }),
+                serde_json::Value::Object(extension),
+                committed_at,
+            )?);
+    }
+
+    if let Some(walk) = walk {
+        // The walk record binds to the attempt envelope of the page the walk stopped on, which
+        // exists whether or not that page carried a promotable body. That is deliberate: the
+        // pages worth explaining are exactly the ones that did not come back clean.
+        let mut extension = serde_json::Map::new();
+        extension.insert("walk".into(), serde_json::to_value(walk)?);
+        extension.insert(
+            "authority".into(),
+            serde_json::Value::String("read_only_no_execution".into()),
+        );
+        extension.insert(
+            "completeness".into(),
+            serde_json::Value::String(
+                "pages_do_not_overlap_by_exclusive_keyset_absence_of_gaps_not_established".into(),
+            ),
+        );
+        admission
+            .batch
+            .store
+            .evidence
+            .assertions
+            .push(claim_assertion(
+                &walk.assertion_id(),
+                &walk.semantic_key(),
+                "pump_trades_backfill_walk",
+                if walk.stop.needs_review() {
+                    "candidate"
+                } else {
+                    "accepted"
+                },
+                &attempt_observation,
+                "context",
+                None,
                 serde_json::Value::Object(extension),
                 committed_at,
             )?);

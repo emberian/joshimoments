@@ -1,11 +1,17 @@
 //! One bounded, read-only Pump product read carried all the way to a durable, restart-readable
 //! versioned assertion.
 //!
-//! The binary performs exactly one documented `GET`, retains the exact response bytes through the
-//! ordinary source-admission path, records an explicit schema-trust decision and an explicit
-//! credential-path decision as assertions in the same immutable batch, derives one identity and
-//! topology claim only when the schema was promoted, then drops the store, reopens it, and proves
-//! the fact and the bytes that said so both survive.
+//! The binary performs exactly one `GET` on one catalogued route, retains the exact response
+//! bytes through the ordinary source-admission path, records an explicit schema-trust decision
+//! and an explicit credential-path decision as assertions in the same immutable batch, derives
+//! one identity and topology claim when the schema was promoted *and* the route has a reviewed
+//! identity projection, then drops the store, reopens it, and proves the retained bytes survive
+//! byte-for-byte.
+//!
+//! Routes without an identity projection — a candle window, a trade page — are ordinary here:
+//! they promote or quarantine like anything else and simply carry no identity assertion. The
+//! byte read-back is therefore driven by the retained body digest, not by the claim, so a route
+//! that yields no claim is still proven to have survived the restart.
 //!
 //! It constructs, signs, and submits nothing. Every route it can reach is a `GET`.
 
@@ -20,9 +26,9 @@ use joshi_pump_adapter::{
     PreparedProductRead, ProductReadInput, close_receipt, prepare_direct_product_read,
 };
 use joshi_pump_api::{
-    AuthenticatedPathDecision, ClientConfig, FetchOutcome, IdentityStore, LogicalRequest,
-    NoSession, ProductIdentityClaimV1, PumpApiClient, RequestParameters, RouteId, SessionProvider,
-    fingerprint_of_shape,
+    AccessClass, AuthenticatedPathDecision, ClientConfig, FetchOutcome, IdentityStore,
+    LogicalRequest, NoSession, ProductIdentityClaimV1, PumpApiClient, RequestParameters, RouteId,
+    RouteSpec, SessionProvider, fingerprint_of_shape,
 };
 use joshi_store::{SqliteStore, StoreConfig, StoreMode, VerifyDepth};
 use serde::Serialize;
@@ -30,11 +36,17 @@ use serde_json::Value;
 
 #[derive(Debug, Parser)]
 #[command(name = "joshi-pump-product-read")]
-#[command(about = "One bounded documented Pump product read, admitted and read back after restart")]
+#[command(about = "One bounded Pump product read, admitted and read back after restart")]
 struct Cli {
     /// SPL mint of the coin to read. It appears in the URL path and in the derived claim.
     #[arg(long)]
     mint: String,
+    /// Catalogued route to read. Only routes the pinned catalog marks collectable are allowed.
+    #[arg(long, default_value = "coin_exact")]
+    route: String,
+    /// Allowlisted query parameter, as `name=value`. Repeat for each one.
+    #[arg(long = "query", value_name = "NAME=VALUE")]
+    queries: Vec<String>,
     /// Durable working root: identity reservations, catalog, blobs, exports.
     #[arg(long)]
     state_dir: PathBuf,
@@ -94,24 +106,41 @@ struct RunReceipt {
     readback_assertion_ids: Vec<String>,
     readback_body_path: Option<String>,
     readback_body_bytes_equal_response: bool,
-    readback_attributes_equal_claim: bool,
+    /// `None` when the route carries no identity projection, so an absent claim is never read
+    /// as a failed comparison.
+    readback_attributes_equal_claim: Option<bool>,
 }
 
 #[allow(clippy::too_many_lines)] // The whole acquire/admit/restart/read-back walk stays in one place.
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let route = RouteId::CoinExact;
+    let route = cli.route.parse::<RouteId>()?;
+    let spec = RouteSpec::for_id(route);
+    if !spec.collection_enabled {
+        return Err(format!(
+            "route {route} is not marked collectable in the pinned catalog; enable it there \
+             deliberately rather than from a flag"
+        )
+        .into());
+    }
     let mut config = ClientConfig {
         request_budget: cli.request_budget,
         maximum_attempts: 1,
-        response_limit_bytes: 512 * 1024,
+        // A candle or trade page is a whole window, not one record: the coin-exact ceiling of
+        // 512 KiB truncated a 1000-row candle body, and a truncated body can never be promoted.
+        response_limit_bytes: 2 * 1024 * 1024,
         request_timeout: Duration::from_secs(20),
         ..ClientConfig::default()
     };
+    // Narrow the run to the single route it was asked for, even though the catalog enables more.
     config.enabled_routes = [route].into_iter().collect();
+    // Settle every argument before anything is opened or reserved: a typo must not consume an
+    // acquisition identity, and it must certainly not consume a request.
+    let query = parse_queries(&cli.queries)?;
 
     let identity = IdentityStore::open(cli.state_dir.join("identity"))?;
-    // A documented public product route. No session provider is configured, so the transport
-    // client cannot attach credential material even if a route asked for it.
+    // No session provider is configured, so the transport client cannot attach credential
+    // material even if a route asked for it. Reaching an authenticated route would fail here
+    // rather than quietly reading it as an anonymous caller.
     let sessions: Arc<dyn SessionProvider> = Arc::new(NoSession);
     let client = PumpApiClient::new(config, identity.clone(), sessions)?;
     let request = LogicalRequest {
@@ -120,7 +149,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             path: [("mint".to_owned(), cli.mint.clone())]
                 .into_iter()
                 .collect(),
-            query: std::collections::BTreeMap::new(),
+            query,
         },
     };
     let outcome: FetchOutcome = client.fetch(&request).await?;
@@ -143,14 +172,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         review_bytes: review_bytes.as_deref(),
         authenticated_path: AuthenticatedPathDecision::NotPerformed,
         session_reason_code: "no_documented_authenticated_get_read_route_for_present_credential",
-        session_detail: concat!(
-            "This run read a documented public product route with no session provider configured. ",
-            "The only Pump-family credential present on this host authenticates PumpPortal's ",
-            "Lightning trading API, its wallet-creation route, and its WebSocket data stream; ",
-            "none of those is a documented HTTP GET product read, and the trading siblings are ",
-            "out of scope for a read-only lane. No pump.fun user session was available, so no ",
-            "authenticated product route was attempted."
-        ),
+        session_detail: session_detail(spec.access),
         durable_batch_id: &format!(
             "batch:pump-product-read:{}",
             outcome
@@ -206,16 +228,31 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
     readback_ids.sort();
 
-    let mut readback_body_path = None;
-    let mut body_equal = false;
-    let mut attributes_equal = false;
+    // Read the retained body back from wherever the catalog physically put it, keyed by the
+    // digest the acquisition declared rather than by anything the claim happens to carry. A
+    // route with no identity claim is proven durable by exactly the same comparison.
+    let body_blob_id = prepared
+        .acquisition
+        .body
+        .blob_id()
+        .ok_or("the completed read retained no body digest")?;
+    let path = external_blob_path(&cli.state_dir, "public_source", body_blob_id)?;
+    let stored_bytes = fs::read(&path)?;
+    let body_equal = stored_bytes == response_bytes;
+    if !body_equal {
+        return Err("read-back provider bytes differ from the response that was admitted".into());
+    }
+    let readback_body_path = Some(path.display().to_string());
+    let mut attributes_equal = None;
     if let Some(claim) = readback_claim.as_ref() {
-        let path = external_blob_path(&cli.state_dir, "public_source", &claim.body_blob_id)?;
-        let bytes = fs::read(&path)?;
-        body_equal = bytes == response_bytes;
-        attributes_equal = attributes_match(&bytes, claim)?;
-        readback_body_path = Some(path.display().to_string());
-        if !body_equal || !attributes_equal {
+        if claim.body_blob_id != body_blob_id {
+            return Err(
+                "the stored claim names a different body than the admitted response".into(),
+            );
+        }
+        let matched = attributes_match(&stored_bytes, claim)?;
+        attributes_equal = Some(matched);
+        if !matched {
             return Err("read-back provider bytes do not support the stored claim".into());
         }
     }
@@ -270,6 +307,57 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("{}", serde_json::to_string_pretty(&receipt)?);
     Ok(())
+}
+
+/// Parse repeated `name=value` query arguments. The client still refuses any name the pinned
+/// catalog does not allowlist for the route, so this only has to be unambiguous.
+fn parse_queries(
+    values: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, Box<dyn std::error::Error>> {
+    let mut query = std::collections::BTreeMap::new();
+    for value in values {
+        let (name, argument) = value
+            .split_once('=')
+            .ok_or_else(|| format!("--query {value:?} is not in name=value form"))?;
+        if name.is_empty() {
+            return Err(format!("--query {value:?} has an empty name").into());
+        }
+        if query.insert(name.to_owned(), argument.to_owned()).is_some() {
+            return Err(format!("--query {name:?} was given more than once").into());
+        }
+    }
+    Ok(query)
+}
+
+/// What actually happened on the credential path, stated per access class rather than asserted
+/// once for every route. Calling an observed product route "documented" would be the lie.
+fn session_detail(access: AccessClass) -> &'static str {
+    match access {
+        AccessClass::OfficiallyDescribedPublic => {
+            "This run read a documented public product route with no session provider configured. \
+             The only Pump-family credential present on this host authenticates PumpPortal's \
+             Lightning trading API, its wallet-creation route, and its WebSocket data stream; \
+             none of those is a documented HTTP GET product read, and the trading siblings are \
+             out of scope for a read-only lane. No pump.fun user session was available, so no \
+             authenticated product route was attempted."
+        }
+        AccessClass::ObservedPublicProduct => {
+            "This run read an undocumented public product route that the Pump web client itself \
+             calls anonymously, with no session provider configured. Its shape is observed rather \
+             than described, so the schema-trust decision beside this note is what governs \
+             whether anything derived from it may be trusted. The only Pump-family credential \
+             present on this host authenticates PumpPortal's Lightning trading API, its \
+             wallet-creation route, and its WebSocket data stream; none of those is an HTTP GET \
+             product read, and the trading siblings are out of scope for a read-only lane. No \
+             pump.fun user session was available, so no authenticated product route was \
+             attempted."
+        }
+        AccessClass::AuthenticatedUserSession | AccessClass::ReconnaissanceOnly => {
+            "No session provider was configured on this run, so no authenticated or \
+             reconnaissance-class route could have been reached; the transport client had no \
+             credential material to attach."
+        }
+    }
 }
 
 fn receipt_count(prepared: &PreparedProductRead, field: &str) -> String {

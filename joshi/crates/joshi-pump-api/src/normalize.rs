@@ -225,18 +225,23 @@ pub(crate) fn records(
     root: &RawValue,
 ) -> Result<Vec<Box<RawValue>>, NormalizeError> {
     match route {
+        // Candles was measured live 2026-08-22 and is a bare top-level JSON array, exactly like
+        // the discovery feeds; trades is an object carrying a `trades` array beside a
+        // `pagination` object. A single shared guess at ["candles","trades","data"] covered
+        // neither and silently produced zero candle rows out of a 1000-row body.
         RouteId::DiscoveryCoins
         | RouteId::CurrentlyLive
         | RouteId::CoinSearch
         | RouteId::UserSearch
-        | RouteId::Following => raw_array(root),
+        | RouteId::Following
+        | RouteId::Candles => raw_array(root),
+        RouteId::Trades => nested_array(root, &["trades"]),
         RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByMint => {
             nested_array(root, &["callouts", "data"])
         }
         RouteId::BalanceTokens => nested_array(root, &["tokens", "data"]),
         RouteId::CommunityMessages => nested_array(root, &["messages", "data"]),
         RouteId::CommunityCallouts => nested_array(root, &["callouts", "data"]),
-        RouteId::Candles | RouteId::Trades => nested_array(root, &["candles", "trades", "data"]),
         RouteId::LiveChat => Ok(Vec::new()),
         RouteId::CoinExact | RouteId::SolPrice | RouteId::BalanceSummary | RouteId::UserProfile => {
             Ok(vec![root.to_owned()])
@@ -391,19 +396,26 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "isSpam",
             "isHarmful",
         ],
-        RouteId::Candles | RouteId::Trades => &[
+        // Measured field names, not guessed ones. Every OHLCV value arrives as a decimal
+        // string, so it is retained verbatim rather than parsed here.
+        RouteId::Candles => &["timestamp", "open", "high", "low", "close", "volume"],
+        // `priceUsd`/`priceSol` are the pool price the trade printed at; `fillPrice*` is what
+        // the taker actually paid, so the pair carries the venue fee and is kept as a pair.
+        RouteId::Trades => &[
+            "slotIndexId",
+            "tx",
             "timestamp",
-            "time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "price",
-            "amount",
-            "signature",
-            "wallet",
-            "mint",
+            "userAddress",
+            "type",
+            "program",
+            "priceUsd",
+            "priceSol",
+            "amountUsd",
+            "amountSol",
+            "baseAmount",
+            "quoteAmount",
+            "fillPriceUsd",
+            "fillPriceSol",
         ],
         RouteId::LiveChat => &[],
     }
@@ -429,10 +441,22 @@ fn tagged_scalar(field: &str, raw: &RawValue) -> Option<TaggedScalar> {
 fn semantics(field: &str) -> &'static str {
     match field {
         "mint" | "creator" | "coinMint" | "address" | "userId" | "user_uuid" | "walletAddress"
-        | "calloutId" | "id" | "signature" => "provider_identifier",
+        | "calloutId" | "id" | "signature" | "tx" | "userAddress" | "slotIndexId" => {
+            "provider_identifier"
+        }
         "createdAt" | "created_timestamp" | "calloutTimestamp" | "timestamp" | "time" => {
             "provider_event_time_unparsed"
         }
+        // These arrive as JSON strings holding 28-significant-digit decimals. Tagging them
+        // `utf8` alone would let a later reader mistake a price for a name, and the provider
+        // pads `open`/`close` to a fixed width while trimming `high`/`low`, so two byte-unequal
+        // strings can denote the same number. Nothing here parses them.
+        "open" | "high" | "low" | "close" | "volume" | "priceUsd" | "priceSol" | "amountUsd"
+        | "amountSol" | "baseAmount" | "quoteAmount" | "fillPriceUsd" | "fillPriceSol" => {
+            "provider_decimal_string_unparsed"
+        }
+        "program" => "provider_execution_venue",
+        "type" => "provider_trade_direction",
         "multiple" | "maxMultiplier" | "maxPriceSol" | "peakTimestamp" => {
             "retrospective_outcome_as_of_acquisition_never_pre_event_feature"
         }
@@ -446,8 +470,15 @@ pub(crate) fn next_cursor(root: &RawValue) -> Result<Option<String>, NormalizeEr
         return Ok(None);
     }
     let object = raw_object(root)?;
+    // Measured 2026-08-22: the trades route carries its continuation under `pagination`, not at
+    // the root. Reading only the root reported "no next page" while `hasMore` was true.
+    let nested = object
+        .get("pagination")
+        .filter(|value| value.get().trim_start().starts_with('{'))
+        .map(|value| raw_object(value))
+        .transpose()?;
     for key in ["nextPageToken", "nextCursor", "cursor"] {
-        if let Some(value) = object.get(key) {
+        if let Some(value) = object.get(key).or_else(|| nested.as_ref()?.get(key)) {
             let source = value.get().trim();
             if source == "null" || source == r#"""# {
                 return Ok(None);

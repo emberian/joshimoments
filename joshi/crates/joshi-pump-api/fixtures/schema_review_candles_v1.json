@@ -1,0 +1,22 @@
+{
+  "contract": "joshi.pump_api.schema_review.v1",
+  "schemaVersion": "1",
+  "reviewId": "review:pump-candles:2026-08-22:v1",
+  "routeId": "candles",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "schemaFingerprint": "sha256:3b8619e4a14ae81cdb8552e929de5430582d368940dd2d4240d527b8f536313a",
+  "reviewedShape": [
+    "$/*/close:string",
+    "$/*/high:string",
+    "$/*/low:string",
+    "$/*/open:string",
+    "$/*/timestamp:number",
+    "$/*/volume:string",
+    "$/*:object",
+    "$:array"
+  ],
+  "reviewer": "claude-opus-5 acting as the joshi pump-tap deputy, autonomously, without Ember present",
+  "reviewedAt": "2026-08-22T01:30:00.000000Z",
+  "decision": "promoted",
+  "rationale": "Reviewed the 8 structural lines above against one live swap-api candle window (interval=1m, limit=1000, no currency argument) for mainnet mint HgBRWfYxEfvPhtqkaeymCQtHCrKE46qQ43pKe8HCpump, fetched 2026-08-22T01:10:12Z. The document is a bare top-level JSON array; there is no envelope, no cursor and no count, so this route asserts nothing about completeness and this review promotes no completeness claim. Every one of the 1000 rows carried exactly the six keys open, high, low, close, volume, timestamp with no nulls and no extra keys, which is why the collapsed shape has one $/*:object line. timestamp is a JSON number of epoch milliseconds; the five price and volume fields are JSON STRINGS holding decimals of up to 28 fractional digits and are retained verbatim, never parsed, by the normalizer. MEASURED SEMANTICS THAT THIS SHAPE DOES NOT ITSELF CARRY, recorded here because a later reader will otherwise assume them: rows are ascending by timestamp, oldest first; intervals containing no trade are OMITTED rather than emitted flat, so 1000 rows spanned 2423 wall-clock minutes and the series is a gap-compressed price path, not a regular grid; row[i+1].open was byte-identical to row[i].close for all 999 adjacent pairs, so open is the carried previous close and not the first trade of the interval; omitting currency denominates in USD, and currency=SOL returns a separately computed series whose prices agreed to about 4 significant figures but whose volume disagreed by 15 percent on one of four compared bars, so the two series must not be converted into each other by a scalar. KNOWN NARROWNESS, accepted deliberately: an empty window collapses to the single line $:array and a row with a missing or null field changes the leaf set, so either will produce a different fingerprint and be refused rather than silently normalized. That refusal is the intended behaviour of this gate. This review was made by an agent, not by Ember. It authorises retaining and normalizing provider-asserted price strings as provider assertions only; it certifies no price, no executability, and no on-chain fact."
+}
