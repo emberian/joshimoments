@@ -38,6 +38,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+joshi-pump-api = { path = "../../crates/joshi-pump-api" }
 sha2.workspace = true
 tempfile = "3.27.0"
 

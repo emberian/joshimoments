@@ -155,6 +155,15 @@ enum Command {
         /// Registered source identity to derive the surface from.
         #[arg(long, default_value = "helius.http.solana.v1")]
         source_id: String,
+        /// Mint you state a retained Pump `candles` window belongs to.
+        ///
+        /// A candles response is a bare OHLCV array and the retained acquisition keeps the
+        /// `{mint}` path template plus a one-way request fingerprint, so the catalog itself
+        /// cannot say which coin a window is for. Passing this attaches the bars to that mint and
+        /// renders the binding as `attested` evidence beside the `observed` bars. Leaving it off
+        /// leaves the window unattached and says so in the report.
+        #[arg(long, value_name = "MINT")]
+        candles_subject: Option<String>,
     },
     /// Mark one real mint over a real catalog through the paired route and reopen after restart.
     LiveGestureWalk {
@@ -384,14 +393,32 @@ async fn main() -> Result<(), CliError> {
             catalog,
             state,
             source_id,
+            candles_subject,
         }) => {
             if !listen.ip().is_loopback() {
                 return Err(CliError::NonLoopback(listen));
             }
-            let mounted =
-                joshi_core::live_gesture::mount_live_surface(&catalog, &state, &source_id)?;
+            let options = joshi_core::live_surface::LiveSurfaceOptions {
+                attested_candle_subject: candles_subject,
+            };
+            let mounted = joshi_core::live_gesture::mount_live_surface_with(
+                &catalog, &state, &source_id, &options,
+            )?;
             let scene_id = mounted.surface.scene_id.clone();
             let surface = serde_json::to_string(&mounted.surface)?;
+            // The binding of bars to a coin is the one thing on this screen the catalog cannot
+            // check, so it is said out loud on the way past rather than left in a JSON field.
+            if mounted.surface.candle_bars_rendered > 0 {
+                eprintln!(
+                    "candles: {} bar(s) attached by {}. The retained bytes name no coin; if that                      mint is wrong, every bar you are about to look at belongs to another market.",
+                    mounted.surface.candle_bars_rendered, mounted.surface.candle_subject_binding,
+                );
+            } else if mounted.surface.candle_windows_unattributed > 0 {
+                eprintln!(
+                    "candles: {} retained window(s) hold bars that reached no candidate, because                      a Pump candles response names no coin. Re-run with --candles-subject <MINT>                      to state which coin they are.",
+                    mounted.surface.candle_windows_unattributed,
+                );
+            }
             let origin = loopback_pairing_origin(glass_origin)?;
             let (core, launcher) = CoreService::with_sqlite_pairing_mounting(
                 mounted.store,

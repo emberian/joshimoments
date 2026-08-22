@@ -10,7 +10,10 @@
 //! is a separate slice.
 
 use crate::{
-    live_surface::{LiveSurfaceError, LiveSurfaceReport, derive_live_surface, source_identity},
+    live_surface::{
+        LiveSurfaceError, LiveSurfaceOptions, LiveSurfaceReport, derive_live_surface,
+        derive_live_surface_with, source_identity,
+    },
     pairing::OrdinaryPairingError,
     service::{CoreService, PairingCapability, PairingCapabilityGenerationError},
 };
@@ -101,6 +104,21 @@ pub fn mount_live_surface(
     state: &Path,
     source_id: &str,
 ) -> Result<MountedLiveSurface, LiveGestureError> {
+    mount_live_surface_with(catalog, state, source_id, &LiveSurfaceOptions::default())
+}
+
+/// Copies a real catalog into a writable overlay and derives its exact Glass scene, honouring
+/// what the operator stated about bytes the catalog cannot attribute on its own.
+///
+/// # Errors
+///
+/// Fails on an unusable overlay, migration drift, or any derivation refusal.
+pub fn mount_live_surface_with(
+    catalog: &Path,
+    state: &Path,
+    source_id: &str,
+    options: &LiveSurfaceOptions,
+) -> Result<MountedLiveSurface, LiveGestureError> {
     let overlay = overlay_catalog_config(state)?;
     match fs::symlink_metadata(&overlay.catalog_path) {
         Ok(metadata) => {
@@ -121,7 +139,7 @@ pub fn mount_live_surface(
     let mut store = SqliteStore::open(overlay, StoreMode::SingleWriter)?;
     let migration = store.migrate(now()?)?;
     let source = source_identity(source_id)?;
-    let derivation = derive_live_surface(&store, &source, None)?;
+    let derivation = derive_live_surface_with(&store, &source, None, options)?;
     Ok(MountedLiveSurface {
         store,
         view: derivation.view,
