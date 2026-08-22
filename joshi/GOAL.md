@@ -134,6 +134,24 @@ mark drifted 35.6 bps in 49s, curve marginal price fell ~3,575 bps in 13.6 min.
 - frontend-api-v3 /coins is UNUSABLE AS STATE: 8 of 12 rows marked incomplete were complete on chain
   with zero reserves; of the 4 genuinely live, one was off by 158x. Candidate addresses only.
 
+## CORRECTION 2 from Ember, 2026-08-22 00:45 — I overindexed on "dip and recover" AGAIN
+
+Her actual meaning: **from the moment she starts watching the coin (usually RIGHT AFTER A CALLOUT)
+there would usually be a decent-magnitude dip OR OTHER VARIANCE worth considering an entry after.**
+
+It was never a price pattern. It is an ENTRY-WINDOW statement. So my signature-regime work measured
+whole-coin-lifetime dynamics when the relevant window is the minutes after a clock starts on the coin.
+
+The methodological key this hands us: **a callout is a t=0 that ALIGNS ACROSS COINS.** Without a
+common origin, coin histories are not comparable and cannot be averaged; with one, "what does minute
+3 look like across 10,000 coins" becomes a real question. Nothing in this project has ever done a
+cross-sectional study because nothing had an origin to align on.
+
+Historical corpus has no callout data (on-chain only), so the available t=0 is FIRST OBSERVED TRADE
+— which is exactly Ember's "first day of a coin's life" question. The live callout-aligned version
+is the sequel and needs callout capture we do not yet retain (CalloutTop/CalloutByMint are real
+routes; CalloutRecent is a phantom).
+
 ## Done log
 
 - 2026-08-22 00:39 SIGNATURE REGIMES, two negative results and one that matters.
