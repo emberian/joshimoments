@@ -24,9 +24,10 @@ use joshi_evidence::{
 use joshi_pump_api::{
     Acquisition, AuthenticatedPathDecision, FetchOutcome, IdentityClaimError, IdentityStore,
     ParityInputV2, ParityReportV2, ProductIdentityClaimV1, PromotionReportV1, PromotionRunV1,
-    SchemaRegistry, SchemaReviewV1, SchemaTrustDecisionV1, SessionPathNoteV1, compare_v2,
-    decide_schema_trust, evaluate_promotion, normalize, product_identity_claim, schema_shape,
-    session_path_note,
+    ROW_PROJECTION_REVIEW_V1, RowProjectionReviewV1, SCHEMA_REVIEW_V1, SchemaRegistry,
+    SchemaReviewV1, SchemaTrustDecisionV1, SessionPathNoteV1, compare_v2,
+    decide_row_projection_trust, decide_schema_trust, evaluate_promotion, normalize,
+    product_identity_claim, schema_shape, session_path_note,
 };
 use joshi_spool::EvidenceBatchEntry;
 use joshi_store::{ObservationStorage, SourceRegistration};
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod backfill;
+pub mod candidates;
 pub mod crackle;
 
 pub use crackle::{
@@ -491,22 +493,22 @@ fn prepare_product_read_inner(
         .last()
         .cloned()
         .ok_or_else(|| PumpAdapterError::Contract("completed outcome has no attempt".into()))?;
-    let review = match input.review_bytes {
-        Some(bytes) => {
-            if bytes.len() > MAX_SCHEMA_REVIEW_BYTES {
-                return Err(PumpAdapterError::Strict(
-                    "reviewed schema exceeds the adapter ingress bound".into(),
-                ));
-            }
-            Some(
-                SchemaReviewV1::from_slice(bytes)
-                    .map_err(|error| PumpAdapterError::Strict(error.to_string()))?,
-            )
+    let review = parse_review(input.review_bytes)?;
+    // Which gate applies is decided by the reviewed artifact the caller supplied, not by the
+    // route. A single-record or homogeneous route is governed by one digest over the whole
+    // document; a collection route whose rows are heterogeneous is governed by a required leaf
+    // set and a closed optional leaf set checked on every row. Supplying no review at all keeps
+    // the original behaviour: a refusal, never a default trust.
+    let decision = match &review {
+        ReviewedSchema::None => decide_schema_trust(&acquisition, None, input.decided_at),
+        ReviewedSchema::Document(review) => {
+            decide_schema_trust(&acquisition, Some(review), input.decided_at)
         }
-        None => None,
-    };
-    let decision = decide_schema_trust(&acquisition, review.as_ref(), input.decided_at)
-        .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
+        ReviewedSchema::Rows(review) => {
+            decide_row_projection_trust(&acquisition, Some(review), input.decided_at)
+        }
+    }
+    .map_err(|error| PumpAdapterError::Contract(error.to_string()))?;
     let session_path = session_path_note(
         &acquisition,
         input.authenticated_path,
@@ -564,6 +566,45 @@ fn observed_shape(acquisition: &Acquisition) -> Vec<String> {
         .ok()
         .and_then(|raw| schema_shape(&raw).ok())
         .unwrap_or_default()
+}
+
+/// Which kind of reviewed artifact the caller handed in, chosen by the artifact's own contract
+/// rather than guessed from the route.
+enum ReviewedSchema {
+    None,
+    Document(SchemaReviewV1),
+    Rows(RowProjectionReviewV1),
+}
+
+#[derive(serde::Deserialize)]
+struct ContractOnly {
+    contract: String,
+}
+
+fn parse_review(bytes: Option<&[u8]>) -> Result<ReviewedSchema, PumpAdapterError> {
+    let Some(bytes) = bytes else {
+        return Ok(ReviewedSchema::None);
+    };
+    if bytes.len() > MAX_SCHEMA_REVIEW_BYTES {
+        return Err(PumpAdapterError::Strict(
+            "reviewed schema exceeds the adapter ingress bound".into(),
+        ));
+    }
+    let named: ContractOnly = serde_json::from_slice(bytes)
+        .map_err(|error| PumpAdapterError::Strict(error.to_string()))?;
+    let strict = |error: joshi_pump_api::TrustError| PumpAdapterError::Strict(error.to_string());
+    match named.contract.as_str() {
+        SCHEMA_REVIEW_V1 => Ok(ReviewedSchema::Document(
+            SchemaReviewV1::from_slice(bytes).map_err(strict)?,
+        )),
+        ROW_PROJECTION_REVIEW_V1 => Ok(ReviewedSchema::Rows(
+            RowProjectionReviewV1::from_slice(bytes).map_err(strict)?,
+        )),
+        other => Err(PumpAdapterError::Strict(format!(
+            "reviewed artifact contract {other:?} is neither {SCHEMA_REVIEW_V1} nor \
+             {ROW_PROJECTION_REVIEW_V1}"
+        ))),
+    }
 }
 
 fn derive_identity_claim(

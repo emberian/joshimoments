@@ -11,6 +11,8 @@ use thiserror::Error;
 use crate::catalog::RouteId;
 use crate::client::sha256;
 use crate::model::{Acquisition, BodyCapture, FidelityGap};
+use crate::row_projection::RowProjectionReviewV1;
+use crate::trust::SchemaTrustOutcome;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -100,28 +102,61 @@ pub enum NormalizeError {
 /// promoted. A quarantine still retains the acquisition bytes; it emits no trusted records.
 #[must_use]
 pub fn normalize(acquisition: &Acquisition, registry: &SchemaRegistry) -> Normalization {
-    match normalize_inner(acquisition, registry) {
+    match normalize_inner(acquisition, Gate::Registry(registry)) {
         Ok(value) => value,
-        Err(error) => Normalization {
-            contract: "joshi.pump_api.normalization.v1".to_owned(),
-            acquisition_id: acquisition.acquisition_id.clone(),
-            route_id: acquisition.route_id.clone(),
-            disposition: "quarantined_parse_or_contract_error".to_owned(),
-            schema_fingerprint: None,
-            records: Vec::new(),
-            page: None,
-            fidelity_gaps: vec![FidelityGap {
-                code: "normalization_error".to_owned(),
-                detail: error.to_string(),
-                acquisition_id: acquisition.acquisition_id.clone(),
-            }],
-        },
+        Err(error) => parse_failure(acquisition, &error),
     }
+}
+
+fn parse_failure(acquisition: &Acquisition, error: &NormalizeError) -> Normalization {
+    Normalization {
+        contract: "joshi.pump_api.normalization.v1".to_owned(),
+        acquisition_id: acquisition.acquisition_id.clone(),
+        route_id: acquisition.route_id.clone(),
+        disposition: "quarantined_parse_or_contract_error".to_owned(),
+        schema_fingerprint: None,
+        records: Vec::new(),
+        page: None,
+        fidelity_gaps: vec![FidelityGap {
+            code: "normalization_error".to_owned(),
+            detail: error.to_string(),
+            acquisition_id: acquisition.acquisition_id.clone(),
+        }],
+    }
+}
+
+/// Normalize one exact response whose ROWS a reviewer has promoted, rather than whose whole
+/// document digest they have.
+///
+/// This is the entry point for a collection route with heterogeneous rows, where the
+/// whole-document fingerprint is a function of which records landed in the page and therefore
+/// cannot gate anything. The row gate refuses on a missing required leaf, an unreviewed wire type
+/// or an unreviewed leaf, and the refusal reaches the caller as a named fidelity gap rather than
+/// as silence.
+#[must_use]
+pub fn normalize_with_row_projection(
+    acquisition: &Acquisition,
+    review: &RowProjectionReviewV1,
+) -> Normalization {
+    match normalize_inner(acquisition, Gate::RowProjection(review)) {
+        Ok(value) => value,
+        Err(error) => parse_failure(acquisition, &error),
+    }
+}
+
+/// What a normalization is allowed to trust. Neither variant can be constructed by default: a
+/// caller has to name the reviewed artifact it is relying on.
+#[derive(Clone, Copy)]
+enum Gate<'a> {
+    /// One digest over the whole document, as reviewed for a single-record or homogeneous route.
+    Registry(&'a SchemaRegistry),
+    /// A required and a closed optional leaf set, checked on every row.
+    RowProjection(&'a RowProjectionReviewV1),
 }
 
 fn normalize_inner(
     acquisition: &Acquisition,
-    registry: &SchemaRegistry,
+    gate: Gate<'_>,
 ) -> Result<Normalization, NormalizeError> {
     let route = RouteId::from_str(&acquisition.route_id)
         .map_err(|_| NormalizeError::Route(acquisition.route_id.clone()))?;
@@ -166,13 +201,36 @@ fn normalize_inner(
     reject_duplicate_keys(&bytes)?;
     let raw: Box<RawValue> = serde_json::from_slice(&bytes)?;
     let schema = schema_fingerprint(&raw)?;
-    if !registry.accepts(route, &schema) {
-        return Ok(quarantine(
-            acquisition,
-            "unpromoted_schema",
-            "exact bytes retained; schema must be reviewed and added to the registry",
-            Some(schema),
-        ));
+    match gate {
+        Gate::Registry(registry) => {
+            if !registry.accepts(route, &schema) {
+                return Ok(quarantine(
+                    acquisition,
+                    "unpromoted_schema",
+                    "exact bytes retained; schema must be reviewed and added to the registry",
+                    Some(schema),
+                ));
+            }
+        }
+        Gate::RowProjection(review) => {
+            // The whole-document fingerprint above is still computed and still travels on the
+            // quarantine below, because it is a usable drift signal. It is simply not what
+            // decides anything here.
+            let decision = crate::row_projection::decide_row_projection_trust(
+                acquisition,
+                Some(review),
+                &acquisition.clocks.received_at,
+            )
+            .map_err(|error| NormalizeError::Route(error.to_string()))?;
+            if decision.outcome != SchemaTrustOutcome::Promoted {
+                return Ok(quarantine(
+                    acquisition,
+                    &decision.reason_code,
+                    &decision.detail,
+                    Some(schema),
+                ));
+            }
+        }
     }
     let rows = records(route, &raw)?;
     let normalized = rows
@@ -302,12 +360,21 @@ fn normalize_record(
 ) -> Result<NormalizedRecord, NormalizeError> {
     let fields = if raw.get().trim_start().starts_with('{') {
         let object = raw_object(raw)?;
+        // A coin's `complete` flag decides whether its reserve numbers mean anything at all, so
+        // it is read once here and travels into every field's semantics. See `reserve_semantics`.
+        let bonded = object
+            .get("complete")
+            .and_then(|value| match value.get().trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            });
         allowed_fields(route)
             .iter()
             .filter_map(|field| {
                 object
                     .get(*field)
-                    .and_then(|value| tagged_scalar(field, value))
+                    .and_then(|value| tagged_scalar(field, value, bonded))
             })
             .collect()
     } else {
@@ -319,6 +386,16 @@ fn normalize_record(
         exact_row_blob_id: sha256(raw.get().as_bytes()),
         fields,
     })
+}
+
+/// The exact projection this crate extracts from a row of `route`.
+///
+/// Exposed inside the crate so that a row-projection review cannot REQUIRE a leaf the normalizer
+/// never reads. Requiring an unread field buys nothing and costs a refusal every time the provider
+/// omits it on some rare row, which turns a fail-closed gate into noise; requiring a field we DO
+/// read is what makes a refusal mean something went missing from the projection.
+pub(crate) fn extracted_fields(route: RouteId) -> &'static [&'static str] {
+    allowed_fields(route)
 }
 
 #[allow(clippy::too_many_lines)] // Auditable field policy is intentionally centralized by route.
@@ -489,7 +566,7 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
     }
 }
 
-fn tagged_scalar(field: &str, raw: &RawValue) -> Option<TaggedScalar> {
+fn tagged_scalar(field: &str, raw: &RawValue, bonded: Option<bool>) -> Option<TaggedScalar> {
     let source = raw.get().trim();
     let (encoding, value) = match source.as_bytes().first().copied()? {
         b'"' => ("utf8", Some(serde_json::from_str::<String>(source).ok()?)),
@@ -502,11 +579,43 @@ fn tagged_scalar(field: &str, raw: &RawValue) -> Option<TaggedScalar> {
         field: field.to_owned(),
         encoding: encoding.to_owned(),
         value,
-        semantics: semantics(field).to_owned(),
+        semantics: semantics(field, bonded).to_owned(),
     })
 }
 
-fn semantics(field: &str) -> &'static str {
+/// The reserve quartet's meaning depends on whether the coin has graduated, so its tag cannot be
+/// a constant. `None` means the row carried no readable `complete` flag, which is treated as
+/// unusable rather than as not-graduated: an unknown curve state is not a live one.
+fn reserve_semantics(field: &str, bonded: Option<bool>) -> Option<&'static str> {
+    if !matches!(
+        field,
+        "virtual_sol_reserves"
+            | "virtual_token_reserves"
+            | "virtual_quote_reserves"
+            | "real_sol_reserves"
+            | "real_token_reserves"
+            | "real_quote_reserves"
+    ) {
+        return None;
+    }
+    Some(match bonded {
+        Some(false) => "provider_bonding_curve_reserve_while_on_curve",
+        Some(true) => "provider_launch_constant_after_graduation_never_a_price_input",
+        None => "provider_reserve_of_unknown_curve_state_never_a_price_input",
+    })
+}
+
+fn semantics(field: &str, bonded: Option<bool>) -> &'static str {
+    // MEASURED 2026-08-22, and the reason this function takes the row's `complete` flag at all: a
+    // coin with complete=true was observed carrying virtual_sol_reserves=30000000000 and
+    // real_sol_reserves=0 — the launch constants, untouched — while its market cap fell 97 percent
+    // in ninety-seven seconds. Once a coin graduates off the pump bonding curve its reserve fields
+    // stop tracking anything, so reconstructing curve state from them yields a confident price for
+    // a coin that no longer trades on that curve. The tag says so on the field itself, and
+    // `crate::reserves` is the accessor that refuses outright.
+    if let Some(tag) = reserve_semantics(field, bonded) {
+        return tag;
+    }
     match field {
         "mint"
         | "creator"
@@ -528,20 +637,21 @@ fn semantics(field: &str) -> &'static str {
         | "quote_mint"
         | "token_program"
         | "chain_id" => "provider_identifier",
-        "createdAt"
-        | "created_timestamp"
-        | "calloutTimestamp"
-        | "timestamp"
-        | "time"
+        // Units MEASURED on the coin routes, so the unit travels in the tag.
+        "created_timestamp"
         | "last_trade_timestamp"
         | "ath_market_cap_timestamp"
         | "king_of_the_hill_timestamp"
-        | "last_reply" => "provider_event_time_unparsed",
+        | "last_reply"
+        | "thumbnail_updated_at" => "provider_event_time_epoch_millis_unparsed",
+        // Units NOT measured on these, so the tag stays silent rather than guessing one.
+        "createdAt" | "calloutTimestamp" | "timestamp" | "time" => "provider_event_time_unparsed",
         // MEASURED 2026-08-22 and NOT a detail: on /coins and /coins/currently-live every other
         // time on the row is epoch MILLISECONDS and `updated_at` alone is epoch SECONDS. Read as
-        // milliseconds it lands in January 1970, which looks like a plausible stale record rather
-        // than like a units error, so the distinction is carried in the tag and the lexeme is
-        // never rescaled here.
+        // milliseconds it lands on 21 January 1970 — which reads as a plausible stale record
+        // rather than as a units error, so nothing downstream would flag it. That is why the unit
+        // is part of this value's type and not a remark in a comment somewhere, and why the lexeme
+        // is never rescaled here.
         "updated_at" => "provider_event_time_epoch_seconds_unparsed",
         // Realised one-hour USD volume, measured only on /coins/search-unrestricted. It is a
         // provider aggregate over a window this catalog cannot see the edges of, so it is never
@@ -560,6 +670,17 @@ fn semantics(field: &str) -> &'static str {
         | "amountSol" | "baseAmount" | "quoteAmount" | "fillPriceUsd" | "fillPriceSol" => {
             "provider_decimal_string_unparsed"
         }
+        // MEASURED 2026-08-22: these two provider fields assert the SAME quantity and DISAGREE,
+        // by a median of 0.10 percent and up to 0.31 percent over 140 rows, presumably because
+        // they were computed against different SOL price snapshots. Neither is preferred and
+        // neither is dropped. There is no universal price here, and the gap between two price
+        // assertions is itself a state variable, so each tag names the other field: a reader who
+        // picks one has to notice that they were choosing.
+        "market_cap_usd" => "provider_usd_market_cap_assertion_disagreeing_with_usd_market_cap",
+        "usd_market_cap" => "provider_usd_market_cap_assertion_disagreeing_with_market_cap_usd",
+        // Quote-denominated, which on every coin measured meant SOL. A third market cap on a
+        // third unit, equally not to be conflated with the two above.
+        "market_cap" | "market_cap_quote" => "provider_quote_denominated_market_cap_assertion",
         "program" => "provider_execution_venue",
         "type" => "provider_trade_direction",
         "multiple" | "maxMultiplier" | "maxPriceSol" | "peakTimestamp" => {
@@ -799,7 +920,7 @@ mod tests {
     #[test]
     fn tagged_numbers_keep_the_exact_json_lexeme() {
         let raw: Box<RawValue> = serde_json::from_str("1.2300e-7").unwrap();
-        let value = tagged_scalar("calloutPrice", &raw).unwrap();
+        let value = tagged_scalar("calloutPrice", &raw, None).unwrap();
         assert_eq!(value.encoding, "json_number_lexeme");
         assert_eq!(value.value.as_deref(), Some("1.2300e-7"));
     }

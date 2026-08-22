@@ -307,11 +307,19 @@ impl RouteSpec {
             // previous page's lowest. It is a live-volume leaderboard filtered by a term, not a
             // relevance ranking.
             //
-            // The term is load-bearing. With `searchTerm` omitted, and with it set to the empty
-            // string, the route returned long-dead coins with volume_1h_usd of exactly 0 ordered
-            // ASCENDING by market cap. So this cannot enumerate a global universe in one call;
-            // reaching one means sweeping terms, and every such sweep is a biased sample of
-            // whatever the terms happened to match.
+            // The term is load-bearing. With `searchTerm` omitted, and again with it set to the
+            // empty string, the returned rows carry NO `volume_1h_usd` KEY AT ALL — 0 of 20 rows
+            // on each of two such pages — and are long-dead coins ordered ASCENDING by market cap.
+            // An earlier note here recorded those rows as having a volume of exactly zero; that
+            // was a readout defaulting an absent field to 0, which is the fabrication this crate
+            // exists to refuse, and it is why `volume_1h_usd` is an OPTIONAL leaf in the row
+            // projection rather than a required one. So this route cannot enumerate a global
+            // universe in one call; reaching one means sweeping terms, and every such sweep is a
+            // biased sample of whatever the terms happened to match.
+            //
+            // Rows here also carry the only nested structure measured on any coin row, a `mayhem`
+            // object with `state`, `mode` and `pause_reason`, and some rows carry NO reserve
+            // quartet and no `total_supply` at all.
             //
             // `limit` is NOT clamped at 70 here the way it is on /coins: limit=100 returned 100
             // rows. Two sibling routes on one host with different silent caps is exactly the kind

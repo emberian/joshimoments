@@ -425,7 +425,7 @@ pub fn session_path_note(
     })
 }
 
-fn is_canonical_utc(value: &str) -> bool {
+pub(crate) fn is_canonical_utc(value: &str) -> bool {
     time::PrimitiveDateTime::parse(
         value,
         time::macros::format_description!(

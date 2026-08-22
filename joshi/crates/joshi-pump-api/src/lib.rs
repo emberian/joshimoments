@@ -15,6 +15,8 @@ pub mod parity;
 pub mod product_identity;
 pub mod projection;
 pub mod promotion;
+pub mod reserves;
+pub mod row_projection;
 pub mod trust;
 
 pub use auth::{CredentialFileSession, NoSession, SessionMaterial, SessionProvider};
@@ -27,7 +29,7 @@ pub use model::{
 };
 pub use normalize::{
     Normalization, NormalizedRecord, SchemaRegistry, TaggedScalar, fingerprint_of_shape, normalize,
-    schema_fingerprint, schema_shape,
+    normalize_with_row_projection, schema_fingerprint, schema_shape,
 };
 pub use parity::{ParityInput, ParityReport, compare};
 pub use product_identity::{
@@ -42,6 +44,13 @@ pub use promotion::{
     compare_v2, direct_parity_input, evaluate_promotion,
 };
 
+pub use reserves::{
+    CurveState, OnCurveReserves, ReserveRefusal, curve_state, price_bearing_reserves,
+};
+pub use row_projection::{
+    ROW_PROJECTION_REVIEW_V1, RowProjectionReviewV1, decide_row_projection_trust,
+    observed_row_leaves,
+};
 pub use trust::{
     AuthenticatedPathDecision, SCHEMA_REVIEW_V1, SCHEMA_TRUST_DECISION_V1, SESSION_PATH_NOTE_V1,
     SchemaReviewV1, SchemaTrustDecisionV1, SchemaTrustOutcome, SessionPathNoteV1, TrustError,
