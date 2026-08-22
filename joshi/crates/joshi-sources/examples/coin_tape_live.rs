@@ -86,7 +86,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            println!("{}", runtime.block_on(record(&root, &mints, budget, key_file.as_deref()))?);
+            println!(
+                "{}",
+                runtime.block_on(record(&root, &mints, budget, key_file.as_deref()))?
+            );
         }
         "analyse" => {
             let bucket = parse_flag(&arguments, "--bucket-seconds", 60)?;
@@ -715,10 +718,12 @@ impl TradeEvent {
         if after <= 0.0 {
             return (None, f64::INFINITY);
         }
-        let buy = (self.virtual_sol - self.sol_amount) * (self.virtual_tokens + self.token_amount);
-        let sell = (self.virtual_sol + self.sol_amount) * (self.virtual_tokens - self.token_amount);
-        let buy_error = ((buy - after) / after).abs();
-        let sell_error = ((sell - after) / after).abs();
+        let buy_product =
+            (self.virtual_sol - self.sol_amount) * (self.virtual_tokens + self.token_amount);
+        let sell_product =
+            (self.virtual_sol + self.sol_amount) * (self.virtual_tokens - self.token_amount);
+        let buy_error = ((buy_product - after) / after).abs();
+        let sell_error = ((sell_product - after) / after).abs();
         let (name, error) = if buy_error <= sell_error {
             ("buy", buy_error)
         } else {
@@ -789,7 +794,14 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         let Some(value) = frame.value.as_ref() else {
             continue;
         };
-        for candidate in ["timestamp", "blockTime", "block_time", "eventTime", "time", "slot"] {
+        for candidate in [
+            "timestamp",
+            "blockTime",
+            "block_time",
+            "eventTime",
+            "time",
+            "slot",
+        ] {
             if value.get(candidate).is_some_and(|value| !value.is_null()) {
                 *clock_key_presence.entry(candidate.to_owned()).or_default() += 1;
             }
@@ -854,18 +866,24 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         }
     }
 
-    let window = inbound.first().zip(inbound.last()).map(|(first, last)| {
-        (first.received_at_millis, last.received_at_millis)
-    });
+    let window = inbound
+        .first()
+        .zip(inbound.last())
+        .map(|(first, last)| (first.received_at_millis, last.received_at_millis));
     let observed_seconds = window
-        .map(|(first, last)| (last - first) as f64 / 1_000.0)
+        .map(|(first, last)| wall_span_seconds(first, last))
         .unwrap_or_default();
 
     let swap_api = swap_api_census(trades, window)?;
 
     let mut coins = Vec::new();
     for (mint, events) in &per_mint {
-        coins.push(coin_report(mint, events, bucket_seconds, swap_api.get(mint))?);
+        coins.push(coin_report(
+            mint,
+            events,
+            bucket_seconds,
+            swap_api.get(mint),
+        )?);
     }
 
     Ok(serde_json::to_string_pretty(&json!({
@@ -879,7 +897,7 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         "observedWindowUnixMs": window.map(|(first, last)| json!([first, last])),
         "observedSeconds": observed_seconds,
         "inboundFramesPerSecond": (observed_seconds > 0.0)
-            .then(|| inbound.len() as f64 / observed_seconds),
+            .then(|| count_as_f64(inbound.len()) / observed_seconds),
         "frameKindCounts": kind_counts,
         "frameKindBytes": kind_bytes,
         "tradeFrameLeafPresence": trade_key_presence,
@@ -966,8 +984,10 @@ fn coin_report(
         .windows(2)
         .filter(|pair| pair[1].sequence <= pair[0].sequence)
         .count();
-    let tape_signatures: BTreeSet<&str> =
-        events.iter().map(|event| event.signature.as_str()).collect();
+    let tape_signatures: BTreeSet<&str> = events
+        .iter()
+        .map(|event| event.signature.as_str())
+        .collect();
     let overlap = swap_api.map(|census| {
         census
             .distinct_tx_in_window
@@ -1010,7 +1030,20 @@ fn running_peak_drawdown(prices: &[f64]) -> f64 {
     worst
 }
 
-fn median(values: &mut Vec<f64>) -> Option<f64> {
+/// Milliseconds between two receipts inside one bounded recording: integer-exact in f64,
+/// because a recording bounded to hours sits far below the 2^52 mantissa ceiling.
+#[allow(clippy::cast_precision_loss)]
+fn wall_span_seconds(first_millis: i64, last_millis: i64) -> f64 {
+    (last_millis - first_millis) as f64 / 1_000.0
+}
+
+/// A frame count as f64 for a rate; bounded recordings hold far fewer than 2^52 frames.
+#[allow(clippy::cast_precision_loss)]
+fn count_as_f64(count: usize) -> f64 {
+    count as f64
+}
+
+fn median(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
@@ -1068,19 +1101,20 @@ fn swap_api_census(
         let mut newest = None;
         for row in &rows {
             if let Some(value) = row["mint"].as_str() {
-                mint = value.to_owned();
+                value.clone_into(&mut mint);
             }
             let Some(timestamp) = row["timestamp"].as_i64() else {
                 continue;
             };
             oldest = Some(oldest.map_or(timestamp, |value: i64| value.min(timestamp)));
             newest = Some(newest.map_or(timestamp, |value: i64| value.max(timestamp)));
-            if let Some((lower, upper)) = window {
-                if timestamp >= lower && timestamp <= upper {
-                    in_window += 1;
-                    if let Some(tx) = row["tx"].as_str() {
-                        distinct.insert(tx.to_owned());
-                    }
+            if let Some((lower, upper)) = window
+                && timestamp >= lower
+                && timestamp <= upper
+            {
+                in_window += 1;
+                if let Some(tx) = row["tx"].as_str() {
+                    distinct.insert(tx.to_owned());
                 }
             }
         }

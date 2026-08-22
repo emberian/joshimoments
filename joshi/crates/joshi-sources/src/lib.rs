@@ -13,6 +13,7 @@ pub mod frame;
 pub mod health;
 pub mod helius;
 pub mod ingress;
+pub mod meteora;
 pub mod pda;
 pub mod provider_plan;
 pub mod pump_swap;
@@ -43,6 +44,11 @@ pub use helius::{
     PublicSolanaHttpClient, RateLimitSignal, SolanaReadMethod, SolanaReadRequest,
 };
 pub use ingress::{BoundedIngress, IngressError};
+pub use meteora::{
+    BASIS_POINT_MAX, FEE_RATE_DENOMINATOR, LB_PAIR_ACCOUNT_LEN, METEORA_DLMM_PROGRAM_ID,
+    MeteoraDecodeError, MeteoraLbPair, MeteoraPositionV2, POSITION_V2_BIN_RECORD_LEN,
+    POSITION_V2_FIXED_BIN_SLOTS, POSITION_V2_FIXED_LEN,
+};
 pub use pda::{
     MAX_SEED_LEN, MAX_SEEDS, PROGRAM_DERIVED_ADDRESS_MARKER, decode_address,
     derivation_bump as program_derivation_bump, derive_program_address, descending_bump_candidates,

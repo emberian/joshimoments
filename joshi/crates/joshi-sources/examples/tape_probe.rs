@@ -15,7 +15,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mint = flag(&arguments, "--mint").ok_or("usage: tape_probe --mint <mint> [--seconds n]")?;
     let seconds: u64 = flag(&arguments, "--seconds").map_or(Ok(30), |v| v.parse())?;
     let max_frames: usize = flag(&arguments, "--max-frames").map_or(Ok(400), |v| v.parse())?;
-    let max_bytes: usize = flag(&arguments, "--max-bytes").map_or(Ok(4 * 1024 * 1024), |v| v.parse())?;
+    let max_bytes: usize =
+        flag(&arguments, "--max-bytes").map_or(Ok(4 * 1024 * 1024), |v| v.parse())?;
 
     // The key is read from a 0600 file, never from a flag, and is never printed. It is attached
     // only when explicitly asked for, because PumpPortal documents this credential as carrying
@@ -31,7 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("connected: http {}", response.status());
     let keys: Vec<&str> = mint.split(',').filter(|value| !value.is_empty()).collect();
     let subscribe = serde_json::json!({"method": "subscribeTokenTrade", "keys": keys});
-    socket.send(Message::Text(subscribe.to_string().into())).await?;
+    socket
+        .send(Message::Text(subscribe.to_string().into()))
+        .await?;
     eprintln!("sent: {subscribe}");
 
     let deadline = Instant::now() + Duration::from_secs(seconds);

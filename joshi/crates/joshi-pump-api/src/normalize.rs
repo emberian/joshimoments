@@ -398,7 +398,16 @@ pub(crate) fn extracted_fields(route: RouteId) -> &'static [&'static str] {
     allowed_fields(route)
 }
 
-#[allow(clippy::too_many_lines)] // Auditable field policy is intentionally centralized by route.
+#[allow(clippy::too_many_lines)]
+// Auditable field policy is intentionally centralized by route.
+// The measured callout arm and the never-called CommunityCallouts arm coincide today, and that
+// coincidence is empirical rather than structural: one list came from live bytes, the other is a
+// prediction awaiting its first call. Merging them (what the lint wants) would couple them so a
+// future re-measurement of one silently rewrites the other.
+#[expect(
+    clippy::match_same_arms,
+    reason = "identical bodies are separate measurements"
+)]
 fn allowed_fields(route: RouteId) -> &'static [&'static str] {
     match route {
         // Every name below was seen in a live 2026-08-22 body on at least one of these four
@@ -1044,11 +1053,28 @@ mod tests {
     #[test]
     fn the_callout_projection_drops_names_that_were_never_observed() {
         let read = extracted_fields(RouteId::CalloutByUser);
-        for absent in ["walletAddress", "calloutTimestamp", "calledOutAtMcap", "thesis"] {
-            assert!(!read.contains(&absent), "{absent} is not a measured callout leaf");
+        for absent in [
+            "walletAddress",
+            "calloutTimestamp",
+            "calledOutAtMcap",
+            "thesis",
+        ] {
+            assert!(
+                !read.contains(&absent),
+                "{absent} is not a measured callout leaf"
+            );
         }
-        for present in ["calloutId", "coinMint", "createdAt", "calloutPriceUsd", "viewCount"] {
-            assert!(read.contains(&present), "{present} was measured on a callout row");
+        for present in [
+            "calloutId",
+            "coinMint",
+            "createdAt",
+            "calloutPriceUsd",
+            "viewCount",
+        ] {
+            assert!(
+                read.contains(&present),
+                "{present} was measured on a callout row"
+            );
         }
     }
 

@@ -259,43 +259,38 @@ impl Client {
             && let Some(path) = self.write_capture.clone()
         {
             self.captured = true;
-            self.retain_state_read(&path, addresses, &read)?;
+            retain_state_read(&path, addresses, &read)?;
         }
         Ok((read_multiple_accounts(&read.body, addresses)?, read.receipt))
     }
+}
 
-    /// Write the state read in the shape `apps/core` mounts, carrying what the body cannot state.
-    fn retain_state_read(
-        &self,
-        path: &Path,
-        addresses: &[String],
-        read: &Read,
-    ) -> Result<(), Box<dyn Error>> {
-        let body: Value = serde_json::from_slice(&read.body)?;
-        let slot = body
-            .pointer("/result/context/slot")
-            .and_then(Value::as_u64)
-            .ok_or("the state response stated no context slot")?;
-        let capture = json!({
-            "contract": "joshi.venue_accounts_capture.v1",
-            "requestedCommitment": COMMITMENT,
-            "requestedAddresses": addresses,
-            "clockId": read.receipt.clock_id,
-            "receivedMonotonicNs": read.receipt.monotonic_ns,
-            "receivedAtUnixMs": read.receipt.wall_unix_ms,
-            // The provider states no block time on an account read, and an absent record is not an
-            // age of zero, so nothing is substituted here.
-            "chainSecondUnixS": Value::Null,
-            "provenance": format!(
-                "One getMultipleAccounts response at {COMMITMENT} slot {slot}, retained verbatim by \
-                 the venue_readout example. The address list is a declaration by the reader: the \
-                 response is positional and names no address."
-            ),
-            "body": body,
-        });
-        std::fs::write(path, serde_json::to_vec_pretty(&capture)?)?;
-        Ok(())
-    }
+/// Write the state read in the shape `apps/core` mounts, carrying what the body cannot state.
+fn retain_state_read(path: &Path, addresses: &[String], read: &Read) -> Result<(), Box<dyn Error>> {
+    let body: Value = serde_json::from_slice(&read.body)?;
+    let slot = body
+        .pointer("/result/context/slot")
+        .and_then(Value::as_u64)
+        .ok_or("the state response stated no context slot")?;
+    let capture = json!({
+        "contract": "joshi.venue_accounts_capture.v1",
+        "requestedCommitment": COMMITMENT,
+        "requestedAddresses": addresses,
+        "clockId": read.receipt.clock_id,
+        "receivedMonotonicNs": read.receipt.monotonic_ns,
+        "receivedAtUnixMs": read.receipt.wall_unix_ms,
+        // The provider states no block time on an account read, and an absent record is not an
+        // age of zero, so nothing is substituted here.
+        "chainSecondUnixS": Value::Null,
+        "provenance": format!(
+            "One getMultipleAccounts response at {COMMITMENT} slot {slot}, retained verbatim by \
+             the venue_readout example. The address list is a declaration by the reader: the \
+             response is positional and names no address."
+        ),
+        "body": body,
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&capture)?)?;
+    Ok(())
 }
 
 /// A mint and either the venue it resolved to or exactly why it did not.
