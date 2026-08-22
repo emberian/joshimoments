@@ -136,6 +136,23 @@ mark drifted 35.6 bps in 49s, curve marginal price fell ~3,575 bps in 13.6 min.
 
 ## Done log
 
+- 2026-08-22 00:39 SIGNATURE REGIMES, two negative results and one that matters.
+  (a) The signature slope does NOT separate worked coins from quiet ones (median 1.245 vs 1.095,
+      rising 25/40 vs 20/36). Partly a badly posed test on my part: the bands are defined by
+      AMPLITUDE and sigma^2 normalises amplitude out by construction. It measures shape, and was
+      never the instrument for tradeability.
+  (b) NO DISCRETE DYNAMIC REGIMES on this axis. Continuous spread, 24% reverting / 34% flat / 42%
+      trending, largest gaps all in the sparse tail above 2.8 rather than between modes. One
+      statistic cannot refute a multi-dimensional taxonomy, so this is evidence against types being
+      visible HERE, not against types.
+  (c) THE FINDING THAT MATTERS: the spread is large and real. Same market, same window, some coins
+      mean-revert strongly and others trend strongly. **A dip-and-recover rule is wrong on ~42% of
+      coins; a momentum rule is wrong on ~24%.** Ember's correction — that a crackle is not only
+      dip-then-recover — shows up in the data as two large populations rather than one shape with
+      exceptions. Direction-agnostic extraction is structural, not stylistic.
+  Scope: graduated AMM pools only; the curve carries 79% of qualifying half-hours and is excluded
+  because its price object is a model, and M0 found pools carry ~50x the tradeable clip anyway.
+
 - 2026-08-22 00:34 ROW-PROJECTION GATE + CANDIDATE FINDER, 100 tests (69 at start of night).
   All three discovery routes now promote, live, on fresh bodies whose document fingerprints had
   already drifted while the row gate correctly held.
