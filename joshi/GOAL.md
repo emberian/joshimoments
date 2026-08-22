@@ -47,10 +47,23 @@ should be earned by one concrete JOSHI study." 38 crates is substantially more a
 **2. The adaptive timescale instrument already exists as Definition P2.**
 Signature volatility sigma^2(tau) := V(tau)/(tau*pbar^2) over the variogram V(tau) := E[(p_{t+tau}-p_t)^2].
 The curve RISES with net positive serial dependence and FALLS with net mean reversion. So you do not
-pick an interval — you sweep tau and read where structure lives. A crackle is dip-then-recover, i.e.
-mean reversion, i.e. the signature curve falling at the crackle's characteristic lag. Comparing the
-signature of a coin Ember would work against one she would not IS a direct measurement of her
-selection, and it needs no taxonomy from her. This replaces the 1-second-bar approach entirely.
+pick an interval — you sweep tau and read where structure lives. CORRECTED BY EMBER 2026-08-21 23:40: a crackle is NOT just dip-then-recover. That was the first
+example she happened to give, and I built an instrument on it twice. Sometimes she enters and it is
+simply going up. So the signature plot does not IDENTIFY a crackle, it TYPES one: falling curve =
+mean-reverting (dip-and-recover) kind, rising curve = positive serial dependence ("Goin up") kind.
+Both are extractable and both are crackles.
+
+What is common across crackles is therefore NOT a shape. It is: moves large enough to clear cost, at
+a timescale she can act on, repeating often enough to work the coin more than once. So the honest
+measurement is the UNSIGNED excursion magnitude distribution at her timescale plus the repeat rate
+per coin, with the shape allowed to fall out per coin rather than being assumed. This may be how the
+"2-5 types of crackle" become measurable: cluster worked coins by signature shape plus flow stats
+and see whether they separate. That is operator-process Q2 answered by measurement rather than by
+asking her to introspect a taxonomy.
+
+Comparing the signature of a coin Ember would work against one she would not is still a direct
+measurement of her selection and still needs no taxonomy from her. This replaces the 1-second-bar
+approach entirely.
 
 ## Done log
 
