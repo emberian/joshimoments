@@ -1,293 +1,42 @@
-# GOAL — close S1, stage S2
+# GOAL — close out work and science before 6am (2026-08-22)
 
-## STATUS 2026-08-21 09:35: S1 CLOSED AND COMMITTED. S2 STAGED, awaiting Ember.
+**Standing goal.** Iterate on improving JOSHI, answer questions, access what data is needed
+(up to $10), and close out as much work and science as possible before 6am.
 
-Everything landed. 454 tests across 14 crates, 0 failed. Workspace clippy -D warnings clean, fmt
-clean, rustdoc clean, schema at 24 migrations, analysis 248 passed.
+## What JOSHI is actually for, so no lane compresses it
 
-Five slices landed on real mainnet data in one night: S1 census, S3 gesture and cockpit, S4 hot
-lease, S5 authenticated product read, S7 would-quote, S8 the first empirical number. S2 is the only
-one that needs a human, and it is one command away.
+Ember trades memecoins on pump.fun. She spots a coin with good live volatility and WORKS it —
+repeated entries and exits pulling profit out of the wiggle. She calls that a **crackle**; a coin is
+a **venue she works**, not a position she holds. Real crackles are **8-20% lifts over minutes to
+tens of minutes**, sometimes returned to later. The product is: she says "LOOK AT $BOOBUS, GREAT
+MICROVOLATILITY", and the machine helps her pull a few dollars out, often enough to pay rent.
 
+## The governing corpus
 
-**Standing goal.** Close S1 (First real census) end to end under the PILLARS.md promotion rule:
-a real observation, acquired from a real source, reaches a rendered surface, and can be read back
-after a restart. All four clauses, same occurrence. Then stage S2 so it is one command away for
-Ember on waking. Do not attempt the human half of S2.
+`docs/microstructure/trades_quotes_prices/` (2,739 lines, from Bouchaud/Bonart/Donier/Gould) is the
+best thing in this repo and governs all analysis. Three binding rules:
+1. **There is no universal price.** Seven distinct objects; the gaps between them are state variables.
+2. **On a bonding curve, price movement is deterministic given reserve state.** Flow is the signal;
+   price is a readout. Any response study must first subtract deterministic curve movement.
+3. **Event time and wall time are both first-class.** Solana adds slot/tx/instruction/landing/finality.
+   Support multiple clocks without inventing a total order.
 
-**S1 done, quoted from PILLARS.md:** a mint that traded on a real day is named in a surface JOSHI
-rendered, next to a count and a cutoff nobody typed. The process is killed, the store reopened, and
-the same mint, the same count and the same digest come back. If a source was not covered, an
-explicit gap row says so with its exact window.
-
-## Where S1 actually stands
-
-Landed 2026-08-19/20: the wire exists and real data is in a store. 13 observations,
-`{"id":1,"jsonrpc":"2.0","result":440345530}` verified with plain sqlite3.
-
-Remaining gaps between that and S1:
-1. Subjects are a **wallet**, not **mints that traded**. Need Pump/PumpSwap program activity.
-2. No **coverage windows** and no **explicit gap rows** are emitted. S1 requires both.
-3. No **registered run / supervisor reservation / settlement** binding; `live.rs` commits directly.
-4. Nothing **renders**. `joshi-surface::readback` derives a cut; no surface has been rendered from
-   real rows and no digest has survived a restart.
+Its research program is already numbered M0-M4 with falsifiers and "useful residue" for each.
 
 ## Thrust
 
-Close 1-4 in that order, then stage S2.
-
-## Thrust, 2026-08-21 06:50 — stop auditing, burn the slices down
-
-Seven lanes in flight, no auditors:
-- S1 census ingest (Pump + PumpSwap -> mints, coverage windows, explicit gaps, run binding)
-- S1 render + restart proof
-- S3 one gesture end to end, plus the cockpit-on-a-real-catalog subcommand
-- S4 one hot lease, bounded window, disconnect produces a typed gap
-- S5 one authenticated Pump product read with a schema trust decision
-- S7 one honest would-quote recomputed from stored bytes, with its age
-- S8 one estimand on real data, denominator beside it, two runtimes
-
-## Known gap in the plan itself
-
-PILLARS.md has 8 slices and none of them produces a trade. S7 is explicitly a would-quote with no
-economic authority. Ember wants a cockpit she can trade from; the plan terminates before the
-product does. This needs a slice S9 and it is not written yet.
-
-## Correction to an earlier overclaim
-
-On 2026-08-20 I told Ember JOSHI was "roughly one honest live-read boundary plus one real ingest run
-away from being able to learn something". Both landed on 2026-08-21 and the distance to a working
-JOSHI did not meaningfully close. The accurate statement was: one wire, then seven more slices, none
-of which trade.
+- **M0 price geometry** (deputy live): replace the 190 bps scalar with round-trip cost as a FUNCTION
+  OF SIZE at real reconstructed state. Decides whether crackle economics hold at Ember's clip size.
+- **Phase 1 corpus** (deputy live): 100M+ rows of authoritative market-wide signed flow in
+  ~/dev/joshibot/state/bulk_pump, never read by JOSHI. Make it queryable; then measure how common
+  8-20% excursions actually are.
+- **Phase 3 discovery**: turn on DiscoveryCoins/CalloutRecent so Ember can find coins inside JOSHI.
 
 ## Done log
 
-- 2026-08-21 wire verified: 13 real observations, 3 ingest commits, slots 440345530 / 440345975.
-- 2026-08-21 S2 precondition verified: ordinary pairing mounts, prints a one-time code, health
-  responds; Glass built with deps installed. Runbook at docs/implementation/S2_RUNBOOK.md.
-- 2026-08-21 S2 gap named: wave5-g0-inspect serves the G0 fixture, not the census. Wiring is move 3.
-- 2026-08-21 11:05 census lane has REAL MINTS in a store: 3NQcporBGYhuBRF7fX4hiNvDUcgQZSca85bFS65Fpump
-  at slot 440672542, 19 observations, 19 requests, 181,872 bytes, catalog v24, 3 coverage windows and
-  4 explicit gap rows (e.g. signature_page_hit_its_requested_limit). The subject relation is stated
-  honestly as "mint appears in the token balances of a transaction returned for this program address"
-  with programRelations account_key_only, rather than claiming the mint traded. Lane still running;
-  not integrated yet.
-- 2026-08-21 S5 lane has run-promoted and run-quarantine catalogs with real reads, i.e. a schema
-  trust decision is actually being exercised in both directions.
-
-## Declined, 2026-08-21 — live trading while Ember sleeps
-
-Asked to test a crackle strategy on up to 5 real trades and compound any profit. Not done, and it
-is not a scheduling problem — there is nothing to test with.
-
-- **There is no crackle strategy.** The only `crackle` in 37 crates is
-  `OperatorPayload::RecordCrackleFamily`, a slot for Ember to record what *she* perceived, and
-  `command.rs:771` refuses the command unless `provisional` is literally `true`. JOSHI_THOUGHT types
-  crackle as **operator perception**, explicitly forbidden from promotion into a machine estimate.
-  Trading it would mean inventing a detector tonight and betting on it.
-- **There is no data to decide on.** The store holds observations first acquired 2026-08-19. No
-  price history, no denominator, no backtest, no realised distribution of anything.
-- **There is no execution capability.** No signer, no transaction builder, no submission path
-  anywhere; the one grep hit is a test. Building one unattended would be the largest authority
-  expansion in the project's history, against a prohibition standing in PILLARS.md and every module.
-- **The loop has no stop condition.** Compounding, unsupervised, while the owner is asleep.
-
-JOSHI_THOUGHT opens by describing how joshibot died: an agent understood one attractive fragment,
-got a clean local result, and silently replaced the project with it. Trading an unmeasured
-perception at 4am is that failure with money attached.
-
-**The real prerequisite is on the critical path anyway.** A crackle cannot be tested until it can be
-detected, and it cannot be detected until Pump/PumpSwap trade activity is observed and stored with a
-denominator. That is exactly S1, in flight now.
-
-## Done log, continued
-
-- 2026-08-21 08:00 CENSUS LANDED (commit). 12 real mints across Pump and PumpSwap, 19 requests of a
-  self-enforced 20, 170,473 bytes, run-registered with supervisor reservation and settlement,
-  catalog v24, tip slot 440678357. 3 coverage windows bounded by the source's OWN signature cursors
-  rather than an invented clock; 4 gap rows with exact windows (2x page-hit-limit, 2x
-  listed-but-not-hydrated: 25 signatures listed, 8 hydrated, 17 accounted for as a row).
-  Subject relation recorded as observed, not as "traded". Wrapped SOL correctly present.
-- 2026-08-21 render lane landed in joshi-surface: render_surface -> head + line-oriented body, pure
-  function of the cut, with an UNRESOLVED section and the line "no subject is eligible at this
-  cutoff: that is the absence of a declared or observed subject row, not evidence that the market
-  was empty". Gating now.
-
-## S1 IS CLOSED — 2026-08-21 08:20
-
-All four clauses met in one occurrence, by the S3 lane's scene path (`joshi-core
-live-surface-inspect` / `live-gesture-walk`), verified cross-process with sqlite3 and python:
-
-| Clause | Evidence |
-| --- | --- |
-| real observation | 13 durable observations, real 18KB getTransaction bodies |
-| from a real source | helius.http.solana.v1, mainnet slots 440345530 / 440345975 |
-| reaches a rendered surface | a Glass V1 scene derived FROM STORE ROWS naming three real mints: 14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump, 4xSqLzcTQz8nCrgaDhSCKocXavkJzArzdvtC2Nz5pump, Fd1ARmK9DWJpQikCC2oQzFTXAiB7K3fT2AeeMboKpump |
-| readable after restart | servedSnapshotDigest == reopenedSnapshotDigest (cac2e93b...), sceneBoundToServedBytes true, rederivationIsStable true |
-
-The integration risk I recorded was real: two renders were built. The one that closes S1 is the
-GlassView scene in apps/core, because that is what the cockpit can actually serve. The
-joshi-surface text render is a separate, still-useful artifact.
-
-WHAT THE REAL DATA ACTUALLY SAYS, and the lane did not flinch: all six getTransaction responses are
-FAILED transactions. No fill, no size, no price in those bytes. So priceSol, marketCapUsd and
-change5mBps are null, symbol is "unobserved", finality is "unstated", and the candle array is
-empty. The first real surface JOSHI ever rendered is mostly nulls, honestly.
-
-That forced a real contract finding: Glass V1 required at least two OHLC candles per candidate in
-both Rust and TypeScript, which chain-only evidence cannot satisfy without inventing bars. The
-contract was widened to admit no price series at all (one bar is still refused: a single point
-implies an interval it does not have).
-
-## What the five wide lanes delivered, 2026-08-21
-
-All on real mainnet bytes. Held uncommitted until joshi-core is green again.
-
-- **S3, gesture + cockpit wiring.** `live-surface-inspect` derives a Glass scene from store rows and
-  mounts it behind ordinary pairing; `live-gesture-walk` proves the whole loop headless. This is
-  what closed S1. Also found that `LoopbackDataSource` sent no pairing token, so the ordinary
-  cockpit could never have read a paired core — live data had never appeared in Glass because it
-  could not.
-- **S5, authenticated product read.** `GET /coins-v2/{mint}` on
-  `14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump` — the SAME mint S1 observed, which appears 27x in
-  those 13 Helius observations. Two lanes joined on one real coin without being told to. 5 GETs
-  total, schema promoted through an explicit review, read back after restart.
-- **S7, would-quote.** PumpSwap pool `FnzKY6x7entQ1eR3D225dQyT7ybfka4PskBMQhb8L3CC` at slot
-  440676107, discovered from a landed swap's account list rather than assumed. Quote recomputed from
-  the STORED bytes: 38,581,426,272 lamports in for 12,250,328,664 base atoms, fees broken out
-  20/5/5 bps, with the chain-time-to-receipt age attached. No fill inferred, no PnL.
-- **S4, hot lease.** Real resource measurement via statvfs and an fs walk, one subject, bounded
-  window, refuses any scope carrying spending permission. Run live three times.
-- **S8, the first empirical number JOSHI has ever produced.**
-
-## THE NUMBER: 13
-
-Of the 13 finalized Solana transactions Helius listed for account
-`BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh` across the three pages JOSHI retained on 2026-08-19,
-**13 carried a non-null on-chain execution error and 0 carried a null error.**
-
-Denominator 13, stated beside it. 19 provenance edges exported: 13 listing edges plus 6 corroborating
-full-`getTransaction` edges whose `meta.err` agree with their listing entry — the census refuses on
-disagreement, so that agreement is checked rather than assumed.
-
-The subject address is not stored in plaintext anywhere in the catalog, only the sha256 of the
-redacted request material. It was recovered by exact preimage search over addresses in the retained
-bodies and verified against `acquisition.request_fingerprint`; a failed recovery reports
-`listing_subject_unrecovered` rather than guessing.
-
-This independently corroborates what the S3 lane found from the other direction: every
-`getTransaction` in the cut is a failed transaction. Two lanes, two paths, same finding. It is also
-exactly why the first rendered surface is mostly nulls, and why that is correct rather than broken.
-
-## Regression FIXED, 2026-08-21 09:30 — and my prime suspect was wrong
-
-joshi-core is back to 0 failed. The cause was not `manifest_declares_g0_profile`.
-
-The S8 lane added `provenance_batch` and wired it into `relation_batches`. `provenance_assertions`
-is one of the fourteen frozen Snapshot V2 relations and had **always been written empty** while the
-rows sat in the store. The V8 witness catalog holds three assertion-to-observation evidence edges,
-so that table went 0 -> 3 rows, which moved the manifest preimage, which moved the self-hashed
-snapshot identity: `sha256:e9ecd599...` -> `sha256:667934d1...`. `apps/core`'s G0 chain performs
-that exact export LIVE and compares it to a derived-artifact golden frozen long ago. Mismatch, in
-all 12 tests. The lane updated its own golden and stopped there.
-
-The export change is right and stays: the Python validator treats `provenance_assertions` as the
-closure source other relations are checked against, so the old always-empty behaviour was silent
-narrowing rather than a contract. The frozen fixture chain was re-baselined with the repo's own
-documented builders instead. Control that makes it trustworthy: rebuilding the V10 catalog BEFORE
-changing anything reproduced the committed bytes exactly, so the builders are deterministic here.
-
-### Three things this exposed, worth more than the fix
-
-1. **The committed artifact golden was ALREADY unreproducible from this tree, invisibly.**
-   `producer.build_digest` is a sha256 over every `analysis/src/joshi_analysis/*.py`, and the census
-   lane added `listing_census.py`. Republishing from the OLD snapshot already produced a different
-   artifact id before anything was touched. Nothing tests that reproduction, so nothing noticed.
-2. **Structural**: `apps/core`'s G0 chain asserts that a LIVE export equals a golden fitted long
-   ago, so every legitimate exporter improvement breaks joshi-core in exactly this way. That is a
-   design smell, not a one-off.
-3. **Residual, deliberately not papered over**: `provenance_batch` inner-joins
-   assertion -> evidence -> observation, and `assertion` is not in the unmapped-facts refusal list,
-   so assertions with no retained observation evidence (4 of the 7 in the V8 witness) are silently
-   absent rather than refused. The frozen relation's primary key cannot represent them. Contract gap
-   for a future slice.
-
-## Superseded: regression under repair, 2026-08-21 08:30
-
-`cargo test -p joshi-core --all-targets` is 26 passed / 12 FAILED after the five slice lanes
-landed. It was green earlier today. Every failure is fixture-restore, pairing, G0 or wave6 shaped,
-and the one confirmed message is
-`Store(InvalidBatch("restricted registration differs from its strict derived-artifact manifest"))`
-raised at crates/joshi-store/src/wave5.rs:2563.
-
-Ruled out: the glass.rs candle change (a strict widening), the joshi-store changes (a re-export and
-one visibility bump), joshi-artifact-admission (untouched), and any fixture edit (none).
-Prime suspect, unconfirmed: joshi-export/src/production.rs gained a `manifest_declares_g0_profile`
-that moved G0 detection from the schema number to the manifest content.
-
-A dedicated agent is on it, with instructions not to weaken a test to make it pass. Also assigned:
-the one clippy blocker, too_many_lines in the joshi-sources example would_quote_live.
-
-Everything else gates green: collector 16, surface 31, store 37, operator 6, sources 138,
-market-math 13, liquidity 13, acquisition-policy 11, supervisor 55, export 25, pump-api 32, schema
-24 migrations.
-
-## Surface render FIXED and committed, 2026-08-21 09:10
-
-The census renders. 9 mints as `observed_undeclared`, 2 program addresses as
-`denominator_only reason="not_observed_by_cutoff"` — the two facts on separate lines so nobody has
-to infer one from the other.
-
-Three findings worth keeping:
-1. **The error was masked.** `SurfaceReadbackError::Surface` printed one fixed string for every
-   variant, so my whole candidate-site list was an inference from a wrapper. Adding `{0}` named the
-   real error instantly. A diagnostic that cannot distinguish its own causes costs hours.
-2. **Identity was wrong, not the closure check.** One observation names several subjects, because a
-   Solana transaction touches every mint in its token balances. `(surface_id, observation_id)`
-   collided; it is now `(surface_id, subject, observation_id)`.
-3. **A silent inversion.** Observed-but-undeclared subjects were labelled `DenominatorOnly` — the
-   opposite fact — and such rows are dropped, so the mints could never have rendered at all.
-
-`closed` is now false and `sample_only` true for this adapter, with the reasoning at the site:
-closure over "declared union whatever we observed" is self-satisfying, but it invites reading
-eligibleCount as a denominator, and for a census it is not one.
-
-## Handed back, not mine to fix here
-
-- **joshi-store latent trap**: `insert_source_event` (store.rs:2752) does `INSERT OR IGNORE` then
-  looks the row up by `source_event_id`, while the table is UNIQUE on
-  `(source_id, event_namespace, natural_key)`. A batch declaring a new id for a known natural key
-  silently no-ops and returns a bare `QueryReturnedNoRows` instead of `IdentityConflict`.
-- **wSOL is a first-class census subject**, because it appears in every swap's token balances. That
-  is honest at the surface layer; if it should not be in the population it has to be excluded at
-  the collector, deliberately, not filtered out at render time.
-
-## Open, carried
-
-My own census work links mints to observations (9 events, 15 links, store-validated) but the
-joshi-surface text render then fails with a derived-surface contract violation at
-crates/joshi-surface/src/reduce.rs:60 — universe.closed is true and the observed mints are not in
-eligible_subjects, which is built at readback.rs:593 from declared_subjects. The census universe is
-genuinely open: two declared programs, nine observed mints. Either the union at :593 must include
-observed event keys, or this profile must derive an open universe. Does NOT block S1, which closed
-through the scene path.
-
-## S1 clause audit against disk, 2026-08-21 07:50 (verified by me with sqlite3, not lane reports)
-
-Catalog: scratchpad/census-catalog/catalog.sqlite
-
-| Clause | State | Evidence |
-| --- | --- | --- |
-| real observation | **MET** | 19 acquisitions, one 18,376-byte getTransaction body, real signature 5SNq8s81VGj7ZiED... |
-| from a real source | **MET** | all 19 from `helius.http.solana.v1` |
-| reaches a rendered surface | **NOT MET** | `SELECT count(*) FROM scene` = 0 |
-| readable after restart | substrate ready | 3 coverage windows, 4 gap rows durable; nothing to re-render yet |
-
-Clause 3 is the whole remaining gap. apps/core/src/live_surface.rs (S3 lane, in flight) builds a
-ValidatedGlassViewV1 with a derived scene identity from durable observations, which is the correct
-render target: the cockpit serves scenes, not surfaces.
-
-INTEGRATION RISK to check when lanes land: the S1 render lane was pointed at
-joshi-surface/joshi-publication while the S3 lane is building the scene in apps/core. If both
-produced a render, keep the one the cockpit can actually serve and delete the other rather than
-carrying two.
+- 2026-08-21 23:07 committed the three deputy lanes: pump tap measured (candles is a bare array, the
+  normalizer had been silently returning 0 rows of 1000; `before` is inert; trades cursor is a
+  seekable keyset), ORBITFAN's fabricated 15-number dossier removed from the live cockpit, contract
+  widened so absence is expressible (realizedNetSol nullable -> "Not reconciled").
+- Gate at that commit: fmt clean, workspace clippy -D warnings 0, Rust 228 tests across 7 crates,
+  Glass 191 tests / 28 files, typecheck clean.
