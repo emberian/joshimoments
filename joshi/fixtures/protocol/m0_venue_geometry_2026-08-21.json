@@ -1,0 +1,222 @@
+{
+  "contract": "joshi.m0.venue_geometry.v1",
+  "acquiredBy": "price-geometry deputy, Study M0",
+  "commitment": "finalized",
+  "contextSlot": "440832401",
+  "blockTimeUnixSeconds": "1787368851",
+  "blockTimeResolutionSeconds": "1",
+  "localReceiptUnixMs": "1787368862968",
+  "provider": "helius mainnet json-rpc, getMultipleAccounts, one call, one context slot",
+  "notAnExecution": "Every number here was read or derived from account bytes. No transaction was constructed, signed, simulated, or submitted, and no fill is claimed.",
+  "venues": [
+    {
+      "id": "pump_curve",
+      "family": "PumpBondingCurve",
+      "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "mint": "BKdJofyhtW3sBgC8PGuXaawKHmrPjTdzxqaJfSpupump",
+      "symbolReportedByProvider": "ZBW",
+      "curveAccount": {
+        "address": "wrXaYnT8PBRSqigbLL3fTfHN2iYcGHCNfMwaGUKijeW",
+        "owner": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "lamports": 12088935621,
+        "len": 151,
+        "sha256": "a522ebf525f0ab179733a94ab038eacfa3945267f2ac3b2d0814aa618e4464bb"
+      },
+      "baseMintAccount": {
+        "address": "BKdJofyhtW3sBgC8PGuXaawKHmrPjTdzxqaJfSpupump",
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 3612240,
+        "len": 391,
+        "sha256": "42e3f9177d89183c3b045800ff2b8362fa6f3775f36b4ca970d227afc391b990"
+      },
+      "baseVaultAccount": {
+        "address": "CRNAnGfhY95Fma3CiQcQ5RMD9ebXoPc3TjoBRG6z7iYE",
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2074080,
+        "len": 170,
+        "sha256": "3f23ad75cfbb723a3264017c74c3f176d7027de6236ef09b45caa49f5036b0a1"
+      },
+      "feeConfigAccount": {
+        "address": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+        "owner": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+        "lamports": 37290293,
+        "len": 4073,
+        "sha256": "d2864545485600cc11e919ab37c669ca2a31bf6de783ea4e5a0187eb7a203823"
+      },
+      "virtualBaseAtoms": "764844374721589",
+      "virtualQuoteAtoms": "42086993781",
+      "realBaseAtoms": "484944374721589",
+      "realQuoteAtoms": "12086993781",
+      "baseMintSupplyAtoms": "1000000000000000",
+      "baseDecimals": "6",
+      "quoteDecimals": "9",
+      "complete": false,
+      "baseVaultAtoms": "691844374721589",
+      "effectiveBaseAtoms": "764844374721589",
+      "effectiveQuoteAtoms": "42086993781",
+      "feeLpBps": "0",
+      "feeProtocolBps": "95",
+      "feeCreatorBps": "30",
+      "feeResolution": "both retained tier tables in 8Wf5Ti... carry exactly one row at threshold 0 with (lp 0, protocol 95, creator 30); the tables agree, so the schedule is unambiguous at every market cap",
+      "checks": {
+        "realQuoteEqualsLamportsMinusRent": "1941840",
+        "rentExemptFor151Bytes": "1941840",
+        "baseVaultMinusRealBase": "206900000000000"
+      }
+    },
+    {
+      "id": "pumpswap",
+      "family": "PumpSwapExactQuoteIn",
+      "program": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+      "mint": "gV5pNNAfxLfJ1fX4kKzJGhENMgE9o12H5aUHUgipump",
+      "symbolReportedByProvider": "CATE",
+      "poolAccount": {
+        "address": "7njsrpwivXWJYYTRbpJJ1UhfnjQHrhovuMbY6GLFfbBg",
+        "owner": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+        "lamports": 2985840,
+        "len": 301,
+        "sha256": "57daef39d0e104d0e704af5290bad2ce808cea2ad6f274f9aa5ae4abd81b6a14"
+      },
+      "baseVaultAccount": {
+        "address": "HPeNMPnuvq8qMefLtKAcaerissjryocgmcWNpcPMtzJA",
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2074080,
+        "len": 170,
+        "sha256": "5dd6c86397bfc6cd1eff0866c3d828520d52474728a894ec27d647611845c3b3"
+      },
+      "quoteVaultAccount": {
+        "address": "ADYwrWVkqojYCCJwR3W5U8gaXw1BUiKYQhFA1pcgo2v1",
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "lamports": 1475555209864,
+        "len": 165,
+        "sha256": "ddbae35c96bf03bb2ac8b709a74902e0f0d040d2324c1446ff053e6ee9654d1b"
+      },
+      "baseMintAccount": {
+        "address": "gV5pNNAfxLfJ1fX4kKzJGhENMgE9o12H5aUHUgipump",
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 3654000,
+        "len": 397,
+        "sha256": "cad50517e0b61db17671dcc29324f55b45aa2794c46b5e3ccd2a5423794a07b7"
+      },
+      "quoteMintAccount": {
+        "address": "So11111111111111111111111111111111111111112",
+        "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "lamports": 1702421393322,
+        "len": 82,
+        "sha256": "b0f919425a529f4971ef8dabd535aec34947d5c8c4885df80dae91635b98c5f3"
+      },
+      "feeConfigAccount": {
+        "address": "5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx",
+        "owner": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+        "lamports": 33103977,
+        "len": 4073,
+        "sha256": "e1c4647573d8caacc33b267781272c4fa0ad30a70900dddbaab512db670d3af2"
+      },
+      "baseVaultAtoms": "11998257118876",
+      "quoteVaultAtoms": "1475553170584",
+      "unattributedQuoteSideReserveAtoms": "17584505288",
+      "unattributedQuoteSideReserveOffset": "245",
+      "unattributedQuoteSideReserveStatus": "REQUIRED_BUT_UNNAMED: this decoder cannot name the field. It is constant across 70 slots of active trading, and adding it to the quote vault balance reproduces four landed fills to the atom while omitting it misprices them by about 119 basis points.",
+      "baseMintSupplyAtoms": "999559963974540",
+      "baseDecimals": "6",
+      "quoteDecimals": "9",
+      "effectiveBaseAtoms": "11998257118876",
+      "effectiveQuoteAtoms": "1493137675872",
+      "feeLpBps": "20",
+      "feeProtocolBps": "5",
+      "feeCreatorBps": "5",
+      "feeResolution": "the fee program returned (lp 20, protocol 5, creator 5) from a GetFees cross-program call inside every observed swap on this pool; both retained tier tables in 5PHirr8... also select those rates at this pool's market cap"
+    }
+  ],
+  "landedFills": [
+    {
+      "venue": "pumpswap",
+      "instruction": "BuyExactQuoteIn",
+      "poolBaseVaultAtoms": "12007887448401",
+      "poolQuoteVaultAtoms": "1474402181341",
+      "quoteInAtoms": "154956",
+      "observedBaseOutAtoms": "1243374",
+      "observedPoolQuoteDeltaAtoms": "154800",
+      "observedProtocolFeeAtoms": "78",
+      "observedCreatorFeeAtoms": "78",
+      "networkFeeLamports": "5239"
+    },
+    {
+      "venue": "pumpswap",
+      "instruction": "BuyExactQuoteIn",
+      "poolBaseVaultAtoms": "12007888360477",
+      "poolQuoteVaultAtoms": "1474402067787",
+      "quoteInAtoms": "113668",
+      "observedBaseOutAtoms": "912076",
+      "observedPoolQuoteDeltaAtoms": "113554",
+      "observedProtocolFeeAtoms": "57",
+      "observedCreatorFeeAtoms": "57",
+      "networkFeeLamports": "5239"
+    },
+    {
+      "venue": "pumpswap",
+      "instruction": "BuyExactQuoteIn",
+      "poolBaseVaultAtoms": "12007889710660",
+      "poolQuoteVaultAtoms": "1474401899689",
+      "quoteInAtoms": "168266",
+      "observedBaseOutAtoms": "1350183",
+      "observedPoolQuoteDeltaAtoms": "168098",
+      "observedProtocolFeeAtoms": "84",
+      "observedCreatorFeeAtoms": "84",
+      "networkFeeLamports": "5239"
+    },
+    {
+      "venue": "pumpswap",
+      "instruction": "BuyExactQuoteIn",
+      "poolBaseVaultAtoms": "12007891022920",
+      "poolQuoteVaultAtoms": "1474401736312",
+      "quoteInAtoms": "163541",
+      "observedBaseOutAtoms": "1312260",
+      "observedPoolQuoteDeltaAtoms": "163377",
+      "observedProtocolFeeAtoms": "82",
+      "observedCreatorFeeAtoms": "82",
+      "networkFeeLamports": "5239"
+    },
+    {
+      "venue": "pumpswap",
+      "instruction": "Sell",
+      "poolBaseVaultAtoms": "11951084570064",
+      "poolQuoteVaultAtoms": "1481596941207",
+      "baseInAtoms": "1117981",
+      "observedRawQuoteAtoms": "140243",
+      "observedSellerProceedsAtoms": "139820",
+      "observedPoolQuoteDeltaAtoms": "-139962",
+      "observedProtocolFeeAtoms": "71",
+      "observedCreatorFeeAtoms": "71",
+      "networkFeeLamports": "7422"
+    },
+    {
+      "venue": "pump_curve",
+      "instruction": "Sell",
+      "virtualBaseAtoms": "674522506167085",
+      "virtualQuoteAtoms": "47722648445",
+      "baseInAtoms": "69727553889",
+      "observedRawQuoteAtoms": "4932733",
+      "observedProtocolFeeAtoms": "46861",
+      "observedCreatorFeeAtoms": "14799",
+      "observedSellerProceedsAtoms": "4871073",
+      "networkFeeLamports": "10291",
+      "note": "the same transaction also paid a flat 1000000 lamport charge to a route account, which is not a venue fee"
+    }
+  ],
+  "unsupported": [
+    "PumpSwap pool bytes 243..245 and 253..301: read as zero, no name established.",
+    "PumpSwap pool bytes 245..253: value is load-bearing for pricing but this decoder cannot name the field.",
+    "Pump bonding curve bytes 81..83: two bytes that differ between curves (observed 0x00,0x01 here) with no established meaning.",
+    "Whether the two PumpSwap fee tier tables are selected by pool class, quote asset, or something else: at this pool's market cap they agree, so nothing had to be chosen, but at market caps between the two tables' thresholds they select different creator rates and no retained byte says which applies.",
+    "The Global account of the bonding-curve program still states creator_fee_basis_points = 5; the fee program returned 30 and the landed transfer was 30. The Global field is not the applied rate and must not be read as one."
+  ],
+  "measuredStateDriftWindow": {
+    "note": "One 49.2 second window, polled every ~2 seconds. One window on one pool during one quiet period; it bounds nothing in general.",
+    "pumpswapMarkChangeBps": "35.6",
+    "pumpswapMaxTwoSecondStepBps": "14.0",
+    "pumpCurveMarkChangeBps": "0.0",
+    "pumpCurveNote": "no trade landed on the curve during the window; an absent trade is an absent record",
+    "pumpCurveLongerWindow": "between slot 440832401 and slot 440834447 (about 13.6 minutes) the curve's marginal price fell about 3575 basis points"
+  }
+}

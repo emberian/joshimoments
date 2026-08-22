@@ -11,6 +11,7 @@ pub mod dlmm_fee;
 pub mod pool_depth;
 pub mod position;
 pub mod q64;
+pub mod round_trip;
 
 /// Stable semantic contract implemented by the current liquidity kernel.
 pub const LIQUIDITY_CONTRACT_VERSION: &str = "joshi.liquidity.v1";
