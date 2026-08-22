@@ -13,6 +13,7 @@ pub mod position;
 pub mod q64;
 pub mod readout;
 pub mod round_trip;
+pub mod tier;
 
 /// Stable semantic contract implemented by the current liquidity kernel.
 pub const LIQUIDITY_CONTRACT_VERSION: &str = "joshi.liquidity.v1";

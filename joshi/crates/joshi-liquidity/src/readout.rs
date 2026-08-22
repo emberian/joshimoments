@@ -41,9 +41,13 @@ use joshi_market_math::{
     would_quote::{ChainSecond, ChainToReceiptAge, LocalReceipt, WouldQuoteError},
 };
 
-use crate::round_trip::{
-    CrackleHurdle, DeclaredFixedCosts, FeasibleClipRange, RoundTripError, SelfRoundTrip,
-    crackle_hurdle, feasible_clips_within_declared_lift, self_round_trip, smallest_quotable_clip,
+use crate::{
+    round_trip::{
+        CrackleHurdle, DeclaredFixedCosts, FeasibleClipRange, RoundTripError, SelfRoundTrip,
+        crackle_hurdle, feasible_clips_within_declared_lift, self_round_trip,
+        smallest_quotable_clip,
+    },
+    tier::{TierBasis, TierDirection, TierStanding},
 };
 
 /// Lamports in one SOL, used only for rendering.
@@ -312,6 +316,14 @@ pub struct PreTradeReadout {
     /// Both ends of the break-even clip interval at that lift, or exactly why there is none.
     pub break_even_clips: Result<FeasibleClipRange, RoundTripError>,
     pub intended: Option<IntendedClip>,
+    /// Where this market cap sits on every retained fee-tier ladder, when the caller supplied
+    /// them.
+    ///
+    /// `None` means the tables were not handed to this readout, never that the venue has no tiers.
+    /// The rates in [`Self::state`] came from a tier row either way; this is what says *which*
+    /// row, how far the next one is, and which table was believed when they disagreed. Attach it
+    /// with [`Self::with_tier_standing`].
+    pub tier: Option<TierStanding>,
     pub costs: DeclaredFixedCosts,
     pub age: StateAge,
     pub drift: Option<MeasuredDrift>,
@@ -408,6 +420,7 @@ impl PreTradeReadout {
                 &request.costs,
             ),
             intended,
+            tier: None,
             costs: request.costs.clone(),
             state,
             composition,
@@ -418,6 +431,32 @@ impl PreTradeReadout {
             drift,
             unsupported,
         })
+    }
+
+    /// Attaches where this market cap sits on every retained fee-tier ladder.
+    ///
+    /// This is separate from [`Self::build`] because the tier tables are read from the fee
+    /// program's configuration account and a caller that never read that account has nothing
+    /// honest to attach. A readout without it says so rather than printing a row.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a standing located at a market cap other than the one the fee rates were selected
+    /// at, because a ladder position and a rate that disagree about the market cap describe two
+    /// different coins.
+    pub fn with_tier_standing(mut self, standing: TierStanding) -> Result<Self, ReadoutError> {
+        let FeeRateSource::FeeProgramConfig {
+            selected_at_market_cap_quote_atoms,
+            ..
+        } = &self.fee_source;
+        if standing.market_cap_quote_atoms != *selected_at_market_cap_quote_atoms {
+            return Err(ReadoutError::TierStandingMarketCapDiffers {
+                standing: standing.market_cap_quote_atoms,
+                selected_at: *selected_at_market_cap_quote_atoms,
+            });
+        }
+        self.tier = Some(standing);
+        Ok(self)
     }
 
     /// The readout as text, one labelled line per number.
@@ -581,6 +620,8 @@ impl PreTradeReadout {
              index)"
         );
 
+        out.push_str(&self.render_tier());
+
         out.push_str("\ncost\n");
         let _ = writeln!(
             out,
@@ -683,6 +724,98 @@ impl PreTradeReadout {
     }
 }
 
+impl PreTradeReadout {
+    /// The fee-tier ladder block: which row this market cap selects and how far the next one is.
+    ///
+    /// A tier row is not decoration. A graduated pool at a 42.8 SOL market cap selects the same
+    /// first row a brand-new coin does and pays 125 basis points a leg, four times what the same
+    /// program charges a large pool, so "which row" is the whole lever and "how far to the next
+    /// one" is the part that is actionable before the trade.
+    #[must_use]
+    fn render_tier(&self) -> String {
+        let mut out = String::new();
+        let quote = |atoms: u128| render_decimal(atoms, self.quote_decimals);
+        let Some(standing) = &self.tier else {
+            out.push_str(
+                "\nfee tier        NOT SUPPLIED. The retained tier tables were not handed to this \
+                 readout, so it does not say which row the market cap selects. That is a missing \
+                 input and not a venue without tiers.\n",
+            );
+            return out;
+        };
+        out.push_str("\nfee tier\n");
+        let _ = writeln!(
+            out,
+            "  market cap      {} SOL ({} quote atoms)",
+            quote(standing.market_cap_quote_atoms),
+            standing.market_cap_quote_atoms
+        );
+        let _ = writeln!(
+            out,
+            "  basis           {}",
+            match standing.basis {
+                TierBasis::EveryTableAgreed =>
+                    "every retained table selected the same rates here, so nothing was chosen",
+                TierBasis::WorstOfDisagreeingTables =>
+                    "the retained tables disagreed and no retained byte says which applies; the \
+                     most expensive was used, which errs against the trade and never for it",
+            }
+        );
+        for (index, position) in standing.per_table.iter().enumerate() {
+            let applied = if index == standing.applied_table_index {
+                " <- applied"
+            } else {
+                ""
+            };
+            let _ = writeln!(
+                out,
+                "  table {index}         row {} of {} at threshold {} SOL, {} bps a leg{applied}",
+                position.row_index + 1,
+                position.row_count,
+                quote(position.threshold_quote_atoms),
+                position
+                    .leg_bps()
+                    .map_or_else(|| "UNKNOWN".to_owned(), |bps| bps.to_string()),
+            );
+            if position.below_first_threshold {
+                out.push_str(
+                    "                  that first row is applying as the deployed fallback, not \
+                     because its own threshold was reached\n",
+                );
+            }
+            match position.next {
+                None => out.push_str(
+                    "                  top row: there is no further threshold to cross\n",
+                ),
+                Some(next) => {
+                    let _ = writeln!(
+                        out,
+                        "                  next row {} at {} SOL: {} SOL of market cap away ({}), \
+                         {} bps a leg, {}",
+                        next.row_index + 1,
+                        quote(next.threshold_quote_atoms),
+                        quote(next.gap_quote_atoms),
+                        next.gap_of_market_cap.map_or_else(
+                            || "no fraction at a zero market cap".to_owned(),
+                            |ratio| format!("{} bps of it", render_bps(ratio.bps_ceil()))
+                        ),
+                        next.leg_bps()
+                            .map_or_else(|| "UNKNOWN".to_owned(), |bps| bps.to_string()),
+                        match next.direction {
+                            TierDirection::Cheaper => "cheaper there",
+                            TierDirection::Dearer => "dearer there",
+                            TierDirection::Unchanged => "the same rate there",
+                            TierDirection::NotComparable =>
+                                "not comparable: a creator component was not observed",
+                        }
+                    );
+                }
+            }
+        }
+        out
+    }
+}
+
 fn render_bps(value: Result<u128, joshi_market_math::stack::StackRefusal>) -> String {
     value.map_or_else(|error| format!("REFUSED({error})"), |bps| bps.to_string())
 }
@@ -723,6 +856,13 @@ pub enum ReadoutError {
     FormulaDoesNotMatchVenue,
     #[error("checked arithmetic failed")]
     Arithmetic,
+    #[error(
+        "the tier standing was located at market cap {standing} but the fee rates were selected at \
+         {selected_at}; these describe two different coins"
+    )]
+    TierStandingMarketCapDiffers { standing: u128, selected_at: u128 },
+    #[error(transparent)]
+    Tier(#[from] crate::tier::TierError),
     #[error(transparent)]
     RoundTrip(#[from] RoundTripError),
     #[error(transparent)]
@@ -863,6 +1003,69 @@ mod tests {
         // And the small end exists at all, which is the whole point of the U shape: with a fixed
         // cost, a clip can be too small as well as too large.
         assert!(range.smallest.clip_quote_in_atoms > 1);
+    }
+
+    #[test]
+    fn a_readout_with_no_tier_tables_says_they_were_not_supplied_rather_than_printing_a_row() {
+        let card = pool_readout().render_card();
+        assert!(card.contains("fee tier        NOT SUPPLIED"));
+        assert!(card.contains("missing input and not a venue without tiers"));
+    }
+
+    #[test]
+    fn a_tier_standing_located_at_another_market_cap_is_refused_rather_than_attached() {
+        use crate::tier::{TierBasis, TierLadder, TierRow, TierStanding};
+        let ladder = TierLadder::new(vec![TierRow {
+            threshold_quote_atoms: 0,
+            schedule: schedule(20, 5, 5),
+        }])
+        .expect("ordered");
+        // The readout's rates were selected at market cap 0; this standing is about 42.8 SOL.
+        let standing =
+            TierStanding::locate(&[ladder], 42_800_000_000, 0, TierBasis::EveryTableAgreed)
+                .expect("locates");
+        let error = pool_readout()
+            .with_tier_standing(standing)
+            .expect_err("a standing about a different market cap must refuse");
+        assert!(matches!(
+            error,
+            ReadoutError::TierStandingMarketCapDiffers { .. }
+        ));
+    }
+
+    #[test]
+    fn an_attached_standing_renders_the_applied_row_and_the_distance_to_the_next() {
+        use crate::tier::{TierBasis, TierLadder, TierRow, TierStanding};
+        let ladder = TierLadder::new(vec![
+            TierRow {
+                threshold_quote_atoms: 0,
+                schedule: schedule(2, 93, 30),
+            },
+            TierRow {
+                threshold_quote_atoms: 420_000_000_000,
+                schedule: schedule(20, 5, 95),
+            },
+        ])
+        .expect("ordered");
+        // Selected at market cap 0, which is what `readout()` states, so the two agree.
+        let standing = TierStanding::locate(
+            &[ladder.clone(), ladder],
+            0,
+            0,
+            TierBasis::WorstOfDisagreeingTables,
+        )
+        .expect("locates");
+        let card = pool_readout()
+            .with_tier_standing(standing)
+            .expect("the market caps agree")
+            .render_card();
+        assert!(card.contains("row 1 of 2"));
+        assert!(card.contains("125 bps a leg <- applied"));
+        assert!(card.contains("errs against the trade and never for it"));
+        assert!(
+            card.contains("no fraction at a zero market cap"),
+            "a fraction of a zero market cap is an absence, not a zero: {card}"
+        );
     }
 
     #[test]

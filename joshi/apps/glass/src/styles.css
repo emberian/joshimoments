@@ -944,6 +944,13 @@ th { color: var(--muted); }
 .held-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 7px; margin: 0; }
 .held-venue dl { display: flex; flex-direction: column; gap: 8px; margin: 0; }
 .held-venue dl p { margin: 2px 0 0; }
+.held-venue-note { color: var(--faint); font-size: 11px; font-weight: 500; line-height: 1.45; }
+.held-venue-absent { color: var(--faint); font-weight: 500; font-style: italic; }
+.held-venue-age { margin: 0 0 9px; padding: 7px 8px; border-radius: 8px; background: var(--surface-3); }
+.held-venue-age p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.held-venue-age p + p { margin-top: 4px; color: var(--faint); }
+.held-venue-gaps { margin: 4px 0 0; padding-left: 16px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.held-venue-gaps li { margin-top: 3px; }
 .held-venue-refusal { color: var(--amber); }
 .held-facts dt, .held-venue dt { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
 .held-facts dd, .held-venue dd { margin: 2px 0 0; font-size: 12px; font-weight: 650; }

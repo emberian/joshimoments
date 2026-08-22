@@ -7,6 +7,7 @@ use joshi_core::{
     readiness::{WALKING_MATERIAL, run_offline_readiness},
     run_fixture,
     service::{CoreService, PairingCapability},
+    venue_readout::{MountedVenueReadouts, VenueAccountsCapture, VenueReadoutPolicy},
 };
 use joshi_domain::{StableString, UtcTimestamp};
 use joshi_evidence::IngestLimits;
@@ -164,6 +165,15 @@ enum Command {
         /// leaves the window unattached and says so in the report.
         #[arg(long, value_name = "MINT")]
         candles_subject: Option<String>,
+        /// Path to one `joshi.venue_accounts_capture.v1` file to mount pre-trade readouts from.
+        ///
+        /// The capture is one retained `getMultipleAccounts` response plus the three things that
+        /// body cannot state about itself: the address list it was requested with, the commitment
+        /// it was requested at, and when the bytes arrived. Every readout served from it carries
+        /// that age, and this process never reads the network to refresh it. Leaving this off
+        /// serves no readouts at all, and the cockpit says so rather than showing blanks.
+        #[arg(long, value_name = "PATH")]
+        venue_accounts: Option<PathBuf>,
     },
     /// Mark one real mint over a real catalog through the paired route and reopen after restart.
     LiveGestureWalk {
@@ -394,10 +404,15 @@ async fn main() -> Result<(), CliError> {
             state,
             source_id,
             candles_subject,
+            venue_accounts,
         }) => {
             if !listen.ip().is_loopback() {
                 return Err(CliError::NonLoopback(listen));
             }
+            let venues = venue_accounts
+                .as_deref()
+                .map(mount_venue_readouts)
+                .transpose()?;
             let options = joshi_core::live_surface::LiveSurfaceOptions {
                 attested_candle_subject: candles_subject,
             };
@@ -420,13 +435,32 @@ async fn main() -> Result<(), CliError> {
                 );
             }
             let origin = loopback_pairing_origin(glass_origin)?;
-            let (core, launcher) = CoreService::with_sqlite_pairing_mounting(
+            if let Some(venues) = &venues {
+                eprintln!(
+                    "venue readouts mounted at slot {}: {}. These numbers are as old as that \
+                     capture and this process never refreshes them.",
+                    venues.context_slot(),
+                    if venues.mints().is_empty() {
+                        "no mint".to_owned()
+                    } else {
+                        venues.mints().join(", ")
+                    }
+                );
+                for unassembled in venues.unassembled() {
+                    eprintln!(
+                        "venue readouts: {} was not assembled. {}",
+                        unassembled.address, unassembled.reason
+                    );
+                }
+            }
+            let (core, launcher) = CoreService::with_sqlite_pairing_mounting_venues(
                 mounted.store,
                 None,
                 PairingCapability::generate_os_random()?,
                 origin,
                 PairingConfig::default(),
                 Some(mounted.view),
+                venues,
             )?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             let issued = launcher.issue_code(vec![
@@ -464,6 +498,19 @@ async fn main() -> Result<(), CliError> {
         None => run_fixture_command(arguments.fixture).await?,
     }
     Ok(())
+}
+
+/// Reads one venue account capture off disk and assembles every readout its bytes support.
+///
+/// Nothing about this touches the network. The capture is retained provider bytes and the
+/// arithmetic over them is pure, which is exactly why the age it carries has to be shown: a
+/// readout assembled from a capture taken minutes ago is a readout about minutes ago.
+fn mount_venue_readouts(path: &std::path::Path) -> Result<MountedVenueReadouts, CliError> {
+    let bytes = std::fs::read(path)?;
+    let capture: VenueAccountsCapture = serde_json::from_slice(&bytes)
+        .map_err(|error| CliError::VenueCapture(error.to_string()))?;
+    MountedVenueReadouts::from_capture(&capture, &VenueReadoutPolicy::study_m0_defaults())
+        .map_err(|error| CliError::VenueCapture(error.to_string()))
 }
 
 async fn run_fixture_command(arguments: FixtureArguments) -> Result<(), CliError> {
@@ -636,6 +683,8 @@ enum CliError {
     FixtureInspectorQualification,
     #[error("fixture exceeds {MAX_FIXTURE_DOCUMENT_BYTES} bytes: {0}")]
     FixtureTooLarge(usize),
+    #[error("venue account capture could not be mounted: {0}")]
+    VenueCapture(String),
 }
 
 #[cfg(all(test, unix))]

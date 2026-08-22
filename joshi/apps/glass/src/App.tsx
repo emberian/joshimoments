@@ -17,7 +17,7 @@ import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
 import { exactUtcNow } from "./operator/contract";
-import { holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
+import { heldSubjectKeys, holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
 import { useOperatorJournal } from "./operator/useOperatorJournal";
 import type { PendingOperatorCommandQueue } from "./operator/pendingQueue";
 import { configuredPresentationSink, type PresentationSink } from "./presentation/client";
@@ -26,6 +26,8 @@ import { defaultPresentationPolicy, presentationPolicies } from "./presentation/
 import { usePresentationWitness } from "./presentation/usePresentationWitness";
 import { useStableCandidateOrder } from "./sensorium/useStableCandidateOrder";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import { configuredVenueReadoutSource } from "./venue/client";
+import { useVenueReadouts } from "./venue/useVenueReadouts";
 
 export type Density = "comfortable" | "compact";
 
@@ -57,11 +59,11 @@ export function GlassApp({
   prospectiveProtocol?: boolean;
   pendingOperatorQueue?: PendingOperatorCommandQueue;
   /**
-   * The measured venue-and-clip readout for a held coin, when something has measured it.
+   * The venue-and-clip answer for a held coin, when a test wants to state it directly.
    *
-   * Left unset on purpose: `joshi-market-math` and `joshi-liquidity` are the only things allowed
-   * to produce those numbers, and until one of them reaches this cockpit every held coin says
-   * "not yet measured" rather than showing a figure Glass invented.
+   * Unset in a real session, where it is built from the local core's `venue-readouts` route below.
+   * `joshi-market-math` and `joshi-liquidity` remain the only things allowed to produce those
+   * numbers; this cockpit renders what the core sends and computes nothing.
    */
   venueReadout?: HeldVenueLookup;
 }) {
@@ -292,6 +294,46 @@ export function GlassApp({
     [operatorJournal.entries],
   );
 
+  // A held coin's subject key is the identity the feed used; the venue route is addressed by mint.
+  // In a live surface those are the same string, but they are not the same *thing*, and resolving
+  // one to the other through what was actually served keeps a subject key from being posted to the
+  // core as if it were an address.
+  const heldMintsBySubject = useMemo(() => {
+    const resolved: Record<string, string> = {};
+    for (const subjectKey of heldSubjectKeys(operatorJournal.entries)) {
+      const candidate = candidates.find((item) => item.id === subjectKey)
+        ?? heldObservations[subjectKey]?.candidate;
+      if (candidate) resolved[subjectKey] = candidate.mint;
+    }
+    return resolved;
+  }, [candidates, heldObservations, operatorJournal.entries]);
+  // Built once and only when this cockpit is not given a lookup directly, so a test that states
+  // one never opens a socket.
+  const venueSource = useMemo(
+    () => (venueReadout ? null : configuredVenueReadoutSource()),
+    [venueReadout],
+  );
+  const heldMints = useMemo(
+    () => [...new Set(Object.values(heldMintsBySubject))].sort(),
+    [heldMintsBySubject],
+  );
+  const measuredVenues = useVenueReadouts(venueSource, heldMints);
+  const venueLookup = useMemo<HeldVenueLookup | undefined>(() => {
+    if (venueReadout) return venueReadout;
+    if (!venueSource) return undefined;
+    return (subjectKey: string) => {
+      const mint = heldMintsBySubject[subjectKey];
+      if (mint === undefined) {
+        return {
+          state: "absent",
+          absence: "This cockpit is holding a mark whose coin the current view does not carry, so "
+            + "it has no mint to ask the core about. The mark itself is unaffected.",
+        };
+      }
+      return measuredVenues[mint] ?? null;
+    };
+  }, [heldMintsBySubject, measuredVenues, venueReadout, venueSource]);
+
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
   const cycleReplay = useCallback(() => {
     if (snapshot && pendingMode === null) requestMode(nextMode(snapshot.view.mode));
@@ -426,7 +468,7 @@ export function GlassApp({
           entries={operatorJournal.entries}
           candidates={candidates}
           retained={heldObservations}
-          {...(venueReadout ? { venueReadout } : {})}
+          {...(venueLookup ? { venueReadout: venueLookup } : {})}
           onSelect={selectCandidate}
           onAppendNote={appendHoldNote}
         />

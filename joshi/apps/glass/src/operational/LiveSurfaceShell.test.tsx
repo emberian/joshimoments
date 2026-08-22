@@ -285,7 +285,7 @@ describe("live surface shell", () => {
     expect(within(rail).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
     expect(await within(rail).findByText(/retained by the catalog at commit 7/i)).toBeInTheDocument();
     // Nothing was measured about this venue, so nothing about it is claimed.
-    expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(3);
+    expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(4);
   });
 
   it("keeps the live surface free of axe-detectable violations", async () => {

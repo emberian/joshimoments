@@ -15,6 +15,8 @@ joshi-domain = { path = "../../crates/joshi-domain" }
 joshi-evidence = { path = "../../crates/joshi-evidence" }
 joshi-export = { path = "../../crates/joshi-export" }
 joshi-g0-harness = { path = "../g0-harness" }
+joshi-liquidity = { path = "../../crates/joshi-liquidity" }
+joshi-market-math = { path = "../../crates/joshi-market-math" }
 joshi-operator = { path = "../../crates/joshi-operator" }
 joshi-pairing = { path = "../../crates/joshi-pairing" }
 joshi-operational-status = { path = "../../crates/joshi-operational-status" }

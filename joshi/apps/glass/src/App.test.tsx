@@ -1,10 +1,11 @@
 import axe from "axe-core";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { GlassApp } from "./App";
 import type { GlassSnapshotV1 } from "./contract/v1";
+import type { HeldVenueReadout } from "./components/HeldCoins";
 import { OfflineFixtureDataSource, type GlassDataSource, type SnapshotRequest } from "./data/client";
 import { mockSnapshots } from "./data/mockSnapshot";
 import { canonicalOperatorCommand, type CommandReceipt, type OperatorCommand, type OperatorCommandV1 } from "./operator/contract";
@@ -577,6 +578,113 @@ describe("accessibility-first glass", () => {
 });
 
 /** Reaches a control with Tab alone. No pointer event exists anywhere in these paths. */
+/** Every element the browser would stop on with Tab. Used to count what a change costs her. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+  + 'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * One venue readout exactly as the local core serves it, for the live bonding curve Study M0
+ * measured. Every number here is one this repository's own Rust tests assert over the retained
+ * `getMultipleAccounts` bytes at finalized slot 440840124; nothing in it is invented for the
+ * screenshot, because a cockpit test that renders a plausible number teaches the reader to trust
+ * plausible numbers.
+ */
+const measuredCurve: HeldVenueReadout = {
+  contract: "joshi.glass.venue_readout",
+  schemaVersion: 1,
+  authority: "read_record_replay_only",
+  mint: "BKdJofyhtW3sBgC8PGuXaawKHmrPjTdzxqaJfSpupump",
+  venueKind: "Pump bonding curve",
+  venueKindLabel: "pump_bonding_curve",
+  venueAccount: "wrXaYnT8PBRSqigbLL3fTfHN2iYcGHCNfMwaGUKijeW",
+  venueBinding: "the curve is the recomputed PDA([\"bonding-curve\", mint], Pump program) at bump 255; nothing in the curve account itself names the mint",
+  feeFloorBps: "247",
+  feeFloorProbeSol: "0.001000000",
+  declaredLiftBps: "800",
+  breakEvenClip: {
+    smallestSol: "0.000277945",
+    largestSol: "0.810409517",
+    smallestHurdleBps: "801",
+    largestHurdleBps: "801",
+  },
+  feeTier: {
+    marketCapSol: "29.012189574",
+    rowOrdinal: "1",
+    rowCount: "1",
+    thresholdSol: "0.000000000",
+    legBps: "125",
+    belowFirstThreshold: false,
+    next: { absence: "This is the top row. There is no further threshold to cross." },
+  },
+  pessimisticTierBranch: null,
+  stateAge: {
+    contextSlot: "440840124",
+    requestedCommitment: "finalized",
+    chainToReceipt: {
+      absence: "The provider stated no blockTime for this slot, so the chain end of the age is an absent record rather than an age of zero.",
+    },
+    receivedAtUnixMs: "1787371691252",
+    clockId: "joshi-repository-fixture-write",
+    drift: {
+      absence: "Not measured. One observation says nothing about how fast this venue moves, and a pool measured on 2026-08-21 drifted nine to ten basis points in thirty seconds.",
+    },
+  },
+  declaredCosts: "network fee 7,422 lamports per transaction x 2, declared by the operator and not measured for this coin",
+  unsupported: [
+    "the curve fee tables carry one row at threshold zero, so no market cap selects anything here",
+  ],
+};
+
+/**
+ * The third mint of the three measured: graduated, and as expensive as the curve above.
+ *
+ * Its 42.8 SOL market cap selects the fee program's first tier row at 125 basis points a leg, and
+ * the next row sits at 420 SOL of market cap -- both thresholds read out of the retained
+ * `PumpSwap` fee configuration. The two retained tier tables disagree at this cap, so the rates
+ * are the worse of the two and the readout says so.
+ */
+const measuredSmallPool: HeldVenueReadout = {
+  ...measuredCurve,
+  mint: "AxshJi4UfQaUL2ZjF11111111111111111111111111",
+  venueKind: "Graduated PumpSwap pool",
+  venueKindLabel: "pumpswap_pool",
+  venueAccount: "7njsrpwivXWJYYTRbpJJ1UhfnjQHrhovuMbY6GLFfbBg",
+  venueBinding: "the pool account states this base mint itself, and its address is the derived address of its own index, creator and mint pair at bump 255",
+  feeFloorBps: "249",
+  breakEvenClip: {
+    smallestSol: "0.000277945",
+    largestSol: "0.810409517",
+    smallestHurdleBps: "801",
+    largestHurdleBps: "801",
+  },
+  feeTier: {
+    marketCapSol: "42.800000000",
+    rowOrdinal: "1",
+    rowCount: "25",
+    thresholdSol: "0.000000000",
+    legBps: "125",
+    belowFirstThreshold: false,
+    next: {
+      rowOrdinal: "2",
+      thresholdSol: "420.000000000",
+      gapSol: "377.200000000",
+      gapBpsOfMarketCap: "88131",
+      legBps: "120",
+      direction: "cheaper",
+    },
+  },
+  pessimisticTierBranch:
+    "The retained fee tier tables disagree here (table 0 on row 1 at 125 bps a leg; table 1 on row "
+    + "2 at 120 bps a leg) and no retained byte says which the program applies. Every number above "
+    + "uses the most expensive of them, which errs against the trade and never for it.",
+  unsupported: [
+    "the address list is a declaration, not evidence: a getMultipleAccounts body is positional and names no address",
+    "pool byte 245 carries quote atoms this decoder can locate and cannot name",
+    "chart mark: no landed fill was read, so no chart mark is stated",
+  ],
+};
+
 async function tabTo(user: ReturnType<typeof userEvent.setup>, target: HTMLElement): Promise<void> {
   for (let step = 0; step < 400 && document.activeElement !== target; step += 1) {
     await user.tab();
@@ -657,33 +765,20 @@ describe("holding a coin before it scrolls away", () => {
     const rail = await screen.findByRole("region", { name: /held coins/i });
     const venue = within(rail).getByRole("heading", { name: /venue and clip/i }).parentElement;
     if (!venue) throw new Error("venue block did not render");
-    expect(within(venue).getAllByText(/not yet measured/i)).toHaveLength(3);
+    expect(within(venue).getAllByText(/not yet measured/i)).toHaveLength(4);
     expect(within(venue).getByText(/nothing here is estimated/i)).toBeInTheDocument();
     expect(venue.textContent).not.toMatch(/\d/);
   });
 
-  /**
-   * The seam a sibling lane fills. It renders `joshi_liquidity::readout::PreTradeReadout` field
-   * for field, including the two things a single headline number would destroy: that the answer
-   * is an interval rather than a ceiling, and that "no clip breaks even" is an answer.
-   */
   it("renders a measured readout as an interval, and a refusal as an answer", async () => {
     const user = userEvent.setup();
     render(
       <GlassApp
         dataSource={new OfflineFixtureDataSource()}
         pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
-        venueReadout={(subjectKey) => subjectKey !== "radon" ? null : {
-          venueKind: "Pump bonding curve",
-          venueAccount: "CurveAcct1111111111111111111111111111111111",
-          venueBinding: "recomputed PDA(['bonding-curve', mint]) at bump 255",
-          feeFloorBps: "247",
-          feeFloorProbeSol: "0.010000000",
-          declaredLiftBps: "800",
-          breakEvenClip: { smallestSol: "0.031000000", largestSol: "1.120000000" },
-          stateAge: "slot 440345975, finalized, 1.4s before local receipt",
-          unsupported: ["creator fee share disagreement between Global and the fee program"],
-        }}
+        venueReadout={(subjectKey) => subjectKey !== "radon"
+          ? null
+          : { state: "measured", readout: measuredCurve }}
       />,
     );
     await screen.findByRole("heading", { name: /radon radon/i });
@@ -692,10 +787,11 @@ describe("holding a coin before it scrolls away", () => {
     const rail = await screen.findByRole("region", { name: /held coins/i });
     expect(within(rail).getByText(/pump bonding curve/i)).toBeInTheDocument();
     expect(within(rail).getByText(/247 bps/)).toBeInTheDocument();
-    expect(within(rail).getByText(/0.031000000 SOL to 1.120000000 SOL/)).toBeInTheDocument();
+    // The interval, both ends, and never a single ceiling number.
+    expect(within(rail).getByText(/0\.000277945 SOL to 0\.810409517 SOL/)).toBeInTheDocument();
     expect(within(rail).getByText(/an interval, not a ceiling/i)).toBeInTheDocument();
     expect(within(rail).getByText(/recomputed PDA/)).toBeInTheDocument();
-    expect(within(rail).getByText(/creator fee share disagreement/)).toBeInTheDocument();
+    expect(within(rail).getByText(/curve fee tables carry one row/)).toBeInTheDocument();
     expect(within(rail).queryByText(/not yet measured/i)).not.toBeInTheDocument();
   });
 
@@ -706,15 +802,12 @@ describe("holding a coin before it scrolls away", () => {
         dataSource={new OfflineFixtureDataSource()}
         pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
         venueReadout={() => ({
-          venueKind: "Pump bonding curve",
-          venueAccount: "CurveAcct1111111111111111111111111111111111",
-          venueBinding: "recomputed PDA(['bonding-curve', mint]) at bump 255",
-          feeFloorBps: "247",
-          feeFloorProbeSol: "0.010000000",
-          declaredLiftBps: "800",
-          breakEvenClip: { refusal: "the fee floor alone exceeds the declared lift at every size" },
-          stateAge: "slot 440345975, finalized, 1.4s before local receipt",
-          unsupported: [],
+          state: "measured",
+          readout: {
+            ...measuredCurve,
+            breakEvenClip: { refusal: "the fee floor alone exceeds the declared lift at every size" },
+            unsupported: [],
+          },
         })}
       />,
     );
@@ -725,6 +818,160 @@ describe("holding a coin before it scrolls away", () => {
     expect(within(rail).getByText(/none\. the fee floor alone exceeds the declared lift/i)).toBeInTheDocument();
     // An empty "could not reconstruct" list is a claim of completeness, and is doubted out loud.
     expect(within(rail).getByText(/worth doubting rather than trusting/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The finding this whole lane exists to put on screen. Three real mints: a bonding curve at 247
+   * basis points, a graduated pool at 60, and a second graduated pool at 249 -- graduated and as
+   * expensive as the curve, because a 42.8 SOL market cap selects the fee program's first tier row
+   * at 125 basis points a leg. If "graduated" were the lever those two would match; the row is the
+   * lever, so the row and the distance to the next one have to be readable in a second.
+   */
+  it("shows which fee tier row the market cap selects and how far the next one is", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={() => ({ state: "measured", readout: measuredSmallPool })}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByText(/graduated pumpswap pool/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/249 bps/)).toBeInTheDocument();
+    expect(within(rail).getByText(/row 1 of 25 · 125 bps a leg/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/42\.800000000 SOL selects the row at 0\.000000000 SOL/)).toBeInTheDocument();
+    expect(within(rail).getByText(/next row 2 at 420\.000000000 SOL: 377\.200000000 SOL of market cap away/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/88131 bps of the current cap/)).toBeInTheDocument();
+    expect(within(rail).getByText(/120 bps a leg there/)).toBeInTheDocument();
+  });
+
+  /**
+   * The two `PumpSwap` tier tables disagree over a wide populated band and no retained byte says
+   * which applies, so the readout uses the worse of them. Erring against the trade is correct, and
+   * a reader must be able to see that a number is the pessimistic branch of an open question
+   * rather than a settled measurement.
+   */
+  it("says out loud when a number is the pessimistic branch of an unresolved tier ambiguity", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={() => ({ state: "measured", readout: measuredSmallPool })}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByText(/retained fee tier tables disagree here/i)).toBeInTheDocument();
+    expect(within(rail).getByText(/errs against the trade and never for it/i)).toBeInTheDocument();
+  });
+
+  /**
+   * State age is bigger than the arithmetic. Chain to receipt was measured at eleven to thirteen
+   * seconds, and one pool drifted nine to ten basis points in thirty seconds -- so its whole sixty
+   * basis-point fee floor is two to four minutes of drift. A number without its age is a lie by
+   * omission, so the age is on screen with the number and it keeps growing while she reads.
+   */
+  it("keeps the age of the reading on screen with the numbers it qualifies", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      vi.setSystemTime(new Date(Number(measuredCurve.stateAge.receivedAtUnixMs) + 12_000));
+      render(
+        <GlassApp
+          dataSource={new OfflineFixtureDataSource()}
+          pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+          venueReadout={() => ({ state: "measured", readout: measuredCurve })}
+        />,
+      );
+      await screen.findByRole("heading", { name: /radon radon/i });
+      await user.keyboard(";");
+
+      const rail = await screen.findByRole("region", { name: /held coins/i });
+      expect(within(rail).getByText(/read 12 seconds ago/i)).toBeInTheDocument();
+      expect(within(rail).getByText(/slot 440840124, commitment finalized/i)).toBeInTheDocument();
+      // The chain end of the age is absent on this reading, and an absent record renders as an
+      // absence rather than as an age of zero.
+      expect(within(rail).getByText(/absent record rather than an age of zero/i)).toBeInTheDocument();
+      expect(within(rail).getByText(/one observation says nothing about how fast/i)).toBeInTheDocument();
+
+      // And it keeps growing while the readout sits unread, because it really is growing.
+      await act(async () => {
+        vi.advanceTimersByTime(65_000);
+      });
+      await waitFor(() => expect(within(rail).getByText(/read 1 minute ago/i)).toBeInTheDocument());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders the core's own reason for having no readout, and never a blank", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={() => ({
+          state: "absent",
+          absence: "The local core was started without a venue account capture, so it has measured "
+            + "no coin's fee floor or clip interval.",
+        })}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByText(/started without a venue account capture/i)).toBeInTheDocument();
+    // Not the generic placeholder: "nothing has been measured at all" and "we have not measured
+    // this coin" are different things to know.
+    expect(within(rail).queryByText(/not yet measured/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * Every path in this cockpit is keyboard-only, and this one adds no shortcut at all: the readout
+   * is prose and lists, so it is reachable by reading rather than by tabbing, and it adds no new
+   * tab stop to a shell that already has too many.
+   */
+  it("reaches every readout line by keyboard with no pointer event and no new tab stop", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <GlassApp
+        dataSource={new OfflineFixtureDataSource()}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        venueReadout={() => ({ state: "measured", readout: measuredSmallPool })}
+      />,
+    );
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await user.keyboard(";");
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+
+    // The gaps are a list, so a screen reader can move through them by list navigation. A
+    // disclosure would have been one more tab stop per held coin on a shell that already carries
+    // more than fifty at first paint.
+    const gaps = within(rail).getByRole("list", { name: /not reconstructed/i });
+    expect(within(gaps).getAllByRole("listitem").length).toBe(measuredSmallPool.unsupported.length);
+
+    // The readout costs zero keystrokes to get past: it is prose and lists, so every line is
+    // reachable by reading and none of it is a tab stop she has to step over to reach the next
+    // held coin.
+    const venue = rail.querySelector(".held-venue");
+    if (!venue) throw new Error("venue block did not render");
+    expect(venue.querySelectorAll(FOCUSABLE)).toHaveLength(0);
+    expect(venue.querySelectorAll("[aria-live]")).toHaveLength(0);
+
+    // The card's own controls are still reached by Tab alone, with no pointer event anywhere.
+    await tabTo(user, within(rail).getByRole("button", { name: /open in workbench/i }));
+    expect(document.activeElement).toHaveFocus();
+
+    const results = await axe.run(container, { rules: { "color-contrast": { enabled: false } } });
+    expect(results.violations).toEqual([]);
   });
 
   it("appends a later free-text note as its own act, and refuses a blank one", async () => {

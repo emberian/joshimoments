@@ -63,6 +63,27 @@ export function duration(seconds: string | null): string {
 }
 
 /**
+ * How long ago something happened, in words, from a millisecond span.
+ *
+ * Deliberately coarse and deliberately never negative-looking: a readout whose receipt clock is
+ * ahead of this browser's clock is a clock disagreement, not a measurement from the future, and it
+ * says so rather than printing a minus sign that reads as a countdown.
+ */
+export function elapsedWords(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds)) return "an unreadable time";
+  if (milliseconds < 0) return "less than a second (this browser's clock is behind the reading clock)";
+  const seconds = Math.floor(milliseconds / 1000);
+  if (seconds < 1) return "less than a second";
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `${days} days`;
+}
+
+/**
  * An instant this view does carry, plus its explicit absence. A null instant means the view
  * recorded none; it is never evidence that the moment did not happen, so it must not read as one.
  */

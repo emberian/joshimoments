@@ -31,8 +31,11 @@ use std::{
 use tower::limit::ConcurrencyLimitLayer;
 use zeroize::Zeroize as _;
 
-use crate::pairing::{
-    OrdinaryPairingError, OrdinaryPairingService, PairingAuthorizer, ordinary_pairing_router,
+use crate::{
+    pairing::{
+        OrdinaryPairingError, OrdinaryPairingService, PairingAuthorizer, ordinary_pairing_router,
+    },
+    venue_readout::{MountedVenueReadouts, venue_readout_wire},
 };
 use joshi_pairing::{PairingConfig, PairingOrigin, PairingScope};
 
@@ -62,6 +65,13 @@ struct Inner {
     /// A scene this process derived from the store and is serving, before any act made it
     /// durable. The first operator act that names it commits the exact bytes it was served.
     live_surface: Option<Arc<ValidatedGlassViewV1>>,
+    /// Pre-trade readouts this process assembled from one retained account capture.
+    ///
+    /// Mounted the same way the scene above is: derived once, held in memory, and served
+    /// byte-identically for the life of the process. Absent means this core was started without a
+    /// capture, which is a different answer from a coin the capture did not cover, and the two
+    /// reach the cockpit under different problem codes.
+    venue_readouts: Option<Arc<MountedVenueReadouts>>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -162,6 +172,7 @@ impl CoreService {
                 monotonic_epoch: Instant::now(),
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
                 live_surface: None,
+                venue_readouts: None,
             }),
         }
     }
@@ -172,6 +183,7 @@ impl CoreService {
         pairing: PairingCapability,
         ordinary_pairing: Arc<OrdinaryPairingService>,
         live_surface: Option<Arc<ValidatedGlassViewV1>>,
+        venue_readouts: Option<Arc<MountedVenueReadouts>>,
     ) -> Self {
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -185,6 +197,7 @@ impl CoreService {
                 monotonic_epoch: Instant::now(),
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
                 live_surface,
+                venue_readouts,
             }),
         }
     }
@@ -231,6 +244,36 @@ impl CoreService {
         config: PairingConfig,
         live_surface: Option<ValidatedGlassViewV1>,
     ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
+        Self::with_sqlite_pairing_mounting_venues(
+            store,
+            companion_installation_id,
+            pairing,
+            origin,
+            config,
+            live_surface,
+            None,
+        )
+    }
+
+    /// Mount a derived scene and, alongside it, the pre-trade readouts one retained account
+    /// capture supports.
+    ///
+    /// The two mounts are independent on purpose. A scene says which coins the feed carried; a
+    /// readout says what one of them would cost to trade, and those come from different bytes read
+    /// at different times. Mounting a readout never changes a scene and can never make one appear.
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
+    pub fn with_sqlite_pairing_mounting_venues(
+        store: SqliteStore,
+        companion_installation_id: Option<String>,
+        pairing: PairingCapability,
+        origin: PairingOrigin,
+        config: PairingConfig,
+        live_surface: Option<ValidatedGlassViewV1>,
+        venue_readouts: Option<MountedVenueReadouts>,
+    ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
         let store = Arc::new(Mutex::new(store));
         let ordinary = Arc::new(OrdinaryPairingService::production_with_shared_store(
             origin,
@@ -243,6 +286,7 @@ impl CoreService {
             pairing,
             ordinary.clone(),
             live_surface.map(Arc::new),
+            venue_readouts.map(Arc::new),
         );
         Ok((service, ordinary))
     }
@@ -259,6 +303,10 @@ impl CoreService {
             .route("/v1/observations/pump-companion", post(companion))
             .route("/api/v1/glass/snapshot", get(snapshot))
             .route("/api/v1/glass/scenes/{scene_id}", get(historical_scene))
+            .route(
+                "/api/v1/glass/venue-readouts/{mint}",
+                get(venue_readout_for_mint),
+            )
             .route("/api/v1/operator/commands", post(operator_command))
             .route("/api/v1/session/launch", get(prospective_session_launch))
             .route(
@@ -1155,6 +1203,47 @@ fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// What one held coin's live venue state costs, for a mint the cockpit names.
+///
+/// The cockpit asks per held coin rather than receiving readouts inside the scene, because a scene
+/// and a readout are two different observations of two different things: a scene is what the feed
+/// carried at one commit, a readout is what an account read said at one slot. Folding the second
+/// into the first would bind a coin's cost to a scene identity that had nothing to do with it, and
+/// would make every re-read of a price rewrite the scene an operator act is bound to.
+///
+/// The two absences are kept apart on purpose. `venue_readouts_not_mounted` is this core having no
+/// capture at all; `venue_readout_not_measured` is a capture that covers other coins and not this
+/// one. A cockpit that collapsed them would render "we have not measured this" over what is really
+/// "nothing has been measured at all".
+async fn venue_readout_for_mint(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+    Path(mint): Path<String>,
+) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
+    let Some(mounted) = service.inner.venue_readouts.as_ref() else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "venue_readouts_not_mounted",
+            "this core was started without a venue account capture, so it has measured no coin's \
+             fee floor or clip interval; an empty answer here is not a claim about any coin",
+        );
+    };
+    let Some(readout) = mounted.get(&mint) else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "venue_readout_not_measured",
+            "the mounted capture supports no venue readout for this mint; it may name no venue \
+             for this coin, or the venue it named could not be assembled from the retained bytes",
+        );
+    };
+    json_response(StatusCode::OK, &venue_readout_wire(readout))
 }
 
 fn snapshot_bytes(view_bytes: &[u8]) -> Option<Vec<u8>> {

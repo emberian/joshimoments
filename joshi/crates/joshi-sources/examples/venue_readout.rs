@@ -109,6 +109,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         key_file: PathBuf::from(
             flag(&arguments, "--key-file").unwrap_or_else(|| DEFAULT_KEY_PATH.to_owned()),
         ),
+        write_capture: flag(&arguments, "--write-capture").map(PathBuf::from),
     };
     print!("{}", run(&mints, &options)?);
     Ok(())
@@ -117,7 +118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn usage() -> Box<dyn Error> {
     "usage: venue_readout --mint <address> [--mint <address> ...] [--lift-bps <n>] \
      [--clip-sol <decimal>] [--drift-window-seconds <n>] [--network-fee-lamports <n>] \
-     [--rent-lamports <n>] [--max-requests <n>] [--key-file <path>]"
+     [--rent-lamports <n>] [--max-requests <n>] [--key-file <path>] [--write-capture <path>]"
         .into()
 }
 
@@ -129,6 +130,14 @@ struct Options {
     rent_lamports: u128,
     max_requests: u32,
     key_file: PathBuf,
+    /// Where to retain the exact state-read response, if anywhere.
+    ///
+    /// A JSON-RPC account response is POSITIONAL: it names no address, and the address list lives
+    /// in the request, which is not retained. So a capture must carry the three things the body
+    /// cannot state -- the addresses asked for, the commitment asked at, and the local receipt --
+    /// or nothing downstream can say which account is which. `apps/core` renders that list as a
+    /// declaration for exactly this reason.
+    write_capture: Option<PathBuf>,
 }
 
 /// A request budget the program enforces on itself and reports.
@@ -164,10 +173,12 @@ struct Client {
     process_start: Instant,
     clock_id: String,
     sequence: u64,
+    write_capture: Option<PathBuf>,
+    captured: bool,
 }
 
 impl Client {
-    fn open(key_file: &Path) -> Result<Self, Box<dyn Error>> {
+    fn open(key_file: &Path, write_capture: Option<PathBuf>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             inner: HeliusHttpClient::at_startup(
                 &HeliusConfig::mainnet(CredentialFile(key_file.to_path_buf())),
@@ -179,6 +190,8 @@ impl Client {
             process_start: Instant::now(),
             clock_id: format!("joshi-venue-readout-{}", std::process::id()),
             sequence: 0,
+            write_capture,
+            captured: false,
         })
     }
 
@@ -239,7 +252,49 @@ impl Client {
                 json!([addresses, { "encoding": "base64", "commitment": COMMITMENT }]),
             ),
         )?;
+        // The first account-set read of a run IS the atomic state read; the later one, if any, is
+        // the drift probe. Only the state read is worth retaining, because a readout describes the
+        // moment its state was observed.
+        if !self.captured
+            && let Some(path) = self.write_capture.clone()
+        {
+            self.captured = true;
+            self.retain_state_read(&path, addresses, &read)?;
+        }
         Ok((read_multiple_accounts(&read.body, addresses)?, read.receipt))
+    }
+
+    /// Write the state read in the shape `apps/core` mounts, carrying what the body cannot state.
+    fn retain_state_read(
+        &self,
+        path: &Path,
+        addresses: &[String],
+        read: &Read,
+    ) -> Result<(), Box<dyn Error>> {
+        let body: Value = serde_json::from_slice(&read.body)?;
+        let slot = body
+            .pointer("/result/context/slot")
+            .and_then(Value::as_u64)
+            .ok_or("the state response stated no context slot")?;
+        let capture = json!({
+            "contract": "joshi.venue_accounts_capture.v1",
+            "requestedCommitment": COMMITMENT,
+            "requestedAddresses": addresses,
+            "clockId": read.receipt.clock_id,
+            "receivedMonotonicNs": read.receipt.monotonic_ns,
+            "receivedAtUnixMs": read.receipt.wall_unix_ms,
+            // The provider states no block time on an account read, and an absent record is not an
+            // age of zero, so nothing is substituted here.
+            "chainSecondUnixS": Value::Null,
+            "provenance": format!(
+                "One getMultipleAccounts response at {COMMITMENT} slot {slot}, retained verbatim by \
+                 the venue_readout example. The address list is a declaration by the reader: the \
+                 response is positional and names no address."
+            ),
+            "body": body,
+        });
+        std::fs::write(path, serde_json::to_vec_pretty(&capture)?)?;
+        Ok(())
     }
 }
 
@@ -265,7 +320,7 @@ fn run(mints: &[String], options: &Options) -> Result<String, Box<dyn Error>> {
         spent: 0,
         ceiling: options.max_requests,
     };
-    let mut client = Client::open(&options.key_file)?;
+    let mut client = Client::open(&options.key_file, options.write_capture.clone())?;
     let mut out = String::new();
 
     // Round one. Every bonding-curve candidate for every mint, both mints' own accounts, wrapped

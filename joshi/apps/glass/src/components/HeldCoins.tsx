@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Anchor, CircleOff, NotebookPen, PanelRight } from "lucide-react";
 
 import type { Candidate } from "../contract/v1";
-import { basisPoints, candidateName, candidateSymbol, compactUsd, duration, instantOrAbsent } from "../format";
+import { basisPoints, candidateName, candidateSymbol, compactUsd, duration, elapsedWords, instantOrAbsent } from "../format";
+import type { VenueReadoutAnswer, VenueReadoutV1 } from "../venue/contract";
 import {
   heldSubjectKeys,
   holdEntriesFor,
@@ -31,36 +32,21 @@ export type RetainedObservation = {
  * The decision-relevant facts about a venue, when something has actually measured them.
  *
  * A live bonding curve and a graduated pool differ by roughly fifty times in the clip they can
- * carry, which is the difference between a coin being worth her attention and not. Glass computes
- * none of it and must never appear to: this is the render shape of
- * `joshi_liquidity::readout::PreTradeReadout`, field for field, so wiring it up is a serializer
- * and not a second implementation.
+ * carry, and a graduated pool at a small market cap can be as expensive as a curve, because the
+ * fee-tier row its market cap selects is the lever rather than the venue label. Glass computes
+ * none of it and must never appear to: this is the parsed wire the local core serves from
+ * `joshi_liquidity::readout::PreTradeReadout`, so wiring it up is a renderer and not a second
+ * implementation.
  */
-export type HeldVenueReadout = {
-  venueKind: string;
-  venueAccount: string;
-  /** What binds that account to this mint, stated rather than assumed. A curve names no mint. */
-  venueBinding: string;
-  /** Venue-only round trip at the probe size. The floor, in basis points. */
-  feeFloorBps: string;
-  /** The probe is a declared input, not a venue fact, so it is shown next to what it produced. */
-  feeFloorProbeSol: string;
-  declaredLiftBps: string;
-  /**
-   * Both ends of the break-even clip interval at that lift, or exactly why there is none.
-   *
-   * With any fixed cost at all the answer is an interval and never a ceiling -- too small and the
-   * network fee eats the trade, too large and the curve does -- so it is never rendered as one
-   * number. "No clip breaks even" is an answer too, and it is rendered as an answer.
-   */
-  breakEvenClip: { smallestSol: string; largestSol: string } | { refusal: string };
-  /** The binding uncertainty on all of this is state age, so it is never left off the screen. */
-  stateAge: string;
-  /** What the readout could not reconstruct. An empty list is a claim, so it is rendered too. */
-  unsupported: string[];
-};
+export type HeldVenueReadout = VenueReadoutV1;
 
-export type HeldVenueLookup = (subjectKey: string) => HeldVenueReadout | null;
+/**
+ * Either a measured readout for a held coin or the reason there is none.
+ *
+ * `null` is a third answer and a different one: this cockpit has no venue source at all, so
+ * nothing was even asked. It is not evidence that nothing has been measured anywhere.
+ */
+export type HeldVenueLookup = (subjectKey: string) => VenueReadoutAnswer | null;
 
 function retentionText(retention: HoldRetention): string {
   switch (retention.state) {
@@ -72,8 +58,105 @@ function retentionText(retention: HoldRetention): string {
   }
 }
 
-function VenueAndClip({ readout }: { readout: HeldVenueReadout | null }) {
-  if (!readout) {
+/** How long ago these bytes arrived, recomputed while the readout sits on screen unread. */
+function useElapsedSince(receivedAtUnixMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    // Five seconds, deliberately. One pool was measured drifting nine to ten basis points in
+    // thirty seconds, so the age has to visibly move; and this element carries no live region, so
+    // a screen reader is never interrupted by a clock she did not ask about.
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now - receivedAtUnixMs;
+}
+
+/**
+ * When these numbers were true, which is the part that beats the arithmetic.
+ *
+ * Chain-to-receipt was measured at eleven to thirteen seconds, mostly the `finalized` commitment
+ * depth, and one pool drifted nine to ten basis points in thirty seconds -- so a sixty
+ * basis-point fee floor is two to four minutes of drift. A number on screen without its age is a
+ * lie by omission, so this is rendered above the numbers rather than under them.
+ */
+function StateAge({ readout }: { readout: HeldVenueReadout }) {
+  const age = readout.stateAge;
+  const elapsed = useElapsedSince(Number(age.receivedAtUnixMs));
+  return (
+    <div className="held-venue-age">
+      <p>
+        <strong>Read {elapsedWords(elapsed)} ago</strong> at slot {age.contextSlot}, commitment{" "}
+        {age.requestedCommitment}. These numbers describe that moment and are not refreshed.
+      </p>
+      <p>
+        {"absence" in age.chainToReceipt
+          ? age.chainToReceipt.absence
+          : `Chain to receipt was ${age.chainToReceipt.earliestMs} to ${age.chainToReceipt.latestMs} ms; an interval, because chain time has whole-second resolution.`}
+      </p>
+      <p>
+        {"absence" in age.drift
+          ? age.drift.absence
+          : `Measured drift: the marginal price moved ${age.drift.direction} ${age.drift.bps} bps over ${age.drift.elapsedSlots} slots and ${age.drift.elapsedLocalMs} ms`
+            + (age.drift.bpsPerMinute === null
+              ? ", over a window with no duration."
+              : `, about ${age.drift.bpsPerMinute} bps per minute over that one window. It bounds nothing in general.`)}
+      </p>
+    </div>
+  );
+}
+
+/** What crossing the next threshold does to the rate, said as a consequence rather than a label. */
+const NEXT_TIER_WORDS = {
+  cheaper: "cheaper if this grows into it.",
+  dearer: "dearer if this grows into it.",
+  unchanged: "the same rate there.",
+  not_comparable: "not comparable, because a creator component was not observed.",
+} as const;
+
+/**
+ * Which fee-tier row this market cap selects, and how far the next one is.
+ *
+ * Three real mints, read on consecutive evenings: a bonding curve at 247 basis points, a graduated
+ * pool at 60, and a second graduated pool at 249 -- the last one as expensive as the curve,
+ * because its 42.8 SOL market cap selects the fee program's first tier row at 125 basis points a
+ * leg. "Graduated" predicts nothing. The row does, and the tables are steep enough that being near
+ * a threshold is worth knowing before the trade rather than after it.
+ */
+function FeeTier({ tier }: { tier: HeldVenueReadout["feeTier"] }) {
+  if ("absence" in tier) {
+    return (
+      <div>
+        <dt>Fee tier</dt>
+        <dd className="held-venue-absent">Not stated<p className="held-venue-note">{tier.absence}</p></dd>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <dt>Fee tier</dt>
+      <dd>
+        Row {tier.rowOrdinal} of {tier.rowCount} · {tier.legBps} bps a leg
+        <p className="held-venue-note">
+          Market cap {tier.marketCapSol} SOL selects the row at {tier.thresholdSol} SOL.
+          {tier.belowFirstThreshold
+            ? " That first row is applying as the program's fallback, not because its own threshold was reached."
+            : ""}
+        </p>
+        <p className="held-venue-note">
+          {"absence" in tier.next
+            ? tier.next.absence
+            : `Next row ${tier.next.rowOrdinal} at ${tier.next.thresholdSol} SOL: ${tier.next.gapSol} SOL of market cap away`
+              + (tier.next.gapBpsOfMarketCap === null ? "" : ` (${tier.next.gapBpsOfMarketCap} bps of the current cap)`)
+              + `, ${tier.next.legBps} bps a leg there — `
+              + NEXT_TIER_WORDS[tier.next.direction]}
+        </p>
+      </dd>
+    </div>
+  );
+}
+
+function VenueAndClip({ answer }: { answer: VenueReadoutAnswer | null }) {
+  if (answer === null) {
     return (
       <div className="held-venue" data-measured="false">
         <h4>Venue and clip</h4>
@@ -81,6 +164,7 @@ function VenueAndClip({ readout }: { readout: HeldVenueReadout | null }) {
           <div><dt>Venue kind</dt><dd>Not yet measured</dd></div>
           <div><dt>Fee floor</dt><dd>Not yet measured</dd></div>
           <div><dt>Clips that break even inside a stated lift</dt><dd>Not yet measured</dd></div>
+          <div><dt>Fee tier</dt><dd>Not yet measured</dd></div>
         </dl>
         <p>
           No liquidity measurement is attached to this cockpit yet. These lines stay empty until a
@@ -90,33 +174,62 @@ function VenueAndClip({ readout }: { readout: HeldVenueReadout | null }) {
       </div>
     );
   }
+  if (answer.state === "absent") {
+    return (
+      <div className="held-venue" data-measured="false">
+        <h4>Venue and clip</h4>
+        <p className="held-venue-absent" role="note">{answer.absence}</p>
+      </div>
+    );
+  }
+  const readout = answer.readout;
   return (
     <div className="held-venue" data-measured="true">
       <h4>Venue and clip</h4>
+      <StateAge readout={readout} />
       <dl>
         <div>
           <dt>Venue kind</dt>
-          <dd>{readout.venueKind}</dd>
-          <p>Bound by {readout.venueBinding} · account {readout.venueAccount}</p>
+          <dd>
+            {readout.venueKind}
+            <p className="held-venue-note">Bound by {readout.venueBinding} · account {readout.venueAccount}</p>
+          </dd>
         </div>
         <div>
           <dt>Fee floor</dt>
-          <dd>{readout.feeFloorBps} bps</dd>
-          <p>Venue only, probed at {readout.feeFloorProbeSol} SOL</p>
+          <dd>
+            {readout.feeFloorBps} bps
+            <p className="held-venue-note">Venue only, probed at {readout.feeFloorProbeSol} SOL</p>
+          </dd>
         </div>
         <div>
           <dt>Clips that break even inside a {readout.declaredLiftBps} bps lift</dt>
-          {"refusal" in readout.breakEvenClip
-            ? <dd className="held-venue-refusal">None. {readout.breakEvenClip.refusal}</dd>
-            : <dd>{readout.breakEvenClip.smallestSol} SOL to {readout.breakEvenClip.largestSol} SOL</dd>}
-          <p>An interval, not a ceiling: below it the fixed costs eat the trade, above it the curve does.</p>
+          <dd className={"refusal" in readout.breakEvenClip ? "held-venue-refusal" : undefined}>
+            {"refusal" in readout.breakEvenClip
+              ? `None. ${readout.breakEvenClip.refusal}`
+              : `${readout.breakEvenClip.smallestSol} SOL to ${readout.breakEvenClip.largestSol} SOL`}
+            <p className="held-venue-note">An interval, not a ceiling: below it the fixed costs eat the trade, above it the curve does.</p>
+          </dd>
         </div>
+        <FeeTier tier={readout.feeTier} />
       </dl>
-      <p>State read at {readout.stateAge}.{" "}
-        {readout.unsupported.length === 0
-          ? "This readout names nothing it could not reconstruct, which is itself worth doubting rather than trusting."
-          : `Not reconstructed: ${readout.unsupported.join("; ")}.`}
-      </p>
+      {readout.pessimisticTierBranch !== null && (
+        <p className="held-venue-refusal" role="note">{readout.pessimisticTierBranch}</p>
+      )}
+      <p>Declared costs: {readout.declaredCosts}</p>
+      {readout.unsupported.length === 0 ? (
+        <p>
+          This readout names nothing it could not reconstruct, which is itself worth doubting rather
+          than trusting.
+        </p>
+      ) : (
+        <>
+          <p id={`held-gaps-${readout.mint}`}>Not reconstructed, {readout.unsupported.length} in all:</p>
+          <ul className="held-venue-gaps" aria-labelledby={`held-gaps-${readout.mint}`}>
+            {readout.unsupported.map((line) => <li key={line}>{line}</li>)}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -273,7 +386,7 @@ export function HeldCoins({
                     </dl>
                   )}
 
-                  <VenueAndClip readout={venueReadout?.(subjectKey) ?? null} />
+                  <VenueAndClip answer={venueReadout?.(subjectKey) ?? null} />
 
                   {notes.length > 0 && (
                     <ul className="held-notes" aria-label={`Notes you appended to ${label}`}>

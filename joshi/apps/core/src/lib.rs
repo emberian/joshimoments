@@ -7,6 +7,7 @@ pub mod live_surface;
 pub mod pairing;
 pub mod readiness;
 pub mod service;
+pub mod venue_readout;
 #[doc(hidden)]
 pub mod wave5_circulation;
 pub mod wave5_g0;
