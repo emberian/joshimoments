@@ -1,0 +1,66 @@
+{
+  "contract": "joshi.pump_api.fetch_outcome.v1",
+  "requestGroupId": "reqgrp:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368619758515-a7e47240c3d10c9da81c365f2f7141a7",
+  "attempts": [
+    {
+      "contract": "joshi.pump_api.acquisition.v1",
+      "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+      "acquisitionId": "acq:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368619758515-a7e47240c3d10c9da81c365f2f7141a7",
+      "requestGroupId": "reqgrp:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368619758515-a7e47240c3d10c9da81c365f2f7141a7",
+      "attemptOrdinal": "1",
+      "routeId": "callout_recent",
+      "transport": "http",
+      "accessClass": "observed_public_product",
+      "stability": "undocumented_observed",
+      "sessionClass": "public",
+      "sourceLocator": "https://frontend-api-v3.pump.fun/callout/recent",
+      "requestFingerprint": "sha256:19ec6d6a38335ef549eee2e2665d506958e25c04faef24b7432878fe45baebe6",
+      "httpStatus": 400,
+      "safeResponseHeaders": [
+        {
+          "name": "content-type",
+          "value": "application/json; charset=utf-8"
+        },
+        {
+          "name": "date",
+          "value": "Sat, 22 Aug 2026 03:17:00 GMT"
+        },
+        {
+          "name": "etag",
+          "value": "W/\"nCUhFJnXUsDGWRrTMrMb4aHZFxc=\""
+        },
+        {
+          "name": "x-ratelimit-limit",
+          "value": "60"
+        },
+        {
+          "name": "x-ratelimit-remaining",
+          "value": "59"
+        },
+        {
+          "name": "x-ratelimit-reset",
+          "value": "60"
+        }
+      ],
+      "clocks": {
+        "startedAt": "2026-08-22T03:16:59.765858Z",
+        "receivedAt": "2026-08-22T03:16:59.962078Z",
+        "monotonicClockId": "mono:pump-api:aa47977575a5c7fab82dae8476b1df1a:83037:1787368619758402",
+        "startedMonotonicNs": "7457792",
+        "receivedMonotonicNs": "203681875",
+        "elapsedNs": "196224083"
+      },
+      "body": {
+        "status": "exact",
+        "boundary": "http_entity_body_post_transfer_decoding_identity_encoding",
+        "mediaType": "application/json; charset=utf-8",
+        "bytesBase64": "eyJzdGF0dXNDb2RlIjo0MDAsInRpbWVzdGFtcCI6IjIwMjYtMDgtMjJUMDM6MTc6MDAuMDYzWiIsInBhdGgiOiIvY2FsbG91dC9yZWNlbnQiLCJtZXNzYWdlIjoiVmFsaWRhdGlvbiBmYWlsZWQgKHV1aWQgaXMgZXhwZWN0ZWQpIiwiZXJyb3IiOiJCYWQgUmVxdWVzdCJ9",
+        "byteLength": "153",
+        "blobId": "sha256:a6a636c93d30713cc371439a68b62206d1141bbd896a8467c75718d7f5c5bb19"
+      }
+    }
+  ],
+  "coverageWindows": [],
+  "coverageGaps": [],
+  "completed": false
+}

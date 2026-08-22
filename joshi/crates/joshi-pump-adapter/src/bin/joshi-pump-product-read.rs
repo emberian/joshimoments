@@ -39,8 +39,10 @@ use serde_json::Value;
 #[command(about = "One bounded Pump product read, admitted and read back after restart")]
 struct Cli {
     /// SPL mint of the coin to read. It appears in the URL path and in the derived claim.
+    /// Required exactly when the catalogued route has a `{mint}` path segment; a discovery feed
+    /// such as `/coins` is coin-less and must be read without one.
     #[arg(long)]
-    mint: String,
+    mint: Option<String>,
     /// Catalogued route to read. Only routes the pinned catalog marks collectable are allowed.
     #[arg(long, default_value = "coin_exact")]
     route: String,
@@ -146,9 +148,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let request = LogicalRequest {
         route,
         parameters: RequestParameters {
-            path: [("mint".to_owned(), cli.mint.clone())]
-                .into_iter()
-                .collect(),
+            path: path_parameters(spec, cli.mint.as_deref())?,
             query,
         },
     };
@@ -307,6 +307,36 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("{}", serde_json::to_string_pretty(&receipt)?);
     Ok(())
+}
+
+/// Bind the route's path parameters from what the caller supplied, driven by the pinned catalog
+/// rather than by the assumption that every product read is about one coin. A collection route
+/// such as `/coins` requires nothing, and handing it a mint anyway is a caller error the client
+/// would refuse on the next line; saying so here keeps the refusal legible.
+fn path_parameters(
+    spec: RouteSpec,
+    mint: Option<&str>,
+) -> Result<std::collections::BTreeMap<String, String>, Box<dyn std::error::Error>> {
+    if spec.required_path.iter().any(|name| *name != "mint") {
+        return Err(format!(
+            "route {} needs a path parameter this binary cannot supply: {:?}",
+            spec.id, spec.required_path
+        )
+        .into());
+    }
+    let takes_mint = spec.required_path.contains(&"mint");
+    match (takes_mint, mint) {
+        (true, Some(value)) => Ok([("mint".to_owned(), value.to_owned())]
+            .into_iter()
+            .collect()),
+        (true, None) => Err(format!("route {} needs --mint", spec.id).into()),
+        (false, None) => Ok(std::collections::BTreeMap::new()),
+        (false, Some(_)) => Err(format!(
+            "route {} takes no mint; it reads a collection, not one coin",
+            spec.id
+        )
+        .into()),
+    }
 }
 
 /// Parse repeated `name=value` query arguments. The client still refuses any name the pinned

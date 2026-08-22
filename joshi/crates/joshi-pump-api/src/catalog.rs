@@ -223,6 +223,34 @@ impl RouteSpec {
                 &[],
                 true,
             ),
+            // Measured live 2026-08-22 across 24 successful calls. The document is a BARE
+            // top-level JSON array of coin records; there is no envelope, no total and no cursor,
+            // so this route asserts nothing whatever about completeness.
+            //
+            // The provider enumerates its own accepted `sort` values in its 400 body:
+            // created_timestamp, market_cap, ath_market_cap, reply_count, last_reply,
+            // last_trade_timestamp. `order` is ASC or DESC and the provider enumerates that too.
+            // `last_reply` is sortable but is NOT a field this route returns, so it can order a
+            // page that cannot be read back. `includeNsfw`, `searchTerm` and `creator` were all
+            // accepted, and `creator` genuinely filtered to that creator's coins.
+            //
+            // `limit` SILENTLY CLAMPS TO 70. limit=71, limit=100 and limit=1000 each returned
+            // exactly 70 rows with HTTP 200 and no warning of any kind, so a caller that asks for
+            // a thousand and counts what it gets is the only caller that finds out.
+            //
+            // `offset` genuinely pages, but over a population that moves under it: at
+            // sort=created_timestamp DESC roughly one coin per second is created, so offset=5
+            // taken seconds after offset=0 re-served a row the first page had already returned.
+            // Deep offsets stop paying out ENTIRELY SILENTLY: offset=1000 returned 70 rows,
+            // offset=1030, 2000 and 5000 each returned a bare `[]` under HTTP 200. Past the end
+            // and no-such-coin are the same two bytes, so an empty page here is never evidence
+            // that nothing matched.
+            //
+            // THE FIELD THAT IS NOT HERE: this route carries no volume, no trade count, no
+            // holder count and no buy/sell split. Its only flow-adjacent fields are
+            // last_trade_timestamp, ath_market_cap with ath_market_cap_timestamp, and
+            // reply_count. The sibling /coins/search-unrestricted route DOES carry
+            // volume_1h_usd; see RouteId::CoinSearch.
             RouteId::DiscoveryCoins => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
@@ -230,7 +258,9 @@ impl RouteSpec {
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
                 PaginationKind::OffsetLimit,
-                "query sort/order; membership and revision unknown",
+                "measured 2026-08-22: bare array; sort/order as the provider enumerates them; limit \
+                 silently clamps to 70; offset pages a population that moves under it and answers \
+                 past-the-end with an empty array; no volume field",
                 &[],
                 &[
                     "offset",
@@ -242,8 +272,18 @@ impl RouteSpec {
                     "creator",
                 ],
                 &["searchTerm", "creator"],
-                false,
+                true,
             ),
+            // Measured live 2026-08-22. Also a bare top-level JSON array. Rows are the same coin
+            // record as /coins plus a livestream block: num_participants, livestream_title,
+            // thumbnail, thumbnail_updated_at, playlist_status, playlist_updated_at and four
+            // playlist URLs. `num_participants` is the only audience-size number anywhere in this
+            // catalog and it is present on every row.
+            //
+            // A bare call returned 60 rows; `limit` and `offset` were both honoured. The row
+            // order matches NO field the rows carry: it is not num_participants, not
+            // usd_market_cap and not last_trade_timestamp, in either direction. Whatever ranks
+            // this feed is not observable in it, so nothing downstream may read position as rank.
             RouteId::CurrentlyLive => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
@@ -251,12 +291,31 @@ impl RouteSpec {
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
                 PaginationKind::OffsetLimit,
-                "provider live rank; revision unknown",
+                "measured 2026-08-22: bare array; offset/limit page; row order matches no returned \
+                 field, so position is not a readable rank; membership churns between calls",
                 &[],
                 &["offset", "limit"],
                 &[],
-                false,
+                true,
             ),
+            // Measured live 2026-08-22, and it is not what its name suggests. This route returns
+            // the same bare array of coin records as /coins with ONE EXTRA FIELD THAT NOTHING
+            // ELSE IN THIS CATALOG HAS: `volume_1h_usd`, present and non-zero on all 70 rows of
+            // every term-bearing page measured. And the rows arrive strictly DESCENDING BY
+            // `volume_1h_usd` — verified monotone over 70 rows for two different terms, and
+            // continuing correctly across an offset page whose highest volume sat below the
+            // previous page's lowest. It is a live-volume leaderboard filtered by a term, not a
+            // relevance ranking.
+            //
+            // The term is load-bearing. With `searchTerm` omitted, and with it set to the empty
+            // string, the route returned long-dead coins with volume_1h_usd of exactly 0 ordered
+            // ASCENDING by market cap. So this cannot enumerate a global universe in one call;
+            // reaching one means sweeping terms, and every such sweep is a biased sample of
+            // whatever the terms happened to match.
+            //
+            // `limit` is NOT clamped at 70 here the way it is on /coins: limit=100 returned 100
+            // rows. Two sibling routes on one host with different silent caps is exactly the kind
+            // of thing that has to be measured per route rather than inherited.
             RouteId::CoinSearch => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
@@ -264,25 +323,48 @@ impl RouteSpec {
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
                 PaginationKind::OffsetLimit,
-                "search relevance; session effects unknown",
+                "measured 2026-08-22: bare array carrying volume_1h_usd, strictly descending by it \
+                 within the searchTerm match; offset pages; limit 100 honoured; an absent or empty \
+                 searchTerm yields dead zero-volume coins ascending by market cap",
                 &[],
                 &["searchTerm", "offset", "limit"],
                 &["searchTerm"],
-                false,
+                true,
             ),
+            // MEASURED NON-EXISTENT 2026-08-22. This entry was catalogued for three days as a
+            // global recent-callout feed with a descending-score keyset. It has neither, because
+            // the path is not a route. A bare GET answered HTTP 400 with
+            //   {"statusCode":400,"path":"/callout/recent",
+            //    "message":"Validation failed (uuid is expected)","error":"Bad Request"}
+            // which is a UUID-parse pipe rejecting the literal segment "recent": the handler that
+            // caught the request is /callout/{uuid}, and no handler is bound to /callout/recent.
+            // The retained body is fixtures/callout_recent_phantom_v1.json.
+            //
+            // It stays in the catalog, un-collectable, so that the refutation is durable and the
+            // next reader does not re-derive this route from the same wishful reading of the
+            // sibling paths. No replacement path is guessed here; /callout/top/{mint} and
+            // /callout/list/{mint} below were separately confirmed to exist.
             RouteId::CalloutRecent => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
                 "/callout/recent",
                 AccessClass::ObservedPublicProduct,
                 Stability::UndocumentedObserved,
-                PaginationKind::PageToken,
-                "descending score keyset as observed; revisions unknown",
+                PaginationKind::None,
+                "measured 2026-08-22: no such route; the provider answers 400 uuid-expected because \
+                 /callout/{uuid} is what catches this path",
                 &[],
                 &["limit", "pageToken"],
                 &["pageToken"],
                 false,
             ),
+            // Measured live 2026-08-22 against a busy mint: this one is real, and the predicted
+            // envelope was right. It returns {"callouts":[...]} whose rows carry calloutId,
+            // userId, user_uuid, coinMint, marketCap, calloutPrice, multiple, createdAt,
+            // maxPriceSol, thesis, peakTimestamp, username, profileImage and xUsername. `multiple`
+            // and `peakTimestamp` are outcomes as of the read, never pre-event features. It stays
+            // un-collectable because it is mint-scoped and retrospective: it can score a coin
+            // already chosen, and can never originate a candidate.
             RouteId::CalloutTop => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",
@@ -296,6 +378,11 @@ impl RouteSpec {
                 &[],
                 false,
             ),
+            // Measured live 2026-08-22 against the same busy mint that /callout/top answered for:
+            // real route, predicted envelope correct, and it returned
+            // {"callouts":[],"nextPageToken":""} — an EMPTY list for a coin that demonstrably has
+            // callouts. Whether that is a default sort, a window, or censoring is unresolved, so
+            // an empty answer here is emphatically not evidence that a mint has no callouts.
             RouteId::CalloutByMint => Self::http(
                 id,
                 "https://frontend-api-v3.pump.fun",

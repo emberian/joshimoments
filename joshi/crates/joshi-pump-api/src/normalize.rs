@@ -229,13 +229,24 @@ pub(crate) fn records(
         // the discovery feeds; trades is an object carrying a `trades` array beside a
         // `pagination` object. A single shared guess at ["candles","trades","data"] covered
         // neither and silently produced zero candle rows out of a 1000-row body.
+        //
+        // Measured live 2026-08-22: /coins, /coins/currently-live and /coins/search-unrestricted
+        // are each a BARE top-level JSON array, so `raw_array` is right for all three by
+        // measurement rather than by family resemblance.
         RouteId::DiscoveryCoins
         | RouteId::CurrentlyLive
         | RouteId::CoinSearch
-        | RouteId::UserSearch
-        | RouteId::Following
         | RouteId::Candles => raw_array(root),
+        // STILL UNMEASURED. Nothing has ever called these two, so `raw_array` here is a guess of
+        // exactly the kind that read a 1000-row candle body as zero rows. Both routes are
+        // un-collectable in the pinned catalog; the first live call must re-measure this arm
+        // before anything downstream believes a row count from it.
+        RouteId::UserSearch | RouteId::Following => unmeasured_bare_array_guess(root),
         RouteId::Trades => nested_array(root, &["trades"]),
+        // Measured live 2026-08-22 against a busy mint: /callout/top/{mint} answers
+        // {"callouts":[...]} and /callout/list/{mint} answers {"callouts":[],"nextPageToken":""},
+        // so the envelope key was predicted correctly for both. /callout/recent is not a route at
+        // all — see the catalog — and can never reach this arm with a body to read.
         RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByMint => {
             nested_array(root, &["callouts", "data"])
         }
@@ -247,6 +258,15 @@ pub(crate) fn records(
             Ok(vec![root.to_owned()])
         }
     }
+}
+
+/// The same reader as the measured bare-array arm, under a name that says it is a guess.
+///
+/// It exists so that a lint, or a later reader in a hurry, cannot merge an arm that was checked
+/// against real provider bytes into one that never has been. Both routes are un-collectable in
+/// the pinned catalog; the first live call must replace this with a measurement.
+fn unmeasured_bare_array_guess(root: &RawValue) -> Result<Vec<Box<RawValue>>, NormalizeError> {
+    raw_array(root)
 }
 
 fn nested_array(
@@ -304,6 +324,32 @@ fn normalize_record(
 #[allow(clippy::too_many_lines)] // Auditable field policy is intentionally centralized by route.
 fn allowed_fields(route: RouteId) -> &'static [&'static str] {
     match route {
+        // Every name below was seen in a live 2026-08-22 body on at least one of these four
+        // routes; extraction is presence-filtered, so a route that does not carry one simply has
+        // no such field rather than a null. What the earlier list was MISSING, measured:
+        //
+        //   ath_market_cap / ath_market_cap_timestamp — present on /coins, on
+        //     /coins/currently-live AND on the already-promoted /coins-v2/{mint}, and silently
+        //     dropped from all three. It is the only within-lifetime peak this provider exposes,
+        //     and the pair with usd_market_cap is the one drawdown signal a SINGLE snapshot can
+        //     support.
+        //   volume_1h_usd — /coins/search-unrestricted only, and the only realised-flow number
+        //     anywhere in this catalog.
+        //   num_participants — /coins/currently-live only; a live audience count.
+        //   last_reply / king_of_the_hill_timestamp — present on some rows only.
+        //   total_supply / total_supply_str / base_decimals / quote_decimals — needed before any
+        //     market cap can be turned into a per-token price; `total_supply` is a JSON number
+        //     and `total_supply_str` the same quantity as a string, so both are retained and
+        //     neither is preferred here.
+        //   bonding_curve / associated_bonding_curve / pool_address / pump_swap_pool — the venue
+        //     a coin actually trades on, which `complete` alone does not identify.
+        //   nsfw / is_banned / boost_mode / mayhem_state / inverted — provider flags that gate
+        //     whether a coin is tradeable or promoted at all.
+        //
+        // Free text and media URLs (description, image_uri, twitter, website, telegram, username,
+        // livestream_title, thumbnails, playlist URLs) are deliberately NOT extracted. They are
+        // untrusted user content, they are in the retained exact bytes for anyone who needs them,
+        // and none of them is a decision input.
         RouteId::CoinExact
         | RouteId::DiscoveryCoins
         | RouteId::CurrentlyLive
@@ -313,8 +359,17 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "symbol",
             "creator",
             "complete",
+            "initialized",
             "created_timestamp",
             "last_trade_timestamp",
+            "updated_at",
+            "ath_market_cap",
+            "ath_market_cap_timestamp",
+            "king_of_the_hill_timestamp",
+            "last_reply",
+            "reply_count",
+            "volume_1h_usd",
+            "num_participants",
             "virtual_quote_reserves",
             "virtual_sol_reserves",
             "virtual_token_reserves",
@@ -325,14 +380,27 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "market_cap_quote",
             "market_cap_usd",
             "usd_market_cap",
-            "reply_count",
+            "total_supply",
+            "total_supply_str",
+            "base_decimals",
+            "quote_decimals",
+            "bonding_curve",
+            "associated_bonding_curve",
+            "pool_address",
+            "pump_swap_pool",
             "token_program",
             "quote_mint",
+            "chain_id",
+            "multichain_family",
             "program",
             "protocol",
             "is_currently_live",
             "verified",
-            "updated_at",
+            "nsfw",
+            "is_banned",
+            "inverted",
+            "boost_mode",
+            "mayhem_state",
         ],
         RouteId::SolPrice => &["solPrice", "asOfTimestamp", "stale"],
         RouteId::BalanceSummary | RouteId::BalanceTokens => &[
@@ -440,13 +508,50 @@ fn tagged_scalar(field: &str, raw: &RawValue) -> Option<TaggedScalar> {
 
 fn semantics(field: &str) -> &'static str {
     match field {
-        "mint" | "creator" | "coinMint" | "address" | "userId" | "user_uuid" | "walletAddress"
-        | "calloutId" | "id" | "signature" | "tx" | "userAddress" | "slotIndexId" => {
-            "provider_identifier"
-        }
-        "createdAt" | "created_timestamp" | "calloutTimestamp" | "timestamp" | "time" => {
-            "provider_event_time_unparsed"
-        }
+        "mint"
+        | "creator"
+        | "coinMint"
+        | "address"
+        | "userId"
+        | "user_uuid"
+        | "walletAddress"
+        | "calloutId"
+        | "id"
+        | "signature"
+        | "tx"
+        | "userAddress"
+        | "slotIndexId"
+        | "bonding_curve"
+        | "associated_bonding_curve"
+        | "pool_address"
+        | "pump_swap_pool"
+        | "quote_mint"
+        | "token_program"
+        | "chain_id" => "provider_identifier",
+        "createdAt"
+        | "created_timestamp"
+        | "calloutTimestamp"
+        | "timestamp"
+        | "time"
+        | "last_trade_timestamp"
+        | "ath_market_cap_timestamp"
+        | "king_of_the_hill_timestamp"
+        | "last_reply" => "provider_event_time_unparsed",
+        // MEASURED 2026-08-22 and NOT a detail: on /coins and /coins/currently-live every other
+        // time on the row is epoch MILLISECONDS and `updated_at` alone is epoch SECONDS. Read as
+        // milliseconds it lands in January 1970, which looks like a plausible stale record rather
+        // than like a units error, so the distinction is carried in the tag and the lexeme is
+        // never rescaled here.
+        "updated_at" => "provider_event_time_epoch_seconds_unparsed",
+        // Realised one-hour USD volume, measured only on /coins/search-unrestricted. It is a
+        // provider aggregate over a window this catalog cannot see the edges of, so it is never
+        // a sum this codebase can reproduce from trades it holds.
+        "volume_1h_usd" => "provider_windowed_aggregate_unverifiable",
+        // The highest market cap the provider has ever recorded for this coin, with the instant
+        // it says that happened. It is an outcome as of the read: comparing it to the current
+        // market cap yields a drawdown, never a forecast.
+        "ath_market_cap" => "retrospective_peak_as_of_acquisition_never_pre_event_feature",
+        "num_participants" => "provider_live_audience_count",
         // These arrive as JSON strings holding 28-significant-digit decimals. Tagging them
         // `utf8` alone would let a later reader mistake a price for a name, and the provider
         // pads `open`/`close` to a fixed width while trimming `high`/`low`, so two byte-unequal

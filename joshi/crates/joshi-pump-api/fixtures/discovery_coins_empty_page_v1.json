@@ -1,0 +1,83 @@
+{
+  "contract": "joshi.pump_api.fetch_outcome.v1",
+  "requestGroupId": "reqgrp:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368581347516-3ab6d67f503458dc3805a5386a6dd8bb",
+  "attempts": [
+    {
+      "contract": "joshi.pump_api.acquisition.v1",
+      "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+      "acquisitionId": "acq:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368581347516-3ab6d67f503458dc3805a5386a6dd8bb",
+      "requestGroupId": "reqgrp:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368581347516-3ab6d67f503458dc3805a5386a6dd8bb",
+      "attemptOrdinal": "1",
+      "routeId": "discovery_coins",
+      "transport": "http",
+      "accessClass": "observed_public_product",
+      "stability": "undocumented_observed",
+      "sessionClass": "public",
+      "sourceLocator": "https://frontend-api-v3.pump.fun/coins",
+      "requestFingerprint": "sha256:feaa52c5f3e9a0df2219292af1c6d2da1aba65e3d6b8a4bf3b7cd5d8e03237e1",
+      "httpStatus": 200,
+      "safeResponseHeaders": [
+        {
+          "name": "content-type",
+          "value": "application/json; charset=utf-8"
+        },
+        {
+          "name": "date",
+          "value": "Sat, 22 Aug 2026 03:16:22 GMT"
+        },
+        {
+          "name": "etag",
+          "value": "W/\"l9Fw4VUO7kr8CvBlt4zaMCqXZ0w=\""
+        },
+        {
+          "name": "x-ratelimit-limit",
+          "value": "60"
+        },
+        {
+          "name": "x-ratelimit-remaining",
+          "value": "59"
+        },
+        {
+          "name": "x-ratelimit-reset",
+          "value": "60"
+        }
+      ],
+      "clocks": {
+        "startedAt": "2026-08-22T03:16:21.359289Z",
+        "receivedAt": "2026-08-22T03:16:21.958507Z",
+        "monotonicClockId": "mono:pump-api:aa47977575a5c7fab82dae8476b1df1a:82763:1787368581347391",
+        "startedMonotonicNs": "11899167",
+        "receivedMonotonicNs": "611126667",
+        "elapsedNs": "599227500"
+      },
+      "body": {
+        "status": "exact",
+        "boundary": "http_entity_body_post_transfer_decoding_identity_encoding",
+        "mediaType": "application/json; charset=utf-8",
+        "bytesBase64": "W10=",
+        "byteLength": "2",
+        "blobId": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    }
+  ],
+  "coverageWindows": [
+    {
+      "windowId": "window:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368581347516-3ab6d67f503458dc3805a5386a6dd8bb",
+      "observedFrom": "2026-08-22T03:16:21.359289Z",
+      "observedTo": "2026-08-22T03:16:21.958507Z",
+      "scope": {
+        "routeId": "discovery_coins",
+        "requestFingerprint": "sha256:feaa52c5f3e9a0df2219292af1c6d2da1aba65e3d6b8a4bf3b7cd5d8e03237e1",
+        "orderSemantics": "query sort/order; membership and revision unknown",
+        "cursorInFingerprint": "sha256:5b66bd0ed856171ce4852788b6a30f6f8bc04dc579e29dea7a29da1e3b0d5eda",
+        "pageSize": "70"
+      },
+      "acquisitionIds": [
+        "acq:pump-api:aa47977575a5c7fab82dae8476b1df1a:1787368581347516-3ab6d67f503458dc3805a5386a6dd8bb"
+      ],
+      "completeness": "one_response_page_observed_feed_completion_unknown"
+    }
+  ],
+  "coverageGaps": [],
+  "completed": true
+}
