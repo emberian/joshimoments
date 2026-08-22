@@ -65,7 +65,43 @@ Comparing the signature of a coin Ember would work against one she would not is 
 measurement of her selection and still needs no taxonomy from her. This replaces the 1-second-bar
 approach entirely.
 
+## CORRECTION I OWE EMBER
+
+I told her repeatedly that the 55GB corpus had "never been read by anything" and framed Phase 1 as
+first contact. **That is false.** joshibot has roughly ten completed studies against these exact
+bytes (seasonality, callout_volatility, jackduval_workup, operator_crime, quality_callers,
+failure_stream, cluster_map, bundle_hypothesizer, unrealized_pnl, plus RESULT_*.md), and
+joshibot/scripts/pump_history.py documents the collection method, the zero-failures property and the
+curve-price identity. Every one of those facts was independently re-derived tonight and matched. The
+corpus was composted along with a repo that had already mined it. Correct framing is PORT AND
+RE-VERIFY, never first read. I asserted "nobody has ever read them" in a deputy brief and to Ember.
+
 ## Done log
+
+- 2026-08-22 00:55 CORPUS READ AND CENSUSED. 106,639,238 rows / 449,723 mints / 2.5M owners /
+  220,475,360 signed balance changes, queryable in 30-50ms per mint over 107M rows.
+  **THE HUNTING GROUND IS DENSE: 174,192 mints (38.7% of corpus, 54.9% of those that traded) had at
+  least one half-hour with >=4 trades and >=8% unsigned range. ~34,000 qualifying half-hours/day,
+  ~23,000 with >=10 SOL.** Robust across 27 configs (153,430-186,156). My independent re-derivation
+  with different tiling: 176,284 mints, 36,730/day.
+  - REPEAT RATE, conditioned on span (raw counts are misleading because most coins live <30min):
+    series alive >3 days average 151.9 workable half-hours of which 51.9 qualify; 71.1% of them have
+    >=10 qualifying. So Ember's harvest question is descriptively YES and **the binding constraint is
+    attention, not supply**.
+  - **Ember's 8-20% band is only 18.0% of workable half-hours; >20% moves are 42.6%; median workable
+    half-hour ranges 13.7%. Her band describes her exit discipline, not the market.** Do not hard-code it.
+  - `err` is empty on ALL 106M rows and structurally cannot be otherwise: extraction keeps only
+    transactions where a pump-mint balance CHANGED, and a revert rolls balances back. No attempt /
+    landing / adverse-selection study is possible on these bytes; that needs a re-pull, not a flag.
+  - Selection is `mint LIKE '%pump'` — a vanity CONVENTION. High precision, UNMEASURED RECALL.
+  - Native SOL lamports are not carried, so curve trades have NO observed SOL amount.
+    sol_leg_lamports_exact stays NULL and a separately-named model column carries the readout.
+    Nothing coalesces them and that separation must survive every downstream join.
+  - Curve model validated against pump.fun's OWN reserves from an independent joshibot boards tape:
+    99.23% exact to better than 1e-6, median relative error 4.8e-9.
+  - Caveats that must travel with the census: last-trade mark is not an executable quote (8% range
+    is not 8% of edge); max/min in a tile is an ORACLE BOUND assuming you turn at the extremes;
+    79% of qualifying half-hours rest on the curve model rather than observed SOL.
 
 - 2026-08-21 23:47 DISCOVERY MEASURED, 81 tests green. Headline: two 5-page sweeps of
   /coins?sort=last_trade_timestamp 97 SECONDS apart, joined on mint -> 64 of ~200 mints persisted
