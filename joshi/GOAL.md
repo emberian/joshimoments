@@ -67,6 +67,16 @@ approach entirely.
 
 ## Done log
 
+- 2026-08-21 23:43 P2 signature instrument landed (analysis/src/joshi_analysis/signature.py, 5
+  tests, 181 analysis tests green). First microstructure statistic JOSHI has computed from its own
+  durably retained provider bytes. On the retained 200-bar window: event-time signature falls
+  monotonically 2.30 -> 0.52 (pure mean reversion) while wall-time signature RISES to a hump at ~5s
+  (0.089 -> 0.246) then falls to 0.033. Same bytes, opposite reading at short lags, because gap
+  compression makes an index step "one traded interval" and an elapsed step "one interval of wall
+  clock including silence". Positive serial dependence inside a burst, reversion across bursts =
+  stylized fact E2 visible in our own data. Caveat: one coin, one window, 45-78 pairs at short wall
+  lags. The instrument works; this is not yet a result about the market.
+
 - 2026-08-21 23:07 committed the three deputy lanes: pump tap measured (candles is a bare array, the
   normalizer had been silently returning 0 rows of 1000; `before` is inert; trades cursor is a
   seekable keyset), ORBITFAN's fabricated 15-number dossier removed from the live cockpit, contract
