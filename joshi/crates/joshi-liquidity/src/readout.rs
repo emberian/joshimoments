@@ -141,6 +141,24 @@ pub enum FeeRateSource {
         /// Market cap, in quote atoms, the tier was selected at.
         selected_at_market_cap_quote_atoms: u128,
     },
+    /// Carried whole from a reading taken elsewhere, at another time, by another process.
+    ///
+    /// **The argument for widening this enum.** A replay over a retained tape reads no account at
+    /// all. The tape states no fee rate on any frame — measured, 0 of 1734 — so a replay's rates
+    /// can only come from a reading that already happened. Every alternative was worse: reusing
+    /// [`Self::FeeProgramConfig`] would write a configuration address and a tier selection into
+    /// an artifact where neither was read, which is exactly the kind of borrowed authority this
+    /// enum exists to prevent; and refusing to price a tape at all would discard the only
+    /// repeatable evidence this system has. So the second provenance is named instead, and it is
+    /// deliberately weaker than the first: it carries no tier selection, cannot take a tier
+    /// standing, and states in its own fields when and by what its rates were established.
+    CarriedFromPriorReading {
+        /// What established these rates, in the declarer's words, including the account they were
+        /// read from and when.
+        established_by: String,
+        /// Why the rates could not be read at the state they are applied to.
+        not_read_here_because: String,
+    },
 }
 
 /// The clock a piece of state carries, and the age that follows from it.
@@ -448,7 +466,10 @@ impl PreTradeReadout {
         let FeeRateSource::FeeProgramConfig {
             selected_at_market_cap_quote_atoms,
             ..
-        } = &self.fee_source;
+        } = &self.fee_source
+        else {
+            return Err(ReadoutError::TierStandingNeedsARateReadHere);
+        };
         if standing.market_cap_quote_atoms != *selected_at_market_cap_quote_atoms {
             return Err(ReadoutError::TierStandingMarketCapDiffers {
                 standing: standing.market_cap_quote_atoms,
@@ -593,11 +614,6 @@ impl PreTradeReadout {
         );
 
         out.push_str("\nfees\n");
-        let FeeRateSource::FeeProgramConfig {
-            config_address,
-            tables_agreed,
-            selected_at_market_cap_quote_atoms,
-        } = &self.fee_source;
         let _ = writeln!(
             out,
             "  lp {} bps, protocol {} bps, creator {}",
@@ -609,16 +625,34 @@ impl PreTradeReadout {
                 CreatorFee::Unknown => "UNKNOWN".to_owned(),
             }
         );
-        let _ = writeln!(
-            out,
-            "  source          fee program config {config_address}, tier selected at market cap \
-             {selected_at_market_cap_quote_atoms} quote atoms"
-        );
-        let _ = writeln!(
-            out,
-            "  tables agreed   {tables_agreed} (never the Global account, never the frontend \
-             index)"
-        );
+        match &self.fee_source {
+            FeeRateSource::FeeProgramConfig {
+                config_address,
+                tables_agreed,
+                selected_at_market_cap_quote_atoms,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "  source          fee program config {config_address}, tier selected at \
+                     market cap {selected_at_market_cap_quote_atoms} quote atoms"
+                );
+                let _ = writeln!(
+                    out,
+                    "  tables agreed   {tables_agreed} (never the Global account, never the \
+                     frontend index)"
+                );
+            }
+            FeeRateSource::CarriedFromPriorReading {
+                established_by,
+                not_read_here_because,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "  source          CARRIED, not read here: {established_by}"
+                );
+                let _ = writeln!(out, "  not read here   {not_read_here_because}");
+            }
+        }
 
         out.push_str(&self.render_tier());
 
@@ -847,6 +881,11 @@ pub const fn lamports_per_sol() -> u128 {
 /// Exactly why a readout could not be assembled. An absent line is never a zero.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ReadoutError {
+    #[error(
+        "a tier standing needs rates that were read at this state; this readout's rates were \
+         carried from a prior reading and select no tier"
+    )]
+    TierStandingNeedsARateReadHere,
     #[error(
         "the stated composition sums to {composed} quote atoms but the state carries {stated}; \
          these must be the same number or the readout is describing a reserve nobody observed"

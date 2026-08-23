@@ -13,6 +13,7 @@ pub mod pool_depth;
 pub mod position;
 pub mod q64;
 pub mod readout;
+pub mod replay;
 pub mod round_trip;
 pub mod tier;
 

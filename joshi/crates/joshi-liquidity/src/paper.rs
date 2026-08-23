@@ -157,6 +157,12 @@ pub enum ChainClock {
     NotRequested,
     /// The provider was asked and stated no block time. An absent record, never an age of zero.
     ProviderStatedNone,
+    /// The feed the state came from carries no chain clock at all, for any frame. Not an economy
+    /// and not a provider's silence about one slot: a structural property of the source, measured
+    /// rather than assumed. A retained `PumpPortal` trade tape is the case this exists for — 0 of
+    /// 1734 frames carried a timestamp, a `blockTime` or a slot — and the only time axis such a
+    /// state has is the recorder's own receive instant.
+    FeedStatesNoClock,
     Stated(ChainSecond),
 }
 
@@ -1595,7 +1601,29 @@ fn render_fee_source(source: &FeeRateSource) -> String {
         config_address,
         tables_agreed,
         selected_at_market_cap_quote_atoms,
-    } = source;
+    } = source
+    else {
+        let FeeRateSource::CarriedFromPriorReading {
+            established_by,
+            not_read_here_because,
+        } = source
+        else {
+            unreachable!("the fee-rate source enum has exactly two variants")
+        };
+        return object(&[
+            ("provenance", quoted("carried_from_prior_reading")),
+            ("establishedBy", quoted(established_by)),
+            ("notReadHereBecause", quoted(not_read_here_because)),
+            (
+                "note",
+                quoted(
+                    "these rates were not read at the state they are applied to, and no tier was \
+                     selected here; a carried rate is weaker evidence than a read one and is \
+                     named so rather than dressed as one",
+                ),
+            ),
+        ]);
+    };
     object(&[
         ("configAddress", quoted(config_address)),
         (
@@ -1631,6 +1659,13 @@ fn render_chain_clock(clock: ChainClock) -> String {
             quoted(
                 "the provider stated no block time for this slot; an absent record, never an \
                  age of zero",
+            ),
+        )]),
+        ChainClock::FeedStatesNoClock => object(&[(
+            "status",
+            quoted(
+                "the feed this state came from carries no chain clock on any frame; the only \
+                 time axis is the recorder's own receive instant, and no chain age is derivable",
             ),
         )]),
         ChainClock::Stated(second) => object(&[
