@@ -437,6 +437,13 @@ first ten holds.
 
 ## Done log
 
+- 2026-08-23 01:12 COMPOSITION COMPLETE, re-verified end to end. The exact test that failed two hours
+  ago — `live-surface-inspect --follow --source-id pump.api.product.v1` over a candles catalog — now
+  derives a scene (subjectCount 1, 2 observations) with NO CandlesNameNoSubject refusal, and the mint
+  landed as a durable source event `mint:pump:XkeT…|pump.api.product.v1|solana.token_mint`. The
+  keeper's price taps can now become live scenes: keeper -> catalog -> follow-mode -> scene is whole
+  for BOTH the wallet source and the price source.
+
 - 2026-08-23 01:02 MINT BINDING LANDED — the identity-gap family is closed at the source. The mint is
   retained from the public request path (catalog-declared per route; user/address keep redaction),
   landed as a durable source event linked from the ATTEMPT ENVELOPE not the body, and scene
