@@ -414,6 +414,27 @@ measured thing we have (callers show no forward edge; leaderboards are retrospec
 corpus predictor is an accounting identity). Which means if there is alpha here, current evidence
 points at EMBER'S selection — making the hold gesture and journal the instrument that could find out.
 
+## SELECTION IS MEASURABLE — verified 2026-08-23 01:05
+
+Checked with plain sqlite3 and no project code: an operator act binds to a scene, the scene's view
+blob is durably retained, and the scene's FULL CANDIDATE LIST reconstructs from those bytes. On the
+real resident catalog: 4 candidates recovered from the scene the act was bound to. So JOSHI already
+records WHAT EMBER WAS CHOOSING AMONG at the instant she chose — the counterfactual "she took this
+one and passed those three" is answerable from durable bytes.
+
+That was the precondition worth verifying BEFORE her first session, because if the choice set were
+not recoverable, the whole session's holds would be unscoreable and we would only have found out
+afterwards.
+
+SELECTION LANE dispatched (opus). Design constraints that matter: the comparison is chosen-vs-passed
+WITHIN one scene (same instant, same choice set, so market-wide moves cancel without needing a
+market factor); outcomes measured only on post-act data; a mint with no post-act observations is an
+ABSENT RECORD counted and reported, never a zero (dropping them biases toward coins that stayed
+observable); an edge smaller than the venue fee floor is not an edge. The scoring rule is
+PRE-REGISTERED before touching real data, and the first deliverable is a POWER STATEMENT — how many
+marked decisions are needed before skill is distinguishable from chance — so nobody over-reads the
+first ten holds.
+
 ## Done log
 
 - 2026-08-23 01:02 MINT BINDING LANDED — the identity-gap family is closed at the source. The mint is
