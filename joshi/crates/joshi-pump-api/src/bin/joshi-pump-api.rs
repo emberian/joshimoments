@@ -12,7 +12,7 @@ use joshi_pump_api::{
     AccessClass, Acquisition, ClientConfig, CredentialFileSession, FetchOutcome, IdentityStore,
     LogicalRequest, NoSession, ParityInput, PumpApiClient, RequestParameters, RouteId,
     RowProjectionReviewV1, SchemaRegistry, SessionProvider, SiwsSession, SiwsSessionProvider,
-    WalletSigner, compare, decide_row_projection_trust, normalize,
+    SuppliedReview, WalletSigner, compare, decide_row_projection_trust, normalize,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -36,6 +36,20 @@ enum Command {
         input: PathBuf,
         registry: PathBuf,
         output: PathBuf,
+    },
+    /// Audit one retained acquisition or fetch outcome for the known source-level failure
+    /// families. No network I/O.
+    ///
+    /// The input is sniffed by its `contract` line: a `joshi.pump_api.fetch_outcome.v1` audits
+    /// every attempt plus the outcome-level absence accounting; a bare
+    /// `joshi.pump_api.acquisition.v1` audits that one acquisition. Reviews of either kind may
+    /// be supplied repeatedly; each attempt selects the review matching its route, preferring
+    /// the kind measured to govern that route. A check that cannot decide reports UNDECIDABLE
+    /// with its reason — it never passes by default.
+    Audit {
+        input: PathBuf,
+        #[arg(long = "review")]
+        reviews: Vec<PathBuf>,
     },
     /// Re-run the row-projection gate offline over one saved fetch outcome. No network I/O.
     ///
@@ -136,6 +150,71 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             reject_duplicate_keys(&bytes)?;
             let raw: Box<RawValue> = serde_json::from_slice(&bytes)?;
             println!("{}", schema_fingerprint(&raw)?);
+        }
+        Command::Audit { input, reviews } => {
+            #[derive(Debug, Deserialize)]
+            struct ContractOnly {
+                contract: String,
+            }
+            let bytes = fs::read(&input)?;
+            reject_duplicate_keys(&bytes)?;
+            let supplied = reviews
+                .iter()
+                .map(|path| {
+                    let review_bytes = fs::read(path)?;
+                    SuppliedReview::from_slice(&review_bytes)
+                        .map_err(|error| format!("{}: {error}", path.display()).into())
+                })
+                .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+            let head: ContractOnly = serde_json::from_slice(&bytes)?;
+            let decided_at =
+                time::OffsetDateTime::now_utc().format(time::macros::format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z"
+                ))?;
+            let (report, findings): (serde_json::Value, Vec<joshi_pump_api::AuditFinding>) =
+                match head.contract.as_str() {
+                    "joshi.pump_api.fetch_outcome.v1" => {
+                        let outcome: FetchOutcome = serde_json::from_slice(&bytes)?;
+                        let audit =
+                            joshi_pump_api::audit_fetch_outcome(&outcome, &supplied, &decided_at)?;
+                        let mut findings = audit.outcome_findings.clone();
+                        for attempt in &audit.attempt_audits {
+                            findings.extend(attempt.findings.iter().cloned());
+                        }
+                        (serde_json::to_value(&audit)?, findings)
+                    }
+                    "joshi.pump_api.acquisition.v1" => {
+                        let acquisition: Acquisition = serde_json::from_slice(&bytes)?;
+                        let review =
+                            joshi_pump_api::select_review(&supplied, &acquisition.route_id);
+                        let audit =
+                            joshi_pump_api::audit_acquisition(&acquisition, review, &decided_at)?;
+                        let findings = audit.findings.clone();
+                        (serde_json::to_value(&audit)?, findings)
+                    }
+                    other => {
+                        return Err(format!(
+                            "unsupported input contract {other:?}; expected a fetch outcome or \
+                             an acquisition"
+                        )
+                        .into());
+                    }
+                };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            let count = |severity: joshi_pump_api::AuditSeverity| {
+                findings
+                    .iter()
+                    .filter(|finding| finding.severity == severity)
+                    .count()
+            };
+            eprintln!(
+                "audit: {} finding(s) — {} defect, {} gap, {} hazard, {} observation",
+                findings.len(),
+                count(joshi_pump_api::AuditSeverity::Defect),
+                count(joshi_pump_api::AuditSeverity::Gap),
+                count(joshi_pump_api::AuditSeverity::Hazard),
+                count(joshi_pump_api::AuditSeverity::Observation),
+            );
         }
         Command::RowGate { outcome, review } => {
             let outcome: FetchOutcome = strict_file(&outcome)?;

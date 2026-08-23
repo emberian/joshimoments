@@ -5,6 +5,7 @@
 //! refuses every method other than `GET`. Normalized records are provider assertions derived
 //! from those bytes and remain quarantined until an observed schema fingerprint is promoted.
 
+pub mod audit;
 pub mod auth;
 pub mod auth_session;
 pub mod catalog;
@@ -20,6 +21,11 @@ pub mod reserves;
 pub mod row_projection;
 pub mod trust;
 
+pub use audit::{
+    ACQUISITION_AUDIT_V1, AcquisitionAuditV1, AuditCheckRecord, AuditFamily, AuditFinding,
+    AuditLocus, AuditSeverity, CheckVerdict, NotExaminedV1, OUTCOME_AUDIT_V1, OutcomeAuditV1,
+    SuppliedReview, audit_acquisition, audit_fetch_outcome, select_review,
+};
 pub use auth::{CredentialFileSession, NoSession, SessionMaterial, SessionProvider};
 pub use auth_session::{SiwsError, SiwsSession, SiwsSessionProvider, WalletSigner};
 pub use catalog::{AccessClass, PaginationKind, RouteId, RouteSpec, Stability, TransportKind};
