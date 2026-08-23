@@ -280,6 +280,77 @@ impl ValidatedOperatorCommandV1 {
             _ => None,
         }
     }
+
+    /// The client-observed choice-context set this act asserts, when this is a
+    /// `record_choice_set` act.
+    ///
+    /// The subjects are exactly the payload's: already validated unique, canonically sorted,
+    /// and every one `candidate`-kind. After `validate_against_view` each key is additionally
+    /// known to name a candidate present in the exact bound scene, which is what lets a store
+    /// treat the assertion as a subset of that scene's rendered choice set.
+    #[must_use]
+    pub fn asserted_choice_set(&self) -> Option<AssertedChoiceSetV1<'_>> {
+        match &self.payload {
+            OperatorPayload::RecordChoiceSet(value) => Some(AssertedChoiceSetV1 {
+                set_kind: &value.choice_set.set_kind,
+                subjects: value
+                    .choice_set
+                    .subjects
+                    .iter()
+                    .map(|subject| AssertedChoiceSubjectV1 {
+                        kind: &subject.kind,
+                        key: &subject.key,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// One client-asserted choice-context set, exactly as an admitted `record_choice_set` act
+/// stated it. This is testimony about what the operator's client observed, never a server
+/// derivation; the server-owned kinds (`eligible`, `surfaced`, `rendered`) are not among its
+/// admissible wire kinds.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssertedChoiceSetV1<'a> {
+    set_kind: &'a str,
+    subjects: Vec<AssertedChoiceSubjectV1<'a>>,
+}
+
+impl<'a> AssertedChoiceSetV1<'a> {
+    /// Frozen wire set kind: `surfaced`, `filtered`, `viewport`, `interacted`, or `compared`.
+    #[must_use]
+    pub const fn set_kind(&self) -> &'a str {
+        self.set_kind
+    }
+
+    /// Unique, canonically sorted members.
+    #[must_use]
+    pub fn subjects(&self) -> &[AssertedChoiceSubjectV1<'a>] {
+        &self.subjects
+    }
+}
+
+/// One member of a client-asserted choice set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssertedChoiceSubjectV1<'a> {
+    kind: &'a str,
+    key: &'a str,
+}
+
+impl<'a> AssertedChoiceSubjectV1<'a> {
+    /// Typed subject family; the frozen contract admits only `candidate`.
+    #[must_use]
+    pub const fn kind(&self) -> &'a str {
+        self.kind
+    }
+
+    /// Exact subject identity.
+    #[must_use]
+    pub const fn key(&self) -> &'a str {
+        self.key
+    }
 }
 
 /// Public command receipt status.
@@ -1021,6 +1092,49 @@ mod tests {
             .split_once(prefix)
             .and_then(|(_, after)| after.split_once(suffix))
             .map_or_else(|| panic!("missing golden {prefix}"), |(value, _)| value)
+    }
+
+    #[test]
+    fn choice_set_assertion_is_exposed_and_other_kinds_assert_nothing() {
+        let command = extract(
+            GOLDEN,
+            "export const GOLDEN_OPERATOR_COMMAND_V1_JSON = `",
+            "`;\n\nexport const GOLDEN_OPERATOR_PAYLOAD_V1_DIGEST",
+        );
+        let original_payload = extract(
+            GOLDEN,
+            "export const GOLDEN_OPERATOR_PAYLOAD_V1_JSON = `",
+            "`;\n\nexport const GOLDEN_OPERATOR_COMMAND_V1_JSON",
+        );
+        let disposition = ValidatedOperatorCommandV1::parse_exact(command.as_bytes())
+            .unwrap_or_else(|error| panic!("golden command: {error}"));
+        assert!(disposition.asserted_choice_set().is_none());
+
+        let context = r#"{"uiLabel":"Capture","uiLabelVersion":"1","confidencePpm":null,"urgency":null,"whyNow":null,"note":null}"#;
+        let payload = format!(
+            r#"{{"context":{context},"choiceSet":{{"setKind":"viewport","subjects":[{{"kind":"candidate","key":"fable"}},{{"kind":"candidate","key":"radon"}}],"selectedSubject":{{"kind":"candidate","key":"radon"}}}}}}"#
+        );
+        let encoded = command
+            .replace(
+                "\"commandKind\":\"record_disposition\"",
+                "\"commandKind\":\"record_choice_set\"",
+            )
+            .replace(original_payload, &payload);
+        let admitted = ValidatedOperatorCommandV1::parse_exact(encoded.as_bytes())
+            .unwrap_or_else(|error| panic!("choice-set command: {error}"));
+        let assertion = admitted
+            .asserted_choice_set()
+            .expect("choice-set act exposes its assertion");
+        assert_eq!(assertion.set_kind(), "viewport");
+        let subjects: Vec<(&str, &str)> = assertion
+            .subjects()
+            .iter()
+            .map(|subject| (subject.kind(), subject.key()))
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![("candidate", "fable"), ("candidate", "radon")]
+        );
     }
 
     #[test]

@@ -18,11 +18,12 @@ import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
 import { exactUtcNow } from "./operator/contract";
+import { viewportAssertionIntent } from "./operator/attention";
 import { heldSubjectKeys, holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
 import { journalEntryIntent } from "./operator/journal";
 import { configuredOperatorReader, type OperatorCommandReader } from "./operator/readback";
 import { useDurableSceneCommands } from "./operator/useDurableSceneCommands";
-import { useOperatorJournal } from "./operator/useOperatorJournal";
+import { useOperatorJournal, type OperatorIntent } from "./operator/useOperatorJournal";
 import type { PendingOperatorCommandQueue } from "./operator/pendingQueue";
 import { configuredPresentationSink, type PresentationSink } from "./presentation/client";
 import { explorationBundleFor } from "./presentation/fixtures";
@@ -94,7 +95,19 @@ export function GlassApp({
   const [focusRequest, setFocusRequest] = useState(0);
   const [capturePreset, setCapturePreset] = useState<CapturePreset | null>(null);
   const [sceneInspectorOpen, setSceneInspectorOpen] = useState(false);
-  const [viewportIds, setViewportIds] = useState<string[]>([]);
+  /**
+   * Candidates whose row the operator's reading actually reached in this scene, in reach order.
+   *
+   * This is the scene's `viewport` choice set — the selection instrument's pre-registered
+   * denominator — and `operator/attention.ts` states exactly what it does and does not claim.
+   * It grows from three observable events only: a feed row receiving real focus, an explicit
+   * selection gesture, and an evidence act naming a candidate. It deliberately does NOT grow
+   * from virtualizer mounting or scroll-rect intersection: pixels on screen are not reading,
+   * least of all for a screen-reader operator.
+   */
+  const [attendedIds, setAttendedIds] = useState<string[]>([]);
+  const attendedRef = useRef<Set<string>>(new Set());
+  const lastAssertedViewport = useRef<{ sceneId: string; key: string } | null>(null);
   const [interactedIds, setInteractedIds] = useState<string[]>([]);
   const [heldObservations, setHeldObservations] = useState<Record<string, RetainedObservation>>({});
   const [holdAnnouncement, setHoldAnnouncement] = useState("");
@@ -214,20 +227,36 @@ export function GlassApp({
   }, [board, query, stableOrder.orderedCandidates]);
 
   useEffect(() => {
-    setViewportIds([]);
+    // A new scene is a new choice context: what was reached in the previous scene says nothing
+    // about what has been reached in this one, even for the same coin at a newer price.
+    attendedRef.current = new Set();
+    setAttendedIds([]);
     setInteractedIds([]);
   }, [snapshot?.view.sceneId]);
 
-  const selectCandidate = useCallback((candidateId: string) => {
-    setSelectedId(candidateId);
-    setInteractedIds((current) => current.includes(candidateId) ? current : [...current, candidateId]);
+  const noteAttended = useCallback((candidateId: string) => {
+    if (attendedRef.current.has(candidateId)) return;
+    attendedRef.current.add(candidateId);
+    setAttendedIds((current) => current.includes(candidateId) ? current : [...current, candidateId]);
   }, []);
 
-  const updateViewport = useCallback((candidateIds: string[]) => {
-    setViewportIds((current) => current.length === candidateIds.length && current.every((id, index) => id === candidateIds[index])
-      ? current
-      : candidateIds);
-  }, []);
+  const selectCandidate = useCallback((candidateId: string) => {
+    noteAttended(candidateId);
+    setSelectedId(candidateId);
+    setInteractedIds((current) => current.includes(candidateId) ? current : [...current, candidateId]);
+  }, [noteAttended]);
+
+  /**
+   * A row's focus is the reading event this cockpit can actually observe: Tab, J/K roving, and
+   * screen-reader navigation that moves system focus all land here. It feeds the viewport set
+   * and keeps selection in step, so what is being read and what a keystroke acts on stay the
+   * same thing. Deliberately not `selectCandidate`: focus reaching a row is reading, not an
+   * interaction gesture, and the `interacted` set keeps that narrower meaning.
+   */
+  const attendCandidate = useCallback((candidateId: string) => {
+    noteAttended(candidateId);
+    setSelectedId(candidateId);
+  }, [noteAttended]);
 
   useEffect(() => {
     if (visibleCandidates.some((candidate) => candidate.id === selectedId)) return;
@@ -246,7 +275,39 @@ export function GlassApp({
     }
   }, [selectCandidate, selectedId, visibleCandidates]);
 
-  const recordCommand = operatorJournal.record;
+  /**
+   * Record one operator act, then let the act carry its scene's honest viewport with it.
+   *
+   * A candidate-named act is what makes a scene durable and scoreable, so it is exactly the
+   * moment the selection instrument's denominator matters. The assertion is a second ordinary
+   * evidence command on the same route (`operator/attention.ts` states precisely what it claims
+   * and refuses to claim); it costs no keystroke, moves no focus, renders nothing, and is
+   * skipped when the reached set has not changed. When it cannot be recorded, the scene keeps
+   * only its `rendered` set and the instrument reports that fallback — absence stays visible,
+   * never backfilled.
+   */
+  const recordCommand = useCallback((intent: OperatorIntent) => {
+    const commandId = operatorJournal.record(intent);
+    if (snapshot && intent.commandKind !== "record_choice_set" && intent.subject.kind === "candidate") {
+      noteAttended(intent.subject.key);
+      const inScene = new Set(snapshot.view.payload.candidates.map((candidate) => candidate.id));
+      const reached = [...attendedRef.current].filter((id) => inScene.has(id)).sort();
+      const sceneId = snapshot.view.sceneId;
+      const reachedKey = reached.join("\0");
+      const last = lastAssertedViewport.current;
+      if (reached.length > 0 && (last === null || last.sceneId !== sceneId || last.key !== reachedKey)) {
+        try {
+          operatorJournal.record(viewportAssertionIntent(sceneId, reached, intent.subject.key));
+          lastAssertedViewport.current = { sceneId, key: reachedKey };
+        } catch {
+          // Her act must never fail because its instrumentation could not be recorded. The
+          // scene then keeps only its rendered choice set, which the instrument reports as
+          // the fallback it is.
+        }
+      }
+    }
+    return commandId;
+  }, [noteAttended, operatorJournal.record, snapshot]);
 
   /**
    * Keep the retained copy of every held coin as fresh as the feed actually made it.
@@ -430,12 +491,17 @@ export function GlassApp({
   if (!selected) return <main className="load-state">This served snapshot contains no candidates.</main>;
   const episode = snapshot.view.payload.episodes.find((item) => item.candidateId === selected.id);
   const mode = snapshot.view.mode;
+  // Membership in this scene's choice context requires being in this scene: a coin reached or
+  // selected from the held rail after the feed stopped carrying it is real attention, but it is
+  // not part of this scene's choice set and asserting it would be refused against these bytes.
+  const inThisScene = (id: string) => candidates.some((candidate) => candidate.id === id);
+  const interactedHere = interactedIds.filter(inThisScene);
   const choiceSets: ChoiceSets = {
     surfaced: candidates.map((candidate) => candidate.id),
     filtered: visibleCandidates.map((candidate) => candidate.id),
-    viewport: viewportIds,
-    interacted: interactedIds,
-    compared: interactedIds.slice(-3),
+    viewport: attendedIds.filter(inThisScene),
+    interacted: interactedHere,
+    compared: interactedHere.slice(-3),
   };
 
   return (
@@ -506,7 +572,7 @@ export function GlassApp({
           onSelect={selectCandidate}
           onAppendNote={appendHoldNote}
         />
-        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={setSelectedId} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest} onViewportChange={updateViewport}
+        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
           orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder} />
         <div id="selected-coin" tabIndex={-1}>
           <CoinWorkbench candidate={selected} episode={episode} socialEvents={snapshot.view.payload.socialEvents} onAnnotate={annotateChart} />
@@ -565,10 +631,11 @@ export function GlassApp({
       <OperatorCaptureDialog
         preset={capturePreset}
         candidate={selected}
+        sceneId={snapshot.view.sceneId}
         mode={mode}
         choiceSets={choiceSets}
         onClose={() => setCapturePreset(null)}
-        onRecord={operatorJournal.record}
+        onRecord={recordCommand}
       />
       <SceneInspector open={sceneInspectorOpen} onOpenChange={setSceneInspectorOpen} snapshot={snapshot} choiceSets={choiceSets} sceneEntries={operatorJournal.sceneEntries} presentationScene={presentationWitness.scene} presentationReceipt={presentationWitness.receipt} presentationEventReceipts={presentationWitness.eventReceipts} presentationGap={presentationWitness.error ?? presentationWitness.eventGap} />
     </div>

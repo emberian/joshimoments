@@ -66,6 +66,7 @@ export function emptyCaptureContext(label: string): CaptureContext {
 function intentFor(
   preset: CapturePreset,
   candidate: Candidate,
+  sceneId: string,
   choiceSets: ChoiceSets,
   values: {
     confidencePpm: string;
@@ -121,9 +122,12 @@ function intentFor(
       };
     case "choice_set": {
       const ids = [...choiceSets[values.choiceSetKind]].sort();
+      // The subject is the scene itself, exactly like a journal entry: capturing a choice set
+      // states context, it does not mark the currently selected coin as chosen, and the
+      // selection instrument counts every candidate-named act as a mark.
       return {
         commandKind: "record_choice_set",
-        subject: candidateSubject,
+        subject: { kind: "scene", key: sceneId },
         label,
         payload: {
           context,
@@ -181,6 +185,7 @@ function requiresOpenValue(preset: CapturePreset): boolean {
 export function OperatorCaptureDialog({
   preset,
   candidate,
+  sceneId,
   mode,
   choiceSets,
   onClose,
@@ -188,6 +193,8 @@ export function OperatorCaptureDialog({
 }: {
   preset: CapturePreset | null;
   candidate: Candidate;
+  /** The immutable scene every captured act binds; a choice-set capture names it as subject. */
+  sceneId: string;
   mode: ReplayMode;
   choiceSets: ChoiceSets;
   onClose(): void;
@@ -236,7 +243,7 @@ export function OperatorCaptureDialog({
             event.preventDefault();
             setFormError(null);
             try {
-              const intent = intentFor(preset, candidate, choiceSets, { confidencePpm, urgency, whyNow, note, openValue, choiceSetKind, outcomeVisibility });
+              const intent = intentFor(preset, candidate, sceneId, choiceSets, { confidencePpm, urgency, whyNow, note, openValue, choiceSetKind, outcomeVisibility });
               onRecord(intent);
               onClose();
             } catch (error) {
@@ -258,7 +265,7 @@ export function OperatorCaptureDialog({
                 <select value={choiceSetKind} onChange={(event) => setChoiceSetKind(event.target.value as ChoiceSetKind)}>
                   <option value="surfaced">Served by this scene ({choiceSets.surfaced.length})</option>
                   <option value="filtered">After current filters ({choiceSets.filtered.length})</option>
-                  <option value="viewport">Actually in the feed viewport ({choiceSets.viewport.length})</option>
+                  <option value="viewport">Rows your reading actually reached ({choiceSets.viewport.length})</option>
                   <option value="interacted">Explicitly focused this visit ({choiceSets.interacted.length})</option>
                   <option value="compared">Recent comparison set ({choiceSets.compared.length})</option>
                 </select>

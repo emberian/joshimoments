@@ -17,7 +17,6 @@ function Harness({ candidates }: { candidates: Candidate[] }) {
     onBoardChange={() => {}}
     density="comfortable"
     focusRequest={0}
-    onViewportChange={() => {}}
     orderUpdatePending={order.pending}
     pendingNewCount={order.pendingNewCount}
     onAcceptOrderUpdate={order.acceptPendingOrder}

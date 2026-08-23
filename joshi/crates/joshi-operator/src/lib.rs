@@ -9,8 +9,8 @@ mod error;
 mod glass;
 
 pub use command::{
-    CommandReceiptV1, OperatorCommandKind, OperatorCommandStatus, OperatorSubject,
-    ValidatedOperatorCommandV1,
+    AssertedChoiceSetV1, AssertedChoiceSubjectV1, CommandReceiptV1, OperatorCommandKind,
+    OperatorCommandStatus, OperatorSubject, ValidatedOperatorCommandV1,
 };
 pub use error::{OperatorAdmissionError, Result};
 pub use glass::{

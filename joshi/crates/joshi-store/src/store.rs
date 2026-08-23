@@ -772,9 +772,11 @@ impl SqliteStore {
         } else {
             None
         };
+        let asserted_choice_members = client_observed_choice_members(command, view)?;
         let structural = SceneCommandBatch {
             batch_id: batch_id.clone(),
             scene,
+            asserted_choice_members,
             command: CommandDraft {
                 command_id: command.command_id().clone(),
                 scene_id: Some(command.scene_id().clone()),
@@ -1398,6 +1400,43 @@ impl SqliteStore {
             .as_ref()
             .map(|scene| &scene.scene_id)
             .or(batch.command.scene_id.as_ref());
+        if !batch.asserted_choice_members.is_empty() {
+            let asserted_scene_id = scene_id.ok_or_else(|| {
+                StoreError::InvalidBatch(
+                    "client-asserted choice members lack a scene binding".into(),
+                )
+            })?;
+            for member in &batch.asserted_choice_members {
+                // Union semantics on the primary key only: a later assertion over the same
+                // scene may repeat members it already stated (the set is monotone within a
+                // scene), and repeating a fact is not a conflict. Any other constraint
+                // violation still aborts.
+                tx.execute(
+                    "INSERT INTO scene_choice_member
+                     (scene_id,set_kind,subject_kind,subject_key,source_rank,rendered_ordinal,
+                      evidence_assertion_id) VALUES (?1,?2,?3,?4,?5,?6,?7)
+                     ON CONFLICT(scene_id,set_kind,subject_kind,subject_key) DO NOTHING",
+                    params![
+                        asserted_scene_id.as_str(),
+                        member.set_kind.as_str(),
+                        member.subject_kind.as_str(),
+                        member.subject_key.as_str(),
+                        member
+                            .source_rank
+                            .map(|value| sqlite_u64(value, "asserted source rank"))
+                            .transpose()?,
+                        member
+                            .rendered_ordinal
+                            .map(|value| sqlite_u64(value, "asserted rendered ordinal"))
+                            .transpose()?,
+                        member
+                            .evidence_assertion_id
+                            .as_ref()
+                            .map(joshi_domain::AssertionId::as_str)
+                    ],
+                )?;
+            }
+        }
         tx.execute(
             "INSERT INTO command
              (command_id,committed_commit_seq,scene_id,client_session_id,client_command_seq,
@@ -3944,6 +3983,31 @@ fn validate_scene_command_preflight(
             identity: scene_id.to_string(),
         });
     }
+    if !batch.asserted_choice_members.is_empty() {
+        if batch.scene.is_none() && batch.command.scene_id.is_none() {
+            return Err(StoreError::InvalidBatch(
+                "client-asserted choice members require a scene-bound command".into(),
+            ));
+        }
+        ensure_sorted_unique(
+            batch.asserted_choice_members.iter().map(|value| {
+                (
+                    value.set_kind.as_str(),
+                    value.subject_kind.as_str(),
+                    value.subject_key.as_str(),
+                )
+            }),
+            "asserted choice members",
+        )?;
+        for member in &batch.asserted_choice_members {
+            if !CLIENT_OBSERVED_CHOICE_SET_KINDS.contains(&member.set_kind.as_str()) {
+                return Err(StoreError::InvalidBatch(format!(
+                    "client-asserted scene choice set {} is not a client-observed kind",
+                    member.set_kind
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -3964,6 +4028,63 @@ fn parse_scene_mode(value: &str) -> Result<SceneMode> {
             "invalid stored scene mode {value}"
         ))),
     }
+}
+
+/// Choice-set kinds an operator client's own observation can testify to. The server-derived
+/// kinds (`eligible`, `surfaced`, `rendered`) are never admitted from a client assertion: a
+/// client stating what the system considered or drew would be fabricating a server set, and a
+/// fabricated set is worse than an honest absence.
+const CLIENT_OBSERVED_CHOICE_SET_KINDS: [&str; 3] = ["viewport", "interacted", "compared"];
+
+/// Materializes a `record_choice_set` act into first-class `scene_choice_member` drafts.
+///
+/// Only the client-observed kinds become members. A `surfaced` or `filtered` assertion stays
+/// retained as exact command payload evidence without becoming a member row, because those
+/// names describe presentation policy rather than observed operator attention, and the member
+/// table's `surfaced` row is a server statement a client must not be able to forge.
+///
+/// Ranks are joined from the exact validated view so an asserted member carries the same
+/// `source_rank`/`rendered_ordinal` its `rendered` sibling does. `validate_against_view` has
+/// already proven every asserted subject present in that view, which keeps each client-observed
+/// set an honest subset of the scene's rendered choice set.
+fn client_observed_choice_members(
+    command: &ValidatedOperatorCommandV1,
+    view: &ValidatedGlassViewV1,
+) -> Result<Vec<ChoiceMemberDraft>> {
+    let Some(assertion) = command.asserted_choice_set() else {
+        return Ok(Vec::new());
+    };
+    if !CLIENT_OBSERVED_CHOICE_SET_KINDS.contains(&assertion.set_kind()) {
+        return Ok(Vec::new());
+    }
+    let set_kind = StableString::new(assertion.set_kind())
+        .map_err(|error| StoreError::InvalidBatch(error.to_string()))?;
+    assertion
+        .subjects()
+        .iter()
+        .map(|subject| {
+            let choice = view
+                .choices()
+                .iter()
+                .find(|choice| choice.candidate_id().as_str() == subject.key())
+                .ok_or_else(|| {
+                    StoreError::InvalidBatch(format!(
+                        "asserted choice member {} is absent from the exact scene",
+                        subject.key()
+                    ))
+                })?;
+            Ok(ChoiceMemberDraft {
+                set_kind: set_kind.clone(),
+                subject_kind: StableString::new(subject.kind())
+                    .map_err(|error| StoreError::InvalidBatch(error.to_string()))?,
+                subject_key: StableString::new(subject.key())
+                    .map_err(|error| StoreError::InvalidBatch(error.to_string()))?,
+                source_rank: choice.source_rank(),
+                rendered_ordinal: Some(choice.rendered_ordinal()),
+                evidence_assertion_id: None,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn load_blob_object(
@@ -4157,6 +4278,7 @@ mod tests {
         let scene_id = SceneId::new("scene-test").expect("scene id");
         let scene_command = SceneCommandBatch {
             batch_id: stable("batch-scene-command"),
+            asserted_choice_members: Vec::new(),
             scene: Some(SceneDraft {
                 scene_id: scene_id.clone(),
                 mode: SceneMode::Witnessed,
@@ -4358,35 +4480,7 @@ mod tests {
             .expect("commit source evidence");
         assert_eq!(ingest.commit_seq, joshi_domain::CommitSeq::new(1));
 
-        let view_source = extract_ts(
-            include_str!("../../../apps/glass/src/contract/golden.ts"),
-            "GOLDEN_VIEW_V1_JSON",
-        );
-        let cursor_block = r#""deliveredThrough":"6","cursors":[{"family":"attention","subject":"census","cursorKind":"epoch","value":"cursor-census-6","advancedThrough":"6"},{"family":"attention","subject":"hot:coin-a","cursorKind":"sequence","value":"cursor-hot-4","advancedThrough":"4"}]"#;
-        let view_bytes = view_source
-            .replace("source-a", "source-test")
-            .replace("\"catalogCommit\":\"7\"", "\"catalogCommit\":\"1\"")
-            .replace(
-                cursor_block,
-                r#""deliveredThrough":"1","cursors":[{"family":"fixture","subject":"test-scope","cursorKind":"page","value":"cursor-4","advancedThrough":"1"}]"#,
-            )
-            .replace(
-                r#""projections":[{"name":"attention","version":"1","stateDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#,
-                r#""projections":[]"#,
-            )
-            .replace("evidence-a", "observation-0")
-            .replace("2026-08-16T18:42:02.000000Z", "2026-08-16T15:59:57.000000Z")
-            .replace("2026-08-16T18:42:10.000000Z", "2026-08-16T15:59:58.000000Z")
-            .replace("2026-08-16T18:42:12.000000Z", "2026-08-16T15:59:59.000000Z")
-            .replace("2026-08-16T18:42:13.000000Z", "2026-08-16T16:00:02.000000Z")
-            .replace("2026-08-16T18:42:14.000000Z", "2026-08-16T16:00:02.000002Z")
-            .replace(
-                "\"receivedThrough\":\"2026-08-16T16:00:02.000002Z\"",
-                "\"receivedThrough\":\"2026-08-16T16:00:02.000000Z\"",
-            )
-            .replace("2026-08-16T18:42:15.000000Z", "2026-08-16T16:00:04.000000Z");
-        let view = ValidatedGlassViewV1::parse_exact(view_bytes.as_bytes(), None)
-            .expect("parse exact typed view");
+        let view = golden_typed_view();
         let command_source = extract_ts(
             include_str!("../../../apps/glass/src/operator/golden.ts"),
             "GOLDEN_OPERATOR_COMMAND_V1_JSON",
@@ -4449,6 +4543,222 @@ mod tests {
                 .view_bytes,
             view.canonical_bytes()
         );
+    }
+
+    /// Canonical `record_choice_set` command bytes bound to the golden typed view. The subject
+    /// is the scene itself, exactly as Glass issues them: a choice-set assertion states context,
+    /// it does not mark a candidate as chosen.
+    fn choice_assertion_bytes(
+        view: &ValidatedGlassViewV1,
+        command_ordinal: u32,
+        set_kind: &str,
+    ) -> String {
+        let command_source = extract_ts(
+            include_str!("../../../apps/glass/src/operator/golden.ts"),
+            "GOLDEN_OPERATOR_COMMAND_V1_JSON",
+        );
+        let payload_source = extract_ts(
+            include_str!("../../../apps/glass/src/operator/golden.ts"),
+            "GOLDEN_OPERATOR_PAYLOAD_V1_JSON",
+        );
+        let payload = format!(
+            r#"{{"context":{{"uiLabel":"Viewport reading reached (automatic)","uiLabelVersion":"1","confidencePpm":null,"urgency":null,"whyNow":null,"note":null}},"choiceSet":{{"setKind":"{set_kind}","subjects":[{{"kind":"candidate","key":"coin-a"}}],"selectedSubject":{{"kind":"candidate","key":"coin-a"}}}}}}"#
+        );
+        command_source
+            .replace(&payload_source, &payload)
+            .replace(
+                "\"commandKind\":\"record_disposition\"",
+                "\"commandKind\":\"record_choice_set\"",
+            )
+            .replace(
+                r#""subject":{"kind":"candidate","key":"radon"}"#,
+                r#""subject":{"kind":"scene","key":"scene-golden-1"}"#,
+            )
+            .replace(
+                "command-golden-1",
+                &format!("command-choice-{command_ordinal}"),
+            )
+            .replace("retry-golden-1", &format!("retry-choice-{command_ordinal}"))
+            .replace(
+                "\"clientCommandSeq\":\"7\"",
+                &format!(
+                    "\"clientCommandSeq\":\"{}\"",
+                    7 + u64::from(command_ordinal)
+                ),
+            )
+            .replace(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                view.digest().as_str(),
+            )
+    }
+
+    fn scene_choice_members(store: &SqliteStore) -> Vec<(String, String, i64, i64)> {
+        let mut statement = store
+            .connection
+            .prepare(
+                "SELECT set_kind, subject_key, source_rank, rendered_ordinal
+                 FROM scene_choice_member WHERE scene_id='scene-golden-1'
+                 ORDER BY set_kind, subject_key",
+            )
+            .expect("prepare member query");
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("query members");
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect members")
+    }
+
+    /// The viewport denominator write path: a client `record_choice_set` act materializes
+    /// first-class `scene_choice_member` rows for the client-observed kinds, unioned per scene,
+    /// idempotent on exact retry, and never for the server-derived kinds. Absence stays honest:
+    /// a scene whose acts assert nothing keeps only its `rendered` set.
+    #[test]
+    #[allow(clippy::too_many_lines)] // Union, retry, refusal and fallback close one write path.
+    fn client_choice_assertion_materializes_client_observed_members() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut store = open_migrated(directory.path());
+        store
+            .register_source(&source_registration())
+            .expect("register source");
+        let mut evidence = observation_batch(false);
+        finalize_digest(&mut evidence);
+        store
+            .commit_ingest(&evidence)
+            .expect("commit source evidence");
+        let view = golden_typed_view();
+        let capture = OperatorCaptureMetadata {
+            client_scene_seq: 1,
+            ui_build: stable("glass-test"),
+            source_mode: SceneSourceMode::Fixture,
+            rendered_clock_id: stable("browser-clock"),
+            rendered_mono_ns: 8,
+            screenshot_bytes: None,
+        };
+
+        let viewport = ValidatedOperatorCommandV1::parse_exact(
+            choice_assertion_bytes(&view, 1, "viewport").as_bytes(),
+        )
+        .expect("parse viewport assertion");
+        let receipt = store
+            .commit_operator_v1(
+                &viewport,
+                Some(&view),
+                &capture,
+                time("2026-08-16T18:42:19.000000Z"),
+                stable("writer-clock"),
+                9,
+                stable("test-writer"),
+            )
+            .expect("commit viewport assertion with its scene");
+        assert_eq!(receipt.status(), OperatorCommandStatus::Accepted);
+        // The rendered set from the served view and the asserted viewport set, with the same
+        // rank and ordinal joined from the same exact bytes.
+        assert_eq!(
+            scene_choice_members(&store),
+            vec![
+                ("rendered".into(), "coin-a".into(), 1, 0),
+                ("viewport".into(), "coin-a".into(), 1, 0),
+            ]
+        );
+
+        let retry = store
+            .commit_operator_v1(
+                &viewport,
+                None,
+                &capture,
+                time("2026-08-16T18:42:20.000000Z"),
+                stable("writer-clock"),
+                10,
+                stable("test-writer"),
+            )
+            .expect("exact assertion retry");
+        assert_eq!(retry.status(), OperatorCommandStatus::Idempotent);
+        assert_eq!(scene_choice_members(&store).len(), 2);
+
+        // A later act on the now-durable scene unions further client-observed members.
+        let interacted = ValidatedOperatorCommandV1::parse_exact(
+            choice_assertion_bytes(&view, 2, "interacted").as_bytes(),
+        )
+        .expect("parse interacted assertion");
+        store
+            .commit_operator_v1(
+                &interacted,
+                None,
+                &capture,
+                time("2026-08-16T18:42:21.000000Z"),
+                stable("writer-clock"),
+                11,
+                stable("test-writer"),
+            )
+            .expect("commit interacted assertion on the durable scene");
+        assert_eq!(
+            scene_choice_members(&store),
+            vec![
+                ("interacted".into(), "coin-a".into(), 1, 0),
+                ("rendered".into(), "coin-a".into(), 1, 0),
+                ("viewport".into(), "coin-a".into(), 1, 0),
+            ]
+        );
+
+        // A `surfaced` assertion is an operator claim about presentation, not a client-observed
+        // set: it stays retained as exact command payload without forging a server member row.
+        let surfaced = ValidatedOperatorCommandV1::parse_exact(
+            choice_assertion_bytes(&view, 3, "surfaced").as_bytes(),
+        )
+        .expect("parse surfaced assertion");
+        let surfaced_receipt = store
+            .commit_operator_v1(
+                &surfaced,
+                None,
+                &capture,
+                time("2026-08-16T18:42:22.000000Z"),
+                stable("writer-clock"),
+                12,
+                stable("test-writer"),
+            )
+            .expect("commit surfaced assertion as evidence only");
+        assert_eq!(surfaced_receipt.status(), OperatorCommandStatus::Accepted);
+        assert_eq!(scene_choice_members(&store).len(), 3);
+
+        // The structural layer refuses a client assertion of any server-derived kind outright.
+        let forged = SceneCommandBatch {
+            batch_id: stable("batch-forged-choice"),
+            scene: None,
+            asserted_choice_members: vec![ChoiceMemberDraft {
+                set_kind: stable("rendered"),
+                subject_kind: stable("candidate"),
+                subject_key: stable("coin-a"),
+                source_rank: Some(1),
+                rendered_ordinal: Some(0),
+                evidence_assertion_id: None,
+            }],
+            command: CommandDraft {
+                command_id: CommandId::new("command-forged-choice").expect("command id"),
+                scene_id: Some(SceneId::new("scene-golden-1").expect("scene id")),
+                client_session_id: ClientSessionId::new("session-golden-1").expect("client id"),
+                client_command_seq: 99,
+                idempotency_key: stable("retry-forged-choice"),
+                command_kind: stable("record_choice_set"),
+                subject_kind: stable("scene"),
+                subject_key: stable("scene-golden-1"),
+                payload_bytes: br#"{"forged":true}"#.to_vec(),
+                issued_at: time("2026-08-16T18:42:23.000000Z"),
+                client_clock_id: stable("clock-golden-1"),
+                issued_mono_ns: 99,
+                received_at: time("2026-08-16T18:42:23.000001Z"),
+            },
+            committed_at: time("2026-08-16T18:42:23.000002Z"),
+            writer_clock_id: stable("writer-clock"),
+            committed_mono_ns: 13,
+            writer_build: stable("test-writer"),
+        };
+        assert!(matches!(
+            store.commit_scene_command(&forged),
+            Err(StoreError::InvalidBatch(_))
+        ));
+        assert_eq!(scene_choice_members(&store).len(), 3);
     }
 
     #[test]
@@ -4569,6 +4879,40 @@ mod tests {
         let prefix = format!("export const {name} = `");
         let rest = source.split_once(&prefix).expect("golden prefix").1;
         rest.split_once("`;\n").expect("golden suffix").0.to_owned()
+    }
+
+    /// The exact cross-language golden Glass view, rebound onto this module's fixture source
+    /// and its first ingest commit so typed admission can resolve every reference.
+    fn golden_typed_view() -> ValidatedGlassViewV1 {
+        let view_source = extract_ts(
+            include_str!("../../../apps/glass/src/contract/golden.ts"),
+            "GOLDEN_VIEW_V1_JSON",
+        );
+        let cursor_block = r#""deliveredThrough":"6","cursors":[{"family":"attention","subject":"census","cursorKind":"epoch","value":"cursor-census-6","advancedThrough":"6"},{"family":"attention","subject":"hot:coin-a","cursorKind":"sequence","value":"cursor-hot-4","advancedThrough":"4"}]"#;
+        let view_bytes = view_source
+            .replace("source-a", "source-test")
+            .replace("\"catalogCommit\":\"7\"", "\"catalogCommit\":\"1\"")
+            .replace(
+                cursor_block,
+                r#""deliveredThrough":"1","cursors":[{"family":"fixture","subject":"test-scope","cursorKind":"page","value":"cursor-4","advancedThrough":"1"}]"#,
+            )
+            .replace(
+                r#""projections":[{"name":"attention","version":"1","stateDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#,
+                r#""projections":[]"#,
+            )
+            .replace("evidence-a", "observation-0")
+            .replace("2026-08-16T18:42:02.000000Z", "2026-08-16T15:59:57.000000Z")
+            .replace("2026-08-16T18:42:10.000000Z", "2026-08-16T15:59:58.000000Z")
+            .replace("2026-08-16T18:42:12.000000Z", "2026-08-16T15:59:59.000000Z")
+            .replace("2026-08-16T18:42:13.000000Z", "2026-08-16T16:00:02.000000Z")
+            .replace("2026-08-16T18:42:14.000000Z", "2026-08-16T16:00:02.000002Z")
+            .replace(
+                "\"receivedThrough\":\"2026-08-16T16:00:02.000002Z\"",
+                "\"receivedThrough\":\"2026-08-16T16:00:02.000000Z\"",
+            )
+            .replace("2026-08-16T18:42:15.000000Z", "2026-08-16T16:00:04.000000Z");
+        ValidatedGlassViewV1::parse_exact(view_bytes.as_bytes(), None)
+            .expect("parse exact typed view")
     }
 
     fn source_registration() -> SourceRegistration {

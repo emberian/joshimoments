@@ -55,7 +55,7 @@ export function SceneInspector({
 
             <section aria-labelledby="choice-context-title">
               <h3 id="choice-context-title">Current choice context</h3>
-              <p>These sets remain distinct. Being served, filtered into view, visible in the viewport, interacted with, and compared are not treated as synonyms.</p>
+              <p>These sets remain distinct. Being served, filtered into view, reached by your reading (viewport), interacted with, and compared are not treated as synonyms.</p>
               <dl className="choice-inspector">
                 {(Object.entries(choiceSets) as Array<[keyof ChoiceSets, string[]]>).map(([kind, members]) => (
                   <div key={kind}>

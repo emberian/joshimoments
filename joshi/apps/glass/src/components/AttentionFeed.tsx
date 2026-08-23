@@ -1,4 +1,9 @@
 import { memo, useEffect, useMemo, useRef } from "react";
+// This feed deliberately reports no "what was visible" set. It once computed the candidates
+// whose pixels intersected the scroll viewport, but pixels on screen are not reading — least
+// of all for a screen-reader operator — and recording them as the scene's `viewport` choice
+// set would fabricate the selection instrument's denominator. The honest reading signal is a
+// row receiving focus (`onFocusCandidate`), which the shell accumulates per scene.
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Activity, Bookmark, RefreshCw, Radio, Users } from "lucide-react";
 
@@ -26,7 +31,6 @@ export const AttentionFeed = memo(function AttentionFeed({
   onBoardChange,
   density,
   focusRequest,
-  onViewportChange,
   orderUpdatePending = false,
   pendingNewCount = 0,
   onAcceptOrderUpdate,
@@ -47,7 +51,6 @@ export const AttentionFeed = memo(function AttentionFeed({
   onBoardChange(board: BoardFilter): void;
   density: Density;
   focusRequest: number;
-  onViewportChange(candidateIds: string[]): void;
   orderUpdatePending?: boolean;
   pendingNewCount?: number;
   onAcceptOrderUpdate?(): void;
@@ -65,17 +68,6 @@ export const AttentionFeed = memo(function AttentionFeed({
     getItemKey: (index) => sorted[index]?.id ?? index,
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
-  const scrollOffset = rowVirtualizer.scrollOffset ?? 0;
-  const viewportHeight = rowVirtualizer.scrollRect?.height ?? 0;
-  const viewportIds = virtualRows
-    .filter((row) => viewportHeight === 0 || (row.end > scrollOffset && row.start < scrollOffset + viewportHeight))
-    .map((row) => sorted[row.index]?.id)
-    .filter((id): id is string => id !== undefined);
-  const viewportKey = viewportIds.join("\0");
-
-  useEffect(() => {
-    onViewportChange(viewportIds);
-  }, [onViewportChange, viewportKey]);
 
   useEffect(() => {
     const index = sorted.findIndex((candidate) => candidate.id === selectedId);

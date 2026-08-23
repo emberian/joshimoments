@@ -3,6 +3,7 @@ import { BookOpen, NotebookPen, RotateCw } from "lucide-react";
 
 import type { Candidate } from "../contract/v1";
 import { candidateSymbol } from "../format";
+import { isViewportAssertion } from "../operator/attention";
 import { verbatimWords, MAX_JOURNAL_ENTRY_LENGTH } from "../operator/journal";
 import type { DurableOperatorCommand } from "../operator/readback";
 import type { DurableJournalReadback } from "../operator/useDurableSceneCommands";
@@ -190,13 +191,19 @@ export function JournalRail({
   onReread(): void;
   onAppendEntry(words: string): void;
 }) {
-  const durable = readback.state === "read" ? readback.answer.commands : [];
+  // Automatic viewport assertions are instrument telemetry, not something she said; narrating
+  // one per hold would cost a reader real traversal time. They stay durable in the catalog and
+  // listed in the scene inspector, and the scope text below states this exclusion out loud.
+  const durable = (readback.state === "read" ? readback.answer.commands : [])
+    .filter((command) => !isViewportAssertion(command));
   const durableIds = new Set(durable.map((command) => command.commandId));
   // Time order: catalog commit order first, then this session's acts that the catalog answer
   // does not already carry, in the order they were made. One act never renders twice; the
   // catalog's record wins because it carries the commit clock.
   const sessionOnly = sessionEntries.filter(
-    (entry) => entry.command.scene.sceneId === sceneId && !durableIds.has(entry.command.commandId),
+    (entry) => entry.command.scene.sceneId === sceneId
+      && !durableIds.has(entry.command.commandId)
+      && !isViewportAssertion(entry.command),
   );
   const total = durable.length + sessionOnly.length;
   return (
@@ -213,7 +220,9 @@ export function JournalRail({
         Every operator act bound to scene {sceneId}, verbatim and in time order: journal entries,
         holds, notes, dispositions. The core reads back one scene at a time, so acts bound to
         other scenes are not listed here — a stated limit of this surface, not a claim that they
-        do not exist.
+        do not exist. Automatic viewport assertions — the record of which rows your reading
+        actually reached, kept for the selection measurement — are retained in the catalog and
+        listed in the scene inspector, not narrated here: they are attention records, not words.
       </p>
 
       <CatalogAnswer readback={readback} onReread={onReread} />

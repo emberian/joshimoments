@@ -112,7 +112,8 @@ describe("operational Glass shell", () => {
     await user.click(screen.getByRole("button", { name: /deliberate focus/i }));
     const dialog = screen.getByRole("dialog", { name: /record deliberate focus/i });
     await user.click(within(dialog).getByRole("button", { name: /append evidence record/i }));
-    await waitFor(() => expect(operatorSink.attemptBodies).toHaveLength(1));
+    // The act plus its automatic viewport assertion; both carry the V2 presentation binding.
+    await waitFor(() => expect(operatorSink.attemptBodies).toHaveLength(2));
     const command = JSON.parse(operatorSink.attemptBodies[0] ?? "null") as OperatorCommandV2;
     expect(command.schemaVersion).toBe(2);
     expect(command.presentation).toMatchObject({

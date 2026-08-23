@@ -8,6 +8,7 @@ import type { GlassSnapshotV1 } from "./contract/v1";
 import type { HeldVenueReadout } from "./components/HeldCoins";
 import { OfflineFixtureDataSource, type GlassDataSource, type SnapshotRequest } from "./data/client";
 import { mockSnapshots } from "./data/mockSnapshot";
+import { isViewportAssertion, VIEWPORT_ASSERTION_UI_LABEL } from "./operator/attention";
 import { canonicalOperatorCommand, type CommandReceipt, type OperatorCommand, type OperatorCommandV1 } from "./operator/contract";
 import { OfflineFixtureOperatorSink, RetryableCommandError, type OperatorCommandSink } from "./operator/client";
 import { MemoryPendingOperatorCommandQueue, type PendingOperatorCommandQueue, type PendingOperatorCommandV1 } from "./operator/pendingQueue";
@@ -16,6 +17,17 @@ import { OfflineFixturePresentationSink, type PresentationSink } from "./present
 
 function renderGlass() {
   return render(<GlassApp dataSource={new OfflineFixtureDataSource()} />);
+}
+
+/**
+ * The acts she stated, without the automatic viewport assertions that candidate-named acts
+ * carry with them (`operator/attention.ts`). Tests about what she said filter to these; the
+ * assertions have their own dedicated test below.
+ */
+function statedActs(sink: OfflineFixtureOperatorSink): OperatorCommandV1[] {
+  return sink.attemptBodies
+    .map((body) => JSON.parse(body) as OperatorCommandV1)
+    .filter((command) => !isViewportAssertion(command));
 }
 
 describe("accessibility-first glass", () => {
@@ -141,12 +153,13 @@ describe("accessibility-first glass", () => {
 
   it("does not render a semantic mark as committed before its append receipt", async () => {
     const delegate = new OfflineFixtureOperatorSink();
-    let release: (() => Promise<void>) | undefined;
+    // One release per append: the act and its automatic viewport assertion each wait here.
+    const releases: Array<() => Promise<void>> = [];
     const delayedSink: OperatorCommandSink = {
       kind: "offline_fixture",
       appendCommand(command) {
         return new Promise<CommandReceipt>((resolve, reject) => {
-          release = async () => delegate.appendCommand(command).then(resolve, reject);
+          releases.push(async () => delegate.appendCommand(command).then(resolve, reject));
         });
       },
     };
@@ -159,7 +172,7 @@ describe("accessibility-first glass", () => {
 
     expect(await screen.findByText(/waiting for a durable receipt/i)).toBeInTheDocument();
     expect(screen.queryByText(/commit 1001/i)).not.toBeInTheDocument();
-    await act(async () => { await release?.(); });
+    await act(async () => { await Promise.all(releases.map((release) => release())); });
     expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
   });
 
@@ -201,19 +214,27 @@ describe("accessibility-first glass", () => {
     />);
     await screen.findByRole("heading", { name: /radon radon/i });
     await secondUser.click(await screen.findByRole("button", { name: /recover retained exact bytes/i }));
-    await waitFor(async () => expect(await queue.list()).toHaveLength(0));
+    // The act's automatic viewport assertion is also pending, but recovery is per act and the
+    // assertion has no recovery affordance: it stays in the bounded cache for repair, and the
+    // scene it described simply keeps its rendered fallback. Only the act she made recovers.
+    await waitFor(async () => expect(await queue.list()).toHaveLength(1));
     expect(accepted).toHaveLength(1);
     expect(canonicalOperatorCommand(accepted[0]!)).toBe(retained.canonicalCommand);
+    const leftover = (await queue.list())[0]!;
+    expect(JSON.parse(leftover.canonicalCommand)).toMatchObject({
+      commandKind: "record_choice_set",
+      payload: { context: { uiLabel: VIEWPORT_ASSERTION_UI_LABEL } },
+    });
   });
 
   it("retains exact canonical command bytes locally before the first server attempt", async () => {
     const sink = new OfflineFixtureOperatorSink();
-    let releaseRetention: (() => void) | undefined;
+    const releaseRetention: Array<() => void> = [];
     const retained: PendingOperatorCommandV1[] = [];
     const queue: PendingOperatorCommandQueue = {
       append(pending) {
         retained.push(pending);
-        return new Promise<void>((resolve) => { releaseRetention = resolve; });
+        return new Promise<void>((resolve) => { releaseRetention.push(resolve); });
       },
       async list() { return []; },
       async acknowledge() {},
@@ -224,11 +245,13 @@ describe("accessibility-first glass", () => {
     await user.click(screen.getByRole("button", { name: /deliberate focus/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
     expect(await screen.findByText(/retaining the exact canonical command/i)).toBeInTheDocument();
-    expect(retained).toHaveLength(1);
+    // The act and its automatic viewport assertion are both retained before any server attempt.
+    expect(retained).toHaveLength(2);
     expect(sink.attemptBodies).toHaveLength(0);
-    act(() => releaseRetention?.());
-    await waitFor(() => expect(sink.attemptBodies).toHaveLength(1));
+    act(() => releaseRetention.forEach((release) => release()));
+    await waitFor(() => expect(sink.attemptBodies).toHaveLength(2));
     expect(sink.attemptBodies[0]).toBe(retained[0]?.canonicalCommand);
+    expect(sink.attemptBodies[1]).toBe(retained[1]?.canonicalCommand);
   });
 
   it("retries the exact queued command after reconnect and commits it once", async () => {
@@ -244,8 +267,11 @@ describe("accessibility-first glass", () => {
     sink.setOnline(true);
     act(() => window.dispatchEvent(new Event("online")));
     expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
-    expect(sink.attemptBodies).toHaveLength(2);
-    expect(sink.attemptBodies[1]).toBe(sink.attemptBodies[0]);
+    // The act and its automatic viewport assertion each queued once and retried once, with
+    // exactly the bytes of their first attempt.
+    await waitFor(() => expect(sink.attemptBodies).toHaveLength(4));
+    expect(sink.attemptBodies[2]).toBe(sink.attemptBodies[0]);
+    expect(sink.attemptBodies[3]).toBe(sink.attemptBodies[1]);
   });
 
   it("undoes with a new compensating event and never erases the prior command", async () => {
@@ -257,15 +283,14 @@ describe("accessibility-first glass", () => {
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
     expect((await screen.findAllByText(/commit 1001/i)).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: /compensate/i }));
-    expect((await screen.findAllByText(/commit 1002/i)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/commit 1003/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/compensated by a later append-only record/i)).toBeInTheDocument();
 
-    const first = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
-    const second = JSON.parse(sink.attemptBodies[1] ?? "null") as OperatorCommandV1;
-    expect(second.commandKind).toBe("compensate_command");
-    if (second.commandKind !== "compensate_command") throw new Error("expected compensating command");
-    expect(second.payload.compensatesCommandId).toBe(first.commandId);
-    expect(sink.attemptBodies).toHaveLength(2);
+    const [first, second] = statedActs(sink);
+    expect(second?.commandKind).toBe("compensate_command");
+    if (second?.commandKind !== "compensate_command") throw new Error("expected compensating command");
+    expect(second.payload.compensatesCommandId).toBe(first?.commandId);
+    expect(statedActs(sink)).toHaveLength(2);
   });
 
   it("keeps committed operator overlays bound to their exact replay scene", async () => {
@@ -351,13 +376,12 @@ describe("accessibility-first glass", () => {
 
     await user.click(screen.getByRole("button", { name: /later interview/i }));
     await user.click(screen.getByRole("button", { name: /append evidence record/i }));
-    await screen.findAllByText(/commit 1002/i);
-    const report = JSON.parse(sink.attemptBodies[0] ?? "null") as OperatorCommandV1;
-    const interview = JSON.parse(sink.attemptBodies[1] ?? "null") as OperatorCommandV1;
-    expect(report.commandKind).toBe("record_post_action_report");
-    expect(interview.commandKind).toBe("link_interview");
-    if (interview.commandKind !== "link_interview") throw new Error("expected interview link");
-    expect(interview.payload.sourceCommandIds).toContain(report.commandId);
+    await screen.findAllByText(/commit 1003/i);
+    const [report, interview] = statedActs(sink);
+    expect(report?.commandKind).toBe("record_post_action_report");
+    expect(interview?.commandKind).toBe("link_interview");
+    if (interview?.commandKind !== "link_interview") throw new Error("expected interview link");
+    expect(interview.payload.sourceCommandIds).toContain(report?.commandId);
     expect(interview.payload.outcomeVisibility).toBe("hidden");
   });
 
@@ -713,7 +737,7 @@ describe("holding a coin before it scrolls away", () => {
     const rail = await screen.findByRole("region", { name: /held coins/i });
     expect(await within(rail).findByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();
 
-    await waitFor(() => expect(sink.attemptBodies.length).toBe(1));
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(2));
     const command = JSON.parse(sink.attemptBodies[0] ?? "{}") as OperatorCommandV1;
     expect(command.commandKind).toBe("record_focus");
     expect(command.subject).toEqual({ kind: "candidate", key: "fable" });
@@ -728,6 +752,51 @@ describe("holding a coin before it scrolls away", () => {
     expect(command.payload.context.note).toBeNull();
     expect(command.payload.context.urgency).toBeNull();
     expect(command.payload.context.confidencePpm).toBeNull();
+  });
+
+  /**
+   * The selection instrument's pre-registered denominator is what she actually saw, and this
+   * cockpit records it as the rows her reading reached — focus visits and explicit selection —
+   * asserted automatically at act time as an ordinary evidence command. It must never claim
+   * rows she did not reach, never name a candidate as its subject (an assertion is not a mark),
+   * and never repeat itself when nothing about the reached set changed.
+   */
+  it("asserts the honestly reached viewport at act time, and only when it grew", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} operatorSink={sink} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+
+    // She reads down one row (orbitfan) and holds it. The initially selected radon was never
+    // reached by her navigation, so it must not be in the asserted set.
+    await user.keyboard("j");
+    await waitFor(() => expect(screen.getByRole("heading", { name: /orbitfan orbit fan club/i })).toBeInTheDocument());
+    await user.keyboard(";");
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(2));
+    const assertion = JSON.parse(sink.attemptBodies[1] ?? "{}") as OperatorCommandV1;
+    expect(assertion.commandKind).toBe("record_choice_set");
+    expect(assertion.subject).toEqual({ kind: "scene", key: mockSnapshots.witnessed.view.sceneId });
+    if (assertion.commandKind !== "record_choice_set") throw new Error("expected a viewport assertion");
+    expect(assertion.payload.context.uiLabel).toBe(VIEWPORT_ASSERTION_UI_LABEL);
+    expect(assertion.payload.choiceSet).toEqual({
+      setKind: "viewport",
+      subjects: [{ kind: "candidate", key: "orbitfan" }],
+      selectedSubject: { kind: "candidate", key: "orbitfan" },
+    });
+
+    // She reads one row further and holds again: the assertion re-states the grown set.
+    await user.keyboard("j");
+    await user.keyboard(";");
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(4));
+    const grown = JSON.parse(sink.attemptBodies[3] ?? "{}") as OperatorCommandV1;
+    if (grown.commandKind !== "record_choice_set") throw new Error("expected a grown viewport assertion");
+    expect(grown.payload.choiceSet.subjects.map((subject) => subject.key)).toEqual(["orbitfan", "wetpaint"]);
+
+    // Holding the same coin again reaches nothing new: the act commits alone, unasserted.
+    await user.keyboard(";");
+    await waitFor(() => expect(sink.attemptBodies.length).toBe(5));
+    const repeat = JSON.parse(sink.attemptBodies[4] ?? "{}") as OperatorCommandV1;
+    expect(repeat.commandKind).toBe("record_focus");
   });
 
   it("keeps a held coin, and its last observation, after the feed stops carrying it", async () => {
@@ -981,7 +1050,7 @@ describe("holding a coin before it scrolls away", () => {
     await screen.findByRole("heading", { name: /radon radon/i });
     await user.keyboard(";");
     const rail = await screen.findByRole("region", { name: /held coins/i });
-    await waitFor(() => expect(sink.attemptBodies.length).toBe(1));
+    await waitFor(() => expect(statedActs(sink)).toHaveLength(1));
 
     // Keyboard only, like every path in this cockpit: a disclosure, a field, a submit.
     await tabTo(user, within(rail).getByText(/add a note/i));
@@ -989,15 +1058,15 @@ describe("holding a coin before it scrolls away", () => {
     await tabTo(user, within(rail).getByRole("button", { name: /append note/i }));
     await user.keyboard("{Enter}");
     expect(within(rail).getByRole("alert")).toHaveTextContent(/a note with no words is not recorded/i);
-    expect(sink.attemptBodies.length).toBe(1);
+    expect(statedActs(sink)).toHaveLength(1);
 
     await tabTo(user, within(rail).getByLabelText(/in your own words/i));
     await user.keyboard("same wick as the one that ran yesterday");
     await tabTo(user, within(rail).getByRole("button", { name: /append note/i }));
     await user.keyboard("{Enter}");
-    await waitFor(() => expect(sink.attemptBodies.length).toBe(2));
-    const note = JSON.parse(sink.attemptBodies[1] ?? "{}") as OperatorCommandV1;
-    if (note.commandKind !== "record_focus") throw new Error("a note must be a record_focus act");
+    await waitFor(() => expect(statedActs(sink)).toHaveLength(2));
+    const note = statedActs(sink)[1];
+    if (note?.commandKind !== "record_focus") throw new Error("a note must be a record_focus act");
     expect(note.subject).toEqual({ kind: "candidate", key: "radon" });
     expect(note.payload.context.uiLabel).toBe("Note on held coin");
     expect(note.payload.context.note).toBe("same wick as the one that ran yesterday");
