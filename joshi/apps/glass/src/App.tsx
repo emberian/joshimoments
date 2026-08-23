@@ -101,9 +101,11 @@ export function GlassApp({
    * This is the scene's `viewport` choice set — the selection instrument's pre-registered
    * denominator — and `operator/attention.ts` states exactly what it does and does not claim
    * (definition v2). It grows from the observable events of a primarily visual operator: a
-   * row's pixels intersecting the visible scroll rectangle, a feed row receiving real focus,
-   * the pointer entering a row, an explicit selection gesture, and an evidence act naming a
-   * candidate. Virtualizer overscan mounting still never counts: mounted is not presented.
+   * row's pixels intersecting the visible scroll rectangle, the feed listbox's active
+   * descendant reaching a row while the listbox holds focus (the single-tab-stop successor to
+   * per-row focus), the pointer entering a row, an explicit selection gesture, and an evidence
+   * act naming a candidate. Virtualizer overscan mounting still never counts: mounted is not
+   * presented.
    */
   const [attendedIds, setAttendedIds] = useState<string[]>([]);
   const attendedRef = useRef<Set<string>>(new Set());
@@ -274,11 +276,14 @@ export function GlassApp({
   }, [noteAttended]);
 
   /**
-   * A row's focus is the reading event this cockpit can actually observe: Tab, J/K roving, and
-   * screen-reader navigation that moves system focus all land here. It feeds the viewport set
-   * and keeps selection in step, so what is being read and what a keystroke acts on stay the
-   * same thing. Deliberately not `selectCandidate`: focus reaching a row is reading, not an
-   * interaction gesture, and the `interacted` set keeps that narrower meaning.
+   * The active descendant reaching a row is the reading event this cockpit can actually
+   * observe: the feed is one tab stop (a listbox), so Tab landing on it, J/K and arrow
+   * movement while it holds focus, and screen-reader navigation in focus mode all surface as
+   * `aria-activedescendant` announcements and land here — the same claim per-row DOM focus
+   * used to carry. It feeds the viewport set and keeps selection in step, so what is being
+   * read and what a keystroke acts on stay the same thing. Deliberately not `selectCandidate`:
+   * reading reaching a row is not an interaction gesture, and the `interacted` set keeps that
+   * narrower meaning.
    */
   const attendCandidate = useCallback((candidateId: string) => {
     noteAttended(candidateId);

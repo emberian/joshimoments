@@ -31,6 +31,65 @@ function statedActs(sink: OfflineFixtureOperatorSink): OperatorCommandV1[] {
 }
 
 describe("accessibility-first glass", () => {
+  /**
+   * The structural fix for the 50-plus-stop shell: the feed is a LISTBOX whose rows are
+   * options under `aria-activedescendant`, so the whole virtualized feed is ONE tab stop and
+   * the board filters rove a single stop between six radios. Before this restructure the shell
+   * presented 53 stops at first paint, grew to 59 once six virtual rows mounted, and the row
+   * stops mutated with every scroll; a screen reader in browse mode also ate six of the eight
+   * single-letter shortcuts, which the listbox avoids by forcing focus mode over the feed.
+   *
+   * First in the file on purpose: the pinned total is a count of a VIRGIN shell, and the
+   * offline fixture accumulates durable journal state across tests in this environment, which
+   * would add real (and really focusable) journal rows to a later render.
+   */
+  it("presents the feed as one tab stop, invariant under virtual row mounting", async () => {
+    const user = userEvent.setup();
+    const { container } = renderGlass();
+    await screen.findByRole("heading", { name: /radon radon/i });
+    const countStops = () => container.querySelectorAll(FOCUSABLE).length;
+
+    // Count only once the whole shell settles: the virtual rows have mounted, and the chart
+    // section has revealed its controls (its data effect lands on its own async schedule, so
+    // an earlier count would race it and pin an accident of timing).
+    await waitFor(() => expect(container.querySelectorAll("[data-candidate-id]").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /^mark point$/i })).toHaveLength(8));
+    // The pinned shell-wide cost. This number moving is the point of the test: a new tab stop
+    // is a cost to her hands and must fail loudly here, never slip in as a side effect. Before
+    // the listbox restructure this same instant measured 74: six virtual-row buttons that
+    // mutated with every scroll, and five extra board-filter stops.
+    expect(countStops()).toBe(63);
+
+    const feed = screen.getByRole("region", { name: /attention feed/i });
+    const feedStops = () => [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      .filter((stop) => feed.contains(stop))
+      .map((stop) => stop.getAttribute("role"));
+    // Exactly two stops in the whole panel: the board radiogroup's roving stop, then the
+    // listbox itself. Six mounted rows contribute zero.
+    expect(feedStops()).toEqual(["radio", "listbox"]);
+
+    // The active descendant names a real, mounted element — the virtualizer pins the active
+    // row into the mounted range, so the reference can never dangle — and J/K move it.
+    const listbox = screen.getByRole("listbox", { name: /market candidates/i });
+    const activeRow = () => {
+      const domId = listbox.getAttribute("aria-activedescendant");
+      expect(domId).toBeTruthy();
+      const element = document.getElementById(domId!);
+      expect(element).not.toBeNull();
+      return element!;
+    };
+    expect(activeRow()).toHaveAttribute("aria-selected", "true");
+    expect(activeRow().getAttribute("data-candidate-id")).toBe("radon");
+    await user.keyboard("j");
+    await waitFor(() => expect(activeRow().getAttribute("data-candidate-id")).toBe("orbitfan"));
+    // Moving the selection hands the keyboard to the listbox: one focused element, with the
+    // active row carried as its descendant rather than as a focus stop of its own — and the
+    // feed still contributes exactly its two stops. (The shell-wide count is not re-pinned
+    // here: a different selected coin honestly renders a different workbench.)
+    await waitFor(() => expect(listbox).toHaveFocus());
+    expect(feedStops()).toEqual(["radio", "listbox"]);
+  });
+
   it("renders the witnessed market, exposure rail, and safety boundary", async () => {
     renderGlass();
     expect(await screen.findByRole("heading", { name: /radon radon/i })).toBeInTheDocument();
@@ -53,7 +112,7 @@ describe("accessibility-first glass", () => {
     const search = screen.getByRole("searchbox", { name: /search candidates in this served snapshot/i });
     expect(search).toHaveFocus();
     await user.type(search, "fancoin");
-    expect(await screen.findByRole("button", { name: /orbitfan/i })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /orbitfan/i })).toBeInTheDocument();
     await user.clear(search);
     search.blur();
     await user.keyboard("r");
@@ -68,7 +127,7 @@ describe("accessibility-first glass", () => {
     expect(target).toBeDefined();
     const search = screen.getByRole("searchbox", { name: /search candidates in this served snapshot/i });
     await user.type(search, target!.mint);
-    expect(await screen.findByRole("button", { name: /orbitfan/i })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /orbitfan/i })).toBeInTheDocument();
   });
 
   it("opens a view-only command surface and toggles provenance", async () => {
@@ -93,7 +152,7 @@ describe("accessibility-first glass", () => {
     await user.keyboard("/");
     const search = screen.getByRole("searchbox", { name: /search candidates in this served snapshot/i });
     await user.type(search, "afterglow");
-    expect(await screen.findByRole("button", { name: /afterglow/i })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /afterglow/i })).toBeInTheDocument();
   });
 
   it("loads mode changes as distinct snapshot requests bound to the witnessed scene", async () => {
@@ -607,10 +666,17 @@ describe("accessibility-first glass", () => {
 });
 
 /** Reaches a control with Tab alone. No pointer event exists anywhere in these paths. */
-/** Every element the browser would stop on with Tab. Used to count what a change costs her. */
+/**
+ * Every element the browser would stop on with Tab. Used to count what a change costs her.
+ * `tabindex="-1"` is honored on every element kind, because the board radiogroup roves its
+ * tabindex: an unchecked radio is a real button that Tab skips, and counting it would state a
+ * cost she does not pay.
+ */
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
-  + 'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), '
+  + 'input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), '
+  + 'textarea:not([disabled]):not([tabindex="-1"]), summary:not([tabindex="-1"]), '
+  + '[tabindex]:not([tabindex="-1"])';
 
 /**
  * One venue readout exactly as the local core serves it, for the live bonding curve Study M0
@@ -821,7 +887,7 @@ describe("holding a coin before it scrolls away", () => {
     // card of the settled virtual window; a below-the-fold card would be mounted only during
     // the initial estimate-sized window and its node would detach when measurement shrinks it.
     const feed = screen.getByRole("region", { name: /attention feed/i });
-    await user.hover(await within(feed).findByRole("button", { name: /wetpaint/i }));
+    await user.hover(await within(feed).findByRole("option", { name: /wetpaint/i }));
     expect(screen.getByRole("heading", { name: /radon radon/i })).toBeInTheDocument();
 
     // Holding the selected radon carries both assertions: the viewport (radon acted on,
@@ -877,7 +943,7 @@ describe("holding a coin before it scrolls away", () => {
     await screen.findByText(/separate later reconstruction/i);
     await user.keyboard("r");
     await screen.findByText(/separate as-known reconstruction/i);
-    expect(screen.queryByRole("button", { name: /\$FABLE/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\$FABLE/ })).not.toBeInTheDocument();
 
     const afterReload = screen.getByRole("region", { name: /held coins/i });
     expect(within(afterReload).getByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();

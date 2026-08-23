@@ -301,10 +301,10 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
   color: var(--muted);
   cursor: pointer;
 }
-.filter-button[aria-pressed="true"] { background: var(--mint-dim); border-color: #3d6a58; color: #c6f6db; }
+.filter-button[aria-checked="true"] { background: var(--mint-dim); border-color: #3d6a58; color: #c6f6db; }
 .feed-scroll { height: calc(100vh - 270px); min-height: 460px; overflow: auto; border-top: 1px solid var(--line); }
 .virtual-list { margin: 0; padding: 0; position: relative; list-style: none; }
-.virtual-row { position: absolute; inset: 0 0 auto; padding: 5px 7px; }
+.virtual-row { position: absolute; inset: 0 0 auto; padding: 5px 7px; cursor: pointer; }
 .candidate-card {
   width: 100%;
   min-height: 116px;
@@ -317,10 +317,20 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
   border-radius: 10px;
   color: var(--ink);
   background: transparent;
-  cursor: pointer;
 }
-.candidate-card:hover { background: #171e1f; }
-.candidate-card[data-selected="true"] { background: #1a2723; border-color: #436b5d; box-shadow: inset 3px 0 0 var(--mint); }
+.virtual-row:hover .candidate-card { background: #171e1f; }
+/* Rows are options under aria-activedescendant, not focusable buttons, so :focus styles can
+   never land on them. The active/selected ring keys off aria-selected instead, and stays
+   visible whether or not the listbox holds focus: the visual operator must always see where
+   she is. */
+.virtual-row[aria-selected="true"] .candidate-card { background: #1a2723; border-color: #436b5d; box-shadow: inset 3px 0 0 var(--mint); }
+/* While the listbox holds keyboard focus, the active option carries the focus ring the row
+   button used to get, so keyboard position stays as loud as it ever was. */
+.feed-scroll:focus .virtual-row[aria-selected="true"] .candidate-card,
+.feed-scroll:focus-visible .virtual-row[aria-selected="true"] .candidate-card {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
 .candidate-rank { color: #7e8b8d; font: 500 12px ui-monospace, "SFMono-Regular", Menlo, monospace; padding-top: 3px; }
 .candidate-main { min-width: 0; display: grid; align-content: start; gap: 7px; }
 .candidate-title-row { display: flex; align-items: baseline; gap: 7px; min-width: 0; }

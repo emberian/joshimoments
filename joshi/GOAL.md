@@ -1,17 +1,26 @@
-# GOAL — make JOSHI as good as it can be, autonomously until 8am (2026-08-23)
+# GOAL — get Ember sitting inside JOSHI (2026-08-23 evening, hangout pace)
 
-**Standing goal.** Integrate the running lanes (source audit, replay harness, regime study), keep the
-tree gating green, and keep swarming Fable/Opus deputies at the highest-value work: the epistemics
-that make JOSHI's numbers trustworthy, and the instruments that make Ember's actual loop measurable.
-No trading, no economic authority. Read-only data access authorized, including her pump session as
-herself (the wallet key signs ONLY the login timestamp, never a transaction).
+**Current thrust.** Bring-up is real: `joshi-up` takes a cold machine to a paired cockpit in one
+command, proven live including teardown. One deputy is restructuring the cockpit's focus
+architecture (51 tab stops → listbox + activedescendant) with the attention channels preserved.
+No trading, no economic authority; read-only data access authorized.
 
 ## Next 3 moves
-1. Land the mint binding (81 core tests green; 8 clippy to clear), closing the identity gap so the
-   keeper's price taps become live scenes.
-2. Integrate source audit + replay harness + regime study as they report; gate the whole tree.
-3. Keep dispatching at the two frontiers: mechanising the remaining source-error families, and
-   making SELECTION measurable — the least-measured, highest-leverage thing we have.
+1. Integrate the focus-architecture deputy when it lands; gate Glass whole.
+2. First attended session: Ember runs `./target/debug/joshi-up`, pairs, holds something real;
+   findings to `state/s2/<date>-session.md` per the corrected measurement table.
+3. Keeper under launchd (ops/launchd/ is staged; needs Ember's say-so — it spends budget
+   unattended) so the catalog advances while nobody watches.
+
+## Done log, this session
+- 2026-08-23 14:45 VIEWPORT V2 + POINTED (2e9e233): the selection denominator corrected for a
+  primarily-visual operator — scroll-rectangle visibility restored, pointer as its own honest
+  kind, migration 0025, pre-registered rule unchanged. jsdom's estimate-rect fabrication caught
+  and refused (real clientHeight only).
+- 2026-08-23 18:05 JOSHI-UP: cold start → keeper cycles → bound windows → scene (DREGG+SOLVE) →
+  paired cockpit banner; SIGTERM teardown with the keeper's own durable shutdown record. Found
+  and fixed en route: stale-sibling-binary hazard (build age now printed), cold-catalog mount
+  retry, external-keeper adoption (single-writer respected). Runbook rewritten around it.
 
 ## What JOSHI is actually for, so no lane compresses it
 

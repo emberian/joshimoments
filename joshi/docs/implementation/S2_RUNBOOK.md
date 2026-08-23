@@ -140,10 +140,13 @@ Each row gets a verdict and a note; "pass" with no note is not a result.
 | 7 | Crash, reload, re-pair (kill joshi-up mid-session and run it again) | Whether the session recovers, and what it loses |
 | 8 | **Hands** | Anything that hurt, or needed a precision movement. This outranks the seven above. |
 
-Known before you start, and not yet fixed: the shell presents **51 focusable stops** at first paint
-before the virtualized feed adds one per row, and those stops **mutate as you scroll**. The
-structural answer is a listbox with `aria-activedescendant`, which is one tab stop and also forces
-readers into focus mode so letter keys pass through. It is a real restructure and has its own lane.
+The feed's focus architecture was restructured 2026-08-23: it is now a single-tab-stop listbox
+with `aria-activedescendant` (the active row is pinned into the virtualizer's mounted range so
+the attribute can never dangle), the board filters are a roving-tabindex radiogroup, and the feed
+panel contributes exactly two stops, invariant under scrolling — measured before at 74 fully
+settled with row stops mutating on every scroll, after at 63. The active row keeps a strong
+visible ring for eye-first reading; the listbox also forces readers into focus mode so letter
+keys pass through. Roughly 61 stops elsewhere in the shell remain a future lane.
 
 Write findings to `state/s2/<date>-session.md` during the session rather than after, including
 anything embarrassing. Row 8 is the one the whole project was founded on and the easiest to skip.

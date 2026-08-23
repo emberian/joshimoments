@@ -10,10 +10,15 @@ import type { OperatorIntent } from "./useOperatorJournal";
  *
  *   (v2) A candidate is in this scene's viewport when the operator could actually see its row
  *   before the assertion was issued — its pixels intersected the feed's visible scroll
- *   rectangle (not merely virtualizer-mounted), or the row received real focus (Tab, J/K
- *   roving navigation, screen-reader navigation that moves system focus), or the pointer
- *   entered the row, or the candidate was explicitly selected by an operator gesture (click,
- *   palette, episode rail, held rail), or an evidence act named it as its subject.
+ *   rectangle (not merely virtualizer-mounted), or her reading reached the row (Tab, J/K and
+ *   arrow navigation, screen-reader navigation in focus mode), or the pointer entered the
+ *   row, or the candidate was explicitly selected by an operator gesture (click, palette,
+ *   episode rail, held rail), or an evidence act named it as its subject. The DOM mechanism
+ *   carrying "reading reached the row" changed once without changing the claim: the feed rows
+ *   were focusable buttons and the event was per-row DOM focus; the feed is now a
+ *   single-tab-stop listbox and the event is the row becoming `aria-activedescendant` while
+ *   the listbox holds focus — the moment a reader announces the row and a keystroke acts on
+ *   it. Same claim, same denominator, so the label version stays 2.
  *
  * Version history, because scored events carry `uiLabelVersion` and eras must stay
  * distinguishable: v1 counted focus-reach and gestures ONLY, on the belief that the operator
@@ -25,8 +30,8 @@ import type { OperatorIntent } from "./useOperatorJournal";
  *
  * What v2 claims: this cockpit presented the row inside the visible rectangle, or observed
  * the operator's navigation or pointer reach it. What it refuses to claim: comprehension,
- * dwell, or screen-reader browse-mode reading that never moves system focus (still invisible
- * to the DOM, still simply absent). When she is working by reader rather than by eye,
+ * dwell, or screen-reader browse-mode reading that never moves system focus or the feed's
+ * active descendant (still invisible to the DOM, still simply absent). When she is working by reader rather than by eye,
  * scroll-visibility over-counts *reading* — but the pre-registered rule forbids only crediting
  * a pass on a coin she could not have SEEN, and visible pixels satisfy that for the operator
  * this cockpit actually has. The label version records which definition produced each event.
