@@ -109,3 +109,14 @@ class JoshiCoreSession:
             "POST", "/api/v1/operator/commands", body=canonical_body,
             scope_token=self._capability)
         return status, json.loads(raw) if raw else {}
+
+    # -- generic authorized read ------------------------------------------
+    def get(self, path: str) -> tuple[int, bytes]:
+        """One authorized GET against any paired route. Returns (status, body).
+
+        The caller owns interpretation: a 404 from a route that may not be
+        mounted on an older core is an answer ("not served"), not an error.
+        """
+        if not self._capability:
+            raise PairingError("not paired")
+        return self._request("GET", path, scope_token=self._capability)

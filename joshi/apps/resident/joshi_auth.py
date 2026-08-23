@@ -70,3 +70,38 @@ def read_oauth_token(account: str | None = None) -> str | None:
         if entry.get("name") == name:
             return entry.get("key") or None
     return None
+
+
+# -- sticky active account + rotation (allgame's rotate-on-limit pattern) --
+#
+# Plan limits are per ACCOUNT and tokeman holds several. A weekly/session
+# rejection means this account is spent, not that the resident has nothing
+# to say. The engine records the rejection reason when the ResultMessage
+# goes past (the exception itself often surfaces uninformatively at asyncio
+# teardown) and the driver rotates on the NEXT turn.
+
+_active = {"account": None}
+
+
+def sticky_account() -> str | None:
+    """The account in use, choosing one if none is active yet. Sticky:
+    each account has its own prompt cache, so switching costs a re-prefill
+    of the whole session."""
+    if _active["account"] is None:
+        _active["account"] = choose_account()
+    return _active["account"]
+
+
+def rotate_account() -> str | None:
+    """Force a re-probe and move off the current account. Returns the new
+    account name, or None when every other account is unusable."""
+    _probe_cache["at"] = 0.0
+    rows = probe_accounts()
+    current = _active["account"]
+    healthy = sorted((r for r in rows
+                      if _health(r)[0] < 2 and r.get("token_name") != current),
+                     key=_health)
+    if not healthy:
+        return None
+    _active["account"] = healthy[0].get("token_name")
+    return _active["account"]
