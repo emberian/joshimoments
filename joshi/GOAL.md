@@ -435,7 +435,41 @@ PRE-REGISTERED before touching real data, and the first deliverable is a POWER S
 marked decisions are needed before skill is distinguishable from chance — so nobody over-reads the
 first ten holds.
 
+## THE SELECTION NUMBERS EMBER SHOULD KNOW BEFORE SHE SITS DOWN
+
+- ~110 scored scenes to detect a modest SKILL shift (k=4 choice set); ~85 at k=8.
+- ~891 scored scenes to detect an economically meaningful NET edge — and that is a LOWER BOUND,
+  because heavy tails make the normal approximation optimistic.
+- **Showing she picks well is cheap. Showing it is worth trading is ~10x more expensive.** Budget
+  for the second number, not the first.
+
+THE CORRECTION THE DEPUTY MADE TO MY BRIEF, which matters: "net of the fee floor" is two questions.
+Against another coin in the SAME scene the fee CANCELS — both alternatives pay it. It only bites
+against not trading at all. So skill tests and the tradeability test are separate, and STRONG SKILL
+WITH A NEGATIVE TRADEABLE EDGE is a likely real outcome: she picks the best coin in the room and the
+room is not worth trading. The instrument emits that verdict in words so skill cannot be misread as
+a green light.
+
+Guarantees: a fixed-seed random picker over 40 scenes must FAIL to show skill (if the instrument
+ever manufactures an edge, that test breaks); read-only proven by byte-identical catalog+WAL hashes
+across a full run.
+
 ## Done log
+
+- 2026-08-23 01:23 SELECTION INSTRUMENT landed (291 analysis tests, ruff clean). Unit is the SCENE
+  not the act (3 holds in one scene are ONE decision; counting them separately would treble the
+  sample and shrink intervals by sqrt(3) for free). Window opens at the ACT not the scene render —
+  one strict inequality is the whole no-leakage guarantee, with a test pinning it. Absent outcomes
+  counted with reasons, never zero-filled. Proven on real bytes: 1 selection event, choice set
+  reconstructs identically from the membership table AND the view blob, scores zero because every
+  candidate price is null — reported as absent baseline, and called meaningless (the actor was the
+  resident, not Ember, and it chose USDC).
+- 2026-08-23 01:26 VIEWPORT lane dispatched, time-sensitive: the store only records
+  set_kind='rendered', so it CANNOT distinguish what Ember SAW from what was DRAWN. Every hold she
+  makes before this lands is permanently scored against the looser denominator. The deputy must
+  define 'viewport' truthfully for a SCREEN-READER, KEYBOARD-ONLY operator — reader-focus may be the
+  honest signal where visual scroll is exactly wrong — and instrumenting must not shape the session
+  it observes.
 
 - 2026-08-23 01:12 COMPOSITION COMPLETE, re-verified end to end. The exact test that failed two hours
   ago — `live-surface-inspect --follow --source-id pump.api.product.v1` over a candles catalog — now
