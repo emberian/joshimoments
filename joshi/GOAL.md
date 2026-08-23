@@ -416,6 +416,13 @@ points at EMBER'S selection — making the hold gesture and journal the instrume
 
 ## Done log
 
+- 2026-08-23 01:02 MINT BINDING LANDED — the identity-gap family is closed at the source. The mint is
+  retained from the public request path (catalog-declared per route; user/address keep redaction),
+  landed as a durable source event linked from the ATTEMPT ENVELOPE not the body, and scene
+  derivation groups per resolved mint. Caught a real latent bug: two coins in one catalog previously
+  MERGED into one candidate, blending two markets into one chart. Proven on the exact composition
+  that failed the smoke test. 129 pump/admission/adapter + 81 core green.
+
 - 2026-08-22 22:54 PORTFOLIO + LIVE TAPE committed (targeted gates, isolated crates, credential-clean).
   Portfolio: 48 tests, states the book with no headline total, every price absent-not-zero, the
   resting order a named structural absence. Live tape: THE DIP CONFIRMED LIVE — 8FNsX6, event-res
