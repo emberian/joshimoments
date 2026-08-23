@@ -91,6 +91,24 @@ pub fn normalize_frame(
     })
 }
 
+/// Derives wallet facts from a durably retained provider body without drafting new evidence.
+///
+/// This is the read-back twin of [`normalize_frame`]: the caller already holds a stored
+/// observation (identity, clocks, exact body bytes) and wants the same normalization the live
+/// path would have produced, citing the stored observation instead of minting a new one.
+///
+/// # Errors
+///
+/// Fails only when a required internal identifier cannot be constructed. Malformed provider
+/// bodies remain successful normalizations with explicit issues.
+pub fn normalize_stored_body(
+    body: &[u8],
+    observation_id: ObservationId,
+    response_context: &AcquisitionResponseContext,
+) -> Result<NormalizedWalletBatch, NormalizationError> {
+    normalize_bytes(body, observation_id, response_context)
+}
+
 // Keep source-surface dispatch together so every branch produces the same coverage closure.
 #[allow(clippy::too_many_lines)]
 fn normalize_bytes(

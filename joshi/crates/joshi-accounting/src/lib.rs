@@ -16,6 +16,7 @@ pub mod effect;
 pub mod episode;
 pub mod lots;
 pub mod model;
+pub mod portfolio;
 
 /// Stable semantic contract implemented by the current pure projector.
 pub const ACCOUNTING_CONTRACT_VERSION: &str = "joshi.accounting.v1";
