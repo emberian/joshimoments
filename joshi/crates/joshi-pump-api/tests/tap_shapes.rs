@@ -135,7 +135,12 @@ fn a_candle_window_is_a_bare_array_of_six_field_rows() {
             .expect("field present")
     };
     assert_eq!(of("timestamp").encoding, "json_number_lexeme");
-    assert_eq!(of("timestamp").semantics, "provider_event_time_unparsed");
+    // Declared 2026-08-23 from the retained bytes: the unit and encoding travel in the tag, and
+    // the trades sibling declares the same name as an ISO-8601 string — a stated homonym.
+    assert_eq!(
+        of("timestamp").semantics,
+        "provider_bar_open_time_epoch_millis_number"
+    );
     // Every price and volume arrives as a JSON string of decimals. Tagging it `utf8` alone would
     // let a later reader treat a price like a name, so the semantics carry the distinction.
     for name in ["open", "high", "low", "close", "volume"] {

@@ -34,6 +34,7 @@ fn acquisition(id: &str, route: RouteId, bytes: &[u8]) -> Acquisition {
         session_class: "public".to_owned(),
         source_locator: "https://frontend-api-v3.pump.fun/fixture".to_owned(),
         resolved_public_path: std::collections::BTreeMap::new(),
+        resolved_public_query: std::collections::BTreeMap::new(),
         request_fingerprint: sha256(b"same logical request"),
         http_status: Some(200),
         safe_response_headers: Vec::new(),

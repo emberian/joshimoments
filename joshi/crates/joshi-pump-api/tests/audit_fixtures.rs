@@ -17,6 +17,8 @@ const CANDLES_OUTCOME: &str = include_str!("../fixtures/candles_live_outcome_v1.
 const TRADES_OUTCOME: &str = include_str!("../fixtures/trades_live_outcome_v1.json");
 const TRADES_TERMINAL: &str = include_str!("../fixtures/trades_terminal_page_v1.json");
 const DISCOVERY_OUTCOME: &str = include_str!("../fixtures/discovery_coins_live_outcome_v1.json");
+const DISCOVERY_CLAMP_OUTCOME: &str =
+    include_str!("../fixtures/discovery_coins_clamp_outcome_v1.json");
 const DISCOVERY_EMPTY: &str = include_str!("../fixtures/discovery_coins_empty_page_v1.json");
 const COIN_SEARCH_OUTCOME: &str = include_str!("../fixtures/coin_search_live_outcome_v1.json");
 const CURRENTLY_LIVE_OUTCOME: &str =
@@ -81,17 +83,22 @@ fn candles_fixture_refinds_the_identity_gap() {
     assert!(gap[0].evidence.contains("CandlesNameNoSubject"));
 }
 
-/// FAMILY 3 adjacent: the candle `timestamp` unit was never declared anywhere in this crate's
-/// semantics, even though everything downstream reads it as milliseconds. The audit states the
-/// inference and its status.
+/// FAMILY 3 adjacent, closed 2026-08-23: the candle `timestamp` unit is now DECLARED (measured
+/// from the retained bytes, mirrored in `normalize::semantics`), so the audit checks the
+/// declaration against the bytes instead of hedging an inference — and the declaration holds.
 #[test]
-fn candles_timestamp_unit_is_an_inference_not_a_measurement() {
+fn candles_timestamp_unit_is_declared_and_holds_on_the_bytes() {
     let audit = audit(CANDLES_OUTCOME, None);
-    let inference = findings(&audit, "audit/units/undeclared_clock_inference");
-    assert_eq!(inference.len(), 1);
-    assert_eq!(inference[0].severity, AuditSeverity::Observation);
-    assert!(inference[0].found.contains("ONLY as epoch_millis"));
-    assert!(inference[0].found.contains("200 value(s)"));
+    assert_eq!(
+        verdict(&audit, "audit/units/declared_clock_plausibility"),
+        CheckVerdict::Clear,
+        "every bar-open instant is plausible as declared epoch millis"
+    );
+    assert_eq!(
+        verdict(&audit, "audit/units/undeclared_clock_inference"),
+        CheckVerdict::Clear,
+        "no clock-named field on candles lacks a measured unit any more"
+    );
 }
 
 /// FAMILY 3, the measured trap itself: every discovery row carries `updated_at` in epoch
@@ -136,6 +143,62 @@ fn discovery_fixture_lists_retained_but_unread_fields() {
     assert!(unread[0].evidence.contains("ath_market_cap"));
 }
 
+/// FAMILY 7, the retention side of the clamp: every envelope retained before
+/// `resolvedPublicQuery` existed keeps the clamp check UNDECIDABLE with its reason. Decidability
+/// arrived with the retention change and must never be backdated onto records that lack the ask.
+#[test]
+fn pre_retention_envelopes_keep_the_clamp_undecidable_never_assumed() {
+    let audit = audit(DISCOVERY_OUTCOME, None);
+    let check = audit
+        .checks
+        .iter()
+        .find(|check| check.check_id == "audit/narrowing/limit_clamp")
+        .expect("the clamp check runs on every limit-paged route");
+    assert_eq!(check.verdict, CheckVerdict::Undecidable);
+    assert!(check.detail.contains("resolvedPublicQuery"));
+    assert!(
+        !audit
+            .not_examined
+            .iter()
+            .any(|entry| entry.check_id == "audit/narrowing/limit_clamp"),
+        "the clamp left the structural boundary when retention began restating the ask"
+    );
+}
+
+/// FAMILY 7 convicted on live bytes, 2026-08-23: the first acquisition retained AFTER the
+/// envelope began restating its own ask (`resolvedPublicQuery`). The request said limit=1000;
+/// the provider answered exactly 70 rows under HTTP 200 with no warning; the audit names both
+/// numbers as a defect. This fixture is the clamp the audit could previously only refuse to
+/// examine, caught by a machine because retention changed.
+#[test]
+fn the_fresh_clamp_acquisition_is_convicted_with_both_numbers() {
+    let attempt = attempt(DISCOVERY_CLAMP_OUTCOME);
+    assert_eq!(
+        attempt
+            .resolved_public_query
+            .get("limit")
+            .map(String::as_str),
+        Some("1000"),
+        "the envelope restates the requested limit verbatim"
+    );
+    assert_eq!(
+        attempt
+            .resolved_public_query
+            .get("sort")
+            .map(String::as_str),
+        Some("created_timestamp"),
+        "every declared page-shape parameter travels, not only the limit"
+    );
+    let supplied = review(DISCOVERY_ROW_REVIEW);
+    let audit = audit_acquisition(&attempt, Some(&supplied), DECIDED_AT).expect("audit runs");
+    let clamp = findings(&audit, "audit/narrowing/limit_clamp");
+    assert_eq!(clamp.len(), 1);
+    assert_eq!(clamp[0].severity, AuditSeverity::Defect);
+    assert!(clamp[0].expected.contains("1000"));
+    assert!(clamp[0].found.contains("70 rows"));
+    assert!(clamp[0].found.contains("clamp of 70"));
+}
+
 /// FAMILY 6 + FAMILY 8 together on real bytes: the empty discovery page refuses to be read as
 /// absence, and the row gate (replayed by the audit) refuses to certify a schema from zero rows.
 #[test]
@@ -173,13 +236,21 @@ fn trades_terminal_page_is_named_and_the_gate_refuses_it() {
 
 /// FAMILY 2 + FAMILY 3, measured across the two swap-api siblings: `timestamp` is an
 /// epoch-millis NUMBER on candles and an ISO-8601 STRING on trades — the same name under two
-/// encodings. The audit states the trades-side inference and flags the homonym on both routes.
+/// encodings. Both units are DECLARED now (2026-08-23), the trades declaration holds on the
+/// retained bytes, and the homonym stays flagged on both routes as a declared fact.
 #[test]
 fn swap_api_timestamp_homonym_is_found_on_both_routes() {
     let trades = audit(TRADES_OUTCOME, None);
-    let inference = findings(&trades, "audit/units/undeclared_clock_inference");
-    assert_eq!(inference.len(), 1);
-    assert!(inference[0].found.contains("ONLY as iso8601_utc"));
+    assert_eq!(
+        verdict(&trades, "audit/units/declared_clock_plausibility"),
+        CheckVerdict::Clear,
+        "every trade instant parses as the declared ISO-8601 UTC"
+    );
+    assert_eq!(
+        verdict(&trades, "audit/units/undeclared_clock_inference"),
+        CheckVerdict::Clear,
+        "no clock-named field on trades lacks a measured unit any more"
+    );
     let homonym = findings(&trades, "audit/homonyms/cross_route_meaning");
     assert!(
         homonym

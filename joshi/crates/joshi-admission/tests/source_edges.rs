@@ -133,6 +133,7 @@ fn pump_reservation_is_acknowledged_only_after_an_exact_durable_receipt() {
         session_class: "none".into(),
         source_locator: "https://frontend-api-v3.pump.fun/coins/{mint}".into(),
         resolved_public_path: std::collections::BTreeMap::new(),
+        resolved_public_query: std::collections::BTreeMap::new(),
         request_fingerprint: format!("sha256:{}", "a".repeat(64)),
         http_status: Some(200),
         safe_response_headers: vec![],

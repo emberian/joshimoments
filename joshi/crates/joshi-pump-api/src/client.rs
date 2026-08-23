@@ -625,6 +625,7 @@ fn acquisition(
         session_class: session_class.to_owned(),
         source_locator: format!("{}{}", spec.origin, spec.path_template),
         resolved_public_path: resolved_public_path(spec, request),
+        resolved_public_query: resolved_public_query(spec, request),
         request_fingerprint: request_fingerprint.to_owned(),
         http_status,
         safe_response_headers,
@@ -642,6 +643,29 @@ fn resolved_public_path(spec: RouteSpec, request: &LogicalRequest) -> BTreeMap<S
             request
                 .parameters
                 .path
+                .get(*name)
+                .map(|value| ((*name).to_owned(), value.clone()))
+        })
+        .collect()
+}
+
+/// The exact values of the query parameters the pinned catalog marks public, and nothing else.
+///
+/// The catalog declaration is necessary but not sufficient: this writer independently refuses
+/// any name the route pins sensitive and any name
+/// [`query_parameter_never_public`](crate::catalog::query_parameter_never_public) rejects, so a
+/// mistaken future catalog edit cannot widen retention to a subject, a cursor, or anything
+/// credential-adjacent. Everything refused here survives only inside the one-way
+/// `request_fingerprint`, which continues to cover the full request either way.
+fn resolved_public_query(spec: RouteSpec, request: &LogicalRequest) -> BTreeMap<String, String> {
+    spec.public_query_parameters()
+        .iter()
+        .filter(|name| !spec.sensitive_query.contains(*name))
+        .filter(|name| !crate::catalog::query_parameter_never_public(name))
+        .filter_map(|name| {
+            request
+                .parameters
+                .query
                 .get(*name)
                 .map(|value| ((*name).to_owned(), value.clone()))
         })
@@ -853,7 +877,7 @@ mod tests {
         assert!(resolved_public_path(callout, &request).is_empty());
 
         // An envelope retained before the field existed still parses, and its absence stays an
-        // absence rather than an empty claim.
+        // absence rather than an empty claim. (resolvedPublicQuery below follows identically.)
         let legacy: crate::model::Acquisition = serde_json::from_value(serde_json::json!({
             "contract": SOURCE_CONTRACT,
             "catalogVersion": ROUTE_CATALOG,
@@ -881,10 +905,76 @@ mod tests {
         }))
         .expect("an envelope without resolvedPublicPath still parses");
         assert!(legacy.resolved_public_path.is_empty());
+        assert!(legacy.resolved_public_query.is_empty());
         let reserialized = serde_json::to_value(&legacy).expect("reserialize");
         assert!(
             reserialized.get("resolvedPublicPath").is_none(),
             "an absent record stays absent on the wire"
+        );
+        assert!(
+            reserialized.get("resolvedPublicQuery").is_none(),
+            "an absent query record stays absent on the wire"
+        );
+    }
+
+    #[test]
+    fn only_catalog_declared_query_parameters_are_restated_on_the_envelope() {
+        // The page shape is restated verbatim; the subject of the ask is not, even though the
+        // route allowlists it — `searchTerm` is pinned sensitive and floor-refused by name.
+        let search = RouteSpec::for_id(RouteId::CoinSearch);
+        let request = LogicalRequest {
+            route: RouteId::CoinSearch,
+            parameters: RequestParameters {
+                path: BTreeMap::new(),
+                query: BTreeMap::from([
+                    ("limit".to_owned(), "100".to_owned()),
+                    ("offset".to_owned(), "70".to_owned()),
+                    ("searchTerm".to_owned(), "private thought".to_owned()),
+                ]),
+            },
+        };
+        assert_eq!(
+            resolved_public_query(search, &request),
+            BTreeMap::from([
+                ("limit".to_owned(), "100".to_owned()),
+                ("offset".to_owned(), "70".to_owned()),
+            ])
+        );
+
+        // A candle window's interval/currency/limit are restated so the retained bytes can say
+        // which series they are; `before` stays only inside the one-way fingerprint.
+        let candles = RouteSpec::for_id(RouteId::Candles);
+        let request = LogicalRequest {
+            route: RouteId::Candles,
+            parameters: RequestParameters {
+                path: BTreeMap::from([("mint".to_owned(), "MINTPUBLIC1111".to_owned())]),
+                query: BTreeMap::from([
+                    ("interval".to_owned(), "1m".to_owned()),
+                    ("limit".to_owned(), "1000".to_owned()),
+                    ("before".to_owned(), "1787352121000".to_owned()),
+                ]),
+            },
+        };
+        let restated = resolved_public_query(candles, &request);
+        assert_eq!(
+            restated,
+            BTreeMap::from([
+                ("interval".to_owned(), "1m".to_owned()),
+                ("limit".to_owned(), "1000".to_owned()),
+            ])
+        );
+        assert!(!restated.contains_key("before"));
+
+        // The fingerprint still covers what retention restates: changing a restated value
+        // changes the fingerprint, so redaction and restatement stay two views of one request.
+        let mut changed = request.clone();
+        changed
+            .parameters
+            .query
+            .insert("limit".to_owned(), "500".to_owned());
+        assert_ne!(
+            request_fingerprint(candles, &request),
+            request_fingerprint(candles, &changed)
         );
     }
 

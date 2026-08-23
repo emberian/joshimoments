@@ -358,6 +358,20 @@ fn declared_clocks(route: RouteId) -> &'static [(&'static str, ClockUnit, &'stat
                  createdAt",
             ),
         ],
+        RouteId::Candles => &[(
+            "timestamp",
+            ClockUnit::EpochMillis,
+            "measured 2026-08-23 from the retained live body: a JSON number of epoch \
+             milliseconds (bar open time), while the sibling trades route carries the same \
+             name as an ISO-8601 string; declared in normalize::semantics",
+        )],
+        RouteId::Trades => &[(
+            "timestamp",
+            ClockUnit::Iso8601Utc,
+            "measured 2026-08-23 from the retained live body: an ISO-8601 UTC string (trade \
+             time), while the sibling candles route carries the same name as an epoch-millis \
+             number; declared in normalize::semantics",
+        )],
         _ => &[],
     }
 }
@@ -366,7 +380,6 @@ fn declared_clocks(route: RouteId) -> &'static [(&'static str, ClockUnit, &'stat
 /// their magnitude admits — an inference said as an inference — or refuse to decide.
 fn undeclared_clock_suspects(route: RouteId) -> &'static [&'static str] {
     match route {
-        RouteId::Candles | RouteId::Trades => &["timestamp"],
         RouteId::SolPrice => &["asOfTimestamp"],
         RouteId::BalanceSummary | RouteId::BalanceTokens => &["updatedAt"],
         RouteId::CommunityMessages | RouteId::CommunityCallouts => &["createdAt"],
@@ -919,6 +932,7 @@ pub fn audit_acquisition(
             let upper_bound_seconds =
                 received.map(|instant| instant.unix_timestamp() + PLAUSIBLE_FUTURE_SLACK_SECONDS);
             check_container_rows(&mut auditor, route, parsed);
+            check_limit_clamp(&mut auditor, acquisition, spec, parsed);
             check_retained_but_unread(&mut auditor, route, parsed);
             check_empty_page(&mut auditor, route, parsed);
             check_trades_terminal_shape(&mut auditor, route, parsed);
@@ -954,7 +968,7 @@ pub fn audit_acquisition(
         decided_at: decided_at.to_owned(),
         checks: auditor.checks,
         findings: auditor.findings,
-        not_examined: not_examined(route, spec),
+        not_examined: not_examined(route),
     })
 }
 
@@ -964,6 +978,7 @@ const CONTENT_CHECKS: &[(&str, AuditFamily)] = &[
         "audit/narrowing/container_rows",
         AuditFamily::SilentNarrowing,
     ),
+    ("audit/narrowing/limit_clamp", AuditFamily::SilentNarrowing),
     (
         "audit/narrowing/retained_but_unread",
         AuditFamily::SilentNarrowing,
@@ -1532,6 +1547,132 @@ fn check_container_rows(auditor: &mut Auditor, _route: RouteId, parsed: &ParsedB
          body (2026-08-22); zero-out-of-something is a misread, not an empty page",
     );
     auditor.found(CHECK, AuditFamily::SilentNarrowing, vec![finding]);
+}
+
+/// Page-size clamps MEASURED per route, each citing its measurement. A route absent here has no
+/// measured clamp value — not "no clamp": /coins/search-unrestricted honoured limit=100 and its
+/// behaviour above that is unmeasured, which is exactly why two siblings on one host cannot
+/// share this constant.
+fn measured_limit_clamp(route: RouteId) -> Option<usize> {
+    match route {
+        // limit=71, limit=100 and limit=1000 each returned exactly 70 rows with HTTP 200 and no
+        // warning of any kind (measured 2026-08-22; see the catalog entry).
+        RouteId::DiscoveryCoins => Some(70),
+        _ => None,
+    }
+}
+
+/// Family 7's loudest member, decidable only because retention changed: the envelope's
+/// `resolvedPublicQuery` restates the requested page size, so requested-vs-delivered becomes a
+/// comparison instead of a permanent unknown. Where the envelope predates that field (or the
+/// request declared no limit) the verdict stays UNDECIDABLE with its reason — the check never
+/// assumes what an older record did not retain.
+fn check_limit_clamp(
+    auditor: &mut Auditor,
+    acquisition: &Acquisition,
+    spec: RouteSpec,
+    parsed: &ParsedBody,
+) {
+    const CHECK: &str = "audit/narrowing/limit_clamp";
+    let parameter = match spec.pagination {
+        PaginationKind::OffsetLimit => "limit",
+        PaginationKind::PageSize => "size",
+        _ => {
+            auditor.clear(
+                CHECK,
+                AuditFamily::SilentNarrowing,
+                "not a limit-paged route; no requested page size exists to be clamped",
+            );
+            return;
+        }
+    };
+    let Some(requested_raw) = acquisition.resolved_public_query.get(parameter) else {
+        auditor.undecidable(
+            CHECK,
+            AuditFamily::SilentNarrowing,
+            &format!(
+                "no requested `{parameter}` is retained on this envelope — it predates \
+                 resolvedPublicQuery or the request sent no `{parameter}` — so \
+                 requested-vs-delivered cannot be compared; a silent clamp stays undecidable, \
+                 never assumed absent"
+            ),
+        );
+        return;
+    };
+    let Ok(requested) = requested_raw.parse::<usize>() else {
+        let finding = auditor.finding(
+            AuditFamily::SilentNarrowing,
+            CHECK,
+            AuditSeverity::Hazard,
+            "envelope:resolvedPublicQuery",
+            Some(parameter),
+            None,
+            "a nonnegative integer page size restated from the request",
+            &format!("`{requested_raw}` does not parse as one"),
+            "a request the provider would have rejected or coerced cannot anchor a \
+             requested-vs-delivered comparison",
+        );
+        auditor.found(CHECK, AuditFamily::SilentNarrowing, vec![finding]);
+        return;
+    };
+    let delivered = parsed.rows.len();
+    if delivered == requested {
+        auditor.clear(
+            CHECK,
+            AuditFamily::SilentNarrowing,
+            &format!("requested {requested} row(s) and the provider delivered exactly that"),
+        );
+        return;
+    }
+    if delivered > requested {
+        let finding = auditor.finding(
+            AuditFamily::SilentNarrowing,
+            CHECK,
+            AuditSeverity::Defect,
+            "$",
+            Some(parameter),
+            None,
+            &format!("at most the requested {requested} row(s)"),
+            &format!("{delivered} rows: the provider ignored the requested bound"),
+            "an over-delivered page means the limit parameter did not govern this response, \
+             so nothing about its coverage follows from what was asked",
+        );
+        auditor.found(CHECK, AuditFamily::SilentNarrowing, vec![finding]);
+        return;
+    }
+    match measured_limit_clamp(spec.id) {
+        Some(clamp) if delivered == clamp && requested > clamp => {
+            let finding = auditor.finding(
+                AuditFamily::SilentNarrowing,
+                CHECK,
+                AuditSeverity::Defect,
+                "$",
+                Some(parameter),
+                None,
+                &format!("the requested {requested} row(s), or a stated narrowing"),
+                &format!(
+                    "{delivered} rows — exactly this route's measured silent clamp of {clamp} \
+                     — under HTTP 2xx with no warning"
+                ),
+                "measured 2026-08-22 on /coins: limit=71, limit=100 and limit=1000 each \
+                 returned exactly 70 rows; a caller that asks and counts is the only caller \
+                 that finds out, and this record retained the ask",
+            );
+            auditor.found(CHECK, AuditFamily::SilentNarrowing, vec![finding]);
+        }
+        _ => {
+            auditor.undecidable(
+                CHECK,
+                AuditFamily::SilentNarrowing,
+                &format!(
+                    "requested {requested}, delivered {delivered}: a short page is either the \
+                     population tail past this offset or an unmeasured narrowing, and one \
+                     acquisition cannot tell which; no measured clamp value for this route \
+                     matches the delivered count"
+                ),
+            );
+        }
+    }
 }
 
 fn scan_nonempty_arrays(
@@ -2589,7 +2730,7 @@ fn check_occurrence_without_availability(
 }
 
 /// The checks this audit structurally cannot run over one retained acquisition, named per route.
-fn not_examined(route: RouteId, spec: RouteSpec) -> Vec<NotExaminedV1> {
+fn not_examined(route: RouteId) -> Vec<NotExaminedV1> {
     let mut entries = vec![NotExaminedV1 {
         check_id: "audit/selection/recall".to_owned(),
         family: AuditFamily::SelectionRecallGap,
@@ -2612,20 +2753,11 @@ fn not_examined(route: RouteId, spec: RouteSpec) -> Vec<NotExaminedV1> {
                 .to_owned(),
         });
     }
-    if matches!(
-        spec.pagination,
-        PaginationKind::OffsetLimit | PaginationKind::PageSize
-    ) {
-        entries.push(NotExaminedV1 {
-            check_id: "audit/narrowing/limit_clamp".to_owned(),
-            family: AuditFamily::SilentNarrowing,
-            reason: "the requested limit survives only inside the one-way request \
-                     fingerprint, so a silent clamp (limit=1000 answered with 70 rows and no \
-                     warning) cannot be decided from this record; this is a retention-shape \
-                     gap, not a provider one"
-                .to_owned(),
-        });
-    }
+    // `audit/narrowing/limit_clamp` used to be named here: the requested limit survived only
+    // inside the one-way request fingerprint, so a silent clamp was structurally undecidable.
+    // Since the catalog began declaring page-shape parameters public and the envelope began
+    // restating them (`resolvedPublicQuery`), that check RUNS — and reports UNDECIDABLE with
+    // its reason on envelopes that predate the field, never a pass.
     if matches!(route, RouteId::Trades | RouteId::Candles) {
         entries.push(NotExaminedV1 {
             check_id: "audit/leg/cross_source".to_owned(),
@@ -2797,6 +2929,7 @@ mod tests {
             session_class: "public".to_owned(),
             source_locator: "https://frontend-api-v3.pump.fun/test".to_owned(),
             resolved_public_path: BTreeMap::new(),
+            resolved_public_query: BTreeMap::new(),
             request_fingerprint: sha256(b"test"),
             http_status: Some(200),
             safe_response_headers: vec![crate::model::SafeHeader {
@@ -3116,6 +3249,86 @@ mod tests {
             .collect();
         assert!(ids.contains(&"audit/selection/recall"));
         assert!(ids.contains(&"audit/staleness/flag_truth"));
-        assert!(ids.contains(&"audit/narrowing/limit_clamp"));
+        assert!(
+            !ids.contains(&"audit/narrowing/limit_clamp"),
+            "the clamp check runs now that retention restates the ask; it no longer hides in \
+             the structural boundary"
+        );
+    }
+
+    /// Family 7, made decidable by retention: an envelope that restates its requested limit
+    /// convicts the measured /coins clamp, naming both numbers.
+    #[test]
+    fn a_retained_limit_convicts_the_measured_discovery_clamp() {
+        let rows: Vec<String> = (0..70)
+            .map(|ordinal| format!(r#"{{"mint":"M{ordinal}","complete":false}}"#))
+            .collect();
+        let body = format!("[{}]", rows.join(","));
+        let mut clamped = acquisition(RouteId::DiscoveryCoins, body.as_bytes());
+        clamped
+            .resolved_public_query
+            .insert("limit".to_owned(), "1000".to_owned());
+        let audit = audit_acquisition(&clamped, None, DECIDED_AT).unwrap();
+        let findings = findings_for(&audit, "audit/narrowing/limit_clamp");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, AuditSeverity::Defect);
+        assert!(findings[0].expected.contains("1000"));
+        assert!(findings[0].found.contains("70 rows"));
+        assert!(findings[0].found.contains("clamp of 70"));
+    }
+
+    /// The same bytes without the retained ask stay UNDECIDABLE with the reason — the check
+    /// never becomes decidable for records that lack the data.
+    #[test]
+    fn an_envelope_without_the_ask_keeps_the_clamp_undecidable() {
+        let body = br#"[{"mint":"M1","complete":false}]"#;
+        let audit = audit_acquisition(
+            &acquisition(RouteId::DiscoveryCoins, body),
+            None,
+            DECIDED_AT,
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(&audit, "audit/narrowing/limit_clamp"),
+            CheckVerdict::Undecidable
+        );
+        let detail = &audit
+            .checks
+            .iter()
+            .find(|check| check.check_id == "audit/narrowing/limit_clamp")
+            .unwrap()
+            .detail;
+        assert!(detail.contains("resolvedPublicQuery"));
+    }
+
+    /// A short page that is not the measured clamp value cannot be told apart from the
+    /// population tail by one acquisition, and an exactly-honoured limit is clear.
+    #[test]
+    fn short_pages_stay_ambiguous_and_honoured_limits_clear() {
+        let mut short = acquisition(
+            RouteId::DiscoveryCoins,
+            br#"[{"mint":"M1","complete":false},{"mint":"M2","complete":false}]"#,
+        );
+        short
+            .resolved_public_query
+            .insert("limit".to_owned(), "50".to_owned());
+        let audit = audit_acquisition(&short, None, DECIDED_AT).unwrap();
+        assert_eq!(
+            verdict(&audit, "audit/narrowing/limit_clamp"),
+            CheckVerdict::Undecidable
+        );
+
+        let mut honoured = acquisition(
+            RouteId::DiscoveryCoins,
+            br#"[{"mint":"M1","complete":false},{"mint":"M2","complete":false}]"#,
+        );
+        honoured
+            .resolved_public_query
+            .insert("limit".to_owned(), "2".to_owned());
+        let audit = audit_acquisition(&honoured, None, DECIDED_AT).unwrap();
+        assert_eq!(
+            verdict(&audit, "audit/narrowing/limit_clamp"),
+            CheckVerdict::Clear
+        );
     }
 }

@@ -672,4 +672,161 @@ impl RouteSpec {
             _ => &[],
         }
     }
+
+    /// Query parameters whose requested values this catalog deliberately retains verbatim on the
+    /// acquisition envelope, beside the one-way request fingerprint. This is the query-side twin
+    /// of [`Self::public_subject_path`], and the same idiom: retention is a pinned per-route
+    /// catalog decision a person can read, never a client-side judgment call.
+    ///
+    /// WHY RETAIN ANY OF THEM. The source audit's silent-narrowing family is undecidable without
+    /// the ask: `/coins` answers `limit=1000` with exactly 70 rows, HTTP 200, no warning
+    /// (measured 2026-08-22), and a record that keeps only the answer can never convict that
+    /// clamp. Likewise a retained candle window does not restate its own `interval` or
+    /// `currency`, so without the request nothing durable says which series the bytes are.
+    /// Every name in this list states the SHAPE of the ask — how many rows, from which offset,
+    /// in which order, over which bar interval, in which denomination — and none of them states
+    /// the SUBJECT of the ask.
+    ///
+    /// THE PRIVACY LINE, stated so it can be disagreed with: the shape of a request is a fact
+    /// about this collector's mechanics; the subject of a request is a fact about what someone
+    /// was interested in. Subjects (`searchTerm`, `creator`), continuation material that encodes
+    /// a position in someone's reading (`cursor`, `pageToken`, `before`), and anything
+    /// credential-adjacent stay ONLY inside the one-way fingerprint. A parameter is restated
+    /// because this list says so, never because it looked harmless; the default for an
+    /// undeclared parameter is redaction. [`query_parameter_never_public`] is the structural
+    /// floor under that: a name it rejects cannot be restated even if a future edit of this
+    /// list mistakenly declares it, and the envelope writer re-checks both at write time.
+    #[must_use]
+    pub fn public_query_parameters(self) -> &'static [&'static str] {
+        match self.id {
+            RouteId::DiscoveryCoins => &["includeNsfw", "limit", "offset", "order", "sort"],
+            RouteId::CurrentlyLive
+            | RouteId::CoinSearch
+            | RouteId::UserSearch
+            | RouteId::Following => &["limit", "offset"],
+            // The `{wallet}` path subject stays redacted; the page shape says nothing about it.
+            RouteId::BalanceTokens => &["page", "size"],
+            // `before` is allowlisted on trades (as on candles) but stays undeclared: it is a
+            // wall-clock seek into a subject's history — reading interest, not page shape — and
+            // the catalog already pins it sensitive, like every cursor and pageToken here.
+            RouteId::CalloutTop
+            | RouteId::CalloutLeaderboard
+            | RouteId::CommunityMessages
+            | RouteId::CommunityCallouts
+            | RouteId::Trades => &["limit"],
+            RouteId::CalloutByUser => &["limit", "sortBy", "sortOrder"],
+            // A retained candle window does not restate its own interval or denomination;
+            // without these the bytes cannot say which series they are.
+            RouteId::Candles => &["currency", "interval", "limit"],
+            RouteId::CoinExact
+            | RouteId::SolPrice
+            | RouteId::BalanceSummary
+            | RouteId::CalloutRecent
+            | RouteId::UserProfile
+            | RouteId::LiveChat => &[],
+        }
+    }
+}
+
+/// Query-parameter names that may NEVER be declared public, whatever a route entry says.
+///
+/// This is the structural floor under [`RouteSpec::public_query_parameters`]: session tokens,
+/// wallet addresses, user identifiers, continuation cursors and anything credential-adjacent are
+/// refused BY NAME, so a mistaken future catalog edit cannot widen retention to them — the
+/// envelope writer in `crate::client` re-checks this predicate (and the route's
+/// `sensitive_query` list) at write time, and the catalog closure test asserts every declared
+/// name passes it. Substring matching is deliberate: it over-refuses (`sortByUser` would be
+/// refused for containing `user`) and never under-refuses, which is the correct failure
+/// direction for a redaction floor.
+#[must_use]
+pub fn query_parameter_never_public(name: &str) -> bool {
+    const NEVER_SUBSTRING: &[&str] = &[
+        "account",
+        "address",
+        "auth",
+        "cookie",
+        "creator",
+        "credential",
+        "cursor",
+        "key",
+        "mail",
+        "password",
+        "phone",
+        "search",
+        "secret",
+        "session",
+        "sign",
+        "term",
+        "token",
+        "user",
+        "wallet",
+    ];
+    const NEVER_EXACT: &[&str] = &["before", "beforeId", "id", "q", "uuid"];
+    let lowered = name.to_ascii_lowercase();
+    NEVER_EXACT.iter().any(|deny| *deny == lowered)
+        || NEVER_SUBSTRING.iter().any(|deny| lowered.contains(deny))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The closure over every route: a declared-public query parameter must be allowlisted,
+    /// must not be route-pinned sensitive, and must clear the never-public floor. This is the
+    /// test that makes "public because the catalog says so" reviewable in one place.
+    #[test]
+    fn public_query_declarations_close_over_the_whole_catalog() {
+        for route in RouteId::ALL {
+            let spec = RouteSpec::for_id(route);
+            for name in spec.public_query_parameters() {
+                assert!(
+                    spec.allowed_query.contains(name),
+                    "{route}: `{name}` is declared public but not allowlisted"
+                );
+                assert!(
+                    !spec.sensitive_query.contains(name),
+                    "{route}: `{name}` is declared public AND pinned sensitive"
+                );
+                assert!(
+                    !query_parameter_never_public(name),
+                    "{route}: `{name}` is on the never-public floor and cannot be declared"
+                );
+            }
+        }
+    }
+
+    /// The floor refuses the names this catalog already knows are subjects, continuations, or
+    /// credential-adjacent — including every route-pinned sensitive name in the catalog today.
+    #[test]
+    fn the_never_public_floor_covers_every_pinned_sensitive_name() {
+        for route in RouteId::ALL {
+            let spec = RouteSpec::for_id(route);
+            for name in spec.sensitive_query {
+                assert!(
+                    query_parameter_never_public(name),
+                    "{route}: sensitive `{name}` must also be refused by name"
+                );
+            }
+        }
+        for name in [
+            "sessionToken",
+            "authToken",
+            "walletAddress",
+            "userId",
+            "apiKey",
+            "cursor",
+            "pageToken",
+            "before",
+            "searchTerm",
+            "creator",
+        ] {
+            assert!(query_parameter_never_public(name), "{name} must be refused");
+        }
+        for name in ["limit", "offset", "interval", "sort", "order", "currency"] {
+            assert!(
+                !query_parameter_never_public(name),
+                "{name} states page shape, not a subject, and must stay declarable"
+            );
+        }
+    }
 }

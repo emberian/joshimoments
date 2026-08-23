@@ -735,6 +735,19 @@ fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str 
     if let Some(tag) = callout_semantics(route, field) {
         return tag;
     }
+    // MEASURED 2026-08-23 from the retained live bodies: the two swap-api routes carry the SAME
+    // `timestamp` name under different units AND different encodings — a JSON number of epoch
+    // MILLISECONDS on candles (the bar open time) and an ISO-8601 UTC STRING on trades (the
+    // trade time). Declaring both here makes the homonym a stated fact each tag carries, instead
+    // of an inference the audit has to hedge; on every other route the name stays unmeasured and
+    // falls through to the silent tag below.
+    if field == "timestamp" {
+        match route {
+            RouteId::Candles => return "provider_bar_open_time_epoch_millis_number",
+            RouteId::Trades => return "provider_trade_time_iso8601_utc_string",
+            _ => {}
+        }
+    }
     match field {
         "mint"
         | "creator"

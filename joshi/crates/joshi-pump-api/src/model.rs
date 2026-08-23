@@ -114,6 +114,22 @@ pub struct Acquisition {
     /// this field existed — an absence, not an empty claim.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resolved_public_path: BTreeMap<String, String>,
+    /// Query parameters the pinned catalog marks public
+    /// ([`RouteSpec::public_query_parameters`](crate::RouteSpec::public_query_parameters)),
+    /// restated with the exact values this request carried.
+    ///
+    /// This is the request restating the SHAPE of its own ask — `limit`, `offset`, `interval`,
+    /// `currency`, sort settings — beside the retained bytes, never inside them. Without it a
+    /// silent clamp is permanently unauditable: `/coins` answers `limit=1000` with 70 rows and
+    /// no warning, and the requested limit otherwise survives only inside the one-way
+    /// `request_fingerprint`. Every undeclared parameter — subjects like `searchTerm`,
+    /// continuations like `cursor`/`pageToken`/`before`, anything credential-adjacent — keeps
+    /// the fingerprint-only redaction, and the fingerprint continues to cover the full request
+    /// including everything restated here. Empty for a request that sent no declared parameter,
+    /// and absent from envelopes retained before this field existed — an absence, not an empty
+    /// claim.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolved_public_query: BTreeMap<String, String>,
     pub request_fingerprint: String,
     pub http_status: Option<u16>,
     pub safe_response_headers: Vec<SafeHeader>,
