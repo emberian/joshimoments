@@ -8,6 +8,7 @@
 pub mod action;
 pub mod chunk;
 pub mod dlmm_fee;
+pub mod paper;
 pub mod pool_depth;
 pub mod position;
 pub mod q64;

@@ -18,6 +18,7 @@ use thiserror::Error;
 use crate::{
     fee::{CreatorFee, FeeBreakdown, FeeSchedule},
     quote::{QuoteCalculation, QuoteOutcome, QuoteRefusal, QuoteSize, SpotQuote},
+    render::{array, integer, object, quoted},
 };
 
 /// Stable contract of the rendered would-quote artifact.
@@ -586,56 +587,6 @@ const fn refusal_kind(refusal: &QuoteRefusal) -> &'static str {
     }
 }
 
-fn object(pairs: &[(&str, String)]) -> String {
-    let mut out = String::from("{");
-    for (index, (key, value)) in pairs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&quoted(key));
-        out.push(':');
-        out.push_str(value);
-    }
-    out.push('}');
-    out
-}
-
-fn array(items: &[String]) -> String {
-    let mut out = String::from("[");
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(item);
-    }
-    out.push(']');
-    out
-}
-
-fn integer(value: &impl ToString) -> String {
-    quoted(&value.to_string())
-}
-
-fn quoted(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            control if control < ' ' => {
-                let _ = write!(out, "\\u{:04x}", u32::from(control));
-            }
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// Refusals from constructing a would-quote.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum WouldQuoteError {
@@ -676,19 +627,5 @@ mod tests {
         let age = ChainToReceiptAge::measure(chain, &receipt(1_787_310_190_000)).expect("measured");
         assert_eq!(age.latest_ms, -1_000);
         assert_eq!(age.earliest_ms, -2_000);
-    }
-
-    #[test]
-    fn json_strings_escape_every_control_character_and_quote() {
-        assert_eq!(quoted("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
-    }
-
-    #[test]
-    fn every_integer_renders_as_a_string_so_reparsing_cannot_lose_width() {
-        assert_eq!(
-            integer(&u128::MAX),
-            "\"340282366920938463463374607431768211455\""
-        );
-        assert_eq!(integer(&-1_i64), "\"-1\"");
     }
 }

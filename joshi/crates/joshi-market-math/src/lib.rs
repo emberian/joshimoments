@@ -10,6 +10,7 @@ pub mod fee;
 pub mod profile;
 pub mod pump;
 pub mod quote;
+pub mod render;
 pub mod stack;
 pub mod wide;
 pub mod would_quote;
