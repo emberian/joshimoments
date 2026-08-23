@@ -198,6 +198,28 @@ building the window instead of the photograph:
   resting limit order a NAMED absence. CLI against the real funds catalog; route+rail spec only
   (core/glass are sibling territory).
 
+## Plus THE PUMP WAVE, 2026-08-22 17:25 — three Fable lanes back on the memecoining itself
+
+- CALLOUT SCIENCE (pump-api, pump-adapter, analysis/): compose a callout population (no global feed
+  exists — discovery sweeps x callout_top x callout_by_user fan-out), outcome census with the
+  multiple=1 floor as its own bin, caller-signal check (port-and-reverify joshibot's
+  quality_callers, not first contact), and THE ENTRY-WINDOW MEASUREMENT: seek the trades tape to
+  each callout's createdAt and measure the first 30-60 min — is there usually a decent-magnitude
+  dip or variance worth entering after? Ember's own loop, measured at last. Occurrence-vs-
+  availability confound stated on every result. <=300 requests.
+- LIVE TAPE (joshi-sources/examples/coin_tape_live.rs only): review the mid-write recorder
+  honestly, record a real hot mint under sane machine load, frame anatomy + tape-vs-swap-api
+  cross-validation (cheapest two-source check JOSHI has ever had), and the live event-resolution
+  vs one-minute-candle drawdown verdict. Keeper-adoption seam spec'd, not built.
+- PAPER DESK (joshi-liquidity, market-math, one new example): the year-old ask — papertrading her
+  actual hypotheses LIVE. PaperEpisodeV1: hypothesis verbatim, declared rules executed without
+  cleverness, would-quotes from M0's to-the-atom arithmetic carrying state age and fee tier,
+  would-PnL NAMED AS ARITHMETIC with the unmodeled-risk list structurally adjacent (landing,
+  failure, competition — unknowable from our data and said so). Unable to lie by construction.
+  Evidence seam into the journal spec'd, not built.
+
+Territory: two lanes share joshi-sources/examples on DISJOINT files, named in both briefs.
+
 Seams named in the briefs: keeper is sole writer of its catalog dir; living-scene watches it
 read-only; resident degrades gracefully if the feed route is absent; portfolio specs its surface
 rather than colliding in service.rs. Primary integrates and commits as they land.
