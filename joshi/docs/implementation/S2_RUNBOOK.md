@@ -12,7 +12,7 @@ The measurement table below reflects the corrected model.)
 
 ```sh
 cd ~/dev/joshi
-./target/debug/joshi-up
+./target/release/joshi-up
 ```
 
 Proven end to end on a cold start (2026-08-23): it starts the keeper (real bounded acquisition
@@ -56,13 +56,14 @@ the rail then says the feed stopped carrying it rather than dropping it.
 The hold commits a durable operator act bound to the exact scene bytes on screen. Nothing is
 classified at the moment of noticing: no dropdown, no required fields. Words go on afterwards.
 
-**Known gap, stated on screen:** a hold already accepted is not read back after a reload, because
-core serves no read route for operator commands yet.
+Holds and journal entries read back after a reload — the durable readback route landed 2026-08-22
+and the journal replays acts verbatim after a restart. (An earlier version of this file named the
+missing read route as a known gap; it is closed.)
 
 ## Finding something to hold
 
 ```sh
-./target/debug/joshi-pump-candidates      # sweep, wait, sweep, join on mint, rank by |delta mcap|
+./target/release/joshi-pump-candidates      # sweep, wait, sweep, join on mint, rank by |delta mcap|
 ```
 
 Differences two discovery sweeps. Measured live: a 92-second window over 58 persisting mints
@@ -107,11 +108,11 @@ read a number without it.
 ## Retaining what you looked at
 
 ```sh
-./target/debug/joshi-collector census        # bounded Pump/PumpSwap census, with coverage and gaps
-./target/debug/joshi-collector census-readback
-./target/debug/joshi-pump-product-read --route candles --query interval=1s --query limit=1000 ...
-./target/debug/joshi-pump-trades-backfill    # walk one mint's trade history backwards
-./target/debug/joshi-pump-crackle --mint ... # excursions per hour above that venue's measured fee floor
+./target/release/joshi-collector census        # bounded Pump/PumpSwap census, with coverage and gaps
+./target/release/joshi-collector census-readback
+./target/release/joshi-pump-product-read --route candles --query interval=1s --query limit=1000 ...
+./target/release/joshi-pump-trades-backfill    # walk one mint's trade history backwards
+./target/release/joshi-pump-crackle --mint ... # excursions per hour above that venue's measured fee floor
 ```
 
 ## What you will see, so it is not a surprise
