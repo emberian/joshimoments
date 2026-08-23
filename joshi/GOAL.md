@@ -456,6 +456,29 @@ across a full run.
 
 ## Done log
 
+- 2026-08-23 01:41 REPLAY HARNESS — a clean NEGATIVE, the useful kind. Across 3 real coins x 5
+  variants: several beat the baseline handsomely, but the baseline is catastrophic, and **0 of 5 on
+  ANY coin clear their own haircut against a net of ZERO**. A +244 bps row sits inside a 777 bps
+  haircut. Second negative: the parameter grid is FINER THAN THE TAPE'S PRICE GRANULARITY — 60/100/200
+  bps produced the SAME episode; five declared strategies were two behaviours.
+  Two deputy corrections to my brief: (1) the haircut had to be TWO numbers — tape gap alone is
+  ~0.09 bps and would have let +244 look real, so it prices tape gap PLUS 12s chain-to-receipt per
+  leg, plus a second ADVERSE-DRAW haircut at p90 (immediate variants clear central 777, FAIL adverse
+  2132); (2) a replay's rules are NOT blind, so every panel carries a required statement of what its
+  author already knew — and this one says the drawdown analysis had been read before the variants
+  were written. It also FALSIFIED the declared reserve term instead of trusting it: 481/508 sell
+  pairs reproduce to the atom, control at term=0 gives 0/508, and the fee floors land at 247/60 bps
+  — Study M0's numbers from a completely different route.
+- 2026-08-23 01:44 SOURCE AUDIT — 107 tests, 11 retained inputs, 34 findings. Triage corrected two of
+  my priors (staleness IS partly decidable; forced-invention is NOT, because it needs the CONSUMER's
+  contract which an acquisition cannot see). Re-found every known issue (the regression working) and
+  found 4 new ones: an ALREADY-PROMOTED route whose two market-cap fields disagree by **4.55%** (14x
+  the census max); `timestamp` meaning epoch-millis-number on candles and ISO-8601-string on trades,
+  neither declared; the fee wedge quantified from our own bytes at median 24.5 bps. An error body
+  records all 16 content checks UNDECIDABLE rather than passing green.
+  Honest gap it cannot close: the limit-clamp (1000 answered with 70) can NEVER be audited, because
+  query params survive only in a one-way fingerprint — it says so on every paginated route.
+
 - 2026-08-23 01:23 SELECTION INSTRUMENT landed (291 analysis tests, ruff clean). Unit is the SCENE
   not the act (3 holds in one scene are ONE decision; counting them separately would treble the
   sample and shrink intervals by sqrt(3) for free). Window opens at the ACT not the scene render —
