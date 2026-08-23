@@ -114,7 +114,14 @@ function pairedSession(): MemoryOnlyPairingSession {
 
 type Attempt = { url: string; method: string; token: string | null; body: string | null };
 
-function stubCore(attempts: Attempt[]) {
+type StubOverrides = {
+  /** The scene feed document to serve; absent means the route 404s like a single-scene core. */
+  sceneFeed?: () => unknown;
+  /** Which snapshot to serve for a requested basis scene. */
+  snapshotFor?: (basisSceneId: string | null) => GlassSnapshotV1;
+};
+
+function stubCore(attempts: Attempt[], overrides: StubOverrides = {}) {
   const fetchStub = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = input instanceof URL ? input.toString() : String(input);
     const method = init?.method ?? "GET";
@@ -125,8 +132,16 @@ function stubCore(attempts: Attempt[]) {
       token: headers.get("X-Joshi-Pairing-Token"),
       body: typeof init?.body === "string" ? init.body : null,
     });
+    if (new URL(url).pathname === "/api/v1/glass/scenes" && overrides.sceneFeed) {
+      return new Response(JSON.stringify(overrides.sceneFeed()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.includes("/api/v1/glass/snapshot")) {
-      return new Response(JSON.stringify(liveSnapshot), {
+      const basis = new URL(url).searchParams.get("basisSceneId");
+      const snapshot = overrides.snapshotFor?.(basis) ?? liveSnapshot;
+      return new Response(JSON.stringify(snapshot), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -138,7 +153,7 @@ function stubCore(attempts: Attempt[]) {
         contract: "joshi.core.operator_command_readback",
         schemaVersion: 1,
         authority: "read_only_no_execution",
-        sceneId: SCENE_ID,
+        sceneId: new URL(url).searchParams.get("sceneId") ?? SCENE_ID,
         sceneRetention: "served_not_yet_durable",
         commands: [],
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -300,6 +315,150 @@ describe("live surface shell", () => {
     expect(await within(rail).findByText(/retained by the catalog at commit 7/i)).toBeInTheDocument();
     // Nothing was measured about this venue, so nothing about it is claimed.
     expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(4);
+  });
+
+  /**
+   * The living-window loop, browser side: the feed grows a newer immutable scene, the shell
+   * announces it politely (no focus theft, no swap), and the operator advances through the
+   * command palette. The scene changes only by that act, and the held rail — journal-derived,
+   * scene-independent — carries every held coin across the advance.
+   */
+  it("announces a newer scene politely and advances only by the operator's act, keeping holds", async () => {
+    const SCENE2 = "scene-live-1c66c9adf6bd0a58bb45ea48029b74d5";
+    const secondView: GlassViewV1 = {
+      ...liveView,
+      sceneId: SCENE2,
+      asOf: {
+        ...liveView.asOf,
+        catalogCommit: "4",
+        sources: liveView.asOf.sources.map((source) => ({ ...source, deliveredThrough: "4" })),
+      },
+    };
+    const secondSnapshot: GlassSnapshotV1 = {
+      ...liveSnapshot,
+      snapshotDigest: digestGlassView(secondView),
+      view: secondView,
+    };
+    const feedEntry = (sceneId: string, viewDigest: string, cutoff: string, derivedAt: string) => ({
+      sceneId,
+      derivedAt,
+      cutoffCommitSeq: cutoff,
+      subjectCount: "1",
+      observationCount: "3",
+      viewDigest,
+      sceneRetention: "served_not_yet_durable",
+    });
+    const feedScenes = [
+      feedEntry(SCENE_ID, liveSnapshot.snapshotDigest, "3", "2026-08-22T17:55:00.000000Z"),
+    ];
+    const attempts: Attempt[] = [];
+    stubCore(attempts, {
+      sceneFeed: () => ({
+        contract: "joshi.core.scene_feed",
+        schemaVersion: 1,
+        authority: "read_only_no_execution",
+        sourceId: "helius.http.solana.v1",
+        scenes: [...feedScenes],
+        catalog: {
+          outcome: "advanced",
+          lastContactAt: "2026-08-22T18:03:00.000000Z",
+          detail: null,
+          basisCommitSeq: feedScenes[0]?.cutoffCommitSeq ?? "3",
+        },
+      }),
+      snapshotFor: (basis) => (basis === SCENE2 ? secondSnapshot : liveSnapshot),
+    });
+    const user = userEvent.setup();
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        sceneFeedIntervalMs={25}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    const sessionBar = screen.getByRole("navigation", { name: /live surface session/i });
+    expect(within(sessionBar).getByText(`Scene ${SCENE_ID}`)).toBeInTheDocument();
+
+    // Hold first, so the survival of the hold across the advance is observable.
+    await user.keyboard(";");
+    const rail = await screen.findByRole("region", { name: /held coins/i });
+    expect(within(rail).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+
+    // The feed grows a newer scene. Nothing on screen swaps; a polite status line appears.
+    feedScenes.unshift(
+      feedEntry(SCENE2, secondSnapshot.snapshotDigest, "4", "2026-08-22T18:03:00.000000Z"),
+    );
+    expect(
+      await screen.findByText(/a newer scene exists, derived at 18:03 utc/i),
+    ).toBeInTheDocument();
+    expect(within(sessionBar).getByText(`Scene ${SCENE_ID}`)).toBeInTheDocument();
+
+    // Advancing is the operator's own act, through the existing command palette.
+    await user.click(within(sessionBar).getByRole("button", { name: /^advance to the newer scene$/i }));
+
+    await waitFor(() => {
+      expect(within(sessionBar).getByText(`Scene ${SCENE2}`)).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(attempts.some((attempt) => attempt.url.includes(`basisSceneId=${SCENE2}`))).toBe(true);
+    });
+    // The workbench now renders the new scene's snapshot...
+    await waitFor(() => {
+      expect(screen.getAllByText(new RegExp(`Scene ${SCENE2}`)).length).toBeGreaterThan(0);
+    });
+    // ...and the held coin is still held: the rail derives from the journal, not from the scene.
+    const railAfter = screen.getByRole("region", { name: /held coins/i });
+    expect(within(railAfter).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+    // Once bound to the newest scene, no advance affordance remains to invite tail-chasing.
+    expect(within(sessionBar).queryByRole("button", { name: /^advance to the newer scene$/i })).not.toBeInTheDocument();
+  });
+
+  it("offers the advance inside the command palette, with no single-letter shortcut", async () => {
+    const SCENE2 = "scene-live-2c66c9adf6bd0a58bb45ea48029b74d5";
+    const attempts: Attempt[] = [];
+    stubCore(attempts, {
+      sceneFeed: () => ({
+        contract: "joshi.core.scene_feed",
+        schemaVersion: 1,
+        authority: "read_only_no_execution",
+        sourceId: "helius.http.solana.v1",
+        scenes: [{
+          sceneId: SCENE2,
+          derivedAt: "2026-08-22T18:03:00.000000Z",
+          cutoffCommitSeq: "4",
+          subjectCount: "1",
+          observationCount: "3",
+          viewDigest: liveSnapshot.snapshotDigest,
+          sceneRetention: "served_not_yet_durable",
+        }],
+        catalog: {
+          outcome: "advanced",
+          lastContactAt: "2026-08-22T18:03:00.000000Z",
+          detail: null,
+          basisCommitSeq: "4",
+        },
+      }),
+    });
+    const user = userEvent.setup();
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        sceneFeedIntervalMs={25}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    await screen.findByText(/a newer scene exists/i);
+    await user.click(screen.getByRole("button", { name: /commands/i }));
+    const dialog = await screen.findByRole("dialog");
+    const entry = within(dialog).getByRole("button", { name: /advance to the newer scene/i });
+    // Deliberately no shortcut on this action: no new single-letter key exists to collide with
+    // screen-reader quick-nav, so the palette entry renders no <kbd> hint.
+    expect(within(entry).queryByText(/^[a-z;]$/i)).not.toBeInTheDocument();
+    expect(entry.querySelector("kbd")).toBeNull();
   });
 
   it("keeps the live surface free of axe-detectable violations", async () => {

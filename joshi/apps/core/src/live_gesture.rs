@@ -402,7 +402,7 @@ const HOLD_UI_LABEL: &str = "Hold coin";
 /// omission in this walk. Asking for confidence, urgency, a reason or a note at the moment of
 /// noticing is what made the coin unreachable in the first place; words come later, as their own
 /// act, or never.
-fn mark_command_bytes(
+pub(crate) fn mark_command_bytes(
     command_id: &str,
     scene_id: &str,
     view_digest: &str,
@@ -467,7 +467,7 @@ fn short_digest(bytes: &[u8]) -> String {
     hex_digest(bytes).chars().take(16).collect()
 }
 
-fn copy_blob_tree(source: &Path, destination: &Path) -> Result<(), LiveGestureError> {
+pub(crate) fn copy_blob_tree(source: &Path, destination: &Path) -> Result<(), LiveGestureError> {
     if !source.is_dir() {
         return Ok(());
     }
@@ -700,10 +700,29 @@ pub(crate) mod live_fixture {
     }
 
     pub(crate) fn seed_catalog(catalog: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        commit_frames(catalog, 0..2, "batch-live-gesture-fixture", 3_000_000)
+    }
+
+    /// Append further fixture observations to an already-seeded catalog, as the keeper would:
+    /// a later batch of new acquisitions, committed while a reader may be following.
+    pub(crate) fn extend_catalog(
+        catalog: &Path,
+        ordinals: std::ops::Range<u64>,
+        batch_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        commit_frames(catalog, ordinals, batch_id, 4_000_000)
+    }
+
+    fn commit_frames(
+        catalog: &Path,
+        ordinals: std::ops::Range<u64>,
+        batch_id: &str,
+        monotonic_ns: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut store =
             SqliteStore::open(source_catalog_config(catalog)?, StoreMode::SingleWriter)?;
         store.migrate(instant("2026-08-19T21:45:30.000000Z"))?;
-        let frames = (0..2)
+        let frames = ordinals
             .map(|ordinal| SourceFrameInput {
                 frame: fixture_frame(ordinal),
                 context: fixture_context(ordinal),
@@ -713,10 +732,37 @@ pub(crate) mod live_fixture {
             frames,
             Vec::new(),
             Vec::new(),
-            StableString::new("batch-live-gesture-fixture")?,
+            StableString::new(batch_id)?,
             instant("2026-08-19T21:45:39.000000Z"),
             StableString::new("live-gesture-fixture-writer")?,
-            3_000_000,
+            monotonic_ns,
+        )?;
+        batch.commit(&mut store)?;
+        Ok(())
+    }
+
+    /// Commit one observation for a *different* source into the same catalog: the catalog's
+    /// commit sequence advances while the followed source's evidence watermark does not.
+    pub(crate) fn commit_bystander_frame(
+        catalog: &Path,
+        ordinal: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut store =
+            SqliteStore::open(source_catalog_config(catalog)?, StoreMode::SingleWriter)?;
+        store.migrate(instant("2026-08-19T21:45:30.000000Z"))?;
+        let mut frame = fixture_frame(ordinal);
+        frame.source = FrameSourceId::Other("bystander".to_owned());
+        let mut context = fixture_context(ordinal);
+        context.redacted_request_fingerprint_material =
+            format!("bystander:getTransaction:{ordinal}");
+        let batch = source_frames(
+            vec![SourceFrameInput { frame, context }],
+            Vec::new(),
+            Vec::new(),
+            StableString::new(format!("batch-live-bystander-{ordinal}"))?,
+            instant("2026-08-19T21:45:39.000000Z"),
+            StableString::new("live-gesture-fixture-writer")?,
+            5_000_000 + ordinal,
         )?;
         batch.commit(&mut store)?;
         Ok(())

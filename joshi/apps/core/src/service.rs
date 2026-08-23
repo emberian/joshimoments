@@ -32,6 +32,7 @@ use tower::limit::ConcurrencyLimitLayer;
 use zeroize::Zeroize as _;
 
 use crate::{
+    live_follow::{FollowError, FollowRuntime},
     pairing::{
         OrdinaryPairingError, OrdinaryPairingService, PairingAuthorizer, ordinary_pairing_router,
     },
@@ -72,6 +73,11 @@ struct Inner {
     /// capture, which is a different answer from a coin the capture did not cover, and the two
     /// reach the cockpit under different problem codes.
     venue_readouts: Option<Arc<MountedVenueReadouts>>,
+    /// A follow mount: many immutable scenes derived over time from a sibling-written catalog,
+    /// listed by the scene feed. When present, scene reads and operator acts go through it; the
+    /// store above then carries only pairing state. Nothing here is a mutable current-scene
+    /// pointer — the feed lists facts and the client chooses.
+    follow: Option<Arc<FollowRuntime>>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -173,6 +179,7 @@ impl CoreService {
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
                 live_surface: None,
                 venue_readouts: None,
+                follow: None,
             }),
         }
     }
@@ -184,6 +191,7 @@ impl CoreService {
         ordinary_pairing: Arc<OrdinaryPairingService>,
         live_surface: Option<Arc<ValidatedGlassViewV1>>,
         venue_readouts: Option<Arc<MountedVenueReadouts>>,
+        follow: Option<Arc<FollowRuntime>>,
     ) -> Self {
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -198,6 +206,7 @@ impl CoreService {
                 monotonic_clock_id: format!("joshi-core-process-{}-{started}", std::process::id()),
                 live_surface,
                 venue_readouts,
+                follow,
             }),
         }
     }
@@ -287,6 +296,44 @@ impl CoreService {
             ordinary.clone(),
             live_surface.map(Arc::new),
             venue_readouts.map(Arc::new),
+            None,
+        );
+        Ok((service, ordinary))
+    }
+
+    /// Mount a follow surface: many immutable scenes over a sibling-written catalog, plus the
+    /// scene feed that lists them.
+    ///
+    /// The pairing store here is the follow mount's own small catalog. It deliberately carries no
+    /// scenes and no acts: those live in the follow runtime's generations, which are replaced as
+    /// the source advances, and replacing a generation must never invalidate the operator's
+    /// session.
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
+    pub fn with_sqlite_pairing_following(
+        pairing_store: SqliteStore,
+        pairing: PairingCapability,
+        origin: PairingOrigin,
+        config: PairingConfig,
+        follow: Arc<FollowRuntime>,
+        venue_readouts: Option<MountedVenueReadouts>,
+    ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
+        let store = Arc::new(Mutex::new(pairing_store));
+        let ordinary = Arc::new(OrdinaryPairingService::production_with_shared_store(
+            origin,
+            config,
+            store.clone(),
+        )?);
+        let service = Self::with_ordinary_pairing(
+            store,
+            None,
+            pairing,
+            ordinary.clone(),
+            None,
+            venue_readouts.map(Arc::new),
+            Some(follow),
         );
         Ok((service, ordinary))
     }
@@ -302,6 +349,7 @@ impl CoreService {
             .route("/api/v1/health", get(health))
             .route("/v1/observations/pump-companion", post(companion))
             .route("/api/v1/glass/snapshot", get(snapshot))
+            .route("/api/v1/glass/scenes", get(scene_feed))
             .route("/api/v1/glass/scenes/{scene_id}", get(historical_scene))
             .route(
                 "/api/v1/glass/venue-readouts/{mint}",
@@ -1133,6 +1181,38 @@ async fn snapshot(
     scene_response(&service, &scene, Some(&query.mode))
 }
 
+/// The scene feed: every immutable scene a follow mount has derived, newest first, plus whether
+/// the source catalog could actually be looked at.
+///
+/// This is a list of facts, not a mutable pointer. A client that wants a newer scene reads the
+/// list and *chooses* to rebind through the ordinary scene routes; nothing served to it ever
+/// changes underneath it. Each row carries the evidence watermark it was cut at, so a client
+/// advances on new observations, never on a new scene identity. On a core without a follow mount
+/// the feed states its own absence instead of serving an empty list.
+async fn scene_feed(State(service): State<CoreService>, headers: HeaderMap) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
+    let Some(follow) = &service.inner.follow else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "scene_feed_not_mounted",
+            "this core serves one mounted scene and does not follow a catalog; the launch scene \
+             identity is printed at startup and no newer scene will ever exist here",
+        );
+    };
+    match follow.feed_wire() {
+        Ok(wire) => json_response(StatusCode::OK, &wire),
+        Err(_) => problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reader_unavailable",
+            "follow state lock is unavailable",
+        ),
+    }
+}
+
 async fn historical_scene(
     State(service): State<CoreService>,
     headers: HeaderMap,
@@ -1154,30 +1234,53 @@ fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&
             "scene identity is invalid",
         );
     };
-    let Ok(store) = service.inner.store.lock() else {
-        return problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "reader_unavailable",
-            "catalog lock is unavailable",
-        );
-    };
-    let stored = store.load_scene(&scene_id).ok();
-    // A scene this process derived from the store is served from memory only until an operator
-    // act makes it durable; afterwards the durable bytes answer, and they are the same bytes.
-    let mounted = service
-        .inner
-        .live_surface
-        .as_ref()
-        .filter(|view| *view.scene_id() == scene_id);
-    let (view_bytes, mode) = match (&stored, mounted) {
-        (Some(scene), _) => (scene.view_bytes.clone(), mode_name(scene.mode)),
-        (None, Some(view)) => (view.canonical_bytes().to_vec(), glass_mode_name(view)),
-        (None, None) => {
+    // A follow mount serves every scene it has derived, durable bytes preferred; nothing else in
+    // this process holds scenes then.
+    let (view_bytes, mode) = if let Some(follow) = &service.inner.follow {
+        match follow.scene_bytes(&scene_id) {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                return problem(
+                    StatusCode::NOT_FOUND,
+                    "scene_not_found",
+                    "immutable scene was not found",
+                );
+            }
+            Err(_) => {
+                return problem(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "reader_unavailable",
+                    "follow state lock is unavailable",
+                );
+            }
+        }
+    } else {
+        let Ok(store) = service.inner.store.lock() else {
             return problem(
-                StatusCode::NOT_FOUND,
-                "scene_not_found",
-                "immutable scene was not found",
+                StatusCode::SERVICE_UNAVAILABLE,
+                "reader_unavailable",
+                "catalog lock is unavailable",
             );
+        };
+        let stored = store.load_scene(&scene_id).ok();
+        // A scene this process derived from the store is served from memory only until an
+        // operator act makes it durable; afterwards the durable bytes answer, and they are the
+        // same bytes.
+        let mounted = service
+            .inner
+            .live_surface
+            .as_ref()
+            .filter(|view| *view.scene_id() == scene_id);
+        match (&stored, mounted) {
+            (Some(scene), _) => (scene.view_bytes.clone(), mode_name(scene.mode)),
+            (None, Some(view)) => (view.canonical_bytes().to_vec(), glass_mode_name(view)),
+            (None, None) => {
+                return problem(
+                    StatusCode::NOT_FOUND,
+                    "scene_not_found",
+                    "immutable scene was not found",
+                );
+            }
         }
     };
     if let Some(expected) = expected_mode
@@ -1265,7 +1368,7 @@ fn snapshot_bytes(view_bytes: &[u8]) -> Option<Vec<u8>> {
     Some(result)
 }
 
-fn glass_mode_name(view: &ValidatedGlassViewV1) -> &'static str {
+pub(crate) fn glass_mode_name(view: &ValidatedGlassViewV1) -> &'static str {
     match view.mode() {
         joshi_operator::GlassMode::Witnessed => "witnessed",
         joshi_operator::GlassMode::KnowledgeCutoff => "knowledge_cutoff",
@@ -1273,7 +1376,7 @@ fn glass_mode_name(view: &ValidatedGlassViewV1) -> &'static str {
     }
 }
 
-fn mode_name(mode: SceneMode) -> &'static str {
+pub(crate) fn mode_name(mode: SceneMode) -> &'static str {
     match mode {
         SceneMode::Witnessed => "witnessed",
         SceneMode::KnowledgeCutoff => "knowledge_cutoff",
@@ -1346,6 +1449,35 @@ async fn operator_command(
             );
         }
     };
+    // A follow mount routes the act to the generation that can re-check the scene it names: a
+    // new act to the newest generation, an exact retry back to the generation that already holds
+    // it, so the retry returns the original durable closure.
+    if let Some(follow) = &service.inner.follow {
+        return match follow.commit_act(
+            &command,
+            committed_at,
+            committed_mono_ns,
+            &service.inner.monotonic_clock_id,
+        ) {
+            Ok(receipt) => {
+                let status = match receipt.status() {
+                    OperatorCommandStatus::Accepted => StatusCode::ACCEPTED,
+                    OperatorCommandStatus::Idempotent => StatusCode::OK,
+                };
+                json_response(status, &receipt)
+            }
+            Err(FollowError::LockPoisoned) => problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "writer_unavailable",
+                "durable writer lock is unavailable",
+            ),
+            Err(_) => problem(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "operator_commit_rejected",
+                "scene-bound operator command was not committed",
+            ),
+        };
+    }
     let receipt = {
         let Ok(mut store) = service.inner.store.lock() else {
             return problem(
@@ -1516,6 +1648,30 @@ async fn operator_command_readback(
             "scene identity is invalid",
         );
     };
+    // A follow mount's journal spans its retained generations: every act ever committed for this
+    // scene, in the order its catalog retained it, whichever generation was current at the time.
+    if let Some(follow) = &service.inner.follow {
+        return match follow.readback(&scene_id) {
+            Ok(Some((scene_retention, stored))) => {
+                readback_response(&scene_id, scene_retention, stored)
+            }
+            Ok(None) => problem(
+                StatusCode::NOT_FOUND,
+                "scene_not_found",
+                "immutable scene was not found",
+            ),
+            Err(FollowError::LockPoisoned) => problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "reader_unavailable",
+                "follow state lock is unavailable",
+            ),
+            Err(_) => problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "command_readback_failed",
+                "durable operator commands failed exact readback",
+            ),
+        };
+    }
     let Ok(store) = service.inner.store.lock() else {
         return problem(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1555,9 +1711,18 @@ async fn operator_command_readback(
             "durable operator commands failed exact readback",
         );
     };
+    readback_response(&scene_id, scene_retention, stored)
+}
+
+/// Serialize one scene's durable acts, exactly as retained, into the frozen readback envelope.
+fn readback_response(
+    scene_id: &SceneId,
+    scene_retention: &'static str,
+    stored: Vec<joshi_store::StoredOperatorCommandV1>,
+) -> Response {
     let mut commands = Vec::with_capacity(stored.len());
     for command in stored {
-        let Some(command) = readback_command(&scene_id, command) else {
+        let Some(command) = readback_command(scene_id, command) else {
             return problem(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "command_payload_unreadable",
@@ -1606,7 +1771,7 @@ async fn operator_command_readback(
 /// the scene was retained. For a scene this process derived and served, the metadata says exactly
 /// that: JOSHI rendered it from the catalog on the server clock domain, and no browser render
 /// clock is claimed for bytes the browser did not compose.
-fn operator_capture(
+pub(crate) fn operator_capture(
     mounting_derived_scene: bool,
     server_clock_id: &str,
 ) -> Result<OperatorCaptureMetadata, joshi_domain::WireStringError> {

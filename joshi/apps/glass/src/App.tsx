@@ -53,6 +53,7 @@ export function GlassApp({
   prospectiveProtocol = false,
   pendingOperatorQueue,
   venueReadout,
+  newerScene = null,
 }: {
   dataSource?: GlassDataSource;
   operatorSink?: OperatorCommandSink;
@@ -73,6 +74,13 @@ export function GlassApp({
    * numbers; this cockpit renders what the core sends and computes nothing.
    */
   venueReadout?: HeldVenueLookup;
+  /**
+   * A newer immutable scene the shell learned about from the scene feed, with the act that
+   * rebinds this cockpit to it. Rendered as a command-palette action and nothing else: no new
+   * single-letter key (six of the eight existing ones already collide with screen-reader
+   * quick-nav), no focus theft, and the current scene never changes without this explicit act.
+   */
+  newerScene?: { sceneId: string; derivedAt: string; advance(): void } | null;
 }) {
   const [snapshot, setSnapshot] = useState<GlassSnapshotV1 | null>(null);
   const [pendingMode, setPendingMode] = useState<ReplayMode | null>(null);
@@ -377,6 +385,13 @@ export function GlassApp({
   }), [cycleReplay, focusSearch, holdSelected, moveSelection, openCommands, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]));
 
   const shellCommands: ShellCommand[] = useMemo(() => [
+    // First when present, because it is time-sensitive; still an explicit choice, never automatic.
+    ...(newerScene ? [{
+      id: "advance-scene",
+      label: "Advance to the newer scene",
+      detail: `Rebind to scene ${newerScene.sceneId}, derived ${newerScene.derivedAt}. Held coins and the journal stay.`,
+      run: newerScene.advance,
+    }] : []),
     { id: "search", label: "Focus market search", detail: "Filter only this immutable view", shortcut: "/", run: focusSearch },
     { id: "replay", label: "Load the next replay mode", detail: "Fetch a distinct cutoff, witnessed, or retrospective DTO", shortcut: "R", run: cycleReplay },
     { id: "density", label: "Toggle density", detail: "Keep large targets; reduce surrounding detail", shortcut: "D", run: toggleDensity },
@@ -388,7 +403,7 @@ export function GlassApp({
     // Deliberately no single-letter shortcut: the journal is reached by tab order or from here.
     { id: "journal", label: "Open the journal", detail: "Read what was said over this scene, verbatim, and append an entry", run: openJournal },
     { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
-  ], [cycleReplay, focusSearch, holdSelected, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
+  ], [cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
 
   const closeCommands = useCallback(() => {
     setCommandsOpen(false);

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 
 import { GlassApp } from "../App";
 import { LoopbackDataSource } from "../data/client";
+import { LoopbackSceneFeedSource } from "../data/sceneFeed";
 import { LoopbackOperatorSink } from "../operator/client";
 import { LoopbackOperatorReader } from "../operator/readback";
 import { LoopbackPresentationSink } from "../presentation/client";
@@ -13,6 +14,7 @@ import {
 } from "../security/pairing";
 import type { PendingOperatorCommandQueue } from "../operator/pendingQueue";
 import { SameOriginOperationalClient } from "./client";
+import { useSceneFeed } from "./useSceneFeed";
 
 export type LiveSurfacePairing = {
   exchange(oneTimeCode: string, signal?: AbortSignal): Promise<Omit<PairingSessionDescriptor, "capability">>;
@@ -25,18 +27,28 @@ export type LiveSurfacePairing = {
  * There is no publication index to choose from here and nothing opens automatically. The launch
  * scene is named explicitly at build time by `VITE_JOSHI_LAUNCH_SCENE_ID`, which the launcher
  * prints next to the one-time code; Glass never asks for a "current" or "latest" scene.
+ *
+ * When the core follows a live catalog it also serves a scene *feed*: a list of immutable scenes,
+ * newest first. This shell polls it gently. A newer scene is announced politely (a status line —
+ * no focus theft, no swap) and offered as a command-palette action plus a session-bar button;
+ * the cockpit rebinds only when the operator runs that action, and holds and the journal carry
+ * across because the app is not remounted — only its data source changes, exactly the machinery
+ * replay-mode selection already uses.
  */
 export function LiveSurfaceShell({
   session = glassPairingSession,
   client,
   launchSceneId = (import.meta.env.VITE_JOSHI_LAUNCH_SCENE_ID as string | undefined) ?? null,
   pendingOperatorQueue,
+  sceneFeedIntervalMs = 20_000,
 }: {
   session?: MemoryOnlyPairingSession;
   client?: LiveSurfacePairing;
   launchSceneId?: string | null;
   // Retention seam for pending marks; the browser default is the IndexedDB-backed queue.
   pendingOperatorQueue?: PendingOperatorCommandQueue;
+  /** How often to poll the scene feed for newer immutable scenes. */
+  sceneFeedIntervalMs?: number;
 }) {
   const resolvedClient = useMemo<LiveSurfacePairing>(
     () => client ?? new SameOriginOperationalClient(session),
@@ -46,6 +58,11 @@ export function LiveSurfaceShell({
   const [oneTimeCode, setOneTimeCode] = useState("");
   const [status, setStatus] = useState<"unpaired" | "pairing" | "paired">("unpaired");
   const [error, setError] = useState<string | null>(null);
+  // The scene this cockpit is bound to. It starts at the named launch scene and changes ONLY by
+  // the operator's own advance act below — never because the feed listed something newer.
+  const [boundSceneId, setBoundSceneId] = useState(launchSceneId);
+  const [sceneAnnouncement, setSceneAnnouncement] = useState("");
+  const announcedSceneRef = useRef<string | null>(null);
 
   useEffect(() => session.subscribe(() => setSessionVersion((value) => value + 1)), [session]);
   const paired = session.paired();
@@ -67,15 +84,62 @@ export function LiveSurfaceShell({
   }, [descriptor?.expiresAt, session]);
 
   const runtime = useMemo(() => {
-    if (!paired || launchSceneId === null) return null;
+    if (!paired || boundSceneId === null) return null;
     const origin = window.location.origin;
     return {
-      source: new LoopbackDataSource(origin, launchSceneId, session),
+      source: new LoopbackDataSource(origin, boundSceneId, session),
       operatorSink: new LoopbackOperatorSink(origin, session, true),
       operatorReader: new LoopbackOperatorReader(origin, session, true),
       presentationSink: new LoopbackPresentationSink(origin, session, true),
     };
-  }, [launchSceneId, paired, session, sessionVersion]);
+  }, [boundSceneId, paired, session, sessionVersion]);
+
+  // The scene feed is a list of immutable facts served by the core. Polling it can only teach
+  // this shell that newer scenes exist; the operator chooses whether to advance.
+  const feedSource = useMemo(
+    () => (paired ? new LoopbackSceneFeedSource(window.location.origin, session) : null),
+    [paired, session, sessionVersion], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const sceneFeed = useSceneFeed(feedSource, sceneFeedIntervalMs);
+  const newestScene = sceneFeed.feed?.scenes[0] ?? null;
+  const newerScene = newestScene !== null && boundSceneId !== null && newestScene.sceneId !== boundSceneId
+    ? newestScene
+    : null;
+
+  const advance = useCallback(() => {
+    if (!newerScene) return;
+    setBoundSceneId(newerScene.sceneId);
+    setSceneAnnouncement(
+      `Advanced to the scene derived at ${newerScene.derivedAt.slice(11, 16)} UTC. `
+        + "Held coins and the journal are unchanged; the previous scene remains readable.",
+    );
+  }, [newerScene]);
+
+  // Announce a newer scene once, politely: an update to an existing status region, no focus
+  // change, no swap. Silence again until an even newer scene appears.
+  useEffect(() => {
+    if (!newerScene || announcedSceneRef.current === newerScene.sceneId) return;
+    announcedSceneRef.current = newerScene.sceneId;
+    setSceneAnnouncement(
+      `A newer scene exists, derived at ${newerScene.derivedAt.slice(11, 16)} UTC. `
+        + 'Open commands with Cmd+K or Ctrl+K and choose "Advance to the newer scene". '
+        + "Held coins and the journal stay.",
+    );
+  }, [newerScene]);
+
+  const newerSceneForApp = useMemo(
+    () => (newerScene ? { sceneId: newerScene.sceneId, derivedAt: newerScene.derivedAt, advance } : null),
+    [advance, newerScene],
+  );
+
+  // Feed trouble is stated, never silently blank — and never mistaken for "no newer scene".
+  const feedNote = sceneFeed.absent
+    ? null
+    : sceneFeed.error !== null
+      ? "Scene feed unreachable; newer scenes may exist unseen."
+      : sceneFeed.feed?.catalog.outcome === "unreachable"
+        ? "The core reports its source catalog unreachable; the scenes listed remain served."
+        : null;
 
   const pair = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -153,11 +217,29 @@ export function LiveSurfaceShell({
 
   return (
     <div className="operational-session">
+      {/*
+        Mounted from the first paired render so a newer-scene notice is an update to an existing
+        live region, not an insertion. Polite on purpose: a newer scene is information, and the
+        operator's current scene never changes without her own act.
+      */}
+      <p className="sr-only" role="status">{sceneAnnouncement}</p>
       <nav className="operational-session-bar" aria-label="Live surface session">
         <span><ShieldCheck aria-hidden="true" /> Evidence-only session · expires {descriptor.expiresAt}</span>
-        <span>Scene {launchSceneId}</span>
+        <span>Scene {boundSceneId ?? launchSceneId}</span>
+        {feedNote && <span>{feedNote}</span>}
+        {newerScene && (
+          <button type="button" onClick={advance}>
+            Advance to the newer scene
+          </button>
+        )}
         <button type="button" onClick={() => session.clear()}>End session</button>
       </nav>
+      {/*
+        The key is the *launch* scene, deliberately stable across advances: advancing swaps the
+        data source (the same machinery replay-mode selection uses) while the held rail, the
+        session journal, and the pending queue keep their state. Remounting here would forget
+        every committed hold, which is exactly the forgetting the hold rail exists to end.
+      */}
       <GlassApp
         key={launchSceneId}
         dataSource={runtime.source}
@@ -165,6 +247,7 @@ export function LiveSurfaceShell({
         operatorReader={runtime.operatorReader}
         presentationSink={runtime.presentationSink}
         launchMode="witnessed"
+        newerScene={newerSceneForApp}
         {...(pendingOperatorQueue ? { pendingOperatorQueue } : {})}
       />
     </div>

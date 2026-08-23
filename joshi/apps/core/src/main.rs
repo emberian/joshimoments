@@ -174,6 +174,24 @@ enum Command {
         /// serves no readouts at all, and the cockpit says so rather than showing blanks.
         #[arg(long, value_name = "PATH")]
         venue_accounts: Option<PathBuf>,
+        /// Follow the source catalog: poll it read-only and derive a NEW immutable scene whenever
+        /// the followed source actually delivered new observations.
+        ///
+        /// Scenes are never mutated or swapped: they accumulate, the scene feed at
+        /// `/api/v1/glass/scenes` lists them newest-first, and a client chooses when to
+        /// advance. A commit that carries no new observation for the followed source (an act, a
+        /// journal write, another source's traffic) derives nothing.
+        #[arg(long)]
+        follow: bool,
+        /// Seconds between source catalog polls in follow mode.
+        #[arg(long, default_value_t = 20, requires = "follow")]
+        poll_seconds: u64,
+        /// Write the one-time pairing code to this owner-only file instead of only stderr, so a
+        /// long-lived local client (the resident, a keeper-era tool) can pair without a human
+        /// ferrying the code. In follow mode, deleting the file after consuming its code makes
+        /// this process issue and write a fresh one on its next poll.
+        #[arg(long, value_name = "PATH")]
+        pairing_code_file: Option<PathBuf>,
     },
     /// Mark one real mint over a real catalog through the paired route and reopen after restart.
     LiveGestureWalk {
@@ -420,6 +438,9 @@ async fn main() -> Result<(), CliError> {
             source_id,
             candles_subject,
             venue_accounts,
+            follow,
+            poll_seconds,
+            pairing_code_file,
         }) => {
             if !listen.ip().is_loopback() {
                 return Err(CliError::NonLoopback(listen));
@@ -431,6 +452,20 @@ async fn main() -> Result<(), CliError> {
             let options = joshi_core::live_surface::LiveSurfaceOptions {
                 attested_candle_subject: candles_subject,
             };
+            if follow {
+                return serve_follow_surface(
+                    listen,
+                    glass_origin,
+                    &catalog,
+                    &state,
+                    &source_id,
+                    &options,
+                    venues,
+                    poll_seconds,
+                    pairing_code_file,
+                )
+                .await;
+            }
             let mounted = joshi_core::live_gesture::mount_live_surface_with(
                 &catalog, &state, &source_id, &options,
             )?;
@@ -482,6 +517,10 @@ async fn main() -> Result<(), CliError> {
                 PairingScope::CockpitRead,
                 PairingScope::OperatorEvidenceWrite,
             ])?;
+            if let Some(path) = &pairing_code_file {
+                write_pairing_code_file(path, issued.code.as_str())?;
+                eprintln!("one-time pairing code written to {}", path.display());
+            }
             println!("{surface}");
             eprintln!(
                 "live surface mounted from {}: scene {scene_id}\n\
@@ -528,6 +567,110 @@ async fn main() -> Result<(), CliError> {
         }
         Some(Command::Fixture(fixture)) => run_fixture_command(fixture).await?,
         None => run_fixture_command(arguments.fixture).await?,
+    }
+    Ok(())
+}
+
+/// Serve a follow mount: many immutable scenes over a sibling-written catalog, a scene feed that
+/// lists them, and a poll loop that derives a new scene whenever the source actually observed
+/// something new. Nothing is ever swapped: the operator's scene changes only by the operator's
+/// own act of advancing.
+#[allow(clippy::too_many_arguments)] // The launcher hands every stated flag through explicitly.
+async fn serve_follow_surface(
+    listen: SocketAddr,
+    glass_origin: String,
+    catalog: &Path,
+    state: &Path,
+    source_id: &str,
+    options: &joshi_core::live_surface::LiveSurfaceOptions,
+    venues: Option<MountedVenueReadouts>,
+    poll_seconds: u64,
+    pairing_code_file: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let runtime =
+        joshi_core::live_follow::FollowRuntime::mount(catalog, state, source_id, options)?;
+    let feed = runtime.feed_wire()?;
+    let scene_id = runtime.newest_scene_id()?;
+    let origin = loopback_pairing_origin(glass_origin)?;
+    let pairing_store = joshi_core::live_follow::open_pairing_store(state)?;
+    let (core, launcher) = CoreService::with_sqlite_pairing_following(
+        pairing_store,
+        PairingCapability::generate_os_random()?,
+        origin,
+        PairingConfig::default(),
+        runtime.clone(),
+        venues,
+    )?;
+    let listener = tokio::net::TcpListener::bind(listen).await?;
+    let issued = launcher.issue_code(vec![
+        PairingScope::CockpitRead,
+        PairingScope::OperatorEvidenceWrite,
+    ])?;
+    if let Some(path) = &pairing_code_file {
+        write_pairing_code_file(path, issued.code.as_str())?;
+        eprintln!("one-time pairing code written to {}", path.display());
+    }
+    println!("{}", serde_json::to_string(&feed)?);
+    eprintln!(
+        "live follow surface mounted from {}: newest scene {scene_id}\n\
+         scene feed: http://{listen}/api/v1/glass/scenes (poll gently; new scenes accumulate, \
+         nothing is swapped)\n\
+         Glass needs: VITE_JOSHI_CORE_URL=http://{listen} VITE_JOSHI_LAUNCH_SCENE_ID={scene_id}\n\
+         one-time pairing code (Cockpit read + operator evidence; no signing or execution): {}",
+        catalog.display(),
+        issued.code.as_str()
+    );
+    let poll_runtime = runtime.clone();
+    let poll_launcher = launcher.clone();
+    std::thread::spawn(move || {
+        let mut last_line = String::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(poll_seconds.max(1)));
+            let line = match poll_runtime.tick() {
+                Ok(joshi_core::live_follow::TickOutcome::Advanced { scene_id }) => {
+                    format!("follow: new scene {scene_id} derived; the feed lists it newest-first")
+                }
+                Ok(joshi_core::live_follow::TickOutcome::Unchanged) => String::new(),
+                Ok(joshi_core::live_follow::TickOutcome::Unreachable { detail }) => {
+                    format!("follow: source catalog unreachable; the feed says so: {detail}")
+                }
+                Err(error) => format!("follow: poll failed: {error}"),
+            };
+            if !line.is_empty() && line != last_line {
+                eprintln!("{line}");
+            }
+            last_line = line;
+            // A consumed-and-deleted code file is a local client asking to pair again: issue a
+            // fresh one-time code rather than making a human ferry stderr.
+            if let Some(path) = &pairing_code_file
+                && !path.exists()
+                && let Ok(issued) = poll_launcher.issue_code(vec![
+                    PairingScope::CockpitRead,
+                    PairingScope::OperatorEvidenceWrite,
+                ])
+                && write_pairing_code_file(path, issued.code.as_str()).is_ok()
+            {
+                eprintln!("fresh one-time pairing code written to {}", path.display());
+            }
+        }
+    });
+    axum::serve(listener, core.router()).await?;
+    Ok(())
+}
+
+/// Write a one-time pairing code to an owner-only regular file, never through a symlink.
+fn write_pairing_code_file(path: &Path, code: &str) -> Result<(), CliError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(CliError::UnsafePairingFile);
+        }
+        _ => {}
+    }
+    fs::write(path, format!("{code}\n"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -685,6 +828,8 @@ enum CliError {
     Wave6StoreInput(#[from] joshi_core::wave6_store_input::Wave6StoreInputCensusError),
     #[error(transparent)]
     Wave6OperatorInput(#[from] joshi_core::wave6_operator_input::Wave6OperatorEvidenceInputError),
+    #[error(transparent)]
+    LiveFollow(#[from] joshi_core::live_follow::FollowError),
     #[error(transparent)]
     LiveGesture(#[from] joshi_core::live_gesture::LiveGestureError),
     #[error(transparent)]
