@@ -328,6 +328,15 @@ market-math). Commit each lane only after the tree gates clean as a whole, in a 
 
 ## Done log
 
+- 2026-08-22 22:54 PORTFOLIO + LIVE TAPE committed (targeted gates, isolated crates, credential-clean).
+  Portfolio: 48 tests, states the book with no headline total, every price absent-not-zero, the
+  resting order a named structural absence. Live tape: THE DIP CONFIRMED LIVE — 8FNsX6, event-res
+  drawdown 45.16% vs one-minute-candle 1.27%, -36.9% at 42s then +30%, on our own retained bytes.
+  Also found: PumpPortal data socket now needs a funded key; trade frames carry NO provider clock
+  (0/1734); a subscribed mint delivered 0 frames while swap-api showed 453 (ack != coverage).
+- Stopped two stuck self-gate loops (living-scene, keeper) to free the build lock; their work is on
+  disk, gated in the integration pass.
+
 - 2026-08-22 05:55 CALLOUT OUTCOMES FETCHED LIVE, and they are directly usable. `callout_top/{mint}`
   returns per callout: `createdAt`, `peakTimestamp`, `calloutPrice`, `maxPriceSol`, `multiple`,
   `marketCap`, and **`thesis` — the caller's own words**. Two real callouts read tonight:
