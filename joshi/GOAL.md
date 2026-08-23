@@ -352,6 +352,30 @@ THE PUMP WAVE (the memecoining itself):
 - authenticated access: SIWS login driven with Ember's own wallet, read-only, the key signs only the
   login; unlocks the global leaderboard fan-out root.
 
+## COMPOSITION SMOKE TEST, 2026-08-23 — the window composes, with one named seam
+
+Ran the assembled loop headless before Ember ever sits in it. Results, honest:
+
+- KEEPER -> CATALOG: WORKS, proven live. 2 bounded cycles committed 12 real DREGG/SOLVE observations
+  across 6 commits, respected the 8-request budget, wrote a heartbeat with per-tap clocks, and on my
+  timeout SIGTERM shut down cleanly recording shutdownReason=SIGTERM. Crash-coherence confirmed.
+- FOLLOW-MODE over the WALLET source (helius.http.solana.v1): WORKS. Derived an immutable scene,
+  served the scene feed at /api/v1/glass/scenes, wrote the pairing code to a file (the resident's
+  requested --pairing-code-file exists). Correctly derived NOTHING when I advanced a DIFFERENT source
+  (a candles read under pump.api.product.v1) — other-source traffic mints no scene, exactly as designed.
+- FOLLOW-MODE over the CANDLES source (pump.api.product.v1): BLOCKED, and it is the recurring gap.
+  Error CandlesNameNoSubject: a candle window names no coin, so scene derivation refuses to bind
+  1997 bars to a subject rather than guess. This is the THIRD instance of "the response names no X"
+  (candle window names no coin; curve account names no mint; account response is positional). The
+  fix is the one flagged for days: retain the resolved mint on the candles acquisition (the mint is
+  public path data), so a candle window can self-identify. Until then the live DREGG/SOLVE PRICE
+  scene cannot derive from candle taps alone; the wallet-source scene works because it carries real
+  subjects.
+
+NET: keeper is real, follow-mode is real, the wallet path composes end to end. The candles->scene
+path is one honest seam away — the anonymous-mint binding — and that seam is now the highest-value
+next fix because it is what stands between the keeper's price taps and a live price chart.
+
 ## Done log
 
 - 2026-08-22 22:54 PORTFOLIO + LIVE TAPE committed (targeted gates, isolated crates, credential-clean).
