@@ -312,6 +312,20 @@ Helius credential (0600, never rendered/logged/committed), READ-ONLY routes only
 signs ONLY the login timestamp, never a transaction. Routed to the callout-science deputy to build +
 explore the authed surface honestly. Token never committed; a live one sits 0600 in scratchpad only.
 
+## Integration hold, 2026-08-22 22:00 — sequencing, not thrashing
+
+Six deputies ran concurrently and congested the shared cargo build lock; a joshi-core gate came back
+with empty test output and 5 clippy errors that are almost certainly sibling in-flight breakage
+(joshi-core transitively depends on joshi-liquidity/joshi-market-math, which the paper-desk lane is
+still writing). Gating now measures the swarm, not the code.
+
+LANDED, awaiting a clean gate window: living-scene (apps/core follow mode + scene feed + Glass
+advance; folded in the re-observed-vs-re-rendered watermark seam so a journal-write-only advance
+never mints a scene — Glass reported 251 green), keeper daemon (apps/collector), resident engine
+(committed). STILL RUNNING: portfolio (joshi-wallet-source/accounting), callout-science +
+auth-provider (joshi-pump-api), live-tape (joshi-sources/examples), paper-desk (joshi-liquidity/
+market-math). Commit each lane only after the tree gates clean as a whole, in a quiet window.
+
 ## Done log
 
 - 2026-08-22 05:55 CALLOUT OUTCOMES FETCHED LIVE, and they are directly usable. `callout_top/{mint}`
