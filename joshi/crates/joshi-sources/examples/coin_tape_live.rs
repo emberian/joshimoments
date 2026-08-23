@@ -167,6 +167,11 @@ enum Stop {
     /// The host's wall clock ran ahead of its monotonic clock, which means this process was
     /// suspended. Everything between the last frame and the resume instant is unobserved.
     HostSuspended,
+    /// The provider answered the subscription with a refusal instead of an acknowledgement.
+    /// MEASURED 2026-08-22: a keyless connection is refused with "'subscribeTokenTrade' ...
+    /// only available when connecting with an API key funded with at least 0.02 SOL". A window
+    /// after that frame is not quiet, it is unsubscribed, so the whole planned window is a gap.
+    SubscriptionRefused,
 }
 
 impl Stop {
@@ -179,6 +184,7 @@ impl Stop {
             Self::TransportError => "transport_error_before_planned_end",
             Self::InactivityCeiling => "no_frame_within_inactivity_ceiling",
             Self::HostSuspended => "host_suspended_during_window",
+            Self::SubscriptionRefused => "provider_refused_subscription",
         }
     }
 
@@ -285,6 +291,11 @@ async fn record(
     let mut inbound_frames = 0_usize;
     let mut inbound_bytes = 0_usize;
     let mut last_frame_millis = sent_at;
+    // Liveness is broader than frames: a websocket ping proves the socket is alive even when the
+    // market is quiet, so it feeds the inactivity clock without being counted as a frame. Pings
+    // carry no JSON body and are not retained; their count states the liveness basis instead.
+    let mut last_liveness_millis = sent_at;
+    let mut transport_pings = 0_usize;
     let stop = loop {
         if inbound_frames >= budget.max_frames {
             break Stop::FrameBudget;
@@ -304,7 +315,7 @@ async fn record(
         if now >= planned_end_millis {
             break Stop::WallClockBudget;
         }
-        if now - last_frame_millis > i64::try_from(budget.inactivity_seconds)? * 1_000 {
+        if now - last_liveness_millis > i64::try_from(budget.inactivity_seconds)? * 1_000 {
             break Stop::InactivityCeiling;
         }
         let remaining = deadline
@@ -325,12 +336,20 @@ async fn record(
             Message::Text(text) => Bytes::from(text.as_bytes().to_vec()),
             Message::Binary(binary) => Bytes::from(binary.to_vec()),
             Message::Close(_) => break Stop::ProviderClosedSocket,
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+            Message::Ping(_) | Message::Pong(_) => {
+                transport_pings += 1;
+                last_liveness_millis = now_millis()?;
+                continue;
+            }
+            Message::Frame(_) => continue,
         };
         let received = now_millis()?;
         last_frame_millis = received;
+        last_liveness_millis = received;
         inbound_frames += 1;
         inbound_bytes += body.len();
+        let refused = classify_pumpportal_frame(&body).kind
+            == PumpPortalFrameKind::AuthenticationOrFundingRejected;
         pending.push(Captured {
             frame: RawSourceFrame::inbound_websocket(
                 SourceId::PumpPortalWebSocket,
@@ -344,6 +363,12 @@ async fn record(
             mono_ns: u64::try_from(process_start.elapsed().as_nanos())?,
         });
         sequence += 1;
+        // The refusal frame is retained first, then the run stops: waiting out the inactivity
+        // ceiling after this frame would let the coverage claim swallow a window the provider
+        // had already said it would never serve.
+        if refused {
+            break Stop::SubscriptionRefused;
+        }
         if pending.len() >= MAX_OBSERVATIONS_PER_BATCH {
             receipts.push(commit_frames(
                 &mut store,
@@ -428,6 +453,8 @@ async fn record(
         "plannedEndUnixMs": planned_end_millis,
         "closedAtUnixMs": closed_at_millis,
         "lastFrameAtUnixMs": last_frame_millis,
+        "lastLivenessAtUnixMs": last_liveness_millis,
+        "transportPings": transport_pings,
         "stopReason": stop.as_str(),
         "plannedWindowCompleted": stop.planned_window_completed(),
         "inboundFrames": inbound_frames,
@@ -553,15 +580,22 @@ fn commit_coverage(
     };
     let mut gap_ids = Vec::new();
     let mut gaps = Vec::new();
-    if !stop.planned_window_completed() && closed_at_millis < planned_end_millis {
-        let gap_id = format!("gap-{namespace}-unobserved-tail");
+    // A refused subscription observed NOTHING: its gap starts at the window's own opening, so the
+    // claim nets to zero coverage instead of quietly keeping the seconds before the refusal.
+    let (gap_lower_millis, gap_name) = if stop == Stop::SubscriptionRefused {
+        (opened_at_millis, "refused-window")
+    } else {
+        (closed_at_millis, "unobserved-tail")
+    };
+    if !stop.planned_window_completed() && gap_lower_millis < planned_end_millis {
+        let gap_id = format!("gap-{namespace}-{gap_name}");
         gap_ids.push(gap_id.clone());
         gaps.push(CoverageGap {
             gap_id: CoverageId::new(gap_id)?,
             coverage_id: coverage_id.clone(),
             scope: scope.clone(),
             lower: Boundary::Wall {
-                value: utc_from_millis(closed_at_millis)?,
+                value: utc_from_millis(gap_lower_millis)?,
             },
             upper: Some(Boundary::Wall {
                 value: utc_from_millis(planned_end_millis)?,
@@ -695,24 +729,31 @@ struct TradeEvent {
     label: String,
     sol_amount: f64,
     token_amount: f64,
+    /// Post-trade SOL-side reserves, from whichever pair the frame states.
     virtual_sol: f64,
+    /// Post-trade token-side reserves, from the same pair.
     virtual_tokens: f64,
+    /// Which reserve pair the frame stated. MEASURED 2026-08-22: a `pool:"pump"` frame carries
+    /// `vSolInBondingCurve`/`vTokensInBondingCurve`; a `pool:"pump-amm"` frame carries
+    /// `solInPool`/`tokensInPool` instead. Both are post-trade constant-product reserves.
+    reserve_basis: &'static str,
     pool: String,
 }
 
 impl TradeEvent {
-    /// SOL per token implied by the curve state the frame states, which is exact arithmetic on
-    /// two numbers the provider supplied rather than a price it asserted.
+    /// SOL per token implied by the post-trade reserve pair the frame states, which is exact
+    /// arithmetic on two numbers the provider supplied rather than a price it asserted.
     fn price(&self) -> f64 {
         self.virtual_sol / self.virtual_tokens
     }
 
     /// Direction derived from the frame ALONE, with no neighbour and no provider label.
     ///
-    /// A pump bonding curve is a constant product. A frame states the post-trade reserves and the
-    /// two amounts that moved, so the pre-trade reserves are recoverable under each hypothesis and
-    /// only the true one comes close to reproducing the post-trade product. `None` means neither
-    /// hypothesis fitted well enough to name, which is reported as an unknown rather than guessed.
+    /// Both the pump bonding curve and the pump-swap AMM are constant products. A frame states
+    /// the post-trade reserves and the two amounts that moved, so the pre-trade reserves are
+    /// recoverable under each hypothesis and only the true one comes close to reproducing the
+    /// post-trade product. `None` means neither hypothesis fitted well enough to name, which is
+    /// reported as an unknown rather than guessed.
     fn derived_direction(&self) -> (Option<&'static str>, f64) {
         let after = self.virtual_sol * self.virtual_tokens;
         if after <= 0.0 {
@@ -724,15 +765,18 @@ impl TradeEvent {
             (self.virtual_sol + self.sol_amount) * (self.virtual_tokens - self.token_amount);
         let buy_error = ((buy_product - after) / after).abs();
         let sell_error = ((sell_product - after) / after).abs();
-        let (name, error) = if buy_error <= sell_error {
-            ("buy", buy_error)
+        let (name, error, other) = if buy_error <= sell_error {
+            ("buy", buy_error, sell_error)
         } else {
-            ("sell", sell_error)
+            ("sell", sell_error, buy_error)
         };
-        // The curve charges a fee on the SOL leg, so neither hypothesis reproduces the product
-        // exactly. One percent is far tighter than the gap between the two hypotheses, which is
-        // of order the trade size relative to the reserves.
-        if error > 0.01 {
+        // The venue charges a fee on the SOL leg, so neither hypothesis reproduces the product
+        // exactly, and the gap between the hypotheses is of order the trade size relative to the
+        // reserves. MEASURED 2026-08-22: in a deep pump-amm pool that gap collapses — the two
+        // errors sat within 3x of each other on 799 of 800 live frames — so a name is only given
+        // when the losing hypothesis misses by at least three times the winning one. Anything
+        // tighter is a coin flip wearing a conclusion, and is reported as undecidable instead.
+        if error > 0.01 || other < error * 3.0 {
             (None, error)
         } else {
             (Some(name), error)
@@ -820,20 +864,24 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
             continue;
         };
         *signatures.entry(signature.clone()).or_default() += 1;
-        let (
-            Some(label),
-            Some(sol_amount),
-            Some(token_amount),
-            Some(virtual_sol),
-            Some(virtual_tokens),
-        ) = (
+        let (Some(label), Some(sol_amount), Some(token_amount)) = (
             value["txType"].as_str().map(ToOwned::to_owned),
             value["solAmount"].as_f64(),
             value["tokenAmount"].as_f64(),
-            value["vSolInBondingCurve"].as_f64(),
-            value["vTokensInBondingCurve"].as_f64(),
-        )
-        else {
+        ) else {
+            continue;
+        };
+        let reserves = value["vSolInBondingCurve"]
+            .as_f64()
+            .zip(value["vTokensInBondingCurve"].as_f64())
+            .map(|(sol, tokens)| (sol, tokens, "bonding_curve"))
+            .or_else(|| {
+                value["solInPool"]
+                    .as_f64()
+                    .zip(value["tokensInPool"].as_f64())
+                    .map(|(sol, tokens)| (sol, tokens, "amm_pool"))
+            });
+        let Some((virtual_sol, virtual_tokens, reserve_basis)) = reserves else {
             continue;
         };
         per_mint.entry(mint).or_default().push(TradeEvent {
@@ -845,6 +893,7 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
             token_amount,
             virtual_sol,
             virtual_tokens,
+            reserve_basis,
             pool: value["pool"].as_str().unwrap_or("unstated").to_owned(),
         });
     }
@@ -874,16 +923,43 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         .map(|(first, last)| wall_span_seconds(first, last))
         .unwrap_or_default();
 
-    let swap_api = swap_api_census(trades, window)?;
+    // Bind each retained swap-api page to a tape coin by signature intersection alone: a
+    // signature is globally unique, so one shared signature proves which coin the page is about,
+    // and a page sharing none stays unbound rather than being trusted from a file name.
+    let pages = swap_api_pages(trades)?;
+    let mut bound: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut unbound_pages: Vec<Value> = Vec::new();
+    for (index, page) in pages.iter().enumerate() {
+        let page_txs: BTreeSet<&str> = page.rows.iter().map(|row| row.tx.as_str()).collect();
+        let best = per_mint
+            .iter()
+            .map(|(mint, events)| {
+                let overlap = events
+                    .iter()
+                    .filter(|event| page_txs.contains(event.signature.as_str()))
+                    .count();
+                (overlap, mint.as_str())
+            })
+            .max();
+        match best {
+            Some((overlap, mint)) if overlap > 0 => {
+                bound.entry(mint).or_default().push(index);
+            }
+            _ => unbound_pages.push(json!({
+                "path": page.path,
+                "rows": page.rows.len(),
+                "reason": "no signature shared with any tape coin; nothing to compare",
+            })),
+        }
+    }
 
     let mut coins = Vec::new();
     for (mint, events) in &per_mint {
-        coins.push(coin_report(
-            mint,
-            events,
-            bucket_seconds,
-            swap_api.get(mint),
-        )?);
+        let coin_pages: Vec<&SwapApiPage> = bound
+            .get(mint.as_str())
+            .map(|indexes| indexes.iter().map(|index| &pages[*index]).collect())
+            .unwrap_or_default();
+        coins.push(coin_report(mint, events, bucket_seconds, &coin_pages)?);
     }
 
     Ok(serde_json::to_string_pretty(&json!({
@@ -915,7 +991,8 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         "direction": {
             "providerLabel": "txType",
             "derivationRule": "constant-product back-solve of the pre-trade reserves under each \
-                               hypothesis, using only the one frame",
+                               hypothesis, using only the one frame; a name needs the losing \
+                               hypothesis to miss by 3x the winning one, else undecidable",
             "agreements": label_agreements,
             "disagreements": label_disagreements,
             "undecidable": label_undecidable,
@@ -924,6 +1001,7 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         "duplicateSignatures": signatures.values().filter(|count| **count > 1).count(),
         "distinctSignatures": signatures.len(),
         "bucketSeconds": bucket_seconds,
+        "swapApiUnboundPages": unbound_pages,
         "coins": coins,
     }))?)
 }
@@ -933,7 +1011,7 @@ fn coin_report(
     mint: &str,
     events: &[TradeEvent],
     bucket_seconds: u64,
-    swap_api: Option<&SwapApiCensus>,
+    swap_api: &[&SwapApiPage],
 ) -> Result<Value, Box<dyn Error>> {
     let prices: Vec<f64> = events.iter().map(TradeEvent::price).collect();
     let event_drawdown = running_peak_drawdown(&prices);
@@ -979,6 +1057,32 @@ fn coin_report(
 
     let buys = events.iter().filter(|event| event.label == "buy").count();
     let pools: BTreeSet<&str> = events.iter().map(|event| event.pool.as_str()).collect();
+    let reserve_bases: BTreeSet<&str> = events.iter().map(|event| event.reserve_basis).collect();
+
+    // Where one frame cannot name a direction, two can verify the provider's labels: if the
+    // reserves are post-trade, a buy must raise the SOL reserve by its own solAmount and a sell
+    // lower it, frame over frame. MEASURED 2026-08-22: 1688 of 1721 live pump-amm pairs fit this
+    // evolution and none fit the pre-trade alternative, which is also the proof the stated
+    // reserves are post-trade. Pairs straddling a venue migration are not comparable.
+    let mut evolution_pairs = 0_usize;
+    let mut evolution_consistent = 0_usize;
+    for pair in events.windows(2) {
+        let (previous, next) = (&pair[0], &pair[1]);
+        if previous.reserve_basis != next.reserve_basis {
+            continue;
+        }
+        let signed = if next.label == "buy" {
+            next.sol_amount
+        } else {
+            -next.sol_amount
+        };
+        let predicted = previous.virtual_sol + signed;
+        let scale = next.sol_amount.max(previous.sol_amount).max(1e-9);
+        evolution_pairs += 1;
+        if (next.virtual_sol - predicted).abs() < 0.05 * scale {
+            evolution_consistent += 1;
+        }
+    }
     // Arrival order is the tape's only order. It is checked rather than assumed.
     let out_of_order = events
         .windows(2)
@@ -988,19 +1092,13 @@ fn coin_report(
         .iter()
         .map(|event| event.signature.as_str())
         .collect();
-    let overlap = swap_api.map(|census| {
-        census
-            .distinct_tx_in_window
-            .iter()
-            .filter(|tx| tape_signatures.contains(tx.as_str()))
-            .count()
-    });
     Ok(json!({
         "mint": mint,
         "events": events.len(),
         "buys": buys,
         "sells": events.len() - buys,
         "pools": pools,
+        "reserveBases": reserve_bases,
         "firstEventUnixMs": events.first().map(|event| event.received_at_millis),
         "lastEventUnixMs": events.last().map(|event| event.received_at_millis),
         "firstPriceSolPerToken": prices.first(),
@@ -1012,9 +1110,10 @@ fn coin_report(
         "bucketOhlcUpperBound": ohlc_bound,
         "eventsPerBucket": buckets.values().map(|bucket| bucket.4).collect::<Vec<_>>(),
         "arrivalOrderInversions": out_of_order,
+        "reserveEvolutionPairs": evolution_pairs,
+        "reserveEvolutionConsistentWithLabels": evolution_consistent,
         "distinctTapeSignatures": tape_signatures.len(),
-        "swapApiComparison": swap_api.map(SwapApiCensus::render),
-        "swapApiSignaturesAlsoOnTape": overlap,
+        "swapApiComparison": swap_api_comparison(events, swap_api),
     }))
 }
 
@@ -1051,37 +1150,33 @@ fn median(values: &mut [f64]) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
-/// What the pump swap-api trade route said about the same mint over the same interval.
-struct SwapApiCensus {
-    rows: usize,
-    rows_in_window: usize,
-    distinct_tx_in_window: BTreeSet<String>,
-    oldest_row_unix_ms: Option<i64>,
-    newest_row_unix_ms: Option<i64>,
+/// One `/v2/trades` row as the retained page states it.
+///
+/// MEASURED 2026-08-22: a row carries no `mint` field, its `timestamp` is an RFC 3339 string,
+/// its amounts are decimal strings, and its `tx` is the transaction signature. The page as a
+/// whole therefore names no coin; only its signatures can say which coin it is about.
+struct SwapApiRow {
+    tx: String,
+    timestamp_unix_ms: i64,
+    label: Option<String>,
+    amount_sol: Option<f64>,
+    program: Option<String>,
 }
 
-impl SwapApiCensus {
-    fn render(&self) -> Value {
-        json!({
-            "rowsInPage": self.rows,
-            "rowsWithinTapeWindow": self.rows_in_window,
-            "distinctSignaturesWithinTapeWindow": self.distinct_tx_in_window.len(),
-            "oldestRowUnixMs": self.oldest_row_unix_ms,
-            "newestRowUnixMs": self.newest_row_unix_ms,
-        })
-    }
-}
-
-/// Read the exact retained body out of `joshi.pump_api.fetch_outcome.v1` envelopes.
+/// One retained swap-api trades page, read from a `joshi.pump_api.fetch_outcome.v1` envelope.
 ///
 /// The envelopes are read as artifacts rather than through the pump client, because this crate
 /// deliberately does not depend on it. Only the retained bytes are consulted.
-fn swap_api_census(
-    paths: &[String],
-    window: Option<(i64, i64)>,
-) -> Result<BTreeMap<String, SwapApiCensus>, Box<dyn Error>> {
+struct SwapApiPage {
+    path: String,
+    fetched_received_at: Option<String>,
+    rows: Vec<SwapApiRow>,
+    rows_unreadable: usize,
+}
+
+fn swap_api_pages(paths: &[String]) -> Result<Vec<SwapApiPage>, Box<dyn Error>> {
     use base64::Engine as _;
-    let mut census = BTreeMap::new();
+    let mut pages = Vec::new();
     for path in paths {
         let outcome: Value = serde_json::from_slice(&fs::read(path)?)?;
         let attempt = outcome["attempts"]
@@ -1093,46 +1188,175 @@ fn swap_api_census(
             .ok_or("fetch outcome retains no exact body")?;
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
         let body: Value = serde_json::from_slice(&bytes)?;
-        let rows = body["trades"].as_array().cloned().unwrap_or_default();
-        let mut mint = String::new();
-        let mut in_window = 0_usize;
-        let mut distinct = BTreeSet::new();
-        let mut oldest = None;
-        let mut newest = None;
-        for row in &rows {
-            if let Some(value) = row["mint"].as_str() {
-                value.clone_into(&mut mint);
-            }
-            let Some(timestamp) = row["timestamp"].as_i64() else {
+        let mut rows = Vec::new();
+        let mut rows_unreadable = 0_usize;
+        for row in body["trades"].as_array().into_iter().flatten() {
+            let (Some(tx), Some(timestamp_unix_ms)) = (row["tx"].as_str(), row_unix_ms(row)) else {
+                rows_unreadable += 1;
                 continue;
             };
-            oldest = Some(oldest.map_or(timestamp, |value: i64| value.min(timestamp)));
-            newest = Some(newest.map_or(timestamp, |value: i64| value.max(timestamp)));
-            if let Some((lower, upper)) = window
-                && timestamp >= lower
-                && timestamp <= upper
-            {
-                in_window += 1;
-                if let Some(tx) = row["tx"].as_str() {
-                    distinct.insert(tx.to_owned());
-                }
-            }
+            rows.push(SwapApiRow {
+                tx: tx.to_owned(),
+                timestamp_unix_ms,
+                label: row["type"].as_str().map(ToOwned::to_owned),
+                amount_sol: decimal_field(&row["amountSol"]),
+                program: row["program"].as_str().map(ToOwned::to_owned),
+            });
         }
-        if mint.is_empty() {
-            mint = format!("unnamed:{path}");
-        }
-        census.insert(
-            mint,
-            SwapApiCensus {
-                rows: rows.len(),
-                rows_in_window: in_window,
-                distinct_tx_in_window: distinct,
-                oldest_row_unix_ms: oldest,
-                newest_row_unix_ms: newest,
-            },
-        );
+        pages.push(SwapApiPage {
+            path: path.clone(),
+            fetched_received_at: attempt["clocks"]["receivedAt"]
+                .as_str()
+                .map(ToOwned::to_owned),
+            rows,
+            rows_unreadable,
+        });
     }
-    Ok(census)
+    Ok(pages)
+}
+
+/// The trades route states `timestamp` as an RFC 3339 string; an epoch-millisecond number is
+/// accepted too. Anything else is an unreadable clock, counted rather than guessed.
+fn row_unix_ms(row: &Value) -> Option<i64> {
+    if let Some(millis) = row["timestamp"].as_i64() {
+        return Some(millis);
+    }
+    let parsed = OffsetDateTime::parse(
+        row["timestamp"].as_str()?,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok()?;
+    i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
+}
+
+/// The route states amounts as decimal strings; a bare number is accepted too.
+fn decimal_field(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+/// Tape vs swap-api page(s) for one coin, judged only inside the interval both instruments claim.
+///
+/// The API `timestamp` is the provider's own assertion — whether it anchors to chain time or to
+/// the indexer's receipt is not stated by the route — so the deltas here are cross-source clock
+/// offsets, not chain latency. Each side of the overlap window is filtered on its OWN clock.
+fn swap_api_comparison(events: &[TradeEvent], pages: &[&SwapApiPage]) -> Option<Value> {
+    if pages.is_empty() {
+        return None;
+    }
+    // De-duplicated by signature on both sides: one transaction can hold several fills.
+    let mut api_rows: BTreeMap<&str, &SwapApiRow> = BTreeMap::new();
+    let mut api_multi_fill = 0_usize;
+    for row in pages.iter().flat_map(|page| page.rows.iter()) {
+        if api_rows.insert(row.tx.as_str(), row).is_some() {
+            api_multi_fill += 1;
+        }
+    }
+    let mut tape_events: BTreeMap<&str, &TradeEvent> = BTreeMap::new();
+    for event in events {
+        tape_events.entry(event.signature.as_str()).or_insert(event);
+    }
+    let api_span = fold_span(api_rows.values().map(|row| row.timestamp_unix_ms))?;
+    let tape_span = (
+        events.first()?.received_at_millis,
+        events.last()?.received_at_millis,
+    );
+    let lower = api_span.0.max(tape_span.0);
+    let upper = api_span.1.min(tape_span.1);
+
+    let mut deltas: Vec<f64> = Vec::new();
+    let mut label_disagreements = 0_usize;
+    let mut amount_diffs: Vec<f64> = Vec::new();
+    for (signature, event) in &tape_events {
+        let Some(row) = api_rows.get(signature) else {
+            continue;
+        };
+        deltas.push(millis_delta(
+            event.received_at_millis,
+            row.timestamp_unix_ms,
+        ));
+        if row
+            .label
+            .as_deref()
+            .is_some_and(|label| label != event.label)
+        {
+            label_disagreements += 1;
+        }
+        if let Some(api_sol) = row.amount_sol
+            && api_sol > 0.0
+        {
+            amount_diffs.push(((event.sol_amount - api_sol) / api_sol).abs());
+        }
+    }
+    let matched = deltas.len();
+    let tape_only = tape_events
+        .iter()
+        .filter(|(signature, event)| {
+            (lower..=upper).contains(&event.received_at_millis)
+                && !api_rows.contains_key(*signature)
+        })
+        .count();
+    let api_only = api_rows
+        .iter()
+        .filter(|(signature, row)| {
+            (lower..=upper).contains(&row.timestamp_unix_ms)
+                && !tape_events.contains_key(*signature)
+        })
+        .count();
+    let programs: BTreeSet<&str> = api_rows
+        .values()
+        .filter_map(|row| row.program.as_deref())
+        .collect();
+    let delta_span = fold_span(deltas.iter().copied());
+    Some(json!({
+        "pages": pages.iter().map(|page| json!({
+            "path": page.path,
+            "fetchedReceivedAt": page.fetched_received_at,
+            "rows": page.rows.len(),
+            "rowsUnreadable": page.rows_unreadable,
+        })).collect::<Vec<_>>(),
+        "binding": "signature intersection; no file name or request label was trusted",
+        "apiDistinctSignatures": api_rows.len(),
+        "apiMultiFillRows": api_multi_fill,
+        "apiRowSpanUnixMs": [api_span.0, api_span.1],
+        "overlapWindowUnixMs": [lower, upper],
+        "matchedSignatures": matched,
+        "tapeOnlyInOverlap": tape_only,
+        "apiOnlyInOverlap": api_only,
+        "apiPrograms": programs,
+        "arrivalMinusApiClockMs": {
+            "caveat": "tape receive clock minus the provider's asserted row clock; the route \
+                       quantises its clock, so each delta carries that quantum, and the anchor \
+                       of the provider clock (chain vs indexer) is unstated",
+            "count": matched,
+            "median": median(&mut deltas),
+            "minMax": delta_span,
+        },
+        "labelDisagreements": label_disagreements,
+        "solAmountRelativeDiff": {
+            "count": amount_diffs.len(),
+            "median": median(&mut amount_diffs),
+            "max": fold_span(amount_diffs.iter().copied()).map(|(_, hi)| hi),
+        },
+    }))
+}
+
+/// Difference of two epoch-millisecond instants as f64; bounded recordings sit far below 2^52.
+#[allow(clippy::cast_precision_loss)]
+fn millis_delta(left: i64, right: i64) -> f64 {
+    (left - right) as f64
+}
+
+/// Smallest and largest of an iterator, in one pass, `None` for an empty one.
+fn fold_span<T: PartialOrd + Copy>(values: impl Iterator<Item = T>) -> Option<(T, T)> {
+    values.fold(None, |span, value| {
+        let (lo, hi) = span.unwrap_or((value, value));
+        Some((
+            if value < lo { value } else { lo },
+            if value > hi { value } else { hi },
+        ))
+    })
 }
 
 fn trailing_sequence(acquisition_id: &str) -> Result<u64, Box<dyn Error>> {
