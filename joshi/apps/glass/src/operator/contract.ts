@@ -117,7 +117,7 @@ const recordAnnotationPayload = z.object({
 const recordChoiceSetPayload = z.object({
   context,
   choiceSet: z.object({
-    setKind: z.enum(["surfaced", "filtered", "viewport", "interacted", "compared"]),
+    setKind: z.enum(["surfaced", "filtered", "viewport", "interacted", "compared", "pointed"]),
     subjects: z.array(choiceSubject).min(1).max(1_000),
     selectedSubject: choiceSubject.nullable(),
   }).strict(),

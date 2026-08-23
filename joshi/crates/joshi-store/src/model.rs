@@ -354,7 +354,7 @@ pub struct SceneCommandBatch {
     /// Required evidence-only command.
     pub command: CommandDraft,
     /// Client-observed choice-set members the command itself asserts for its bound scene
-    /// (`viewport`, `interacted`, or `compared` only — the server-derived kinds are never
+    /// (`viewport`, `interacted`, `compared`, or `pointed` only — the server-derived kinds are never
     /// accepted from a client). Unioned into `scene_choice_member`; an empty vector is
     /// skipped during digesting so batches without assertions keep their historical digests.
     #[serde(skip_serializing_if = "Vec::is_empty")]

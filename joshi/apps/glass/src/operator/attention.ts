@@ -1,72 +1,90 @@
 import type { OperatorIntent } from "./useOperatorJournal";
 
 /**
- * The automatic viewport assertion: the honest denominator for the selection instrument.
+ * The automatic attention assertions: the honest denominator for the selection instrument.
  *
  * The selection measurement scores a chosen coin against the coins the operator PASSED OVER in
  * the same scene, and its pre-registered denominator is the `viewport` choice set when a scene
  * recorded one (falling back to `rendered`). This module is where that set is defined, so the
- * definition is stated here precisely:
+ * definition is stated here precisely — and versioned, because it has changed once:
  *
- *   A candidate is in this scene's viewport when the operator's reading actually reached its
- *   row before the assertion was issued — reached meaning the row received real focus (Tab,
- *   J/K roving navigation, screen-reader navigation that moves system focus), or the candidate
- *   was explicitly selected into the workbench by an operator gesture (click, palette, episode
- *   rail, held rail), or an evidence act named it as its subject.
+ *   (v2) A candidate is in this scene's viewport when the operator could actually see its row
+ *   before the assertion was issued — its pixels intersected the feed's visible scroll
+ *   rectangle (not merely virtualizer-mounted), or the row received real focus (Tab, J/K
+ *   roving navigation, screen-reader navigation that moves system focus), or the pointer
+ *   entered the row, or the candidate was explicitly selected by an operator gesture (click,
+ *   palette, episode rail, held rail), or an evidence act named it as its subject.
  *
- * What it claims: this cockpit observed the operator's navigation reach that row. In this feed
- * every row is a single focusable button and the app's own navigation model keeps "what she is
- * on" and "what a keystroke acts on" identical, so reaching a row is the event in which a
- * screen reader announces it.
+ * Version history, because scored events carry `uiLabelVersion` and eras must stay
+ * distinguishable: v1 counted focus-reach and gestures ONLY, on the belief that the operator
+ * was screen-reader, keyboard-only — so pixels on screen were rejected as "not reading". That
+ * belief was wrong and Ember corrected it directly: she is primarily visual and uses a
+ * pointer. For a visual operator, presentation inside the visible scroll rectangle is the
+ * honest floor of "saw", and excluding it systematically under-counted her reading — which
+ * shrank the passed-over set and biased the very instrument this set exists to serve.
  *
- * What it refuses to claim: comprehension, dwell, or coverage of screen-reader browse-mode
- * reading that never moves system focus — that reading is invisible to the DOM and is therefore
- * NOT recorded. The omission can only shrink the recorded set: it may fail to credit a pass the
- * operator really made, but it can never credit her with passing over a coin she did not see,
- * which is the failure mode the pre-registration forbids.
+ * What v2 claims: this cockpit presented the row inside the visible rectangle, or observed
+ * the operator's navigation or pointer reach it. What it refuses to claim: comprehension,
+ * dwell, or screen-reader browse-mode reading that never moves system focus (still invisible
+ * to the DOM, still simply absent). When she is working by reader rather than by eye,
+ * scroll-visibility over-counts *reading* — but the pre-registered rule forbids only crediting
+ * a pass on a coin she could not have SEEN, and visible pixels satisfy that for the operator
+ * this cockpit actually has. The label version records which definition produced each event.
  *
- * Definitions deliberately rejected:
+ * Definitions still deliberately rejected:
  * - "the virtualizer mounted the row": overscan mounts rows that were never presented at all —
  *   a fabricated denominator, worse than the honest `rendered` fallback.
- * - "the row's pixels intersected the scroll viewport": pixels on screen are not reading for a
- *   screen-reader operator, and rows keep scrolling past while she is working elsewhere.
- * - "dwell above a threshold": elapsed time is not reading either, and any threshold would be a
- *   free parameter chosen by the people being measured.
+ * - "dwell above a threshold": any threshold would be a free parameter chosen by the people
+ *   being measured. Entry and visibility are events; dwell is an interpretation.
  *
- * The assertion is recorded automatically at act time — the only moments a scene can ever
- * produce a selection event — as an ordinary `record_choice_set` evidence command whose subject
+ * The assertions are recorded automatically at act time — the only moments a scene can ever
+ * produce a selection event — as ordinary `record_choice_set` evidence commands whose subject
  * is the scene itself, never a candidate: an automatic assertion must not register as the
- * operator marking a coin. It adds no keystroke, moves no focus, and renders nothing; a scene
- * without one keeps only its `rendered` set, and the instrument reports that fallback rather
- * than having it backfilled.
+ * operator marking a coin. They add no keystroke, move no focus, and render nothing; a scene
+ * without them keeps only its `rendered` set, and the instrument reports that fallback rather
+ * than having it backfilled. Headless, replay, and agent clients produce no DOM events and
+ * therefore never synthesize either set — absence stays absent.
  */
 export const VIEWPORT_ASSERTION_UI_LABEL = "Viewport reading reached (automatic)";
 
+/** Version 2: visible-rectangle and pointer entry joined focus-reach. See module doc. */
+export const VIEWPORT_ASSERTION_UI_LABEL_VERSION = "2";
+
+/**
+ * The pointer set is its own kind, never blurred into `viewport`, because Ember uses her
+ * pointer DELIBERATELY as an attention marker — her words: "scroll rectangle is good and so is
+ * my pointer, i can be mindful to intentionally use the pointer to capture some aspect of my
+ * attention". The instrument and the operator co-adapt: it watches where she points, and she
+ * points on purpose. What this set claims is exactly "the pointer entered this row's
+ * rectangle" — nothing about intent or reading. Deliberateness is supplied by her stated
+ * practice, not inferred by the instrument, and incidental crossings are therefore included
+ * rather than filtered by some threshold she would have chosen herself. Pointer entry also
+ * feeds the viewport set (a pointed row is a seen row), so `pointed` is a subset of
+ * `viewport` by construction.
+ */
+export const POINTED_ASSERTION_UI_LABEL = "Pointer entered (automatic)";
+
 /** The one label version this automatic assertion has ever had. */
-export const VIEWPORT_ASSERTION_UI_LABEL_VERSION = "1";
+export const POINTED_ASSERTION_UI_LABEL_VERSION = "1";
 
 /** The frozen `record_choice_set` contract admits at most this many subjects. */
 export const MAX_VIEWPORT_ASSERTION_SUBJECTS = 1_000;
 
-/**
- * The exact automatic assertion one operator act triggers.
- *
- * @throws when the reached set is empty or exceeds the frozen contract's bound. An oversized
- * set is refused rather than truncated: a truncated viewport would silently drop passed
- * candidates, and the honest alternative to an unrecordable set is the `rendered` fallback.
- */
-export function viewportAssertionIntent(
+function attentionAssertionIntent(
+  setKind: "viewport" | "pointed",
+  uiLabel: string,
+  uiLabelVersion: string,
   sceneId: string,
-  reachedCandidateIds: readonly string[],
+  memberCandidateIds: readonly string[],
   actedCandidateId: string | null,
 ): OperatorIntent {
-  const subjects = [...new Set(reachedCandidateIds)].sort();
+  const subjects = [...new Set(memberCandidateIds)].sort();
   if (subjects.length === 0) {
-    throw new Error("an empty viewport is not asserted; the scene keeps its rendered set");
+    throw new Error(`an empty ${setKind} set is not asserted; the scene keeps its rendered set`);
   }
   if (subjects.length > MAX_VIEWPORT_ASSERTION_SUBJECTS) {
     throw new Error(
-      `a viewport of ${subjects.length} rows exceeds the frozen choice-set contract; the scene keeps its rendered set`,
+      `a ${setKind} set of ${subjects.length} rows exceeds the frozen choice-set contract; the scene keeps its rendered set`,
     );
   }
   const selected = actedCandidateId !== null && subjects.includes(actedCandidateId)
@@ -75,11 +93,11 @@ export function viewportAssertionIntent(
   return {
     commandKind: "record_choice_set",
     subject: { kind: "scene", key: sceneId },
-    label: VIEWPORT_ASSERTION_UI_LABEL,
+    label: uiLabel,
     payload: {
       context: {
-        uiLabel: VIEWPORT_ASSERTION_UI_LABEL,
-        uiLabelVersion: VIEWPORT_ASSERTION_UI_LABEL_VERSION,
+        uiLabel,
+        uiLabelVersion,
         // Nothing is asked of the operator; an automatic record answers no questions.
         confidencePpm: null,
         urgency: null,
@@ -87,7 +105,7 @@ export function viewportAssertionIntent(
         note: null,
       },
       choiceSet: {
-        setKind: "viewport",
+        setKind,
         subjects: subjects.map((key) => ({ kind: "candidate" as const, key })),
         selectedSubject: selected,
       },
@@ -96,9 +114,51 @@ export function viewportAssertionIntent(
 }
 
 /**
- * Whether a command is an automatic viewport assertion, from either the session journal or the
- * durable readback. Instrument telemetry, not operator words: the journal narrative filters
- * these out (and says so), while the scene inspector still lists them.
+ * The exact automatic viewport assertion one operator act triggers.
+ *
+ * @throws when the seen set is empty or exceeds the frozen contract's bound. An oversized
+ * set is refused rather than truncated: a truncated viewport would silently drop passed
+ * candidates, and the honest alternative to an unrecordable set is the `rendered` fallback.
+ */
+export function viewportAssertionIntent(
+  sceneId: string,
+  seenCandidateIds: readonly string[],
+  actedCandidateId: string | null,
+): OperatorIntent {
+  return attentionAssertionIntent(
+    "viewport",
+    VIEWPORT_ASSERTION_UI_LABEL,
+    VIEWPORT_ASSERTION_UI_LABEL_VERSION,
+    sceneId,
+    seenCandidateIds,
+    actedCandidateId,
+  );
+}
+
+/**
+ * The exact automatic pointer assertion one operator act triggers, when the pointer entered
+ * any row this scene. Same refusals as the viewport assertion, for the same reasons.
+ */
+export function pointedAssertionIntent(
+  sceneId: string,
+  pointedCandidateIds: readonly string[],
+  actedCandidateId: string | null,
+): OperatorIntent {
+  return attentionAssertionIntent(
+    "pointed",
+    POINTED_ASSERTION_UI_LABEL,
+    POINTED_ASSERTION_UI_LABEL_VERSION,
+    sceneId,
+    pointedCandidateIds,
+    actedCandidateId,
+  );
+}
+
+/**
+ * Whether a command is an automatic attention assertion (viewport or pointed), from either the
+ * session journal or the durable readback. Instrument telemetry, not operator words: the
+ * journal narrative filters these out (and says so), while the scene inspector still lists
+ * them.
  */
 export function isViewportAssertion(command: {
   commandKind: string;
@@ -106,5 +166,8 @@ export function isViewportAssertion(command: {
 }): boolean {
   if (command.commandKind !== "record_choice_set") return false;
   const context = (command.payload as { context?: { uiLabel?: string } }).context;
-  return context?.uiLabel === VIEWPORT_ASSERTION_UI_LABEL;
+  return (
+    context?.uiLabel === VIEWPORT_ASSERTION_UI_LABEL
+    || context?.uiLabel === POINTED_ASSERTION_UI_LABEL
+  );
 }

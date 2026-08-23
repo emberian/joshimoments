@@ -491,7 +491,14 @@ def _build_event(
         blob_keys = set(prices)
         blob_only = tuple(sorted(blob_keys - table_keys))
         table_only = tuple(sorted(table_keys - blob_keys))
-        agreement = BLOB_AGREES if not blob_only and not table_only else BLOB_DISAGREES
+        if chosen_kind == "rendered":
+            agreement = BLOB_AGREES if not blob_only and not table_only else BLOB_DISAGREES
+        else:
+            # A client-observed set (viewport) is an honest SUBSET of the rendered view by
+            # construction — the store admits each asserted member only after proving it against
+            # the exact served bytes — so the blob listing more candidates than the table is the
+            # design, not a disagreement. Only a table member missing from the blob disagrees.
+            agreement = BLOB_AGREES if not table_only else BLOB_DISAGREES
 
     chosen_keys = {a.subject_key for a in acts}
     off_set = chosen_keys - table_keys

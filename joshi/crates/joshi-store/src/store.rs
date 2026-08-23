@@ -3967,7 +3967,13 @@ fn validate_scene_command_preflight(
         for member in &scene.choice_members {
             if !matches!(
                 member.set_kind.as_str(),
-                "eligible" | "surfaced" | "rendered" | "viewport" | "interacted" | "compared"
+                "eligible"
+                    | "surfaced"
+                    | "rendered"
+                    | "viewport"
+                    | "interacted"
+                    | "compared"
+                    | "pointed"
             ) {
                 return Err(StoreError::InvalidBatch(format!(
                     "unsupported scene choice set {}",
@@ -4034,7 +4040,8 @@ fn parse_scene_mode(value: &str) -> Result<SceneMode> {
 /// kinds (`eligible`, `surfaced`, `rendered`) are never admitted from a client assertion: a
 /// client stating what the system considered or drew would be fabricating a server set, and a
 /// fabricated set is worse than an honest absence.
-const CLIENT_OBSERVED_CHOICE_SET_KINDS: [&str; 3] = ["viewport", "interacted", "compared"];
+const CLIENT_OBSERVED_CHOICE_SET_KINDS: [&str; 4] =
+    ["viewport", "interacted", "compared", "pointed"];
 
 /// Materializes a `record_choice_set` act into first-class `scene_choice_member` drafts.
 ///
@@ -4234,7 +4241,7 @@ mod tests {
         let report = store
             .migrate(time("2026-08-16T16:00:00.000000Z"))
             .expect("migrate test store");
-        assert_eq!(report.current, 24);
+        assert_eq!(report.current, 25);
         store
     }
 
@@ -4257,7 +4264,7 @@ mod tests {
         let json = serde_json::to_value(&accepted).expect("receipt JSON");
         assert_eq!(json["contract"], "joshi.store.ingest_receipt");
         assert_eq!(json["schemaVersion"], 1);
-        assert_eq!(json["catalogSchema"], "joshi.sqlite.v24");
+        assert_eq!(json["catalogSchema"], "joshi.sqlite.v25");
         assert_eq!(json["admitted"]["observations"], "0");
         assert!(json.get("storeAdmissionDigest").is_some());
 
@@ -4516,7 +4523,7 @@ mod tests {
         let receipt_json = serde_json::to_value(&receipt).expect("operator receipt JSON");
         assert_eq!(receipt_json["contract"], "joshi.store.command_receipt");
         assert_eq!(receipt_json["schemaVersion"], 1);
-        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v24");
+        assert_eq!(receipt_json["catalogSchema"], "joshi.sqlite.v25");
         assert_eq!(receipt_json["scene"]["sceneId"], "scene-golden-1");
         assert_eq!(receipt_json["scene"]["viewDigest"], view.digest().as_str());
         assert_eq!(
@@ -4702,6 +4709,33 @@ mod tests {
             ]
         );
 
+        // `pointed` is the fourth client-observed kind: the operator's pointer entering a row is
+        // her own deliberate attention marker, admitted exactly like the other observed kinds.
+        let pointed = ValidatedOperatorCommandV1::parse_exact(
+            choice_assertion_bytes(&view, 4, "pointed").as_bytes(),
+        )
+        .expect("parse pointed assertion");
+        store
+            .commit_operator_v1(
+                &pointed,
+                None,
+                &capture,
+                time("2026-08-16T18:42:21.500000Z"),
+                stable("writer-clock"),
+                12,
+                stable("test-writer"),
+            )
+            .expect("commit pointed assertion on the durable scene");
+        assert_eq!(
+            scene_choice_members(&store),
+            vec![
+                ("interacted".into(), "coin-a".into(), 1, 0),
+                ("pointed".into(), "coin-a".into(), 1, 0),
+                ("rendered".into(), "coin-a".into(), 1, 0),
+                ("viewport".into(), "coin-a".into(), 1, 0),
+            ]
+        );
+
         // A `surfaced` assertion is an operator claim about presentation, not a client-observed
         // set: it stays retained as exact command payload without forging a server member row.
         let surfaced = ValidatedOperatorCommandV1::parse_exact(
@@ -4715,12 +4749,12 @@ mod tests {
                 &capture,
                 time("2026-08-16T18:42:22.000000Z"),
                 stable("writer-clock"),
-                12,
+                13,
                 stable("test-writer"),
             )
             .expect("commit surfaced assertion as evidence only");
         assert_eq!(surfaced_receipt.status(), OperatorCommandStatus::Accepted);
-        assert_eq!(scene_choice_members(&store).len(), 3);
+        assert_eq!(scene_choice_members(&store).len(), 4);
 
         // The structural layer refuses a client assertion of any server-derived kind outright.
         let forged = SceneCommandBatch {
@@ -4751,14 +4785,14 @@ mod tests {
             },
             committed_at: time("2026-08-16T18:42:23.000002Z"),
             writer_clock_id: stable("writer-clock"),
-            committed_mono_ns: 13,
+            committed_mono_ns: 14,
             writer_build: stable("test-writer"),
         };
         assert!(matches!(
             store.commit_scene_command(&forged),
             Err(StoreError::InvalidBatch(_))
         ));
-        assert_eq!(scene_choice_members(&store).len(), 3);
+        assert_eq!(scene_choice_members(&store).len(), 4);
     }
 
     #[test]

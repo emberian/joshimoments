@@ -96,7 +96,7 @@ fn store() -> (TempDir, SqliteStore) {
     let report = store
         .migrate(timestamp("2026-08-18T00:00:00.000000Z"))
         .expect("migrate");
-    assert_eq!(report.current, 24);
+    assert_eq!(report.current, 25);
     (root, store)
 }
 

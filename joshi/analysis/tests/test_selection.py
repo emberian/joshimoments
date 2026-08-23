@@ -385,6 +385,32 @@ def test_viewport_wins_over_rendered_as_the_denominator(tmp_path: Path) -> None:
     events, _ = reconstruct_catalog(path)
     assert events[0].choice_set_kind == "viewport"
     assert events[0].choice_set_size == 2  # mintC was rendered but never in the viewport
+    # A viewport is a subset of the rendered blob BY DESIGN (the store proves each asserted
+    # member against the served bytes), so the blob holding more is agreement, not drift.
+    assert events[0].blob_agreement == BLOB_AGREES
+    assert events[0].blob_only_subjects == ("mintC",)
+
+
+def test_viewport_member_missing_from_blob_still_disagrees(tmp_path: Path) -> None:
+    """Subset semantics only relax the blob-side check; a table member the served view never
+    contained is real drift in either direction and stays reported."""
+    b = CatalogBuilder(tmp_path / "cat")
+    b.add_scene("scene-1", T0, [("mintA", 1.0, T0), ("mintB", 2.0, T0)])
+    conn = b.conn
+    for ordinal, mint in enumerate(["mintA", "mintGHOST"]):
+        conn.execute(
+            "INSERT INTO scene_choice_member (scene_id, set_kind, subject_kind, subject_key,"
+            " source_rank, rendered_ordinal, evidence_assertion_id)"
+            " VALUES ('scene-1', 'viewport', 'candidate', ?, ?, ?, NULL)",
+            (mint, ordinal + 1, ordinal),
+        )
+    b.add_act("scene-1", "mintA", T0 + 5 * US, command_seq=1)
+    path = b.close()
+
+    events, _ = reconstruct_catalog(path)
+    assert events[0].choice_set_kind == "viewport"
+    assert events[0].blob_agreement == BLOB_DISAGREES
+    assert events[0].table_only_subjects == ("mintGHOST",)
 
 
 def test_inline_blobs_load_as_well_as_external(tmp_path: Path) -> None:

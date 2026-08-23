@@ -2337,7 +2337,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 24);
+        assert_eq!(migration.current, 25);
         let batch_id =
             StableString::new("wave6:program-registration:fixture-001").expect("batch ID");
         let build = StableString::new("wave6-store-test").expect("build ID");
@@ -2345,7 +2345,7 @@ mod tests {
             .commit_wave6_program_registration_v1(REGISTRATION, batch_id.clone(), build.clone())
             .expect("accepted registration");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
         assert_eq!(
             accepted.semantic_ceiling,
             SemanticCeilingV1::UnverifiedSemanticFixtureOnly
@@ -2488,7 +2488,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("schema commit {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
             let retry = store
                 .commit_wave6_artifact_schema_v1(
                     &program_id,
@@ -2607,7 +2607,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("artifact {kind}: {error}"));
             assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+            assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
             assert!(accepted.result_count > 0);
             assert_eq!(
                 accepted.semantic_ceiling,
@@ -2682,7 +2682,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 24);
+        assert_eq!(migration.current, 25);
         let writer_build = StableString::new("wave6-store-test").expect("writer build");
         let (program_id, artifacts) = prepare_fixture_content(&mut store, &writer_build, 4);
         let batch_id = StableString::new("wave6:artifact-dag:fixture-001").expect("DAG batch");
@@ -2695,7 +2695,7 @@ mod tests {
             )
             .expect("accepted artifact DAG");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
         assert_eq!(accepted.artifact_count, 4);
         assert_eq!(
             accepted.maximum_information_cutoff,
@@ -2815,7 +2815,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 24);
+        assert_eq!(migration.current, 25);
         let writer_build = StableString::new("wave6-store-test").expect("writer build");
         let (program_id, dag) = prepare_fixture_dag(&mut store, &writer_build);
         let batch_id =
@@ -2829,7 +2829,7 @@ mod tests {
             )
             .expect("accepted decision ledger");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
         assert_eq!(accepted.program_id, program_id);
         assert_eq!(accepted.dag_id, dag.dag_id);
         assert_eq!(accepted.decision_count, 4);

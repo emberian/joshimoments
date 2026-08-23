@@ -18,7 +18,7 @@ import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
 import { exactUtcNow } from "./operator/contract";
-import { viewportAssertionIntent } from "./operator/attention";
+import { pointedAssertionIntent, viewportAssertionIntent } from "./operator/attention";
 import { heldSubjectKeys, holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
 import { journalEntryIntent } from "./operator/journal";
 import { configuredOperatorReader, type OperatorCommandReader } from "./operator/readback";
@@ -96,18 +96,27 @@ export function GlassApp({
   const [capturePreset, setCapturePreset] = useState<CapturePreset | null>(null);
   const [sceneInspectorOpen, setSceneInspectorOpen] = useState(false);
   /**
-   * Candidates whose row the operator's reading actually reached in this scene, in reach order.
+   * Candidates the operator could actually see in this scene, in the order they were seen.
    *
    * This is the scene's `viewport` choice set — the selection instrument's pre-registered
-   * denominator — and `operator/attention.ts` states exactly what it does and does not claim.
-   * It grows from three observable events only: a feed row receiving real focus, an explicit
-   * selection gesture, and an evidence act naming a candidate. It deliberately does NOT grow
-   * from virtualizer mounting or scroll-rect intersection: pixels on screen are not reading,
-   * least of all for a screen-reader operator.
+   * denominator — and `operator/attention.ts` states exactly what it does and does not claim
+   * (definition v2). It grows from the observable events of a primarily visual operator: a
+   * row's pixels intersecting the visible scroll rectangle, a feed row receiving real focus,
+   * the pointer entering a row, an explicit selection gesture, and an evidence act naming a
+   * candidate. Virtualizer overscan mounting still never counts: mounted is not presented.
    */
   const [attendedIds, setAttendedIds] = useState<string[]>([]);
   const attendedRef = useRef<Set<string>>(new Set());
   const lastAssertedViewport = useRef<{ sceneId: string; key: string } | null>(null);
+  /**
+   * Candidates whose row the pointer entered in this scene. Its own honest kind (`pointed`),
+   * never blurred into `viewport`, because Ember points DELIBERATELY as an attention marker —
+   * the instrument watches where she points, and she points on purpose. Pointer entry also
+   * feeds the seen set: a pointed row is a seen row.
+   */
+  const [pointedIds, setPointedIds] = useState<string[]>([]);
+  const pointedRef = useRef<Set<string>>(new Set());
+  const lastAssertedPointed = useRef<{ sceneId: string; key: string } | null>(null);
   const [interactedIds, setInteractedIds] = useState<string[]>([]);
   const [heldObservations, setHeldObservations] = useState<Record<string, RetainedObservation>>({});
   const [holdAnnouncement, setHoldAnnouncement] = useState("");
@@ -227,10 +236,12 @@ export function GlassApp({
   }, [board, query, stableOrder.orderedCandidates]);
 
   useEffect(() => {
-    // A new scene is a new choice context: what was reached in the previous scene says nothing
-    // about what has been reached in this one, even for the same coin at a newer price.
+    // A new scene is a new choice context: what was seen in the previous scene says nothing
+    // about what has been seen in this one, even for the same coin at a newer price.
     attendedRef.current = new Set();
     setAttendedIds([]);
+    pointedRef.current = new Set();
+    setPointedIds([]);
     setInteractedIds([]);
   }, [snapshot?.view.sceneId]);
 
@@ -239,6 +250,22 @@ export function GlassApp({
     attendedRef.current.add(candidateId);
     setAttendedIds((current) => current.includes(candidateId) ? current : [...current, candidateId]);
   }, []);
+
+  /** The visible-rectangle channel: every id the scroll viewport currently presents is seen. */
+  const noteScrollViewport = useCallback((candidateIds: string[]) => {
+    const fresh = candidateIds.filter((id) => !attendedRef.current.has(id));
+    if (fresh.length === 0) return;
+    for (const id of fresh) attendedRef.current.add(id);
+    setAttendedIds((current) => [...current, ...fresh.filter((id) => !current.includes(id))]);
+  }, []);
+
+  /** The pointer channel: feeds `pointed` and the seen set, and never moves selection. */
+  const notePointed = useCallback((candidateId: string) => {
+    noteAttended(candidateId);
+    if (pointedRef.current.has(candidateId)) return;
+    pointedRef.current.add(candidateId);
+    setPointedIds((current) => current.includes(candidateId) ? current : [...current, candidateId]);
+  }, [noteAttended]);
 
   const selectCandidate = useCallback((candidateId: string) => {
     noteAttended(candidateId);
@@ -276,33 +303,45 @@ export function GlassApp({
   }, [selectCandidate, selectedId, visibleCandidates]);
 
   /**
-   * Record one operator act, then let the act carry its scene's honest viewport with it.
+   * Record one operator act, then let the act carry its scene's honest attention sets with it.
    *
    * A candidate-named act is what makes a scene durable and scoreable, so it is exactly the
-   * moment the selection instrument's denominator matters. The assertion is a second ordinary
-   * evidence command on the same route (`operator/attention.ts` states precisely what it claims
-   * and refuses to claim); it costs no keystroke, moves no focus, renders nothing, and is
-   * skipped when the reached set has not changed. When it cannot be recorded, the scene keeps
-   * only its `rendered` set and the instrument reports that fallback — absence stays visible,
-   * never backfilled.
+   * moment the selection instrument's denominator matters. Each assertion is a second ordinary
+   * evidence command on the same route (`operator/attention.ts` states precisely what each
+   * claims and refuses to claim); they cost no keystroke, move no focus, render nothing, and
+   * are skipped when their set has not changed. When one cannot be recorded, the scene keeps
+   * what it has — `rendered` at worst — and the instrument reports that fallback; absence
+   * stays visible, never backfilled. The two assertions fail independently: a refused pointer
+   * record must not cost the viewport record, or the act itself.
    */
   const recordCommand = useCallback((intent: OperatorIntent) => {
     const commandId = operatorJournal.record(intent);
     if (snapshot && intent.commandKind !== "record_choice_set" && intent.subject.kind === "candidate") {
       noteAttended(intent.subject.key);
       const inScene = new Set(snapshot.view.payload.candidates.map((candidate) => candidate.id));
-      const reached = [...attendedRef.current].filter((id) => inScene.has(id)).sort();
       const sceneId = snapshot.view.sceneId;
-      const reachedKey = reached.join("\0");
-      const last = lastAssertedViewport.current;
-      if (reached.length > 0 && (last === null || last.sceneId !== sceneId || last.key !== reachedKey)) {
+      const seen = [...attendedRef.current].filter((id) => inScene.has(id)).sort();
+      const seenKey = seen.join("\0");
+      const lastSeen = lastAssertedViewport.current;
+      if (seen.length > 0 && (lastSeen === null || lastSeen.sceneId !== sceneId || lastSeen.key !== seenKey)) {
         try {
-          operatorJournal.record(viewportAssertionIntent(sceneId, reached, intent.subject.key));
-          lastAssertedViewport.current = { sceneId, key: reachedKey };
+          operatorJournal.record(viewportAssertionIntent(sceneId, seen, intent.subject.key));
+          lastAssertedViewport.current = { sceneId, key: seenKey };
         } catch {
           // Her act must never fail because its instrumentation could not be recorded. The
           // scene then keeps only its rendered choice set, which the instrument reports as
           // the fallback it is.
+        }
+      }
+      const pointed = [...pointedRef.current].filter((id) => inScene.has(id)).sort();
+      const pointedKey = pointed.join("\0");
+      const lastPointed = lastAssertedPointed.current;
+      if (pointed.length > 0 && (lastPointed === null || lastPointed.sceneId !== sceneId || lastPointed.key !== pointedKey)) {
+        try {
+          operatorJournal.record(pointedAssertionIntent(sceneId, pointed, intent.subject.key));
+          lastAssertedPointed.current = { sceneId, key: pointedKey };
+        } catch {
+          // Same rule: a scene with no pointer record simply has no pointer record.
         }
       }
     }
@@ -500,6 +539,7 @@ export function GlassApp({
     surfaced: candidates.map((candidate) => candidate.id),
     filtered: visibleCandidates.map((candidate) => candidate.id),
     viewport: attendedIds.filter(inThisScene),
+    pointed: pointedIds.filter(inThisScene),
     interacted: interactedHere,
     compared: interactedHere.slice(-3),
   };
@@ -572,7 +612,7 @@ export function GlassApp({
           onSelect={selectCandidate}
           onAppendNote={appendHoldNote}
         />
-        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
+        <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
           orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder} />
         <div id="selected-coin" tabIndex={-1}>
           <CoinWorkbench candidate={selected} episode={episode} socialEvents={snapshot.view.payload.socialEvents} onAnnotate={annotateChart} />

@@ -129,6 +129,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "0024_retire_wave5_c1_activation.sql",
         sql: include_str!("../../../schema/migrations/0024_retire_wave5_c1_activation.sql"),
     },
+    Migration {
+        id: 25,
+        name: "0025_pointed_choice_set.sql",
+        sql: include_str!("../../../schema/migrations/0025_pointed_choice_set.sql"),
+    },
 ];
 
 /// Linked runtime and active durability settings.
@@ -457,11 +462,11 @@ mod tests {
         assert_eq!(g0.current, 10);
         assert_eq!(g0.applied, vec![10]);
 
-        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V24");
-        assert_eq!(current.current, 24);
+        let current = migrate(&mut connection, 1_786_000_000_000_003).expect("advance to V25");
+        assert_eq!(current.current, 25);
         assert_eq!(
             current.applied,
-            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+            vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
         );
 
         let error = migrate_through(&mut connection, 1_786_000_000_000_004, 10)

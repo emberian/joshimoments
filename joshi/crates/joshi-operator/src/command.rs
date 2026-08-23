@@ -954,7 +954,14 @@ fn validate_anchor(value: &ChartAnchor) -> Result<()> {
 fn validate_choice_set(value: &ChoiceSet) -> Result<()> {
     one_of(
         &value.set_kind,
-        &["surfaced", "filtered", "viewport", "interacted", "compared"],
+        &[
+            "surfaced",
+            "filtered",
+            "viewport",
+            "interacted",
+            "compared",
+            "pointed",
+        ],
         "choice setKind",
     )?;
     if value.subjects.is_empty() || value.subjects.len() > 1_000 {

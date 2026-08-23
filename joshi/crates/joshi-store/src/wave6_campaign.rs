@@ -946,7 +946,7 @@ mod tests {
                     .expect("migration time"),
             )
             .expect("latest migration");
-        assert_eq!(migration.current, 24);
+        assert_eq!(migration.current, 25);
         let build = StableString::new("wave6-campaign-store-test").expect("build ID");
         let program = store
             .commit_wave6_program_registration_v1(
@@ -981,7 +981,7 @@ mod tests {
                 build.clone(),
             )
             .expect("campaign bundle");
-        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v24");
+        assert_eq!(accepted.catalog_schema.as_str(), "joshi.sqlite.v25");
         assert_eq!(accepted.status, IdempotencyStatus::Accepted);
         assert_eq!(accepted.eligible_subject_count, 3);
         assert_eq!(accepted.included_subject_count, 2);

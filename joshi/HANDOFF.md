@@ -50,8 +50,11 @@ saw (`viewport`) is now recorded distinctly from what was drawn (`rendered`).
 2. **Run the keeper under launchd for real** (`ops/launchd/`), so the catalog advances unattended.
 3. **The selection power budget**: ~110 scored scenes to detect skill, ~891 for a tradeable edge.
    That is a lot of sitting; design sessions accordingly.
-4. `analysis/.../selection/events.py` blob-agreement should be a subset check for `viewport`
-   (it is a subset by design, currently reports "disagrees"). Report-only, scoring unaffected.
+
+Done since this handoff was written: the viewport definition is corrected for a primarily-visual
+operator (v2: scroll-rectangle visibility and pointer entry join focus-reach; `pointed` is its own
+recorded kind per Ember's ruling; migration 0025 widens the store vocabulary), and the
+blob-agreement subset check for client-observed kinds is in.
 
 ## House rules that were learned the hard way
 

@@ -8,7 +8,7 @@ import type { GlassSnapshotV1 } from "./contract/v1";
 import type { HeldVenueReadout } from "./components/HeldCoins";
 import { OfflineFixtureDataSource, type GlassDataSource, type SnapshotRequest } from "./data/client";
 import { mockSnapshots } from "./data/mockSnapshot";
-import { isViewportAssertion, VIEWPORT_ASSERTION_UI_LABEL } from "./operator/attention";
+import { isViewportAssertion, POINTED_ASSERTION_UI_LABEL, VIEWPORT_ASSERTION_UI_LABEL } from "./operator/attention";
 import { canonicalOperatorCommand, type CommandReceipt, type OperatorCommand, type OperatorCommandV1 } from "./operator/contract";
 import { OfflineFixtureOperatorSink, RetryableCommandError, type OperatorCommandSink } from "./operator/client";
 import { MemoryPendingOperatorCommandQueue, type PendingOperatorCommandQueue, type PendingOperatorCommandV1 } from "./operator/pendingQueue";
@@ -194,7 +194,12 @@ describe("accessibility-first glass", () => {
     await firstUser.click(screen.getByRole("button", { name: /deliberate focus/i }));
     await firstUser.click(screen.getByRole("button", { name: /append evidence record/i }));
     expect(await screen.findByText(/disconnected.*retained for retry/i)).toBeInTheDocument();
-    const retained = (await queue.list())[0]!;
+    // The act, found by kind rather than position: the queue also holds the act's automatic
+    // viewport assertion, and their list order is not part of this test's claim.
+    const retained = (await queue.list()).find(
+      (item) => (JSON.parse(item.canonicalCommand) as OperatorCommandV1).commandKind === "record_focus",
+    )!;
+    expect(retained).toBeDefined();
     first.unmount();
 
     const accepted: OperatorCommand[] = [];
@@ -797,6 +802,62 @@ describe("holding a coin before it scrolls away", () => {
     await waitFor(() => expect(sink.attemptBodies.length).toBe(5));
     const repeat = JSON.parse(sink.attemptBodies[4] ?? "{}") as OperatorCommandV1;
     expect(repeat.commandKind).toBe("record_focus");
+  });
+
+  /**
+   * Ember points DELIBERATELY as an attention marker — her pointer is a first-class channel,
+   * recorded as its own `pointed` kind rather than blurred into the viewport. Hover feeds the
+   * seen set too (a pointed row is a seen row) but never moves selection: the hold key still
+   * acts on the focused coin, because hover hijacking the act target would reintroduce the
+   * silent wrong-coin bug.
+   */
+  it("records pointer attention as its own pointed set, without moving selection", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    render(<GlassApp dataSource={new OfflineFixtureDataSource()} operatorSink={sink} pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()} />);
+    await screen.findByRole("heading", { name: /radon radon/i });
+
+    // She hovers a row she never focused. Selection stays where it was. Wetpaint is the top
+    // card of the settled virtual window; a below-the-fold card would be mounted only during
+    // the initial estimate-sized window and its node would detach when measurement shrinks it.
+    const feed = screen.getByRole("region", { name: /attention feed/i });
+    await user.hover(await within(feed).findByRole("button", { name: /wetpaint/i }));
+    expect(screen.getByRole("heading", { name: /radon radon/i })).toBeInTheDocument();
+
+    // Holding the selected radon carries both assertions: the viewport (radon acted on,
+    // wetpaint seen by pointer) and the pointed set (wetpaint alone).
+    await user.keyboard(";");
+    await waitFor(() => expect(
+      sink.attemptBodies.map((body) => {
+        const command = JSON.parse(body) as OperatorCommandV1;
+        return command.commandKind === "record_choice_set"
+          ? (command.payload as { context: { uiLabel: string } }).context.uiLabel
+          : command.commandKind;
+      }),
+    ).toEqual(["record_focus", VIEWPORT_ASSERTION_UI_LABEL, POINTED_ASSERTION_UI_LABEL]));
+
+    const viewport = JSON.parse(sink.attemptBodies[1] ?? "{}") as OperatorCommandV1;
+    if (viewport.commandKind !== "record_choice_set") throw new Error("expected a viewport assertion");
+    expect(viewport.payload.context.uiLabel).toBe(VIEWPORT_ASSERTION_UI_LABEL);
+    expect(viewport.payload.context.uiLabelVersion).toBe("2");
+    expect(viewport.payload.choiceSet.setKind).toBe("viewport");
+    expect(viewport.payload.choiceSet.subjects.map((subject) => subject.key)).toEqual(["radon", "wetpaint"]);
+
+    const pointed = JSON.parse(sink.attemptBodies[2] ?? "{}") as OperatorCommandV1;
+    if (pointed.commandKind !== "record_choice_set") throw new Error("expected a pointed assertion");
+    expect(pointed.payload.context.uiLabel).toBe(POINTED_ASSERTION_UI_LABEL);
+    expect(pointed.payload.context.uiLabelVersion).toBe("1");
+    expect(pointed.payload.choiceSet).toEqual({
+      setKind: "pointed",
+      subjects: [{ kind: "candidate", key: "wetpaint" }],
+      // Radon was acted on but never pointed at; a selection outside the set stays unstated.
+      selectedSubject: null,
+    });
+
+    // Both automatic assertions stay out of the journal narrative: they are telemetry, not
+    // her words.
+    expect(isViewportAssertion(viewport)).toBe(true);
+    expect(isViewportAssertion(pointed)).toBe(true);
   });
 
   it("keeps a held coin, and its last observation, after the feed stops carrying it", async () => {

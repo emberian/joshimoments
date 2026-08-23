@@ -1,9 +1,12 @@
 import { memo, useEffect, useMemo, useRef } from "react";
-// This feed deliberately reports no "what was visible" set. It once computed the candidates
-// whose pixels intersected the scroll viewport, but pixels on screen are not reading — least
-// of all for a screen-reader operator — and recording them as the scene's `viewport` choice
-// set would fabricate the selection instrument's denominator. The honest reading signal is a
-// row receiving focus (`onFocusCandidate`), which the shell accumulates per scene.
+// This feed reports three attention channels the shell accumulates per scene: a row receiving
+// focus (`onFocusCandidate`), a row's pixels actually intersecting the visible scroll
+// rectangle (`onScrollViewportChange` — computed from the virtualizer's own scroll geometry,
+// so overscan-mounted rows that were never presented do NOT count), and the pointer entering
+// a row (`onPointerCandidate`). The visible-rectangle channel was removed once on the belief
+// that the operator was screen-reader-only and pixels were not reading; Ember corrected that
+// directly — she is primarily visual — so it is restored. `operator/attention.ts` states
+// exactly what each channel claims and refuses to claim.
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Activity, Bookmark, RefreshCw, Radio, Users } from "lucide-react";
 
@@ -27,6 +30,8 @@ export const AttentionFeed = memo(function AttentionFeed({
   selectedId,
   onSelect,
   onFocusCandidate,
+  onScrollViewportChange,
+  onPointerCandidate,
   board,
   onBoardChange,
   density,
@@ -47,6 +52,19 @@ export const AttentionFeed = memo(function AttentionFeed({
    * coin is worse than not holding one.
    */
   onFocusCandidate?(id: string): void;
+  /**
+   * Candidates whose pixels currently intersect the visible scroll rectangle — actual
+   * visibility from the virtualizer's scroll geometry, never overscan mounting. Fired on every
+   * change; the shell unions it into the scene's seen set.
+   */
+  onScrollViewportChange?(candidateIds: string[]): void;
+  /**
+   * The pointer entered this row. Ember points deliberately as an attention marker, so this
+   * feeds both the seen set and its own `pointed` choice set. It never moves selection: hover
+   * hijacking the act target would reintroduce the silent wrong-coin bug that focus-follows
+   * selection exists to prevent.
+   */
+  onPointerCandidate?(id: string): void;
   board: BoardFilter;
   onBoardChange(board: BoardFilter): void;
   density: Density;
@@ -68,6 +86,27 @@ export const AttentionFeed = memo(function AttentionFeed({
     getItemKey: (index) => sorted[index]?.id ?? index,
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
+
+  // Actual visibility, not mounting: a virtual row is in the viewport only when its extent
+  // overlaps the scroll element's REAL rectangle, read from the DOM at effect time. The
+  // virtualizer's scrollOffset is observed from scroll events and is honest (and re-fires this
+  // effect as she scrolls), but its scrollRect is deliberately not consulted — before
+  // measurement it is the `initialRect` estimate, and asserting "she could see this row" from
+  // an estimate would fabricate the set (in jsdom, where no screen exists, clientHeight is 0
+  // and this channel honestly reports nothing at all).
+  const scrollOffset = rowVirtualizer.scrollOffset ?? 0;
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const viewportHeight = element.clientHeight;
+    if (viewportHeight === 0) return;
+    const visibleIds = virtualRows
+      .filter((row) => row.end > scrollOffset && row.start < scrollOffset + viewportHeight)
+      .map((row) => sorted[row.index]?.id)
+      .filter((id): id is string => id !== undefined);
+    if (visibleIds.length === 0) return;
+    onScrollViewportChange?.(visibleIds);
+  }, [onScrollViewportChange, scrollOffset, sorted, virtualRows]);
 
   useEffect(() => {
     const index = sorted.findIndex((candidate) => candidate.id === selectedId);
@@ -167,6 +206,11 @@ export const AttentionFeed = memo(function AttentionFeed({
                     aria-current={selectedId === candidate.id ? "true" : undefined}
                     aria-keyshortcuts=";"
                     onFocus={() => onFocusCandidate?.(candidate.id)}
+                    // Both enter flavors: pointerenter is the real channel in browsers, while
+                    // mouseenter is what environments without PointerEvent (jsdom) deliver.
+                    // The shell's note is idempotent, so a browser firing both records once.
+                    onPointerEnter={() => onPointerCandidate?.(candidate.id)}
+                    onMouseEnter={() => onPointerCandidate?.(candidate.id)}
                     onClick={() => onSelect(candidate.id)}
                   >
                     <span

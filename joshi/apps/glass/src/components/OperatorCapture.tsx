@@ -7,7 +7,7 @@ import { candidateSymbol } from "../format";
 import type { ChartAnchor, CaptureContext } from "../operator/contract";
 import type { JournalEntry, OperatorIntent } from "../operator/useOperatorJournal";
 
-export type ChoiceSetKind = "surfaced" | "filtered" | "viewport" | "interacted" | "compared";
+export type ChoiceSetKind = "surfaced" | "filtered" | "viewport" | "interacted" | "compared" | "pointed";
 export type ChoiceSets = Record<ChoiceSetKind, string[]>;
 
 export type CapturePreset =
@@ -265,7 +265,8 @@ export function OperatorCaptureDialog({
                 <select value={choiceSetKind} onChange={(event) => setChoiceSetKind(event.target.value as ChoiceSetKind)}>
                   <option value="surfaced">Served by this scene ({choiceSets.surfaced.length})</option>
                   <option value="filtered">After current filters ({choiceSets.filtered.length})</option>
-                  <option value="viewport">Rows your reading actually reached ({choiceSets.viewport.length})</option>
+                  <option value="viewport">Rows you could actually see ({choiceSets.viewport.length})</option>
+                  <option value="pointed">Rows your pointer marked ({choiceSets.pointed.length})</option>
                   <option value="interacted">Explicitly focused this visit ({choiceSets.interacted.length})</option>
                   <option value="compared">Recent comparison set ({choiceSets.compared.length})</option>
                 </select>
