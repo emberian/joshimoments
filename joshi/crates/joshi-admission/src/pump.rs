@@ -10,7 +10,7 @@ use joshi_domain::{
 use joshi_evidence::{
     AcquisitionRecord, Boundary, CoverageGap, CoverageScope, CoverageWindow, EvidenceDraft,
     MonotonicReading, ObservationDraft, ObservationEventTime, ObservationMetadata,
-    ObservationTiming,
+    ObservationSourceEvent, ObservationTiming, SourceEventRecord,
 };
 use joshi_pump_api::{
     AccessClass, BodyCapture, FetchOutcome, IdentityStore, ROUTE_CATALOG, RouteId, RouteSpec,
@@ -48,6 +48,7 @@ pub fn admit_pump_outcome(
     }
     let source_id = SourceId::new(PUMP_SOURCE_ID)?;
     let mut drafts = Vec::new();
+    let mut source_events: Vec<SourceEventRecord> = Vec::new();
     let mut private_observations = BTreeSet::new();
     let mut acquisition_ids = Vec::new();
     for attempt in &outcome.attempts {
@@ -73,7 +74,7 @@ pub fn admit_pump_outcome(
         let envelope_id = ObservationId::new(format!("obs:{}:attempt", attempt.acquisition_id))?;
         let is_private = requires_private_retention(route.access, &attempt.session_class);
         let envelope = serde_json::to_vec(attempt)?;
-        drafts.push(EvidenceDraft::Observation(observation(
+        let mut envelope_draft = observation(
             acquisition.clone(),
             envelope_id.clone(),
             0,
@@ -82,7 +83,28 @@ pub fn admit_pump_outcome(
             envelope,
             timestamp(&attempt.clocks.received_at)?,
             committed_at,
-        )?));
+        )?;
+        // A mint the envelope carries as a request-resolved public path segment becomes a durable
+        // source event — the same mint-as-subject mechanism the chain census uses, so a candles
+        // acquisition and a wallet sweep about one coin converge on one `solana.token_mint`
+        // natural key. The link hangs off the *attempt envelope*, because those retained bytes
+        // are what actually state the mint; the provider body never does, and linking the body
+        // would claim it did. The event identity is pump-scoped because the store refuses one
+        // event identity owned by two sources, and the census already owns `mint:<mint>`.
+        if let Some(mint) = attempt.resolved_public_path.get("mint") {
+            let event = mint_source_event(&source_id, mint)?;
+            envelope_draft.observation.source_events = vec![ObservationSourceEvent {
+                source_event_id: event.source_event_id.clone(),
+                relation: OpenVariant::known("contains")?,
+                event_ordinal: None,
+            }];
+            if !source_events.iter().any(|existing: &SourceEventRecord| {
+                existing.source_event_id == event.source_event_id
+            }) {
+                source_events.push(event);
+            }
+        }
+        drafts.push(EvidenceDraft::Observation(envelope_draft));
         if is_private {
             private_observations.insert(envelope_id.to_string());
         }
@@ -242,7 +264,7 @@ pub fn admit_pump_outcome(
     let mut batch = source_drafts(SourceDraftBatch {
         batch_id: StableString::new(batch_id)?,
         drafts,
-        source_events: Vec::new(),
+        source_events,
         cursor_advances: Vec::new(),
         registrations: vec![registration],
         policy: AdmissionPolicy::public_source()?,
@@ -269,6 +291,26 @@ pub fn admit_pump_outcome(
         batch,
         acquisition_ids,
         coverage_gap_ids,
+    })
+}
+
+/// One SPL mint the request path named, as a durable source event owned by the pump source.
+///
+/// The namespace and natural key are exactly the census's — `solana.token_mint`, the address as
+/// the caller spelled it — so cross-source reconciliation happens on the public key itself. The
+/// event kind states how the mint was established and claims nothing stronger: the request asked
+/// about it. Not observed in a body, not a launch, not a trade, not a price.
+fn mint_source_event(
+    source_id: &SourceId,
+    mint: &str,
+) -> Result<SourceEventRecord, AdmissionError> {
+    Ok(SourceEventRecord {
+        source_event_id: joshi_domain::SourceEventId::new(format!("mint:pump:{mint}"))?,
+        source_id: source_id.clone(),
+        namespace: StableString::new("solana.token_mint")?,
+        natural_key: StableString::new(mint)?,
+        source_order_key: None,
+        event_kind: OpenVariant::known("named_in_request_path")?,
     })
 }
 

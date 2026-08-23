@@ -281,3 +281,115 @@ fn an_unreviewed_tap_window_is_quarantined_and_its_bytes_are_still_retained() {
         .expect("quarantine retains the bytes it refused to trust");
     assert_eq!(stored, bytes);
 }
+
+/// The mainnet mint both fixture outcomes were actually requested for, restated here the way the
+/// source-edge client now writes it onto every attempt envelope for a catalog-declared public
+/// path segment.
+const FIXTURE_MINT: &str = "HgBRWfYxEfvPhtqkaeymCQtHCrKE46qQ43pKe8HCpump";
+
+/// The verbatim fixture with `resolvedPublicPath` restored onto its attempt envelope. The
+/// provider body bytes are untouched; only the request's own record says more.
+fn outcome_with_resolved_mint(outcome: &str, mint: &str) -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(outcome.trim_end()).expect("fixture outcome parses");
+    value["attempts"][0]["resolvedPublicPath"] = serde_json::json!({ "mint": mint });
+    serde_json::to_string(&value).expect("patched outcome serializes")
+}
+
+#[test]
+fn a_request_resolved_mint_lands_as_a_durable_source_event_and_an_absent_one_lands_nothing() {
+    // The mint the request resolved into its path becomes the same mint-as-subject mechanism
+    // the chain census uses: a `solana.token_mint` source event, linked from the attempt
+    // envelope whose retained bytes actually state it. The event identity is pump-scoped
+    // (`mint:pump:<mint>`) because the store refuses one event identity owned by two sources
+    // and the census already owns `mint:<mint>` for the same coins.
+    let patched = outcome_with_resolved_mint(CANDLES_OUTCOME, FIXTURE_MINT);
+    let prepared = prepare(
+        &patched,
+        Some(CANDLES_REVIEW.as_bytes()),
+        "batch:pump-tap:candles-resolved",
+    );
+    let evidence = &prepared.prepared.admission_batch().store.evidence;
+    assert_eq!(evidence.source_events.len(), 1);
+    let event = &evidence.source_events[0];
+    assert_eq!(
+        event.source_event_id.as_str(),
+        format!("mint:pump:{FIXTURE_MINT}")
+    );
+    assert_eq!(event.source_id.as_str(), "pump.api.product.v1");
+    assert_eq!(event.namespace.as_str(), "solana.token_mint");
+    assert_eq!(event.natural_key.as_str(), FIXTURE_MINT);
+    assert_eq!(
+        event.event_kind.discriminator.as_str(),
+        "named_in_request_path"
+    );
+    let attempt = evidence
+        .observations
+        .iter()
+        .find(|draft| {
+            draft
+                .observation
+                .observation_id
+                .as_str()
+                .ends_with(":attempt")
+        })
+        .expect("attempt envelope draft");
+    assert_eq!(attempt.observation.source_events.len(), 1);
+    assert_eq!(
+        attempt.observation.source_events[0]
+            .source_event_id
+            .as_str(),
+        format!("mint:pump:{FIXTURE_MINT}")
+    );
+    assert_eq!(
+        attempt.observation.source_events[0]
+            .relation
+            .discriminator
+            .as_str(),
+        "contains",
+        "the retained envelope bytes state the mint; that is what `contains` claims"
+    );
+    let body = evidence
+        .observations
+        .iter()
+        .find(|draft| draft.observation.observation_id.as_str().ends_with(":body"))
+        .expect("provider body draft");
+    assert!(
+        body.observation.source_events.is_empty(),
+        "the provider body does not state the mint, so nothing may claim it contains one"
+    );
+
+    // The store accepts the linked event, and a full reopen verification stays clean.
+    let root = tempfile::tempdir().expect("temp root");
+    let mut store =
+        SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
+    store.migrate(committed_at()).expect("migrate");
+    let receipt = prepared
+        .prepared
+        .admission_batch()
+        .commit(&mut store)
+        .expect("commit");
+    close_receipt(&prepared.prepared, &receipt).expect("receipt closure");
+    drop(store);
+    let reopened =
+        SqliteStore::open(config(root.path()), StoreMode::ReadOnly).expect("reopen store");
+    let verification = reopened.verify(VerifyDepth::Full).expect("verify");
+    assert_eq!(verification.integrity, "ok");
+    assert_eq!(verification.foreign_key_defects, 0);
+
+    // The verbatim fixture, whose envelope predates the field, still lands nothing: an absent
+    // record stays absent rather than becoming a guessed subject.
+    let unresolved = prepare(
+        CANDLES_OUTCOME,
+        Some(CANDLES_REVIEW.as_bytes()),
+        "batch:pump-tap:candles-unresolved",
+    );
+    let evidence = &unresolved.prepared.admission_batch().store.evidence;
+    assert!(evidence.source_events.is_empty());
+    assert!(
+        evidence
+            .observations
+            .iter()
+            .all(|draft| draft.observation.source_events.is_empty())
+    );
+}

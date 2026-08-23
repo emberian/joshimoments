@@ -23,11 +23,14 @@
 //! 2. The newest bar's age is **not** feed freshness. A quiet coin's newest bar is arbitrarily
 //!    old while the read itself is seconds old, so bar clocks and acquisition clocks are kept in
 //!    different fields and never collapsed into one "staleness".
-//! 3. The window **names no coin**. The route's mint lives only in the URL path, and the retained
-//!    acquisition keeps the path template with `{mint}` unresolved plus a one-way request
-//!    fingerprint. Nothing durable in the catalog says which coin a candle window is for, so this
-//!    surface will not guess: bars are attached to a mint only when an operator states it, and
-//!    that statement is rendered as `attested` evidence next to `observed` bars.
+//! 3. The window's coin is **never guessed**. The provider body names no coin; the mint lives in
+//!    the URL path the request carried. An acquisition retained since the catalog began marking
+//!    the mint segment public restates that resolved value on its attempt envelope
+//!    (`resolvedPublicPath`), and bars from such a window bind to that mint with the binding
+//!    rendered as `derived` evidence — resolved from the request's own durable record, not
+//!    observed in the body. An older or hand-fed window whose envelope carries no resolved mint
+//!    still refuses: its bars attach only when an operator states the coin, rendered as
+//!    `attested` evidence, and with neither statement the window stays unrendered and counted.
 
 use joshi_domain::{CommitSeq, SourceId, StableString, UtcTimestamp};
 use joshi_operator::ValidatedGlassViewV1;
@@ -103,11 +106,12 @@ pub struct LiveSurfaceReport {
 pub struct LiveSurfaceOptions {
     /// Mint an operator states a retained, coin-anonymous `candles` window belongs to.
     ///
-    /// A pump `candles` response is a bare OHLCV array, and the retained acquisition keeps the
-    /// `{mint}` path *template* plus a one-way request fingerprint rather than the resolved path.
-    /// Nothing durable in the catalog therefore says which coin a window is for. Setting this
-    /// attaches the bars to that mint and records the binding as `attested` evidence sitting next
-    /// to the `observed` bars; leaving it unset leaves the window unrendered and counted.
+    /// A pump `candles` response is a bare OHLCV array that names no coin. An acquisition whose
+    /// retained attempt envelope restates its request-resolved mint needs no statement here and
+    /// is never re-labelled by one; this option covers only windows whose envelope carries no
+    /// resolved mint — an older read, or a hand-fed fixture. Setting it attaches those bars to
+    /// that mint and records the binding as `attested` evidence sitting next to the `observed`
+    /// bars; leaving it unset leaves such a window unrendered and counted.
     pub attested_candle_subject: Option<String>,
 }
 
@@ -257,6 +261,7 @@ pub fn derive_live_surface_with(
                 source_id: body.source_id.to_string(),
                 ingested_at: body.received_at,
                 known_at: body.available_at,
+                request_mint: attempt.request_mint.clone(),
                 rows,
                 schema_trust: schema_trust(
                     store,
@@ -269,32 +274,15 @@ pub fn derive_live_surface_with(
         }
     }
 
-    let series = CandleSeries::merge(windows).map_err(LiveSurfaceError::CandleWindows)?;
-    let mut binding = if series.is_empty() {
-        "no_candle_window_retained"
-    } else {
-        "unattributed_bytes_name_no_coin"
-    };
-    if let Some(mint) = options.attested_candle_subject.as_deref()
-        && let Some(attached) = series.attach(mint, &mut subjects, rendered_at)
-    {
-        binding = attached;
-    }
-    let unattributed_windows = if binding == "operator_attested_not_witnessed" {
-        0
-    } else {
-        u64::try_from(series.window_count()).unwrap_or(u64::MAX)
-    };
-    if unattributed_windows > 0 {
-        unrendered.extend(series.unattributed_notes());
-    }
+    let candles = bind_candle_windows(windows, options, &mut subjects, rendered_at)?;
+    unrendered.extend(candles.notes.iter().cloned());
 
     if subjects.is_empty() {
-        if !series.is_empty() {
+        if candles.windows_total > 0 {
             return Err(LiveSurfaceError::CandlesNameNoSubject {
                 source_id: source_id.to_string(),
-                windows: series.window_count(),
-                bars: series.bar_count(),
+                windows: candles.windows_total,
+                bars: candles.bars_total,
             });
         }
         return Err(LiveSurfaceError::NoRenderableSubject {
@@ -360,7 +348,7 @@ pub fn derive_live_surface_with(
 
     let bytes = serde_json::to_vec(&wire)?;
     let view = ValidatedGlassViewV1::parse_exact(&bytes, None)?;
-    let rendered = series.rendered_shape(price_series_rendered);
+    let rendered = candles.shape;
     let report = LiveSurfaceReport {
         contract: "joshi.core.live_surface",
         schema_version: 1,
@@ -379,13 +367,14 @@ pub fn derive_live_surface_with(
         chain_slot_high: slot_high.map(|value| value.to_string()),
         unrendered_observations: unrendered,
         price_series_rendered,
-        candle_windows: u64::try_from(series.window_count()).unwrap_or(u64::MAX),
-        candle_windows_unattributed: unattributed_windows,
+        candle_windows: u64::try_from(candles.windows_total).unwrap_or(u64::MAX),
+        candle_windows_unattributed: u64::try_from(candles.windows_unattributed)
+            .unwrap_or(u64::MAX),
         candle_bars_rendered: rendered.bars,
         candle_spacing_seconds: rendered.spacing_seconds.map(|value| value.to_string()),
         candle_gaps: rendered.gaps,
         candle_omitted_intervals: rendered.omitted_intervals,
-        candle_subject_binding: binding,
+        candle_subject_binding: candles.binding,
         candle_newest_bar_at: rendered.newest_bar_at,
         candle_window_known_at: rendered.window_known_at,
         ceiling: if price_series_rendered {
@@ -406,6 +395,10 @@ struct SubjectDraft {
     price_note: Option<String>,
     /// At least one attached window came from a read this project's schema gate did not promote.
     schema_unpromoted: bool,
+    /// At least one attached window bound through its request-resolved envelope mint.
+    candles_request_resolved: bool,
+    /// At least one attached window bound only through an operator's attestation.
+    candles_operator_attested: bool,
 }
 
 struct EvidenceDraft {
@@ -433,6 +426,13 @@ const CANDLE_ROUTE: &str = "candles";
 struct PumpAttempt {
     route_id: String,
     http_status: Option<u64>,
+    /// The mint the request resolved into its path, when the retained envelope restates it.
+    ///
+    /// The transport client writes `resolvedPublicPath` only for path segments the pinned route
+    /// catalog marks as public subjects, so a value here is the request's own durable statement
+    /// of which coin it asked about. Envelopes retained before that field existed have no value,
+    /// and their windows keep refusing to bind without an operator statement.
+    request_mint: Option<String>,
 }
 
 impl PumpAttempt {
@@ -471,6 +471,11 @@ fn decode_observation(observation: &DurableSourceObservation) -> DecodedObservat
                         .unwrap_or_default()
                         .to_owned(),
                     http_status: value.get("httpStatus").and_then(serde_json::Value::as_u64),
+                    request_mint: value
+                        .get("resolvedPublicPath")
+                        .and_then(|resolved| resolved.get("mint"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
                 })
             }
             _ => DecodedObservation::Unrenderable(
@@ -574,6 +579,8 @@ struct CandleWindow {
     source_id: String,
     ingested_at: UtcTimestamp,
     known_at: UtcTimestamp,
+    /// Mint the acquisition's retained attempt envelope restates as request-resolved, if any.
+    request_mint: Option<String>,
     rows: Vec<CandleRow>,
     /// What this project's own schema gate decided about the read these bytes came from.
     ///
@@ -698,10 +705,6 @@ impl CandleSeries {
         })
     }
 
-    fn is_empty(&self) -> bool {
-        self.windows.is_empty()
-    }
-
     fn window_count(&self) -> usize {
         self.windows.len()
     }
@@ -724,20 +727,30 @@ impl CandleSeries {
             .max_by_key(|value: &UtcTimestamp| value.as_datetime())
     }
 
-    /// Every window this surface holds but could not attach to a coin.
+    /// Every window this surface holds but could not attach to a coin, with the true reason
+    /// per window: a coin nothing durable names, or a series too short for the frozen contract.
     fn unattributed_notes(&self) -> Vec<UnrenderedObservation> {
         self.windows
             .iter()
             .map(|window| UnrenderedObservation {
                 observation_id: window.observation_id.clone(),
                 locator: None,
-                reason: format!(
-                    "{} retained candle bar(s), but a pump candles response names no coin and the \
-                     retained acquisition keeps only the `{{mint}}` path template plus a one-way \
-                     request fingerprint. Nothing here says which coin these bars are; state it \
-                     with --candles-subject <MINT> if you know it",
-                    window.rows.len(),
-                ),
+                reason: match window.request_mint.as_deref() {
+                    Some(mint) => format!(
+                        "{} retained candle bar(s) resolved to {mint} from the request path, but \
+                         the merged series holds fewer than two bars, and a one-sample series \
+                         implies an interval it does not have, so the frozen contract refuses to \
+                         draw it",
+                        window.rows.len(),
+                    ),
+                    None => format!(
+                        "{} retained candle bar(s), but a pump candles response names no coin and \
+                         this acquisition's retained envelope carries no request-resolved mint — \
+                         an older read, or a hand-fed fixture. Nothing here says which coin these \
+                         bars are; state it with --candles-subject <MINT> if you know it",
+                        window.rows.len(),
+                    ),
+                },
             })
             .collect()
     }
@@ -767,19 +780,22 @@ impl CandleSeries {
         }
     }
 
-    /// Attach the merged path to the mint an operator stated, recording that binding as attested.
+    /// Attach the merged path to one mint, recording per window how that binding was established:
+    /// the request's own resolved path restated on the retained envelope (`derived`), or the
+    /// operator's statement (`attested`). Which one applies is a fact about each window, so one
+    /// merged series can carry both.
     ///
-    /// Returns the binding label when bars actually reached the scene, `None` when they could not.
+    /// Returns whether bars actually reached the scene.
     fn attach(
         &self,
         mint: &str,
         subjects: &mut BTreeMap<String, SubjectDraft>,
         rendered_at: UtcTimestamp,
-    ) -> Option<&'static str> {
+    ) -> bool {
         // The frozen contract refuses a one-sample series, because one bar implies an interval it
         // does not have. That bar is still real, so it is named in prose instead of drawn.
         if self.rows.len() < 2 {
-            return None;
+            return false;
         }
         let clocks = self.rows.keys().copied().collect::<Vec<_>>();
         let spacing = spacing_of(&clocks);
@@ -842,24 +858,201 @@ impl CandleSeries {
                     window.schema_trust.sentence(),
                 ),
             });
-            entry.evidence.push(EvidenceDraft {
-                id: format!("{}:operator-attested-subject", window.observation_id),
-                source_id: window.source_id.clone(),
+            if window.request_mint.is_some() {
+                entry.candles_request_resolved = true;
+            } else {
+                entry.candles_operator_attested = true;
+            }
+            entry.evidence.push(window.subject_binding_evidence(mint));
+        }
+        true
+    }
+}
+
+impl CandleWindow {
+    /// The evidence row stating how this window's bars reached `mint`: derived from the
+    /// request's own durable record, or attested by an operator. Never observed — the provider
+    /// body names no coin either way.
+    fn subject_binding_evidence(&self, mint: &str) -> EvidenceDraft {
+        if self.request_mint.is_some() {
+            EvidenceDraft {
+                id: format!("{}:request-resolved-subject", self.observation_id),
+                source_id: self.source_id.clone(),
+                field: "mint".to_owned(),
+                evidence_class: "derived",
+                observed_at: None,
+                ingested_at: self.ingested_at,
+                known_at: self.known_at,
+                note: format!(
+                    "The acquisition that retained this window resolved {mint} into its request \
+                     path and its retained attempt envelope restates that resolved segment, \
+                     which the pinned route catalog marks as a public subject. The provider body \
+                     itself names no coin, so this binding is derived from the request's own \
+                     durable record — an operator-independent public fact — not observed in the \
+                     body and not attested by anyone.",
+                ),
+            }
+        } else {
+            EvidenceDraft {
+                id: format!("{}:operator-attested-subject", self.observation_id),
+                source_id: self.source_id.clone(),
                 field: "mint".to_owned(),
                 evidence_class: "attested",
                 observed_at: None,
-                ingested_at: window.ingested_at,
-                known_at: window.known_at,
+                ingested_at: self.ingested_at,
+                known_at: self.known_at,
                 note: format!(
-                    "An operator stated that this coin-anonymous candle window belongs to {mint}. \
-                     The retained bytes do not say so: a candles response carries no mint, and \
-                     the acquisition keeps the `{{mint}}` path template plus a one-way request \
-                     fingerprint. This binding is attested, not observed.",
+                    "An operator stated that this coin-anonymous candle window belongs to \
+                     {mint}. The retained bytes do not say so: a candles response carries no \
+                     mint, and this acquisition's envelope keeps only the `{{mint}}` path \
+                     template plus a one-way request fingerprint. This binding is attested, not \
+                     observed.",
+                ),
+            }
+        }
+    }
+}
+
+/// How every retained candle window in one cutoff did or did not reach a coin.
+struct CandleBindingOutcome {
+    /// Retained windows, attached or not.
+    windows_total: usize,
+    /// Windows whose bars reached no candidate.
+    windows_unattributed: usize,
+    /// Merged bars across every group, rendered or not, for the refusal message.
+    bars_total: usize,
+    /// One label describing how the rendered bars reached their mints.
+    binding: &'static str,
+    /// Aggregated facts about the rendered paths, or explicit absences.
+    shape: RenderedShape,
+    /// One note per window that stayed unrendered, with the true reason.
+    notes: Vec<UnrenderedObservation>,
+}
+
+/// Bind retained candle windows to coins without guessing.
+///
+/// Windows are grouped by the mint their own acquisition resolved into its request path; each
+/// group merges and attaches to that mint. Windows whose envelope restates no mint join the
+/// operator-stated group when `--candles-subject` was given — including a stated mint that also
+/// has request-resolved windows, which merges both onto one subject with each window keeping its
+/// own binding evidence — and otherwise stay unrendered and counted.
+fn bind_candle_windows(
+    windows: Vec<CandleWindow>,
+    options: &LiveSurfaceOptions,
+    subjects: &mut BTreeMap<String, SubjectDraft>,
+    rendered_at: UtcTimestamp,
+) -> Result<CandleBindingOutcome, LiveSurfaceError> {
+    let windows_total = windows.len();
+    let mut groups: BTreeMap<String, Vec<CandleWindow>> = BTreeMap::new();
+    let mut anonymous: Vec<CandleWindow> = Vec::new();
+    for window in windows {
+        match window.request_mint.clone() {
+            Some(mint) => groups.entry(mint).or_default().push(window),
+            None => anonymous.push(window),
+        }
+    }
+    let mut notes = Vec::new();
+    if let Some(stated) = options.attested_candle_subject.as_deref() {
+        groups
+            .entry(stated.to_owned())
+            .or_default()
+            .append(&mut anonymous);
+    } else {
+        for window in &anonymous {
+            notes.push(UnrenderedObservation {
+                observation_id: window.observation_id.clone(),
+                locator: None,
+                reason: format!(
+                    "{} retained candle bar(s), but a pump candles response names no coin and \
+                     this acquisition's retained envelope carries no request-resolved mint — an \
+                     older read, or a hand-fed fixture. Nothing here says which coin these bars \
+                     are; state it with --candles-subject <MINT> if you know it",
+                    window.rows.len(),
                 ),
             });
         }
-        Some("operator_attested_not_witnessed")
     }
+    let mut windows_unattributed = anonymous.len();
+    let mut bars_total = 0_usize;
+    let mut bound_request = false;
+    let mut bound_operator = false;
+    let mut shapes = Vec::new();
+    for (mint, group) in groups {
+        let series = CandleSeries::merge(group).map_err(LiveSurfaceError::CandleWindows)?;
+        bars_total += series.bar_count();
+        if series.attach(&mint, subjects, rendered_at) {
+            bound_request |= series
+                .windows
+                .iter()
+                .any(|window| window.request_mint.is_some());
+            bound_operator |= series
+                .windows
+                .iter()
+                .any(|window| window.request_mint.is_none());
+            shapes.push(series.rendered_shape(true));
+        } else {
+            windows_unattributed += series.window_count();
+            notes.extend(series.unattributed_notes());
+        }
+    }
+    let binding = match (windows_total == 0, bound_request, bound_operator) {
+        (true, _, _) => "no_candle_window_retained",
+        (false, true, true) => "request_path_resolved_and_operator_attested",
+        (false, true, false) => "request_path_resolved",
+        (false, false, true) => "operator_attested_not_witnessed",
+        (false, false, false) => "unattributed_bytes_name_no_coin",
+    };
+    Ok(CandleBindingOutcome {
+        windows_total,
+        windows_unattributed,
+        bars_total,
+        binding,
+        shape: aggregate_shapes(shapes),
+        notes,
+    })
+}
+
+/// Fold the rendered shape of every attached series into the report's single set of fields.
+///
+/// Sums are honest sums; the spacing survives only when every rendered path shares one, because
+/// two coins on two grids have no single spacing and inventing one would be a claim about
+/// neither. Newest clocks take the latest across paths.
+fn aggregate_shapes(shapes: Vec<RenderedShape>) -> RenderedShape {
+    let mut folded = RenderedShape {
+        bars: 0,
+        spacing_seconds: None,
+        gaps: 0,
+        omitted_intervals: 0,
+        newest_bar_at: None,
+        window_known_at: None,
+    };
+    let mut spacings: BTreeSet<u64> = BTreeSet::new();
+    for shape in shapes {
+        folded.bars += shape.bars;
+        folded.gaps += shape.gaps;
+        folded.omitted_intervals += shape.omitted_intervals;
+        spacings.extend(shape.spacing_seconds);
+        if let Some(value) = shape.newest_bar_at
+            && folded
+                .newest_bar_at
+                .as_ref()
+                .is_none_or(|held| *held < value)
+        {
+            folded.newest_bar_at = Some(value);
+        }
+        if let Some(value) = shape.window_known_at
+            && folded
+                .window_known_at
+                .as_ref()
+                .is_none_or(|held| *held < value)
+        {
+            folded.window_known_at = Some(value);
+        }
+    }
+    if spacings.len() == 1 {
+        folded.spacing_seconds = spacings.into_iter().next();
+    }
+    folded
 }
 
 /// Read back the schema gate's own decision about one product read, as known at this cutoff.
@@ -1095,10 +1288,15 @@ fn candidate_wires(
                 let mut tags = vec![
                     "gap_compressed_path".to_owned(),
                     "provider_asserted_price".to_owned(),
-                    "subject_operator_attested".to_owned(),
                     "ticker_unobserved".to_owned(),
                     "unit_unstated".to_owned(),
                 ];
+                if draft.candles_request_resolved {
+                    tags.push("subject_request_resolved".to_owned());
+                }
+                if draft.candles_operator_attested {
+                    tags.push("subject_operator_attested".to_owned());
+                }
                 if draft.schema_unpromoted {
                     tags.push("schema_unpromoted".to_owned());
                 }
@@ -1293,10 +1491,11 @@ pub enum LiveSurfaceError {
     #[error(
         "source {source_id} retained {windows} candle window(s) holding {bars} bar(s), and \
          nothing else that names a subject. A Pump candles response is a bare OHLCV array that \
-         names no coin, and the retained acquisition keeps the `{{mint}}` path template plus a \
-         one-way request fingerprint rather than the resolved path, so this catalog does not say \
-         which coin these bars are. Re-run with --candles-subject <MINT> to state it yourself; it \
-         will be rendered as attested, not observed"
+         names no coin, and none of these acquisitions' retained envelopes restates a \
+         request-resolved mint — an acquisition from before the catalog marked the mint path \
+         segment public, or a hand-fed fixture — so this catalog does not say which coin these \
+         bars are. Re-run with --candles-subject <MINT> to state it yourself; it will be \
+         rendered as attested, not observed"
     )]
     CandlesNameNoSubject {
         source_id: String,
@@ -1510,8 +1709,26 @@ mod tests {
     }
 
     fn store_with_review(root: &Path, review_bytes: Option<&[u8]>) -> SqliteStore {
+        store_with_outcome(root, CANDLES_OUTCOME.trim_end().as_bytes(), review_bytes)
+    }
+
+    /// The same verbatim read, with the attempt envelope restating the request-resolved mint —
+    /// exactly what every acquisition made since the pinned catalog marked the mint path segment
+    /// public carries. The provider body bytes are untouched.
+    fn resolved_outcome() -> Vec<u8> {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CANDLES_OUTCOME.trim_end()).expect("fixture outcome parses");
+        value["attempts"][0]["resolvedPublicPath"] = serde_json::json!({ "mint": SUBJECT });
+        serde_json::to_vec(&value).expect("patched outcome serializes")
+    }
+
+    fn store_with_outcome(
+        root: &Path,
+        outcome_bytes: &[u8],
+        review_bytes: Option<&[u8]>,
+    ) -> SqliteStore {
         let prepared = prepare_direct_product_read(&ProductReadInput {
-            outcome_bytes: CANDLES_OUTCOME.trim_end().as_bytes(),
+            outcome_bytes,
             review_bytes,
             authenticated_path: AuthenticatedPathDecision::NotPerformed,
             session_reason_code: "no_documented_authenticated_get_read_route_for_present_credential",
@@ -1635,6 +1852,67 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(classes.contains(&("candles".to_owned(), "observed".to_owned())));
         assert!(classes.contains(&("mint".to_owned(), "attested".to_owned())));
+    }
+
+    #[test]
+    fn a_request_resolved_mint_binds_the_bars_with_no_operator_standing_by() {
+        // The keeper has no operator beside it. An acquisition whose retained envelope restates
+        // the mint the request resolved must derive a scene on its own, with the binding
+        // labelled as derived from the request — and never upgraded to observed, because the
+        // provider body still names no coin.
+        let root = tempfile::tempdir().expect("temp root");
+        let store = store_with_outcome(
+            root.path(),
+            &resolved_outcome(),
+            Some(CANDLES_REVIEW.as_bytes()),
+        );
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let derived =
+            derive_live_surface_with(&store, &source, None, &LiveSurfaceOptions::default())
+                .expect("a request-resolved window binds without an operator");
+        let report = &derived.report;
+        assert_eq!(report.candle_subject_binding, "request_path_resolved");
+        assert_eq!(report.candle_windows, 1);
+        assert_eq!(report.candle_windows_unattributed, 0);
+        assert_eq!(report.candle_bars_rendered, 200);
+        assert!(report.price_series_rendered);
+
+        let view: serde_json::Value =
+            serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
+        let candidate = &view["payload"]["candidates"][0];
+        assert_eq!(candidate["mint"], SUBJECT);
+        let evidence = candidate["evidence"].as_array().expect("evidence");
+        let classes = evidence
+            .iter()
+            .map(|entry| {
+                (
+                    entry["field"].as_str().unwrap_or_default().to_owned(),
+                    entry["evidenceClass"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(classes.contains(&("candles".to_owned(), "observed".to_owned())));
+        assert!(classes.contains(&("mint".to_owned(), "derived".to_owned())));
+        assert!(
+            !classes.contains(&("mint".to_owned(), "attested".to_owned())),
+            "nobody attested anything on this path"
+        );
+        let note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "mint")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(note.contains("resolved"), "{note}");
+        assert!(note.contains("request path"), "{note}");
+        let tags = candidate["tags"].as_array().expect("tags");
+        assert!(
+            tags.iter().any(|tag| tag == "subject_request_resolved"),
+            "{tags:?}"
+        );
+        assert!(!tags.iter().any(|tag| tag == "subject_operator_attested"));
     }
 
     #[test]

@@ -651,4 +651,25 @@ impl RouteSpec {
     pub fn requires_session(self) -> bool {
         self.access == AccessClass::AuthenticatedUserSession
     }
+
+    /// Path segments whose resolved request values this catalog deliberately retains verbatim on
+    /// the acquisition envelope, because they are public subject identifiers.
+    ///
+    /// A provider body frequently does not restate the identifier the request carried — a
+    /// `candles` window is a bare OHLCV array that names no coin — so without this the resolved
+    /// value survives only inside the one-way request fingerprint and nothing durable says which
+    /// subject the retained bytes are about. An SPL mint in `/v1/coins/{mint}/candles` is public
+    /// chain data the request already spelled out; retaining it restates a public fact.
+    ///
+    /// This is a pinned catalog decision, not a default: every segment absent from this list —
+    /// `{user}` on the callout route, `{address}` on the balance routes — keeps the existing
+    /// redaction and lives only in the fingerprint, because who was asked about is not the same
+    /// class of fact as which coin a public price window describes.
+    #[must_use]
+    pub fn public_subject_path(self) -> &'static [&'static str] {
+        match self.id {
+            RouteId::CoinExact | RouteId::Candles | RouteId::Trades => &["mint"],
+            _ => &[],
+        }
+    }
 }

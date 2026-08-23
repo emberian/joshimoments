@@ -102,6 +102,18 @@ pub struct Acquisition {
     pub stability: String,
     pub session_class: String,
     pub source_locator: String,
+    /// Path parameters the pinned catalog marks as public subjects
+    /// ([`RouteSpec::public_subject_path`](crate::RouteSpec::public_subject_path)), resolved to
+    /// the exact values this request carried.
+    ///
+    /// This is the request restating its own public arguments: the provider body never says
+    /// them, `source_locator` keeps the unresolved template, and every other parameter survives
+    /// only inside the one-way `request_fingerprint`. Anything derived from these values is
+    /// therefore "resolved from the request path", never "observed in the body". Empty for a
+    /// route with no catalog-declared public segment, and absent from envelopes retained before
+    /// this field existed — an absence, not an empty claim.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolved_public_path: BTreeMap<String, String>,
     pub request_fingerprint: String,
     pub http_status: Option<u16>,
     pub safe_response_headers: Vec<SafeHeader>,

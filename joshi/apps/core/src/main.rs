@@ -156,13 +156,14 @@ enum Command {
         /// Registered source identity to derive the surface from.
         #[arg(long, default_value = "helius.http.solana.v1")]
         source_id: String,
-        /// Mint you state a retained Pump `candles` window belongs to.
+        /// Mint you state a coin-anonymous retained Pump `candles` window belongs to.
         ///
-        /// A candles response is a bare OHLCV array and the retained acquisition keeps the
-        /// `{mint}` path template plus a one-way request fingerprint, so the catalog itself
-        /// cannot say which coin a window is for. Passing this attaches the bars to that mint and
+        /// A candles response is a bare OHLCV array that names no coin. An acquisition whose
+        /// retained envelope restates its request-resolved mint binds by itself and ignores this
+        /// flag; it exists for windows retained before the catalog marked the mint path segment
+        /// public, and for hand-fed fixtures. Passing it attaches those bars to that mint and
         /// renders the binding as `attested` evidence beside the `observed` bars. Leaving it off
-        /// leaves the window unattached and says so in the report.
+        /// leaves such a window unattached and says so in the report.
         #[arg(long, value_name = "MINT")]
         candles_subject: Option<String>,
         /// Path to one `joshi.venue_accounts_capture.v1` file to mount pre-trade readouts from.
@@ -471,16 +472,23 @@ async fn main() -> Result<(), CliError> {
             )?;
             let scene_id = mounted.surface.scene_id.clone();
             let surface = serde_json::to_string(&mounted.surface)?;
-            // The binding of bars to a coin is the one thing on this screen the catalog cannot
-            // check, so it is said out loud on the way past rather than left in a JSON field.
+            // How bars reached a coin is the one thing on this screen worth saying out loud on
+            // the way past rather than leaving in a JSON field: a request-resolved binding is
+            // checkable against the retained envelope, an operator attestation is not.
             if mounted.surface.candle_bars_rendered > 0 {
                 eprintln!(
-                    "candles: {} bar(s) attached by {}. The retained bytes name no coin; if that                      mint is wrong, every bar you are about to look at belongs to another market.",
+                    "candles: {} bar(s) attached by {}. A request_path_resolved binding restates \
+                     the mint the acquisition itself asked about; an operator_attested one is \
+                     only as right as the operator, and if that mint is wrong every bar you are \
+                     about to look at belongs to another market.",
                     mounted.surface.candle_bars_rendered, mounted.surface.candle_subject_binding,
                 );
             } else if mounted.surface.candle_windows_unattributed > 0 {
                 eprintln!(
-                    "candles: {} retained window(s) hold bars that reached no candidate, because                      a Pump candles response names no coin. Re-run with --candles-subject <MINT>                      to state which coin they are.",
+                    "candles: {} retained window(s) hold bars that reached no candidate, because \
+                     a Pump candles response names no coin and these acquisitions' envelopes \
+                     carry no request-resolved mint. Re-run with --candles-subject <MINT> to \
+                     state which coin they are.",
                     mounted.surface.candle_windows_unattributed,
                 );
             }

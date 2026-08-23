@@ -270,6 +270,7 @@ impl PumpApiClient {
                     let body_missing = matches!(body, BodyCapture::Missing { .. });
                     let acquisition = acquisition(
                         spec,
+                        request,
                         &reservation,
                         &request_group_id,
                         &ordinal,
@@ -355,6 +356,7 @@ impl PumpApiClient {
                 Err(error) => {
                     let acquisition = acquisition(
                         spec,
+                        request,
                         &reservation,
                         &request_group_id,
                         &ordinal,
@@ -599,6 +601,7 @@ async fn capture_body(
 #[allow(clippy::too_many_arguments)]
 fn acquisition(
     spec: RouteSpec,
+    request: &LogicalRequest,
     reservation: &AcquisitionReservation,
     request_group_id: &str,
     attempt_ordinal: &str,
@@ -621,12 +624,28 @@ fn acquisition(
         stability: spec.stability.to_string(),
         session_class: session_class.to_owned(),
         source_locator: format!("{}{}", spec.origin, spec.path_template),
+        resolved_public_path: resolved_public_path(spec, request),
         request_fingerprint: request_fingerprint.to_owned(),
         http_status,
         safe_response_headers,
         clocks,
         body,
     }
+}
+
+/// The exact resolved values of the path segments the pinned catalog marks public subjects, and
+/// nothing else. Every other parameter stays inside the one-way request fingerprint.
+fn resolved_public_path(spec: RouteSpec, request: &LogicalRequest) -> BTreeMap<String, String> {
+    spec.public_subject_path()
+        .iter()
+        .filter_map(|name| {
+            request
+                .parameters
+                .path
+                .get(*name)
+                .map(|value| ((*name).to_owned(), value.clone()))
+        })
+        .collect()
 }
 
 fn clocks(
@@ -803,6 +822,70 @@ mod tests {
             .query
             .insert("searchTerm".to_owned(), "another".to_owned());
         assert_ne!(first, request_fingerprint(spec, &changed));
+    }
+
+    #[test]
+    fn only_catalog_declared_public_subjects_are_restated_on_the_envelope() {
+        // The mint the request resolved into a coin route's path is restated verbatim; the
+        // callout route's `{user}` segment is not catalog-declared public and stays only inside
+        // the one-way fingerprint.
+        let candles = RouteSpec::for_id(RouteId::Candles);
+        let request = LogicalRequest {
+            route: RouteId::Candles,
+            parameters: RequestParameters {
+                path: BTreeMap::from([("mint".to_owned(), "MINTPUBLIC1111".to_owned())]),
+                query: BTreeMap::new(),
+            },
+        };
+        assert_eq!(
+            resolved_public_path(candles, &request),
+            BTreeMap::from([("mint".to_owned(), "MINTPUBLIC1111".to_owned())])
+        );
+
+        let callout = RouteSpec::for_id(RouteId::CalloutByUser);
+        let request = LogicalRequest {
+            route: RouteId::CalloutByUser,
+            parameters: RequestParameters {
+                path: BTreeMap::from([("user".to_owned(), "somebody".to_owned())]),
+                query: BTreeMap::new(),
+            },
+        };
+        assert!(resolved_public_path(callout, &request).is_empty());
+
+        // An envelope retained before the field existed still parses, and its absence stays an
+        // absence rather than an empty claim.
+        let legacy: crate::model::Acquisition = serde_json::from_value(serde_json::json!({
+            "contract": SOURCE_CONTRACT,
+            "catalogVersion": ROUTE_CATALOG,
+            "acquisitionId": "acq:test",
+            "requestGroupId": "reqgrp:test",
+            "attemptOrdinal": "1",
+            "routeId": "candles",
+            "transport": "http",
+            "accessClass": "observed_public_product",
+            "stability": "undocumented_observed",
+            "sessionClass": "public",
+            "sourceLocator": "https://swap-api.pump.fun/v1/coins/{mint}/candles",
+            "requestFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "httpStatus": 200,
+            "safeResponseHeaders": [],
+            "clocks": {
+                "startedAt": "2026-08-22T01:00:00.000000Z",
+                "receivedAt": "2026-08-22T01:00:00.100000Z",
+                "monotonicClockId": "test-clock",
+                "startedMonotonicNs": "0",
+                "receivedMonotonicNs": "100",
+                "elapsedNs": "100"
+            },
+            "body": { "status": "missing", "reason": "test" }
+        }))
+        .expect("an envelope without resolvedPublicPath still parses");
+        assert!(legacy.resolved_public_path.is_empty());
+        let reserialized = serde_json::to_value(&legacy).expect("reserialize");
+        assert!(
+            reserialized.get("resolvedPublicPath").is_none(),
+            "an absent record stays absent on the wire"
+        );
     }
 
     #[test]
