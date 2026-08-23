@@ -4,6 +4,7 @@ members = [
     "apps/collector",
     "apps/core",
     "apps/g0-harness",
+    "apps/up",
     "crates/*",
 ]
 [workspace.package]

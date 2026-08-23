@@ -1,35 +1,49 @@
 # Operator runbook
 
-What Ember can actually run, as of 2026-08-22 02:00. Everything here was exercised tonight against
-live data unless it says otherwise.
+What Ember can actually run, as of 2026-08-23 evening. Everything here was exercised against live
+data unless it says otherwise.
 
-S2 — one attended browser session with a screen reader and a keyboard — is still the slice nobody
-can do for her, and it is still the point. The tools below exist to make that session worth having.
+S2 — one attended browser session — is still the slice nobody can do for her, and it is still the
+point. The tools below exist to make that session worth having. (The operator model this file once
+assumed was wrong: Ember is primarily visual and uses a pointer, with a screen reader sometimes.
+The measurement table below reflects the corrected model.)
 
 ## The one command that matters
 
 ```sh
 cd ~/dev/joshi
-./target/debug/joshi-core live-surface-inspect \
-  --catalog <dir containing catalog.sqlite> \
-  --state   /tmp/joshi-s2 \
-  --listen  127.0.0.1:43219 \
-  --glass-origin http://127.0.0.1:4173
+./target/debug/joshi-up
 ```
 
-It backs the real catalog into an overlay (so a sibling writer is undisturbed and the catalog is
-never written), derives one Glass scene **from store rows**, mounts durable ordinary pairing, and
-prints three things: the scene id, the two `VITE_` values Glass needs, and a one-time pairing code
-scoped to cockpit read and operator evidence, with no signing or execution.
+Proven end to end on a cold start (2026-08-23): it starts the keeper (real bounded acquisition
+into the durable catalog `ops/keeper.toml` names), waits honestly while a cold catalog warms
+("surface cannot mount yet; retrying while the keeper advances the catalog" — a quiet coin's
+first candle windows are legitimately empty), mounts the follow surface over it (the catalog is
+backed into an overlay and never written), starts the Glass cockpit with the exact values the
+core printed, and ends with the one thing that is genuinely yours to do:
 
-```sh
-cd ~/dev/joshi/apps/glass
-VITE_JOSHI_LIVE_SURFACE=1 VITE_JOSHI_CORE_URL=... VITE_JOSHI_LAUNCH_SCENE_ID=... pnpm dev --port 4173
+```
+JOSHI is up.
+
+  cockpit   http://127.0.0.1:4173
+  pairing   JOSHI-XXXX-....   (one-time; Cockpit read + operator evidence; no signing, no execution)
+  feed      http://127.0.0.1:43219/api/v1/glass/scenes
+  keeper    state/keeper/heartbeat.json
 ```
 
-`live-gesture-walk`, same arguments, runs the whole loop headless — mount, pair, snapshot, mark a
-real mint, drop everything, reopen read-only, prove the digests match — if you want to know the path
-works before spending your own attention on it.
+Open the cockpit, enter the code, sit down. Ctrl-C takes the whole session down in order, and the
+keeper records its own shutdown reason durably. If any piece dies, the rest are taken down loudly —
+a half-up session that looks up is the failure mode it refuses.
+
+Worth knowing: `--no-keeper` mounts over a still catalog (nothing advances); a keeper already
+running (launchd, another terminal) is detected by its fresh heartbeat and adopted rather than
+doubled; `--source-id helius.http.solana.v1` follows wallet activity instead of prices; and each
+sibling binary's build age is printed at startup, because a stale binary is the quietest way to
+get an honestly-wrong catalog (learned the hard way, same night).
+
+`joshi-core live-gesture-walk` still runs the whole gesture loop headless — mount, pair, snapshot,
+mark a real mint, drop everything, reopen read-only, prove the digests match — if you want to know
+the path works before spending your own attention on it.
 
 ### Press `;` to hold a coin
 
@@ -117,13 +131,13 @@ Each row gets a verdict and a note; "pass" with no note is not a result.
 
 | # | Measurement | What counts as a finding |
 | --- | --- | --- |
-| 1 | Screen reader announces the live regions, the feed, and a hold | Announced late, twice, out of order, or not at all |
-| 2 | Keyboard-only throughout, no pointer at any moment | Any trap, any skipped control, anything reachable only by mouse |
-| 3 | Focus order visible and correct | Invisible ring; order disagreeing with reading order |
-| 4 | 200% zoom | Anything clipped, overlapped, unreachable |
-| 5 | 320 CSS px reflow | Any horizontal scrollbar at all |
+| 1 | Visual scanning as the primary channel: can you read the feed at a glance, and is the active row's ring obvious? | Anything you had to hunt for, squint at, or re-find after a refresh |
+| 2 | Pointer as an attention marker: hover marks a row (`pointed`), click selects, targets are full-row | Any target needing precision, any hover that hijacks selection, any pointer act that hurt |
+| 3 | Keyboard paths complete as the equal second channel | Any trap, any skipped control, anything reachable only by mouse — or only by keyboard |
+| 4 | Screen reader (when used) announces the live regions, the feed, and a hold | Announced late, twice, out of order, or not at all |
+| 5 | Focus order visible and correct; 200% zoom; 320 CSS px reflow | Invisible ring; clipped or unreachable content; any horizontal scrollbar |
 | 6 | Contrast on **rendered pixels**, not declared tokens | Any pair below its ratio; screenshot it |
-| 7 | Crash, reload, re-pair | Whether the session recovers, and what it loses |
+| 7 | Crash, reload, re-pair (kill joshi-up mid-session and run it again) | Whether the session recovers, and what it loses |
 | 8 | **Hands** | Anything that hurt, or needed a precision movement. This outranks the seven above. |
 
 Known before you start, and not yet fixed: the shell presents **51 focusable stops** at first paint
