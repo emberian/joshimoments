@@ -376,6 +376,34 @@ NET: keeper is real, follow-mode is real, the wallet path composes end to end. T
 path is one honest seam away — the anonymous-mint binding — and that seam is now the highest-value
 next fix because it is what stands between the keeper's price taps and a live price chart.
 
+## SYSTEMATIC WAVE, 2026-08-23 — the taxonomy becomes instruments
+
+Twelve source-level failure families were derived from this session's evidence (identity gaps,
+semantic drift across routes, unit mismatch, disagreeing duplicates, staleness that looks live,
+absence that looks like data, silent narrowing, gate-measures-content, required-cardinality-forces-
+invention, selection/recall, clock gaps, leg/reference mismatch). Each was found BY HAND, each after
+it had already produced a wrong number. Four lanes now turn evidence into mechanism:
+
+- MINT BINDING (fable): close the identity gap properly — bind the mint from the public request path
+  so a candle window self-identifies and follow-mode can derive a price scene. The seam the
+  composition smoke test found.
+- REPLAY HARNESS (opus): the tape is retained, so it can be replayed — N declared rule variants over
+  the SAME events, deterministic and free. Baseline (immediate entry / max-hold exit) and the
+  drift-derived landing haircut are STRUCTURALLY unremovable, so no panel can hide "this did not
+  beat doing nothing" or report a result smaller than measured decision-to-landing drift.
+- SOURCE AUDIT (fable): triage the twelve into mechanically-decidable / decidable-with-a-declared-
+  expectation / not-decidable, then build the audit for the first two and run it over every retained
+  acquisition in the tree. A check that cannot decide says UNDECIDABLE, never passes by default.
+- REGIME TAG (fable): make the 24/34/42 reverting/diffusive/trending split a usable typed tag, and
+  answer the question that decides its worth — IS REGIME STABLE ACROSS TIME WINDOWS? If it does not
+  persist, it is a description of the past with no forward content, and saying so plainly saves us
+  from building a conditioning layer on noise.
+
+The strategy picture, stated for the record: selection is where the leverage is and it is the least
+measured thing we have (callers show no forward edge; leaderboards are retrospective; the strongest
+corpus predictor is an accounting identity). Which means if there is alpha here, current evidence
+points at EMBER'S selection — making the hold gesture and journal the instrument that could find out.
+
 ## Done log
 
 - 2026-08-22 22:54 PORTFOLIO + LIVE TAPE committed (targeted gates, isolated crates, credential-clean).
