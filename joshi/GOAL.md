@@ -326,6 +326,32 @@ never mints a scene — Glass reported 251 green), keeper daemon (apps/collector
 auth-provider (joshi-pump-api), live-tape (joshi-sources/examples), paper-desk (joshi-liquidity/
 market-math). Commit each lane only after the tree gates clean as a whole, in a quiet window.
 
+## BOTH WAVES LANDED, 2026-08-22 23:40 — tree clean, whole-tree gate green
+
+All nine lanes committed. fmt clean, workspace clippy -D warnings clean, joshi-core 80, Glass 251,
+joshi-collector 24, portfolio 48, paper 79, pump 107, wallet/accounting green, no credential leak.
+
+THE LIVING WAVE (a JOSHI worth sitting in):
+- keeper: single-writer bounded cycles, hard budgets, heartbeat, launchd; a failed cycle is a
+  durable gap, never a silence. The catalog now outlives a terminal.
+- living scene: scenes stay immutable; a new observation mints a new scene, a journal write does
+  NOT (the watermark closes the resident's tail-chasing loop); a scene feed the operator advances by
+  choice, never a silent swap.
+- resident engine: the Agent SDK inhabitant, jailed to four MCP tools, its notes durable evidence.
+  Its first act was to tell us our photograph was six hours stale.
+- portfolio: the book stated as pure derivation, no headline total, the resting order a named
+  absence.
+
+THE PUMP WAVE (the memecoining itself):
+- live tape: THE DIP CONFIRMED LIVE, 45% event-res vs 1.3% candle, on our own bytes.
+- paper desk: the year-old ask, unable to lie by construction; first live episode +113 bps net,
+  held through 15 red polls.
+- callout science: Ember's loop measured — 6/6 sampled callouts dipped (median 28%), the edge is in
+  WAITING for the dip (6/6 clear the hurdle from the trough vs 2/6 from the callout price); callers
+  have no forward edge; leaderboards are retrospective winner lists. Honest n=6 floor stated.
+- authenticated access: SIWS login driven with Ember's own wallet, read-only, the key signs only the
+  login; unlocks the global leaderboard fan-out root.
+
 ## Done log
 
 - 2026-08-22 22:54 PORTFOLIO + LIVE TAPE committed (targeted gates, isolated crates, credential-clean).
