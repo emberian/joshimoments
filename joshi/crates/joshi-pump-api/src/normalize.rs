@@ -308,6 +308,12 @@ pub(crate) fn records(
         RouteId::CalloutRecent | RouteId::CalloutTop | RouteId::CalloutByUser => {
             nested_array(root, &["callouts", "data"])
         }
+        // Measured live 2026-08-23 authenticated: the envelope key is {"callouts":[...]} — the
+        // same key the per-mint and per-user callout routes use — but the rows are CALLERS, not
+        // callouts: each carries userId, wallets, a topCallouts array, and the provider's own
+        // aggregate score fields (totalCallouts, avgMultiple, medianMultiple, averageTimeToPeak).
+        // The top-level records are therefore the caller rows.
+        RouteId::CalloutLeaderboard => nested_array(root, &["callouts"]),
         RouteId::BalanceTokens => nested_array(root, &["tokens", "data"]),
         RouteId::CommunityMessages => nested_array(root, &["messages", "data"]),
         RouteId::CommunityCallouts => nested_array(root, &["callouts", "data"]),
@@ -531,6 +537,24 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "repostCount",
             "quoteCount",
             "updateCount",
+        ],
+        // Measured live 2026-08-23 authenticated: a leaderboard row is a CALLER. Its scalar
+        // fields are caller identity plus the provider's own retrospective aggregate score over
+        // that caller's history, and those are exactly what the caller-signal question reads. The
+        // `topCallouts` and `wallets` arrays are NOT descended into here — they stay whole in the
+        // retained bytes for a later reviewed projection — so they are optional in the row review
+        // rather than extracted scalars. Every score field is a look-ahead outcome as of the read.
+        RouteId::CalloutLeaderboard => &[
+            "userId",
+            "user_uuid",
+            "primaryWallet",
+            "totalCallouts",
+            "avgMultiple",
+            "medianMultiple",
+            "pct2xOrMore",
+            "onePointFiveXPercent",
+            "onePointTwoXPercent",
+            "averageTimeToPeak",
         ],
         // The same names under a route NOTHING has ever called. It is a separate arm so that a
         // later reader cannot mistake this list for a measurement: `profile-api.pump.fun` is a

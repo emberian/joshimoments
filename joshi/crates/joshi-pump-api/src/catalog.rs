@@ -16,6 +16,7 @@ pub enum RouteId {
     CalloutRecent,
     CalloutTop,
     CalloutByUser,
+    CalloutLeaderboard,
     UserSearch,
     UserProfile,
     Following,
@@ -27,7 +28,7 @@ pub enum RouteId {
 }
 
 impl RouteId {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::CoinExact,
         Self::SolPrice,
         Self::BalanceSummary,
@@ -38,6 +39,7 @@ impl RouteId {
         Self::CalloutRecent,
         Self::CalloutTop,
         Self::CalloutByUser,
+        Self::CalloutLeaderboard,
         Self::UserSearch,
         Self::UserProfile,
         Self::Following,
@@ -62,6 +64,7 @@ impl fmt::Display for RouteId {
             Self::CalloutRecent => "callout_recent",
             Self::CalloutTop => "callout_top",
             Self::CalloutByUser => "callout_by_user",
+            Self::CalloutLeaderboard => "callout_leaderboard",
             Self::UserSearch => "user_search",
             Self::UserProfile => "user_profile",
             Self::Following => "following",
@@ -435,6 +438,38 @@ impl RouteSpec {
                 &["user"],
                 &["limit", "sortBy", "sortOrder", "pageToken"],
                 &["pageToken"],
+                true,
+            ),
+            // Measured live 2026-08-23 as Ember's authenticated account. This is the GLOBAL
+            // caller leaderboard, and it is the fan-out ROOT the callout study was previously
+            // approximating by hand: /callout/recent is a phantom (400 uuid-expected) and both
+            // real callout routes need a subject already in hand, so before this route nothing in
+            // the catalog could ORIGINATE a caller population. Anonymous it answers 401; the
+            // community-documented advanced-api-v2 callout paths are stale (404). It requires the
+            // SIWS session in crate::auth_session, whose wallet signs ONLY the login timestamp.
+            //
+            // ENVELOPE, measured: {"leaderboard":[...]} with no continuation token; `limit` is
+            // allowlisted. Each row is a CALLER carrying userId, wallets and a `topCallouts`
+            // array whose elements repeat the /callout/top row shape (coinMint, calloutPrice,
+            // multiple, createdAt, maxPriceSol, thesis). Its ranking is the provider's own
+            // retrospective caller score, so it is a leaderboard and not a census: a caller absent
+            // from it is not a caller who never called. Every clock on it is the same occurrence
+            // clock the sibling callout routes carry, with no availability instant anywhere, and
+            // the SOL-denominated prices carry the same read-time divisor. The row-projection
+            // review measured from the real response is the gate for anything retained from it.
+            RouteId::CalloutLeaderboard => Self::http(
+                id,
+                "https://frontend-api-v3.pump.fun",
+                "/callout/leaderboard",
+                AccessClass::AuthenticatedUserSession,
+                Stability::AuthenticatedUnverified,
+                PaginationKind::None,
+                "measured 2026-08-23 authenticated: global caller leaderboard, provider \
+                 retrospective score; each row a caller with a topCallouts array; no continuation \
+                 token",
+                &[],
+                &["limit"],
+                &[],
                 true,
             ),
             RouteId::UserSearch => Self::http(

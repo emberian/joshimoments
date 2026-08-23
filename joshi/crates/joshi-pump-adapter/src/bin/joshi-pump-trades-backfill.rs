@@ -64,6 +64,15 @@ struct Cli {
     /// Stop once a page reaches back to this canonical six-digit UTC instant.
     #[arg(long)]
     stop_before: Option<String>,
+    /// Begin the walk at this canonical six-digit UTC instant instead of at the newest page.
+    ///
+    /// The trades cursor is a random-access seek, measured 2026-08-22 and recorded in the route
+    /// catalog: the provider does not validate the `slotIndexId` prefix, so an all-zero prefix
+    /// with an epoch-millisecond suffix returns the newest rows strictly before that instant.
+    /// Seeking past the beginning of a mint's retained history returns the terminal page shape,
+    /// which the reviewed schema refuses, and the walk stops there with the refusal written down.
+    #[arg(long)]
+    seek: Option<String>,
     /// Write the walk record here as well as to the store.
     #[arg(long)]
     emit_walk: Option<PathBuf>,
@@ -90,6 +99,9 @@ struct WalkReceipt {
     reopened_external_blobs_checked: String,
     walk_semantic_key: String,
     walk_readback_assertion_id: Option<String>,
+    /// The instant the walk was asked to begin before, when it did not begin at the newest page.
+    /// The first page's `request_cursor_fingerprint` in the walk record is the seek cursor's.
+    seek_instant: Option<String>,
     oldest_page_body_path: Option<String>,
     oldest_page_bytes_equal_response: bool,
     /// Set when the walk stopped on something a person has to look at before it resumes.
@@ -111,6 +123,20 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         .as_deref()
         .map(str::parse::<UtcTimestamp>)
         .transpose()?;
+    let seek = cli
+        .seek
+        .as_deref()
+        .map(str::parse::<UtcTimestamp>)
+        .transpose()?;
+    if let (Some(horizon), Some(seek)) = (horizon, seek)
+        && horizon.as_datetime() >= seek.as_datetime()
+    {
+        return Err("--stop-before must be strictly earlier than --seek".into());
+    }
+    let seek_cursor = seek.map(|instant| {
+        let millis = instant.as_datetime().unix_timestamp_nanos() / 1_000_000;
+        format!("{:026}-{millis}", 0)
+    });
     let review_bytes = cli.review.as_deref().map(fs::read).transpose()?;
 
     let mut config = ClientConfig {
@@ -143,7 +169,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
     let mut pages: Vec<TradesBackfillPageV1> = Vec::new();
     let mut committed_batches: Vec<String> = Vec::new();
     let mut previous: Option<PageFacts> = None;
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<String> = seek_cursor;
     let mut requests_used: u32 = 0;
     let mut rows_retained: u64 = 0;
     let mut newest_event_time: Option<String> = None;
@@ -328,6 +354,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         ),
         walk: stop,
         committed_batches,
+        seek_instant: cli.seek.clone(),
         reopened_integrity: verification.integrity,
         reopened_external_blobs_checked: verification.external_artifacts_checked.to_string(),
         walk_readback_assertion_id: readback,

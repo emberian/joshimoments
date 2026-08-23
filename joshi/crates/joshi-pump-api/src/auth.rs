@@ -62,6 +62,19 @@ impl fmt::Debug for SessionMaterial {
 }
 
 impl SessionMaterial {
+    /// Build session material carrying only a cookie header value, for a provider that obtained a
+    /// bare token (a SIWS `auth_token`, for instance) rather than a full credential file.
+    #[must_use]
+    pub fn cookie_only(cookie: &str, session_label: &str) -> Self {
+        Self {
+            bearer: None,
+            cookie: Some(SecretString::from(cookie.to_owned())),
+            csrf_name: None,
+            csrf_value: None,
+            session_label: session_label.to_owned(),
+        }
+    }
+
     #[must_use]
     pub fn class(&self) -> &str {
         &self.session_label

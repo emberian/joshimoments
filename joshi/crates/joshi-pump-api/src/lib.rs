@@ -6,6 +6,7 @@
 //! from those bytes and remain quarantined until an observed schema fingerprint is promoted.
 
 pub mod auth;
+pub mod auth_session;
 pub mod catalog;
 pub mod client;
 pub mod identity;
@@ -20,6 +21,7 @@ pub mod row_projection;
 pub mod trust;
 
 pub use auth::{CredentialFileSession, NoSession, SessionMaterial, SessionProvider};
+pub use auth_session::{SiwsError, SiwsSession, SiwsSessionProvider, WalletSigner};
 pub use catalog::{AccessClass, PaginationKind, RouteId, RouteSpec, Stability, TransportKind};
 pub use client::{ClientConfig, PumpApiClient, PumpApiError};
 pub use identity::{AcquisitionReservation, IdentityStore};

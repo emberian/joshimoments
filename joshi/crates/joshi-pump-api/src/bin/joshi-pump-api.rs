@@ -11,7 +11,8 @@ use joshi_pump_api::normalize::{reject_duplicate_keys, schema_fingerprint};
 use joshi_pump_api::{
     AccessClass, Acquisition, ClientConfig, CredentialFileSession, FetchOutcome, IdentityStore,
     LogicalRequest, NoSession, ParityInput, PumpApiClient, RequestParameters, RouteId,
-    SchemaRegistry, SessionProvider, compare, normalize,
+    RowProjectionReviewV1, SchemaRegistry, SessionProvider, SiwsSession, SiwsSessionProvider,
+    WalletSigner, compare, decide_row_projection_trust, normalize,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -36,6 +37,13 @@ enum Command {
         registry: PathBuf,
         output: PathBuf,
     },
+    /// Re-run the row-projection gate offline over one saved fetch outcome. No network I/O.
+    ///
+    /// This exists so that an amended row-projection review can be applied to bytes that were
+    /// already retained, instead of spending another provider request on a population that has
+    /// moved. The original decision made at acquisition time stays in the store; this prints a
+    /// fresh decision against the review given here, stamped with its own decision instant.
+    RowGate { outcome: PathBuf, review: PathBuf },
     /// Compare companion and direct exact response bodies under strict parity preconditions.
     Parity {
         companion: PathBuf,
@@ -51,10 +59,21 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         session_file: Option<PathBuf>,
+        /// Wallet key file for a Sign-In-With-Solana session. The wallet signs ONLY the login
+        /// timestamp; the resulting read-only session is used for authenticated routes. Mutually
+        /// exclusive with --session-file.
+        #[arg(long)]
+        wallet_file: Option<PathBuf>,
         #[arg(long)]
         enable_observed_product_route: bool,
         #[arg(long)]
         enable_authenticated_route: bool,
+    },
+    /// Sign the SIWS login challenge with a wallet file and report the session's identity and
+    /// expiry. Prints NO token. Proves the login works without retaining anything.
+    AuthProbe {
+        #[arg(long)]
+        wallet_file: PathBuf,
     },
 }
 
@@ -118,6 +137,22 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let raw: Box<RawValue> = serde_json::from_slice(&bytes)?;
             println!("{}", schema_fingerprint(&raw)?);
         }
+        Command::RowGate { outcome, review } => {
+            let outcome: FetchOutcome = strict_file(&outcome)?;
+            let review_bytes = fs::read(review)?;
+            reject_duplicate_keys(&review_bytes)?;
+            let review = RowProjectionReviewV1::from_slice(&review_bytes)?;
+            let acquisition = outcome
+                .attempts
+                .last()
+                .ok_or("outcome carries no attempt to decide")?;
+            let decided_at =
+                time::OffsetDateTime::now_utc().format(time::macros::format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z"
+                ))?;
+            let decision = decide_row_projection_trust(acquisition, Some(&review), &decided_at)?;
+            println!("{}", serde_json::to_string_pretty(&decision)?);
+        }
         Command::Normalize {
             input,
             registry,
@@ -141,11 +176,24 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let report = compare(&companion, &direct, max_differences);
             write_private_new(&output, &serde_json::to_vec_pretty(&report)?)?;
         }
+        Command::AuthProbe { wallet_file } => {
+            let signer = WalletSigner::from_file(&wallet_file)?;
+            let session = SiwsSession::login(&signer).await?;
+            let report = serde_json::json!({
+                "contract": "joshi.pump_api.auth_probe.v1",
+                "address": signer.address(),
+                "sessionLive": session.is_live(),
+                "expiresAt": session.expires_at().format(&time::format_description::well_known::Rfc3339)?,
+                "note": "the wallet signed only the login timestamp; no token is printed or retained",
+            });
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::Fetch {
             request,
             state_dir,
             output,
             session_file,
+            wallet_file,
             enable_observed_product_route,
             enable_authenticated_route,
         } => {
@@ -176,9 +224,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     return Err("reconnaissance-only route has no direct collector".into());
                 }
             }
-            let sessions: Arc<dyn SessionProvider> = match session_file {
-                Some(path) => Arc::new(CredentialFileSession::new(path)),
-                None => Arc::new(NoSession),
+            if session_file.is_some() && wallet_file.is_some() {
+                return Err("--session-file and --wallet-file are mutually exclusive".into());
+            }
+            let sessions: Arc<dyn SessionProvider> = match (session_file, wallet_file) {
+                (Some(path), _) => Arc::new(CredentialFileSession::new(path)),
+                (None, Some(wallet)) => {
+                    let signer = WalletSigner::from_file(&wallet)?;
+                    let session = SiwsSession::login(&signer).await?;
+                    Arc::new(SiwsSessionProvider::new(session))
+                }
+                (None, None) => Arc::new(NoSession),
             };
             let identity = IdentityStore::open(state_dir)?;
             let client = PumpApiClient::new(config, identity, sessions)?;

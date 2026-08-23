@@ -8,7 +8,9 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+bs58 = "0.5.1"
 clap.workspace = true
+ed25519-dalek = "2.2.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 secrecy = "0.10.3"
 serde.workspace = true

@@ -1,0 +1,40 @@
+{
+  "contract": "joshi.pump_api.row_projection_review.v1",
+  "schemaVersion": "1",
+  "reviewId": "review:pump-callout-leaderboard-rows:2026-08-23:v1",
+  "routeId": "callout_leaderboard",
+  "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+  "requiredLeaves": [
+    "$/averageTimeToPeak:number",
+    "$/avgMultiple:number",
+    "$/medianMultiple:number",
+    "$/onePointFiveXPercent:number",
+    "$/onePointTwoXPercent:number",
+    "$/pct2xOrMore:number",
+    "$/primaryWallet:string",
+    "$/totalCallouts:number",
+    "$/userId:string",
+    "$/user_uuid:string"
+  ],
+  "optionalLeaves": [
+    "$/topCallouts:array",
+    "$/topCallouts/*:object",
+    "$/topCallouts/*/calloutId:string",
+    "$/topCallouts/*/calloutPrice:number",
+    "$/topCallouts/*/coinMint:string",
+    "$/topCallouts/*/createdAt:number",
+    "$/topCallouts/*/marketCap:number",
+    "$/topCallouts/*/maxPriceSol:number",
+    "$/topCallouts/*/multiple:number",
+    "$/topCallouts/*/peakTimestamp:number",
+    "$/topCallouts/*/thesis:string",
+    "$/topCallouts/*/userId:string",
+    "$/topCallouts/*/user_uuid:string",
+    "$/wallets:array",
+    "$/wallets/*:string"
+  ],
+  "reviewer": "claude-fable-5 acting as the joshi callout-science deputy, autonomously, without Ember present",
+  "reviewedAt": "2026-08-23T02:50:00.000000Z",
+  "decision": "promoted",
+  "rationale": "PROMOTED for /callout/leaderboard. THE FAN-OUT ROOT THIS STUDY LACKED. Its brief said no global feed exists and a caller population had to be composed by hand; that is now false. Reached as Ember's authenticated pump.fun account through the SIWS session in crate::auth_session, whose wallet SIGNS ONLY the login timestamp and never a transaction. Anonymous the route is 401. REVIEWED MATERIAL: one live response body, 50 rows, limit=50, fetched 2026-08-23 through the bounded source-edge client with the authenticated route explicitly enabled. ENVELOPE, measured: {\"callouts\":[...]} - the SAME top-level key the per-mint /callout/top and per-user /callout/list routes use - but the rows are CALLERS, not callouts, and there is no continuation token of any kind, so a bare read is the whole answer. WHAT A ROW IS. Each of the 50 rows is one caller carrying userId, user_uuid, primaryWallet, a wallets array, a topCallouts array (whose elements repeat the /callout/top callout shape: coinMint, calloutPrice, multiple, createdAt, maxPriceSol, thesis, peakTimestamp), and the PROVIDER'S OWN AGGREGATE SCORE over that caller's history: totalCallouts, avgMultiple, medianMultiple, pct2xOrMore, onePointFiveXPercent, onePointTwoXPercent, averageTimeToPeak. Twelve leaves, each present on all 50 rows, so all twelve are required and the optional set is empty and closed. THE SCORE FIELDS ARE PROVIDER ASSERTIONS AND THEY ARE RETROSPECTIVE. avgMultiple, medianMultiple and the pctNx fields are computed by the provider over outcomes as of the read; they are the very leaderboard ranking, so ranking a caller high because their past callouts peaked high is look-ahead by construction and must never be read as a forward signal. THE IDENTIFIER IS USUALLY BUT NOT ALWAYS A SOLANA WALLET. Measured over the 50 rows: userId is a base58 Solana address on 49 and a 0x-prefixed 20-byte hex (a Privy-style embedded-wallet id) on 1; primaryWallet follows userId. Every row's wallets array carried at least one base58 Solana member. A join to on-chain trades must therefore take the base58 member of wallets and never assume userId is it, and a name/id match remains a name until a trade confirms it - the identity-vs-name-collision rule the joshibot quality_callers study established. topCallouts is a THREE-element top sample per caller (150 across 50 rows), not the caller's full history, so totalCallouts (median 289) is the real denominator and topCallouts is a teaser; avgMultiple/medianMultiple/pctNx/averageTimeToPeak are computed by the provider over the FULL history, not over the three shown. averageTimeToPeak reads as a duration on the order of 1e7 (about three hours if milliseconds); its unit is not stated by the provider and is left unconfirmed. THE CLOCK, unchanged from the sibling callout routes: every createdAt/peakTimestamp inside topCallouts is epoch-millisecond OCCURRENCE time, no availability instant exists anywhere on this route, and the SOL-denominated prices carry the read-time SOL divisor. topCallouts and wallets are retained as array leaves and not descended into by this gate; their exact bytes stay in the retained body for a later reviewed projection. This review was made by an agent, not by Ember."
+}
