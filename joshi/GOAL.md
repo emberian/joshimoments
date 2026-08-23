@@ -1,7 +1,17 @@
-# GOAL — close out work and science before 6am (2026-08-22)
+# GOAL — make JOSHI as good as it can be, autonomously until 8am (2026-08-23)
 
-**Standing goal.** Iterate on improving JOSHI, answer questions, access what data is needed
-(up to $10), and close out as much work and science as possible before 6am.
+**Standing goal.** Integrate the running lanes (source audit, replay harness, regime study), keep the
+tree gating green, and keep swarming Fable/Opus deputies at the highest-value work: the epistemics
+that make JOSHI's numbers trustworthy, and the instruments that make Ember's actual loop measurable.
+No trading, no economic authority. Read-only data access authorized, including her pump session as
+herself (the wallet key signs ONLY the login timestamp, never a transaction).
+
+## Next 3 moves
+1. Land the mint binding (81 core tests green; 8 clippy to clear), closing the identity gap so the
+   keeper's price taps become live scenes.
+2. Integrate source audit + replay harness + regime study as they report; gate the whole tree.
+3. Keep dispatching at the two frontiers: mechanising the remaining source-error families, and
+   making SELECTION measurable — the least-measured, highest-leverage thing we have.
 
 ## What JOSHI is actually for, so no lane compresses it
 
