@@ -175,7 +175,32 @@ Historical corpus has no callout data (on-chain only), so the available t=0 is F
 is the sequel and needs callout capture we do not yet retain (CalloutTop/CalloutByMint are real
 routes; CalloutRecent is a phantom).
 
-## Thrust, 2026-08-22 01:35
+## Thrust, 2026-08-22 17:10 — THE LIVING WAVE
+
+Ember's call: do not bring it up until it is living. Four Fable deputies, disjoint territories,
+building the window instead of the photograph:
+
+- KEEPER (apps/collector, ops/): the process that outlives a terminal. ops/keeper.toml config
+  (watched mints DREGG+SOLVE, the wallet, budgets, cadences), bounded acquisition cycles through
+  the existing admission machinery, hard self-enforced budgets, heartbeat file, launchd plist,
+  kill-mid-cycle coherence. A silent stop must be distinguishable from a still market.
+- LIVING SCENE (apps/core, apps/glass): scenes stay immutable; liveness = NEW scenes + the operator
+  CHOOSING to advance. Follow mode re-derives on catalog advance via the backup-overlay pattern; a
+  scene FEED route lists scenes newest-first (a list of immutable facts, not a mutable pointer);
+  Glass announces politely, never swaps silently (screen reader). Holds + journal survive advance.
+- RESIDENT ENGINE (apps/resident): the claude_agent_sdk loop over the proven plumbing. Jailed
+  in-process MCP tools only (read_scene, read_journal, append_note, list_scenes w/ graceful 404),
+  tools=[] so no host reach, session resume, tokeman rotation, interval turns + stdin conversation.
+  "An empty turn is a valid turn."
+- PORTFOLIO (crates/joshi-wallet-source, joshi-accounting): PortfolioStatementV1 as a pure
+  derivation from durable wallet observations — every number with its derivation, price KIND and
+  age labelled per the no-universal-price rule, DLMM position via meteora.rs, the unobservable
+  resting limit order a NAMED absence. CLI against the real funds catalog; route+rail spec only
+  (core/glass are sibling territory).
+
+Seams named in the briefs: keeper is sole writer of its catalog dir; living-scene watches it
+read-only; resident degrades gracefully if the feed route is absent; portfolio specs its surface
+rather than colliding in service.rs. Primary integrates and commits as they land.
 
 - COCKPIT WIRING (apps/core, apps/glass, joshi-liquidity): connect the hold gesture to the pre-trade
   readout so a held coin shows fee floor + break-even clip interval, plus tier proximity.
