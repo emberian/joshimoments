@@ -334,6 +334,11 @@ market-math). Commit each lane only after the tree gates clean as a whole, in a 
   drawdown 45.16% vs one-minute-candle 1.27%, -36.9% at 42s then +30%, on our own retained bytes.
   Also found: PumpPortal data socket now needs a funded key; trade frames carry NO provider clock
   (0/1734); a subscribed mint delivered 0 frames while swap-api showed 453 (ack != coverage).
+- 2026-08-22 22:56 authed surface spot-map (token still live): /auth/my-profile 200, /callout/leaderboard 200,
+  /following/{userId} 200, /coins/currently-live 200. Stale/app-only (404 authed): /notifications,
+  /watchlist, /coins/for-you, /coins/user-created-coins/{userId}, advanced-api-v2/coins/featured.
+  Systematic mapping + reviews delegated to the callout lane; stopped probing to avoid two agents
+  acting as the account.
 - Stopped two stuck self-gate loops (living-scene, keeper) to free the build lock; their work is on
   disk, gated in the integration pass.
 
