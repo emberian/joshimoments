@@ -1,4 +1,5 @@
 mod census;
+mod keeper;
 mod live;
 
 use census::{CensusOptions, PUMP_PROGRAM, PUMPSWAP_PROGRAM, census_readback, run_census};
@@ -13,6 +14,7 @@ use joshi_supervisor::{
     SupervisorHealthV1, SyntheticRuntimeOutcomeAdapter, parse_provider_run_plan_exact,
     replay_spool, synthetic_c0_json_runner,
 };
+use keeper::{KeeperOptions, run_keeper};
 use live::{DEFAULT_HELIUS_KEY_PATH, LiveIngestOptions, ingest_live, store_readback};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -138,6 +140,16 @@ enum Command {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Run the long-lived keeper: bounded acquisition cycles on a cadence, forever, into one
+    /// durable catalog, with hard request budgets, rate-limit backoff, and a heartbeat file.
+    Keeper {
+        /// Keeper configuration file; see ops/keeper.toml for the starter watch set.
+        #[arg(long)]
+        config: PathBuf,
+        /// Stop cleanly after this many acquisition cycles (for bounded proof runs).
+        #[arg(long = "max-cycles")]
+        max_cycles: Option<u64>,
+    },
 }
 
 fn main() {
@@ -261,6 +273,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::CensusReadback { root } => {
             require_existing_root(&root)?;
             println!("{}", census_readback(&root)?);
+        }
+        Command::Keeper { config, max_cycles } => {
+            println!("{}", run_keeper(&KeeperOptions { config, max_cycles })?);
         }
     }
     Ok(())

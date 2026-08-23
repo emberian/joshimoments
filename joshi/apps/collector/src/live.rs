@@ -392,7 +392,7 @@ pub(crate) async fn perform_one(
     })
 }
 
-fn commit_reads(
+pub(crate) fn commit_reads(
     store: &mut SqliteStore,
     reads: &[CapturedRead],
     namespace: &str,
@@ -522,7 +522,7 @@ fn event_time_and_location(
     }
 }
 
-fn first_signatures(frame: &RawSourceFrame, wanted: usize) -> Vec<String> {
+pub(crate) fn first_signatures(frame: &RawSourceFrame, wanted: usize) -> Vec<String> {
     let Ok(value) = serde_json::from_slice::<Value>(&frame.body) else {
         return Vec::new();
     };

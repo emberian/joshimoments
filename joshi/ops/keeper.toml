@@ -1,0 +1,59 @@
+# JOSHI keeper — the watch set and the politeness budgets.
+#
+# Ember edits this file; the keeper re-reads it every tick, so edits take effect without a
+# restart (a broken edit keeps the last good config and says so in the heartbeat note).
+# Relative paths resolve against this file's directory.
+#
+# v2 note: the watch set below is hand-listed for now; v2 derives the mint list from the coins
+# the wallet actually holds, so a new position starts being kept without editing this file.
+
+# Keeper state root. The durable catalog lives at <root>/catalog (single writer: the keeper),
+# the heartbeat at <root>/heartbeat.json, the bounded log at <root>/keeper.log.
+root = "../state/keeper"
+
+# Owner-only Helius credential, read at each wallet sweep and never rendered anywhere.
+key_file = "~/.helius-key"
+
+[budgets]
+# Hard ceilings the keeper enforces on itself. When the day budget is spent it idles until UTC
+# midnight and writes that down durably; nothing here is a hint.
+per_cycle_requests = 8
+per_day_requests = 1500
+# Scheduler granularity; taps fire on their own cadences, this is only how often they are checked.
+tick_seconds = 30
+# Rate-limit backoff: doubles from the initial on consecutive throttled cycles, capped.
+backoff_initial_seconds = 120
+backoff_max_seconds = 3600
+
+[wallet]
+# The wallet sweep: one signatures page per cadence, hydrating only signatures not yet swept.
+address = "Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ"
+cadence_minutes = 30
+signature_limit = 10
+transactions = 3
+
+[taps]
+# Reviewed-schema artifacts gate what the pump taps may trust; without a matching review the
+# bytes are still retained but quarantined. These live in the repo beside their measurements.
+candles_review = "../crates/joshi-pump-api/fixtures/schema_review_candles_v1.json"
+trades_review = "../crates/joshi-pump-api/fixtures/schema_review_trades_v1.json"
+# One newest-anchored 1s candle window per tap; 1000 bars of 1s tape is ~16 minutes on a coin
+# that trades every second, comfortably overlapping a 10-minute cadence.
+candles_interval = "1s"
+candles_limit = 1000
+# The trades route caps limit at 100.
+trades_limit = 100
+
+[[mints]]
+mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+label = "DREGG"
+taps = ["candles", "trades"]
+candles_cadence_minutes = 10
+trades_cadence_minutes = 5
+
+[[mints]]
+mint = "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump"
+label = "SOLVE"
+taps = ["candles", "trades"]
+candles_cadence_minutes = 10
+trades_cadence_minutes = 5

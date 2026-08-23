@@ -13,6 +13,8 @@ clap.workspace = true
 joshi-admission = { path = "../../crates/joshi-admission", features = ["source-edges"] }
 joshi-domain = { path = "../../crates/joshi-domain" }
 joshi-evidence = { path = "../../crates/joshi-evidence" }
+joshi-pump-adapter = { path = "../../crates/joshi-pump-adapter" }
+joshi-pump-api = { path = "../../crates/joshi-pump-api" }
 joshi-sources = { path = "../../crates/joshi-sources" }
 joshi-spool = { path = "../../crates/joshi-spool" }
 joshi-store = { path = "../../crates/joshi-store" }
@@ -22,7 +24,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = "0.10.9"
 time.workspace = true
-tokio = { workspace = true, features = ["net", "rt", "time"] }
+tokio = { workspace = true, features = ["net", "rt", "signal", "time"] }
+toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 zeroize.workspace = true
 
 [dev-dependencies]

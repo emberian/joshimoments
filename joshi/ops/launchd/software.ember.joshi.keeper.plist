@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>software.ember.joshi.keeper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/dev/joshi/target/release/joshi-collector</string>
+        <string>keeper</string>
+        <string>--config</string>
+        <string>/Users/YOUR_USERNAME/dev/joshi/ops/keeper.toml</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/dev/joshi</string>
+
+    <!-- Restart whenever the keeper exits, however it exits: sleep/wake, crash, clean stop.
+         The keeper's own heartbeat file distinguishes "restarted" from "quietly dead". -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Do not restart-loop faster than once a minute if it is failing at startup. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <!-- launchd sends SIGTERM and waits this long before SIGKILL; the keeper finishes or
+         abandons its current commit atomically inside this window. -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
+
+    <!-- The keeper logs to state/keeper/keeper.log (bounded, rotated by the keeper itself).
+         These two files catch only panics and startup refusals, so they stay small. -->
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/dev/joshi/state/keeper/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/dev/joshi/state/keeper/launchd.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
