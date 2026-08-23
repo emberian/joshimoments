@@ -292,6 +292,26 @@ residual inventory — every fill in it landed.
 she looked at."** Capturing what was on screen and when is worth more than further modelling on
 these bytes. That is exactly what the hold gesture committed tonight begins to capture.
 
+## AUTHENTICATED ACCESS UNLOCKED, 2026-08-22 — driven with Ember's own wallet
+
+pump.fun uses Sign-In-With-Solana: sign the literal string "Sign in to pump.fun: {ms-timestamp}"
+with the wallet's ed25519 key, base58 the signature, POST {address,signature,timestamp} to
+frontend-api-v3/auth/login, receive a 30-day auth_token cookie. Verified working from the shitcoims
+wallet: userId 37869d39... It is an AUTHENTICATION signature, not a transaction — nothing on-chain,
+no spend. The exact format was found empirically: bare timestamp -> 401, the colon-space prefix -> 200.
+
+UNLOCKS the global callout leaderboard (401 to anonymous): top callers each with topCallouts
+(coinMint, calloutPrice, multiple, createdAt, maxPriceSol, thesis, wallets). Top-8 best multiples
+seen: 41.5, 50, 235.4, 61.4, 120.2, 56, 86.8, 371.8. The fan-out ROOT the callout-science lane was
+approximating.
+
+TRUST POSTURE, deliberately separate: JOSHI now acts AS Ember's account, distinct from anonymous
+product reads. The companion extension keeps its no-auth-material boundary. Authenticated access is
+its own gated lane: a SIWS session provider in joshi-pump-api, token + wallet key treated like the
+Helius credential (0600, never rendered/logged/committed), READ-ONLY routes only. HARD RULE: the key
+signs ONLY the login timestamp, never a transaction. Routed to the callout-science deputy to build +
+explore the authed surface honestly. Token never committed; a live one sits 0600 in scratchpad only.
+
 ## Done log
 
 - 2026-08-22 05:55 CALLOUT OUTCOMES FETCHED LIVE, and they are directly usable. `callout_top/{mint}`
