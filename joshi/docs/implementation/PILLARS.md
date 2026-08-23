@@ -62,7 +62,7 @@ carries exactly one.
 | **unverified semantic** | Useful, honest semantics exist, but the inputs are caller projections. The meaning is right; the truth is unavailable. | Kernel with a real ontology and no adapter beneath it |
 | **durable offline** | An exact occurrence survives commit, readback and restart in the sole store — but its content is fixture or synthetic. | Migration plus store adapter plus reopen test over checked-in bytes |
 | **live** | A real observation from a real source is durably retained, with its exact request, budget settlement, coverage and gaps, and renders after restart. | The rule above, closed once |
-| **product** | Ember uses it in the ordinary way, on ordinary days, and the observation reaches her senses under the conditions she actually works in. | A recorded session: real browser, screen reader, keyboard only, her machine, her morning |
+| **product** | Ember uses it in the ordinary way, on ordinary days, and the observation reaches her senses under the conditions she actually works in. | A recorded session: real browser, her machine, her morning. Ember is PRIMARILY VISUAL and uses a pointer; she uses a screen reader SOMETIMES, not exclusively, and is not keyboard-only. Do not design as if she were: an earlier version of this line said 'screen reader, keyboard only' and that overstatement propagated into real design decisions before she corrected it (2026-08-23) |
 
 `live` is a per-slice fact, not a per-crate fact. A crate is `live` for the exact path that closed;
 it stays `unverified semantic` for every other input it accepts.

@@ -61,7 +61,9 @@ express "I have nothing" will get a fabricated answer — that already happened 
 fifteen-number dossier was invented to satisfy a required cardinality. Gate the narrowest thing that
 could refute you; never a bare `-p` suite.
 
-Ember uses a screen reader and works keyboard-only. Six of eight single-letter shortcuts collide
-with NVDA/JAWS quick-nav, which is why the hold key is `;`. Pointer-heavy design is a failed design
-here. The shell still has 51 focusable stops at first paint and the virtualized feed's tab stops
+Ember is PRIMARILY VISUAL and uses a pointer. She uses a screen reader sometimes; she is NOT
+keyboard-only, and designing as if she were is a mistake this project already made (a repo doc said
+so, an agent believed it, and it shaped real decisions before she corrected it). Keyboard paths must
+work — six of eight single-letter shortcuts collide with NVDA/JAWS quick-nav, which is why the hold
+key is `;` — but visual scanning is her main channel and should be treated as first-class. The shell still has 51 focusable stops at first paint and the virtualized feed's tab stops
 mutate as she scrolls — the listbox/`aria-activedescendant` restructure is a real, unstarted lane.
