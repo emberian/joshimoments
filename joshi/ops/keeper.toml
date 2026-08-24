@@ -24,11 +24,20 @@ key_file = "~/.helius-key"
 # an accident — every cadence below divides 30 minutes — so the cycle ceiling affords it rather
 # than deferring taps into gap-noise every half hour. Steady state per day: wallet 48x4=192,
 # candles 2x144=288, trades 2x288=576, coin_exact 2x144=288, discovery 288 — 1632 in all, about
-# 1.1 requests per minute. 2000 leaves ~22% headroom for restarts and cadence drift while still
-# being a hard stop well short of anything impolite. Only the 192 wallet requests touch the
-# Helius credential; every pump read is an anonymous product-route GET.
-per_cycle_requests = 11
-per_day_requests = 2000
+# 1.1 requests per minute. Only the 192 wallet requests touch the Helius credential; every pump
+# read is an anonymous product-route GET.
+#
+# The hot lane ([hot] below) adds on top of that: the worst coincident cycle is three freshly
+# leased hot mints each wanting candles + trades + coin_exact + callout_top in the same cycle,
+# 3x4 = 12 requests, so 11 + 12 = 23 and the ceiling is 24. Per day, one fully hot mint costs
+# 30 candles + 30 trades + 2 coin_exact + 2 callout_top = 64 requests per hour, so the 3000 cap
+# affords base 1632 + about 21 hot-mint-hours (1368/64) — seven hours of triple-hot attention —
+# at a worst case of ~2.1 requests per minute. Hotness needs a fresh act every 30 minutes, so
+# sustained worst case means Ember is actually sitting there refreshing it. The day cap stays
+# an absolute stop: a hot tap that would bust it defers with a durable note and the keeper
+# idles until UTC midnight, exactly as before.
+per_cycle_requests = 24
+per_day_requests = 3000
 # Scheduler granularity; taps fire on their own cadences, this is only how often they are checked.
 tick_seconds = 30
 # Rate-limit backoff: doubles from the initial on consecutive throttled cycles, capped.
@@ -61,12 +70,36 @@ coin_exact_review = "../crates/joshi-pump-api/fixtures/row_projection_coin_exact
 # heterogeneous rows: every row must show the reviewed required leaves and nothing outside the
 # closed reviewed set, or the whole page quarantines with its reason named.
 discovery_review = "../crates/joshi-pump-api/fixtures/row_projection_discovery_coins_v1.json"
+# callout_top is the hot lane's fourth read: who called a hot coin out, at what multiple, as the
+# provider retrospectively scores it. Row-projection review (v2, 2026-08-23, 80-mint sweep);
+# an empty page ({"callouts":[]}) is refused as row-uncheckable and retained as an absent
+# record, never as evidence that nobody called the coin.
+callout_top_review = "../crates/joshi-pump-api/fixtures/row_projection_callout_top_v1.json"
 # One newest-anchored 1s candle window per tap; 1000 bars of 1s tape is ~16 minutes on a coin
 # that trades every second, comfortably overlapping a 10-minute cadence.
 candles_interval = "1s"
 candles_limit = 1000
 # The trades route caps limit at 100.
 trades_limit = 100
+
+[hot]
+# The hot-attention lane. When Ember focuses in on a coin — holds it (;), requests hot scope,
+# or enters the inspect lens (') on it — core writes the coin's mint into <root>/hot-requests.json
+# (contract joshi.attention.hot_requests.v1; core is the single writer, this keeper the single
+# reader, and neither imports the other). The keeper re-reads that file every tick like this
+# config: a hot mint gets candles (1s bars, currency=SOL restated on the retained request —
+# the only durable unit statement the price derivation accepts), trades, one coin_exact and one
+# callout_top read on the cadences below, while its 30-minute TTL lives; any further act
+# refreshes the TTL. Expiry is a silent stop with a log/heartbeat note, never an error. A
+# malformed file keeps the last good entries with a note, exactly like a broken config edit.
+# The concurrency bound holds hard: slots go to the freshest expiries (the most recently
+# refreshed attention), the rest are refused-and-noted durably — oldest expiry is first out.
+max_concurrent_mints = 3
+candles_cadence_minutes = 2
+trades_cadence_minutes = 2
+# One coin record and one callout read per 30-minute lease: cadence equals TTL on purpose.
+coin_exact_cadence_minutes = 30
+callout_top_cadence_minutes = 30
 
 [discovery]
 # The catalog-level sweep that lets NEW coins reach the attention feed at all: one page of

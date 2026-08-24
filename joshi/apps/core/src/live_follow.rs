@@ -557,6 +557,19 @@ impl FollowRuntime {
         Ok(TickOutcome::Advanced { scene_id })
     }
 
+    /// Where this mount's operational hot-attention channel lives: `hot-requests.json` beside
+    /// the followed catalog directory — which, when the sibling writer is the keeper, is exactly
+    /// the keeper root the keeper re-reads every tick (`crate::hot_requests` owns the contract).
+    ///
+    /// `None` only when the catalog path has no parent to sit beside. A followed catalog whose
+    /// root no keeper watches simply gets a file nobody reads: silence-with-absence, not error.
+    #[must_use]
+    pub fn hot_requests_path(&self) -> Option<PathBuf> {
+        self.catalog
+            .parent()
+            .map(|root| root.join(crate::hot_requests::HOT_REQUESTS_FILE_NAME))
+    }
+
     /// The newest derived scene identity, for the launcher to print.
     ///
     /// # Errors
@@ -1361,6 +1374,133 @@ mod tests {
         assert_eq!(
             runtime.tick().expect("post-restart tick"),
             TickOutcome::Unchanged
+        );
+    }
+
+    /// The whole hot-attention seam through the real route: a qualifying act committed over a
+    /// followed scene writes the mint into `hot-requests.json` beside the source catalog — the
+    /// keeper root — deduped, and its TTL refreshed by the exact idempotent retry. The
+    /// fixture-mint hold stays out of the channel: its 45-character candidate key is not a
+    /// plausible SPL mint, so throwaway fixture cockpits never pollute a real keeper root.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Hold, inspect, and retry belong in one visible sequence.
+    async fn a_qualifying_act_writes_the_hot_requests_file_beside_the_catalog() {
+        let root = tempfile::tempdir().expect("temporary follow root");
+        let catalog = root.path().join("catalog");
+        let state = root.path().join("state");
+        seed_catalog(&catalog).expect("seeded fixture catalog");
+        let runtime = FollowRuntime::mount(
+            &catalog,
+            &state,
+            FIXTURE_SOURCE,
+            &LiveSurfaceOptions::default(),
+        )
+        .expect("fresh follow mount");
+        let hot_path = runtime.hot_requests_path().expect("hot path");
+        assert_eq!(hot_path, root.path().join("hot-requests.json"));
+        let scene = runtime.newest_scene_id().expect("scene");
+        let (app, capability) = paired_app(runtime.clone(), &state).await;
+        let view_bytes = runtime
+            .scene_bytes(&SceneId::new(scene.clone()).expect("scene id"))
+            .expect("lock")
+            .expect("scene served")
+            .0;
+        let view_digest = qualified_digest(&view_bytes);
+
+        // A hold on the fixture candidate commits durably but writes nothing operational.
+        let hold = mark_command_bytes(
+            "command-hot-hold-1",
+            &scene,
+            &view_digest,
+            FIXTURE_MINT,
+            crate::live_gesture::now().expect("clock"),
+        );
+        let response = send(
+            &app,
+            authorized(
+                ORIGIN,
+                "POST",
+                "/api/v1/operator/commands",
+                &capability,
+                Body::from(hold),
+            )
+            .expect("request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(
+            !hot_path.exists(),
+            "an implausible fixture mint stays out of the operational channel"
+        );
+
+        // The automatic inspect assertion's exact shape: scene subject (invisible to the
+        // selection instrument), the real mint inside the hot-scope payload.
+        let mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump";
+        let issued_at = crate::live_gesture::now().expect("clock");
+        let inspect_bytes = format!(
+            concat!(
+                r#"{{"contract":"joshi.operator.command","schemaVersion":1,"#,
+                r#""commandId":"command-hot-inspect-1","idempotencyKey":"retry-hot-inspect-1","#,
+                r#""clientSessionId":"session-hot-inspect","clientCommandSeq":"1","#,
+                r#""scene":{{"sceneId":"{scene}","viewDigest":"{digest}"}},"#,
+                r#""issuedAt":"{issued}","#,
+                r#""clientClock":{{"clockId":"hot-inspect-clock","monotonicNs":"1"}},"#,
+                r#""commandKind":"request_hot_scope","#,
+                r#""subject":{{"kind":"scene","key":"{scene}"}},"#,
+                r#""payload":{{"context":{{"uiLabel":"Inspect lens entered (automatic)","#,
+                r#""uiLabelVersion":"1","confidencePpm":null,"urgency":null,"whyNow":null,"#,
+                r#""note":null}},"scope":{{"family":"candidate-attention","#,
+                r#""subject":{{"kind":"mint","key":"{mint}"}}}}}},"#,
+                r#""authorityClass":"evidence_only","effectCeiling":"observe_only"}}"#
+            ),
+            scene = scene,
+            digest = view_digest,
+            issued = issued_at,
+            mint = mint,
+        )
+        .into_bytes();
+        let accepted = send(
+            &app,
+            authorized(
+                ORIGIN,
+                "POST",
+                "/api/v1/operator/commands",
+                &capability,
+                Body::from(inspect_bytes.clone()),
+            )
+            .expect("request"),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let written = crate::hot_requests::read_requests(&hot_path)
+            .expect("the qualifying act wrote the hot-requests file");
+        assert_eq!(written.contract, crate::hot_requests::HOT_REQUESTS_CONTRACT);
+        assert_eq!(written.requests.len(), 1);
+        assert_eq!(written.requests[0].mint, mint);
+        assert_eq!(written.requests[0].last_command_kind, "request_hot_scope");
+        let first_expiry = written.requests[0].expires_at.clone();
+        let first_seen = written.requests[0].first_requested_at.clone();
+
+        // The exact idempotent retry refreshes the TTL and dedupes the mint.
+        let retried = send(
+            &app,
+            authorized(
+                ORIGIN,
+                "POST",
+                "/api/v1/operator/commands",
+                &capability,
+                Body::from(inspect_bytes),
+            )
+            .expect("request"),
+        )
+        .await;
+        assert_eq!(retried.status(), StatusCode::OK);
+        let refreshed = crate::hot_requests::read_requests(&hot_path).expect("file still reads");
+        assert_eq!(refreshed.requests.len(), 1, "the same mint is deduped");
+        assert_eq!(refreshed.requests[0].first_requested_at, first_seen);
+        assert!(
+            refreshed.requests[0].expires_at >= first_expiry,
+            "a further act never shortens hotness"
         );
     }
 

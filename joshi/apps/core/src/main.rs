@@ -511,6 +511,12 @@ async fn main() -> Result<(), CliError> {
                     );
                 }
             }
+            // The hot-attention channel sits beside the catalog — the keeper root when the
+            // catalog is a keeper's. A static mount is still a cockpit: focusing in on a coin
+            // here asks the keeper for candles exactly as it does under a follow mount.
+            let hot_requests_path = catalog
+                .parent()
+                .map(|root| root.join(joshi_core::hot_requests::HOT_REQUESTS_FILE_NAME));
             let (core, launcher) = CoreService::with_sqlite_pairing_mounting_venues(
                 mounted.store,
                 None,
@@ -519,6 +525,7 @@ async fn main() -> Result<(), CliError> {
                 PairingConfig::default(),
                 Some(mounted.view),
                 venues,
+                hot_requests_path,
             )?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             let issued = launcher.issue_code(vec![

@@ -19,7 +19,7 @@ import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
 import { exactUtcNow } from "./operator/contract";
-import { pointedAssertionIntent, viewportAssertionIntent } from "./operator/attention";
+import { inspectAssertionIntent, pointedAssertionIntent, viewportAssertionIntent } from "./operator/attention";
 import { heldSubjectKeys, holdIntent, holdNoteIntent, isHoldCommand } from "./operator/holds";
 import { journalEntryIntent } from "./operator/journal";
 import { configuredOperatorReader, type OperatorCommandReader } from "./operator/readback";
@@ -148,6 +148,7 @@ export function GlassApp({
   const [pointedIds, setPointedIds] = useState<string[]>([]);
   const pointedRef = useRef<Set<string>>(new Set());
   const lastAssertedPointed = useRef<{ sceneId: string; key: string } | null>(null);
+  const lastAssertedInspect = useRef<{ sceneId: string; candidateId: string } | null>(null);
   const [interactedIds, setInteractedIds] = useState<string[]>([]);
   const [heldObservations, setHeldObservations] = useState<Record<string, RetainedObservation>>({});
   const [holdAnnouncement, setHoldAnnouncement] = useState("");
@@ -510,7 +511,31 @@ export function GlassApp({
   }, [heldMintsBySubject, measuredVenues, venueReadout, venueSource]);
 
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
-  const toggleSurface = useCallback(() => setSurface((value) => value === "hunt" ? "inspect" : "hunt"), []);
+  /**
+   * The `'` lens switch. Entering inspect on a selected coin additionally records the automatic
+   * inspect assertion (`operator/attention.ts` states exactly what it claims and why its subject
+   * is the scene, never the candidate), which is what asks the keeper to start tapping the
+   * coin's candles while her attention is on it. Debounced per (scene, coin) the same way the
+   * viewport assertion debounces an unchanged set; leaving the lens records nothing, and a
+   * refused record never costs the lens switch itself.
+   */
+  const toggleSurface = useCallback(() => {
+    const next = surface === "hunt" ? "inspect" : "hunt";
+    setSurface(next);
+    if (next !== "inspect" || !snapshot) return;
+    const candidate = candidates.find((item) => item.id === selectedId);
+    if (!candidate) return;
+    const sceneId = snapshot.view.sceneId;
+    const last = lastAssertedInspect.current;
+    if (last && last.sceneId === sceneId && last.candidateId === candidate.id) return;
+    try {
+      recordCommand(inspectAssertionIntent(sceneId, candidate.mint));
+      lastAssertedInspect.current = { sceneId, candidateId: candidate.id };
+    } catch {
+      // Her lens must never fail to open because its instrumentation could not be recorded;
+      // the sensing side then simply hears nothing about this inspect.
+    }
+  }, [candidates, recordCommand, selectedId, snapshot, surface]);
   const cycleReplay = useCallback(() => {
     if (!snapshot || pendingMode !== null) return;
     // Cycle over the lenses that exist for this scene. When none besides the current one exist

@@ -78,6 +78,12 @@ struct Inner {
     /// store above then carries only pairing state. Nothing here is a mutable current-scene
     /// pointer — the feed lists facts and the client chooses.
     follow: Option<Arc<FollowRuntime>>,
+    /// Where the operational hot-attention channel lives (`crate::hot_requests`): a file under
+    /// the followed catalog's keeper root that a qualifying committed act appends its mint to,
+    /// so a keeper watching that root taps the coin while attention is on it. `None` means this
+    /// process serves no keeper-rooted catalog and qualifying acts stay durable-only — the
+    /// degradation is silence-with-absence, never an error.
+    hot_requests_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -180,10 +186,12 @@ impl CoreService {
                 live_surface: None,
                 venue_readouts: None,
                 follow: None,
+                hot_requests_path: None,
             }),
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // The one private waist every mount states itself through.
     fn with_ordinary_pairing(
         store: Arc<Mutex<SqliteStore>>,
         companion_installation_id: Option<String>,
@@ -192,6 +200,7 @@ impl CoreService {
         live_surface: Option<Arc<ValidatedGlassViewV1>>,
         venue_readouts: Option<Arc<MountedVenueReadouts>>,
         follow: Option<Arc<FollowRuntime>>,
+        hot_requests_path: Option<std::path::PathBuf>,
     ) -> Self {
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -207,6 +216,7 @@ impl CoreService {
                 live_surface,
                 venue_readouts,
                 follow,
+                hot_requests_path,
             }),
         }
     }
@@ -261,6 +271,7 @@ impl CoreService {
             config,
             live_surface,
             None,
+            None,
         )
     }
 
@@ -271,9 +282,14 @@ impl CoreService {
     /// readout says what one of them would cost to trade, and those come from different bytes read
     /// at different times. Mounting a readout never changes a scene and can never make one appear.
     ///
+    /// `hot_requests_path` is where a qualifying committed act appends its mint for a keeper to
+    /// notice (`crate::hot_requests`); a static mount over a keeper-rooted catalog passes the
+    /// file beside that catalog, and a throwaway or fixture mount passes `None`.
+    ///
     /// # Errors
     ///
     /// Fails unless the `SQLite` journal atomically begins and exactly reads back a higher epoch.
+    #[allow(clippy::too_many_arguments)] // Every mount is stated explicitly at the call site.
     pub fn with_sqlite_pairing_mounting_venues(
         store: SqliteStore,
         companion_installation_id: Option<String>,
@@ -282,6 +298,7 @@ impl CoreService {
         config: PairingConfig,
         live_surface: Option<ValidatedGlassViewV1>,
         venue_readouts: Option<MountedVenueReadouts>,
+        hot_requests_path: Option<std::path::PathBuf>,
     ) -> Result<(Self, Arc<OrdinaryPairingService>), OrdinaryPairingError> {
         let store = Arc::new(Mutex::new(store));
         let ordinary = Arc::new(OrdinaryPairingService::production_with_shared_store(
@@ -297,6 +314,7 @@ impl CoreService {
             live_surface.map(Arc::new),
             venue_readouts.map(Arc::new),
             None,
+            hot_requests_path,
         );
         Ok((service, ordinary))
     }
@@ -326,6 +344,9 @@ impl CoreService {
             config,
             store.clone(),
         )?);
+        // The follow mount knows which catalog it reads, so the hot-attention channel needs no
+        // extra configuration: it lives beside that catalog, in the keeper root.
+        let hot_requests_path = follow.hot_requests_path();
         let service = Self::with_ordinary_pairing(
             store,
             None,
@@ -334,6 +355,7 @@ impl CoreService {
             None,
             venue_readouts.map(Arc::new),
             Some(follow),
+            hot_requests_path,
         );
         Ok((service, ordinary))
     }
@@ -1464,6 +1486,7 @@ async fn operator_command(
                     OperatorCommandStatus::Accepted => StatusCode::ACCEPTED,
                     OperatorCommandStatus::Idempotent => StatusCode::OK,
                 };
+                note_hot_request(&service, &command, &receipt);
                 json_response(status, &receipt)
             }
             Err(FollowError::LockPoisoned) => problem(
@@ -1528,7 +1551,39 @@ async fn operator_command(
         OperatorCommandStatus::Accepted => StatusCode::ACCEPTED,
         OperatorCommandStatus::Idempotent => StatusCode::OK,
     };
+    note_hot_request(&service, &command, &receipt);
     json_response(status, &receipt)
+}
+
+/// After a qualifying act is durable, append its mint to the operational hot-attention channel
+/// (`crate::hot_requests`), so a keeper watching this catalog's root starts tapping the coin.
+///
+/// The act is already committed when this runs — including an exact idempotent retry, which
+/// refreshes the hotness TTL exactly as a fresh act does. A channel failure is logged and never
+/// surfaces into the response: the durable evidence is complete without the file.
+fn note_hot_request(
+    service: &CoreService,
+    command: &ValidatedOperatorCommandV1,
+    receipt: &joshi_operator::CommandReceiptV1,
+) {
+    let Some(path) = &service.inner.hot_requests_path else {
+        return;
+    };
+    let Some(mint) = crate::hot_requests::qualifying_hot_mint(command) else {
+        return;
+    };
+    if let Err(error) = crate::hot_requests::record_hot_request(
+        path,
+        &mint,
+        command.kind().as_str(),
+        command.command_id().as_str(),
+        &receipt.commit_seq().get().to_string(),
+        time::OffsetDateTime::now_utc(),
+    ) {
+        eprintln!(
+            "hot-requests channel write failed for {mint} (the act itself is durable): {error}"
+        );
+    }
 }
 
 #[derive(Deserialize)]

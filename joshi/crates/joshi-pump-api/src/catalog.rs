@@ -668,7 +668,14 @@ impl RouteSpec {
     #[must_use]
     pub fn public_subject_path(self) -> &'static [&'static str] {
         match self.id {
-            RouteId::CoinExact | RouteId::Candles | RouteId::Trades => &["mint"],
+            // `/callout/top/{mint}` joins the coin-subject routes (2026-08-24, for the keeper's
+            // hot-attention tap): its `{mint}` is the same class of public chain fact as the
+            // candles/trades segment, and its body rows name `coinMint` — retaining the resolved
+            // ask corroborates the rows rather than revealing anything. `{user}` on the sibling
+            // callout routes stays redacted exactly as before.
+            RouteId::CoinExact | RouteId::Candles | RouteId::Trades | RouteId::CalloutTop => {
+                &["mint"]
+            }
             _ => &[],
         }
     }

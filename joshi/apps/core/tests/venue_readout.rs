@@ -278,6 +278,7 @@ async fn paired_router(
         PairingConfig::default(),
         None,
         venues,
+        None,
     )
     .expect("paired service");
     let issued = launcher

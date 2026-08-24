@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GlassApp } from "./App";
 import { OfflineFixtureDataSource } from "./data/client";
 import { mockSnapshots } from "./data/mockSnapshot";
-import { isViewportAssertion, POINTED_ASSERTION_UI_LABEL, VIEWPORT_ASSERTION_UI_LABEL } from "./operator/attention";
+import { INSPECT_ASSERTION_UI_LABEL, isViewportAssertion, POINTED_ASSERTION_UI_LABEL, VIEWPORT_ASSERTION_UI_LABEL } from "./operator/attention";
 import type { OperatorCommandV1 } from "./operator/contract";
 import { OfflineFixtureOperatorSink } from "./operator/client";
 import { MemoryPendingOperatorCommandQueue } from "./operator/pendingQueue";
@@ -172,6 +172,51 @@ describe("hunt surface", () => {
     await screen.findByRole("region", { name: /hunt board/i });
     expect(screen.getByRole("option", { name: /\$ORBITFAN/ })).toHaveAttribute("aria-selected", "true");
     expect(within(screen.getByRole("region", { name: /held coins/i })).getByRole("heading", { name: /\$ORBITFAN/ })).toBeInTheDocument();
+  });
+
+  /**
+   * Focusing in is a sensing request: entering the inspect lens on a coin emits the automatic
+   * hot-scope assertion so the keeper starts tapping its candles while attention is on it.
+   * Scene-subject on purpose — the selection instrument scores candidate-named acts as picks,
+   * and an automatic record must never mark a coin chosen — and debounced per (scene, coin)
+   * exactly like the viewport assertion's unchanged-set skip.
+   */
+  it("entering inspect emits one scene-subject hot-scope assertion per coin per scene", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    const { container } = renderHunt(sink);
+    await boardSettled(container);
+
+    const posted = () => sink.attemptBodies
+      .map((body) => JSON.parse(body) as OperatorCommandV1)
+      .filter((command) => command.commandKind === "request_hot_scope");
+
+    await user.keyboard("'");
+    await screen.findByRole("heading", { name: /radon radon/i });
+    await waitFor(() => expect(posted().length).toBe(1));
+    const inspect = posted()[0]!;
+    expect(inspect.subject).toEqual({ kind: "scene", key: mockSnapshots.witnessed.view.sceneId });
+    if (inspect.commandKind !== "request_hot_scope") throw new Error("expected the inspect assertion");
+    expect(inspect.payload.scope.subject).toEqual({ kind: "mint", key: "RADON9BkJ3Wj5mT8p2Qx7sV4nL6cH1fZ" });
+    expect(inspect.payload.context.uiLabel).toBe(INSPECT_ASSERTION_UI_LABEL);
+    expect(isViewportAssertion(inspect)).toBe(true);
+
+    // Out and straight back in on the same coin in the same scene: debounced, not re-posted.
+    await user.keyboard("'");
+    await screen.findByRole("region", { name: /hunt board/i });
+    await user.keyboard("'");
+    await screen.findByRole("heading", { name: /radon radon/i });
+    expect(posted().length).toBe(1);
+
+    // A different coin is fresh attention: back to the board, move, inspect again.
+    await user.keyboard("'");
+    await screen.findByRole("region", { name: /hunt board/i });
+    await user.keyboard("j");
+    await user.keyboard("'");
+    await waitFor(() => expect(posted().length).toBe(2));
+    const second = posted()[1]!;
+    if (second.commandKind !== "request_hot_scope") throw new Error("expected the inspect assertion");
+    expect(second.payload.scope.subject.key).toBe("ORBIT4JxM7qT2vN8cL5pR1kD9bW3sHzE");
   });
 
   it("has no automatically detectable accessibility violations on the hunt surface", async () => {

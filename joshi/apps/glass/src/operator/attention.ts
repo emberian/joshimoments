@@ -141,6 +141,54 @@ export function viewportAssertionIntent(
 }
 
 /**
+ * Entering the inspect lens on a coin is its own automatic attention record, because it is the
+ * moment Ember focuses IN — her words: "it's when i 'inspect' (the ' hotkey) that it should
+ * pull that down". The act asks the sensing side for richer observation of that coin (core's
+ * hot-attention channel forwards the mint to the keeper), so it is a `request_hot_scope`
+ * command; the label below marks it automatic, distinguishing it from the deliberate capture
+ * gesture with its own words.
+ *
+ * THE SUBJECT IS THE SCENE, NEVER THE CANDIDATE, exactly like the viewport assertion above and
+ * for the same reason: the selection instrument counts every candidate-named act as the
+ * operator marking a coin (`selection/events.py` scores `subject_kind == "candidate"`), and an
+ * automatic record on every lens switch would silently score every inspected coin as a pick.
+ * The mint rides inside the payload (`scope.subject` of kind `mint`), which is where core reads
+ * it from.
+ */
+export const INSPECT_ASSERTION_UI_LABEL = "Inspect lens entered (automatic)";
+
+/** The one label version this automatic assertion has ever had. */
+export const INSPECT_ASSERTION_UI_LABEL_VERSION = "1";
+
+/**
+ * The exact automatic act one hunt-to-inspect lens switch emits for the selected coin. The
+ * caller debounces repeats of the same coin in the same scene, the changed-set idiom the
+ * viewport assertion uses.
+ */
+export function inspectAssertionIntent(sceneId: string, mint: string): OperatorIntent {
+  return {
+    commandKind: "request_hot_scope",
+    subject: { kind: "scene", key: sceneId },
+    label: INSPECT_ASSERTION_UI_LABEL,
+    payload: {
+      context: {
+        uiLabel: INSPECT_ASSERTION_UI_LABEL,
+        uiLabelVersion: INSPECT_ASSERTION_UI_LABEL_VERSION,
+        // Nothing is asked of the operator; an automatic record answers no questions.
+        confidencePpm: null,
+        urgency: null,
+        whyNow: null,
+        note: null,
+      },
+      scope: {
+        family: "candidate-attention",
+        subject: { kind: "mint", key: mint },
+      },
+    },
+  };
+}
+
+/**
  * The exact automatic pointer assertion one operator act triggers, when the pointer entered
  * any row this scene. Same refusals as the viewport assertion, for the same reasons.
  */
@@ -160,17 +208,20 @@ export function pointedAssertionIntent(
 }
 
 /**
- * Whether a command is an automatic attention assertion (viewport or pointed), from either the
- * session journal or the durable readback. Instrument telemetry, not operator words: the
- * journal narrative filters these out (and says so), while the scene inspector still lists
- * them.
+ * Whether a command is an automatic attention assertion (viewport, pointed, or the inspect-lens
+ * record), from either the session journal or the durable readback. Instrument telemetry, not
+ * operator words: the journal narrative filters these out (and says so), while the scene
+ * inspector still lists them.
  */
 export function isViewportAssertion(command: {
   commandKind: string;
   payload: unknown;
 }): boolean {
-  if (command.commandKind !== "record_choice_set") return false;
   const context = (command.payload as { context?: { uiLabel?: string } }).context;
+  if (command.commandKind === "request_hot_scope") {
+    return context?.uiLabel === INSPECT_ASSERTION_UI_LABEL;
+  }
+  if (command.commandKind !== "record_choice_set") return false;
   return (
     context?.uiLabel === VIEWPORT_ASSERTION_UI_LABEL
     || context?.uiLabel === POINTED_ASSERTION_UI_LABEL

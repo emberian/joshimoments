@@ -97,6 +97,30 @@ const DISCOVERY_SOURCE_ID: &str = "joshi.keeper.discovery.v1";
 const DISCOVERY_ROWS_CONTRACT: &str = "joshi.keeper.discovery_rows.v1";
 /// Cadences are minutes, not seconds: this loop spends Ember's API quota unattended.
 const MINIMUM_CADENCE_SECONDS: u64 = 60;
+// --- The hot-attention seam. ---------------------------------------------------------------
+// Core writes `<root>/hot-requests.json` when a qualifying operator act commits (a hold, a
+// hot-scope request, the automatic inspect assertion); this keeper re-reads it every tick the
+// way it re-reads its config, and neither side imports the other. The act in the session store
+// is the evidence; the file is only the operational signal derived from it. These constants
+// MIRROR `apps/core/src/hot_requests.rs` — change them on one side only and the loop silently
+// never closes, so keep the mirror exact.
+const HOT_REQUESTS_FILE_NAME: &str = "hot-requests.json";
+const HOT_REQUESTS_CONTRACT: &str = "joshi.attention.hot_requests.v1";
+const MAX_HOT_REQUESTS_BYTES: u64 = 256 * 1024;
+/// Entries the file may carry (the core writer bounds it identically); reading more than this is
+/// a malformed file, not a bigger ask.
+const MAX_HOT_FILE_ENTRIES: usize = 16;
+const DEFAULT_HOT_MAX_CONCURRENT: usize = 3;
+const DEFAULT_HOT_CANDLES_CADENCE_MINUTES: u64 = 2;
+const DEFAULT_HOT_TRADES_CADENCE_MINUTES: u64 = 2;
+/// One coin record and one callout read per hot lease: the 30-minute cadence equals the TTL, so
+/// while one unrefreshed lease lives each runs once, and a refreshed lease refreshes them too.
+const DEFAULT_HOT_COIN_EXACT_CADENCE_MINUTES: u64 = 30;
+const DEFAULT_HOT_CALLOUT_TOP_CADENCE_MINUTES: u64 = 30;
+/// The callout ask, exactly as the reviewed material asked it: the row-projection review's
+/// 80-mint sweep of 2026-08-23 read `/callout/top/{mint}?limit=50`. The `limit` name is
+/// catalog-declared public on this route, so the retained request restates the ask.
+const HOT_CALLOUT_TOP_LIMIT: u32 = 50;
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 const MAX_HEARTBEAT_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -142,6 +166,10 @@ struct KeeperConfigFile {
     wallet: Option<WalletSection>,
     taps: TapsSection,
     discovery: Option<DiscoverySection>,
+    /// Opt-in hot-attention lane: when present, mints named in `<root>/hot-requests.json` (the
+    /// operational file core writes on qualifying operator acts) are tapped on the fast
+    /// cadences below while their TTL lives.
+    hot: Option<HotSection>,
     #[serde(default)]
     mints: Vec<MintSection>,
 }
@@ -170,11 +198,15 @@ struct WalletSection {
 struct TapsSection {
     candles_review: String,
     trades_review: String,
-    /// Required as soon as any mint names a `coin_exact` tap; absent otherwise is fine.
+    /// Required as soon as any mint names a `coin_exact` tap or a `[hot]` section exists (a hot
+    /// mint gets one coin record); absent otherwise is fine.
     coin_exact_review: Option<String>,
     /// Required as soon as a `[discovery]` section exists; a row-projection review, not a
     /// whole-document one, because discovery pages have heterogeneous rows.
     discovery_review: Option<String>,
+    /// Required as soon as a `[hot]` section exists: a hot mint gets one `callout_top` read,
+    /// and an unreviewed route may not be tapped.
+    callout_top_review: Option<String>,
     candles_interval: Option<String>,
     candles_limit: Option<u32>,
     trades_limit: Option<u32>,
@@ -184,6 +216,16 @@ struct TapsSection {
 #[serde(deny_unknown_fields)]
 struct DiscoverySection {
     cadence_minutes: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HotSection {
+    max_concurrent_mints: Option<usize>,
+    candles_cadence_minutes: Option<u64>,
+    trades_cadence_minutes: Option<u64>,
+    coin_exact_cadence_minutes: Option<u64>,
+    callout_top_cadence_minutes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,6 +253,10 @@ enum TapKind {
     /// One page of the promoted `/coins` discovery feed per cadence, catalog-level rather than
     /// per-mint: the tap that lets NEW coins reach the catalog at all.
     Discovery,
+    /// One `GET /callout/top/{mint}` per hot lease: who called this coin out and at what
+    /// multiple, as the provider retrospectively scores it. Hot lane only — nothing in the
+    /// standing watch set taps it.
+    CalloutTop,
 }
 
 impl TapKind {
@@ -221,6 +267,7 @@ impl TapKind {
             Self::Trades => "trades",
             Self::CoinExact => "coin_exact",
             Self::Discovery => "discovery",
+            Self::CalloutTop => "callout_top",
         }
     }
 }
@@ -261,7 +308,23 @@ struct KeeperConfig {
     /// Present exactly when a `[discovery]` section exists; validated at load to be a
     /// row-projection review for the `discovery_coins` route.
     discovery_review: Option<Vec<u8>>,
+    /// Present exactly when a `[hot]` section exists; validated at load to be a row-projection
+    /// review for the `callout_top` route.
+    callout_top_review: Option<Vec<u8>>,
+    /// The hot-attention lane's bounds and cadences; `None` means the keeper never reads the
+    /// hot-requests file and operator focus stays durable-only.
+    hot: Option<HotConfig>,
     taps: Vec<Tap>,
+}
+
+/// Validated `[hot]` lane configuration, cadences already in seconds.
+#[derive(Clone, Debug)]
+struct HotConfig {
+    max_concurrent_mints: usize,
+    candles_cadence_seconds: u64,
+    trades_cadence_seconds: u64,
+    coin_exact_cadence_seconds: u64,
+    callout_top_cadence_seconds: u64,
 }
 
 fn resolve(base: &Path, value: &str) -> PathBuf {
@@ -432,20 +495,22 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
         }
     }
     // The coin_exact review artifact is required exactly when something would use it, so a mint
-    // cannot be watched through a gate nobody has reviewed.
-    let coin_exact_review = if taps.iter().any(|tap| tap.kind == TapKind::CoinExact) {
-        let path = file.taps.coin_exact_review.as_deref().ok_or(
-            "a mint names the coin_exact tap but taps.coin_exact_review is absent; \
-             an unreviewed route may not be tapped",
-        )?;
-        Some(read_bounded_file(
-            &resolve(&base, path),
-            MAX_CONFIG_BYTES,
-            "taps.coin_exact_review",
-        )?)
-    } else {
-        None
-    };
+    // cannot be watched through a gate nobody has reviewed. The hot lane uses it too: a hot
+    // mint gets one coin record per lease.
+    let coin_exact_review =
+        if taps.iter().any(|tap| tap.kind == TapKind::CoinExact) || file.hot.is_some() {
+            let path = file.taps.coin_exact_review.as_deref().ok_or(
+                "a mint names the coin_exact tap (or a [hot] section exists) but \
+             taps.coin_exact_review is absent; an unreviewed route may not be tapped",
+            )?;
+            Some(read_bounded_file(
+                &resolve(&base, path),
+                MAX_CONFIG_BYTES,
+                "taps.coin_exact_review",
+            )?)
+        } else {
+            None
+        };
     let discovery_review = if let Some(discovery) = &file.discovery {
         let path = file.taps.discovery_review.as_deref().ok_or(
             "a [discovery] section exists but taps.discovery_review is absent; \
@@ -482,8 +547,68 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
     } else {
         None
     };
-    if taps.is_empty() {
-        return Err("the keeper config names no wallet and no mint taps; nothing to keep".into());
+    let (hot, callout_top_review) = if let Some(section) = &file.hot {
+        let path = file.taps.callout_top_review.as_deref().ok_or(
+            "a [hot] section exists but taps.callout_top_review is absent; \
+             an unreviewed route may not be tapped",
+        )?;
+        let bytes = read_bounded_file(
+            &resolve(&base, path),
+            MAX_CONFIG_BYTES,
+            "taps.callout_top_review",
+        )?;
+        let review = RowProjectionReviewV1::from_slice(&bytes)
+            .map_err(|error| format!("taps.callout_top_review does not parse: {error}"))?;
+        if review.route_id != RouteId::CalloutTop.to_string() {
+            return Err(format!(
+                "taps.callout_top_review reviews route {:?}, not callout_top",
+                review.route_id
+            )
+            .into());
+        }
+        let max_concurrent_mints = section
+            .max_concurrent_mints
+            .unwrap_or(DEFAULT_HOT_MAX_CONCURRENT);
+        if !(1..=MAX_HOT_FILE_ENTRIES).contains(&max_concurrent_mints) {
+            return Err(format!(
+                "hot.max_concurrent_mints must be between 1 and {MAX_HOT_FILE_ENTRIES}"
+            )
+            .into());
+        }
+        let candles = section
+            .candles_cadence_minutes
+            .unwrap_or(DEFAULT_HOT_CANDLES_CADENCE_MINUTES);
+        require_gentle_cadence("hot.candles_cadence_minutes", candles)?;
+        let trades = section
+            .trades_cadence_minutes
+            .unwrap_or(DEFAULT_HOT_TRADES_CADENCE_MINUTES);
+        require_gentle_cadence("hot.trades_cadence_minutes", trades)?;
+        let coin_exact = section
+            .coin_exact_cadence_minutes
+            .unwrap_or(DEFAULT_HOT_COIN_EXACT_CADENCE_MINUTES);
+        require_gentle_cadence("hot.coin_exact_cadence_minutes", coin_exact)?;
+        let callout_top = section
+            .callout_top_cadence_minutes
+            .unwrap_or(DEFAULT_HOT_CALLOUT_TOP_CADENCE_MINUTES);
+        require_gentle_cadence("hot.callout_top_cadence_minutes", callout_top)?;
+        (
+            Some(HotConfig {
+                max_concurrent_mints,
+                candles_cadence_seconds: candles * 60,
+                trades_cadence_seconds: trades * 60,
+                coin_exact_cadence_seconds: coin_exact * 60,
+                callout_top_cadence_seconds: callout_top * 60,
+            }),
+            Some(bytes),
+        )
+    } else {
+        (None, None)
+    };
+    if taps.is_empty() && hot.is_none() {
+        return Err(
+            "the keeper config names no wallet, no mint taps and no [hot] lane; nothing to keep"
+                .into(),
+        );
     }
     let mut seen = std::collections::BTreeSet::new();
     for tap in &taps {
@@ -518,6 +643,8 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
         trades_review,
         coin_exact_review,
         discovery_review,
+        callout_top_review,
+        hot,
         taps,
     })
 }
@@ -578,6 +705,28 @@ struct ShutdownRecord {
     reason: String,
 }
 
+/// The hot lane as the heartbeat states it every tick: which mints hold leases (with the tap
+/// clocks carried in `tap_clocks` under the same `kind:mint` keys as every other tap), which
+/// were refused over the bound, and what the hot-requests file itself looked like.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct HotStatusV1 {
+    /// `absent` (no file — the ordinary quiet state), `ok`, or `malformed_kept_last_good`.
+    file_state: String,
+    leased: Vec<HotLeaseRecord>,
+    /// Requested-hot mints the concurrency bound refused this tick, freshest-first losers of
+    /// the lease sort. Named here and as durable cycle gaps, never silently dropped.
+    refused_over_bound: Vec<String>,
+    note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HotLeaseRecord {
+    mint: String,
+    expires_at: String,
+}
+
 /// The whole heartbeat. Unknown fields are tolerated on read so an older keeper build can still
 /// adopt a newer file's memory instead of resetting the day budget.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -600,6 +749,10 @@ struct HeartbeatV1 {
     catalog_root: String,
     config_path: String,
     note: Option<String>,
+    /// Present exactly while a `[hot]` section is configured; absent otherwise, and absent in
+    /// heartbeats written before the hot lane existed.
+    #[serde(default)]
+    hot: Option<HotStatusV1>,
     shutdown: Option<ShutdownRecord>,
 }
 
@@ -693,6 +846,166 @@ fn new_signatures_since<'a>(rows: &'a [String], remembered: Option<&str>) -> (&'
             .position(|signature| signature == known)
             .map_or((rows, false), |position| (&rows[..position], true)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The hot-attention lane: mints core asked to run hot, leased under a hard bound.
+// ---------------------------------------------------------------------------
+
+/// One entry of `<root>/hot-requests.json`, as this keeper reads it. Unknown fields are
+/// tolerated on purpose: the file is core's (`apps/core/src/hot_requests.rs` is the writer and
+/// owns the contract), this struct only mirrors the leaves the keeper needs, and version drift
+/// on the writer side must degrade to ignored extras rather than a refused file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HotFileEntry {
+    mint: String,
+    /// Hotness end unless a further act refreshes it. Parsed and enforced here; expiry is a
+    /// silent stop with a note, never an error.
+    expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HotFileV1 {
+    contract: String,
+    schema_version: u16,
+    #[serde(default)]
+    requests: Vec<HotFileEntry>,
+}
+
+enum HotFileRead {
+    /// No file: the ordinary state of a root whose core never wrote one (operator on another
+    /// box, or no qualifying act yet). Silence-with-absence, not an error.
+    Absent,
+    Present(Vec<HotFileEntry>),
+}
+
+/// Read the hot-requests file the way the config is read: fully validated or refused whole. A
+/// refusal keeps the last good entries (the caller's job) with a heartbeat note, exactly like a
+/// broken config edit.
+fn read_hot_requests(path: &Path) -> Result<HotFileRead, Failure> {
+    if !path.exists() {
+        return Ok(HotFileRead::Absent);
+    }
+    let bytes = read_bounded_file(path, MAX_HOT_REQUESTS_BYTES, "hot-requests file")?;
+    let file: HotFileV1 = serde_json::from_slice(&bytes)?;
+    if file.contract != HOT_REQUESTS_CONTRACT || file.schema_version != 1 {
+        return Err(format!(
+            "hot-requests file states contract {:?} v{}, not {HOT_REQUESTS_CONTRACT} v1",
+            file.contract, file.schema_version
+        )
+        .into());
+    }
+    if file.requests.len() > MAX_HOT_FILE_ENTRIES {
+        return Err(format!(
+            "hot-requests file carries {} entries; the writer bounds it at {MAX_HOT_FILE_ENTRIES}",
+            file.requests.len()
+        )
+        .into());
+    }
+    for entry in &file.requests {
+        validate_base58_address(&entry.mint, "hot-requests mint")?;
+        if parse_instant(&entry.expires_at).is_none() {
+            return Err(format!(
+                "hot-requests entry for {} carries unparseable expiresAt {:?}",
+                entry.mint, entry.expires_at
+            )
+            .into());
+        }
+    }
+    Ok(HotFileRead::Present(file.requests))
+}
+
+/// One leased hot mint: inside the concurrency bound, TTL still live.
+#[derive(Clone, Debug)]
+struct HotLease {
+    mint: String,
+    expires_at: OffsetDateTime,
+    expires_at_wire: String,
+}
+
+/// Which requested mints hold the hot slots right now, and which are refused over the bound.
+///
+/// The slots go to the LATEST expiries — the most recently refreshed attention — so a fresh act
+/// on a new coin takes a slot from whichever lease is closest to expiring ("oldest expires
+/// first" is exactly how the bound frees). Expired entries are simply not leases any more; the
+/// caller notes the stop, and refused mints are named rather than silently dropped. Ties break
+/// on the mint so a restart computes the identical set from the identical file.
+fn hot_leases(
+    entries: &[HotFileEntry],
+    now: OffsetDateTime,
+    bound: usize,
+) -> (Vec<HotLease>, Vec<String>) {
+    let mut live: Vec<HotLease> = entries
+        .iter()
+        .filter_map(|entry| {
+            parse_instant(&entry.expires_at)
+                .filter(|expires| *expires > now)
+                .map(|expires| HotLease {
+                    mint: entry.mint.clone(),
+                    expires_at: expires,
+                    expires_at_wire: entry.expires_at.clone(),
+                })
+        })
+        .collect();
+    live.sort_by(|left, right| {
+        right
+            .expires_at
+            .cmp(&left.expires_at)
+            .then_with(|| left.mint.cmp(&right.mint))
+    });
+    let refused = live
+        .split_off(bound.min(live.len()))
+        .into_iter()
+        .map(|lease| lease.mint)
+        .collect();
+    (live, refused)
+}
+
+/// The taps a set of hot leases asks for this tick. A mint the standing watch set already taps
+/// at least this fast keeps its configured tap (hot never slows anything down); otherwise the
+/// hot tap takes the same clock key, so cadence memory carries across the handover and the
+/// heartbeat lists hot mints exactly like every other tap.
+fn hot_taps(leases: &[HotLease], hot: &HotConfig, configured: &[Tap]) -> Vec<Tap> {
+    let configured_at_least_as_fast = |kind: &TapKind, subject: &str, cadence: u64| {
+        configured.iter().any(|tap| {
+            tap.kind == *kind && tap.subject == subject && tap.cadence_seconds <= cadence
+        })
+    };
+    let mut taps = Vec::new();
+    for lease in leases {
+        for (kind, cadence_seconds) in [
+            (TapKind::Candles, hot.candles_cadence_seconds),
+            (TapKind::Trades, hot.trades_cadence_seconds),
+            (TapKind::CoinExact, hot.coin_exact_cadence_seconds),
+            (TapKind::CalloutTop, hot.callout_top_cadence_seconds),
+        ] {
+            if configured_at_least_as_fast(&kind, &lease.mint, cadence_seconds) {
+                continue;
+            }
+            taps.push(Tap {
+                kind,
+                subject: lease.mint.clone(),
+                label: Some("hot".to_owned()),
+                cadence_seconds,
+                cost: 1,
+            });
+        }
+    }
+    taps
+}
+
+/// The tick's whole tap universe: the configured watch set, minus any tap a hot lease overrides
+/// (same `kind:subject` key at a faster cadence), plus the hot taps.
+fn effective_taps(configured: &[Tap], hot: &[Tap]) -> Vec<Tap> {
+    let hot_keys: std::collections::BTreeSet<String> = hot.iter().map(Tap::key).collect();
+    configured
+        .iter()
+        .filter(|tap| !hot_keys.contains(&tap.key()))
+        .cloned()
+        .chain(hot.iter().cloned())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +1248,12 @@ async fn run_pump_tap(
                     "a discovery tap ran without its review; load_config must forbid this",
                 )?,
             ),
+            TapKind::CalloutTop => (
+                RouteId::CalloutTop,
+                config.callout_top_review.as_deref().ok_or(
+                    "a callout_top tap ran without its review; load_config must forbid this",
+                )?,
+            ),
             TapKind::Wallet { .. } => return Err("wallet tap dispatched to the pump path".into()),
         };
     let mut query = BTreeMap::new();
@@ -950,6 +1269,11 @@ async fn run_pump_tap(
         TapKind::Trades => {
             query.insert("limit".to_owned(), config.trades_limit.to_string());
         }
+        TapKind::CalloutTop => {
+            // The exact ask the reviewed material was gathered with; the name is
+            // catalog-declared public, so the retained request restates it.
+            query.insert("limit".to_owned(), HOT_CALLOUT_TOP_LIMIT.to_string());
+        }
         TapKind::Discovery => {
             query.insert("limit".to_owned(), DISCOVERY_PAGE_LIMIT.to_string());
             query.insert("offset".to_owned(), "0".to_owned());
@@ -958,6 +1282,7 @@ async fn run_pump_tap(
         }
         TapKind::CoinExact | TapKind::Wallet { .. } => {}
     }
+
     let mut client_config = ClientConfig {
         request_budget: 1,
         // One attempt, no internal retries: backoff is the keeper's job and is durable there.
@@ -1604,6 +1929,14 @@ struct Keeper {
     process_start: Instant,
     run_tag: String,
     clock_id: String,
+    /// Last good hot-requests entries, kept across a malformed re-read exactly like a broken
+    /// config edit keeps the last good config.
+    hot_entries: Vec<HotFileEntry>,
+    hot_file_state: String,
+    hot_note: Option<String>,
+    /// Mints leased last tick, so lease starts and silent stops are logged once as
+    /// transitions instead of once per tick.
+    previously_leased: std::collections::BTreeSet<String>,
 }
 
 fn fresh_heartbeat(
@@ -1631,6 +1964,7 @@ fn fresh_heartbeat(
         catalog_root: config.root.join("catalog").display().to_string(),
         config_path: config_path.display().to_string(),
         note: None,
+        hot: None,
         shutdown: None,
     }
 }
@@ -1714,6 +2048,10 @@ async fn keeper_main(options: &KeeperOptions) -> Result<String, Failure> {
         process_start,
         run_tag,
         clock_id,
+        hot_entries: Vec::new(),
+        hot_file_state: String::new(),
+        hot_note: None,
+        previously_leased: std::collections::BTreeSet::new(),
     };
     write_heartbeat(&keeper.heartbeat_path, &keeper.heartbeat)?;
     keeper.log.line(&format!(
@@ -1763,6 +2101,14 @@ async fn keeper_main(options: &KeeperOptions) -> Result<String, Failure> {
                 keeper.heartbeat.note = Some(note);
             }
         }
+        // The hot-attention lane: re-read core's hot-requests file the way the config was just
+        // re-read, lease the requested mints under the bound, and merge their taps in. All of
+        // this runs every tick — backoff and day-idle included — so the heartbeat always states
+        // the hot lane even while nothing may be tapped.
+        let (hot_lane_taps, refused_hot) = keeper.refresh_hot_lane(now);
+        let taps = effective_taps(&keeper.config.taps, &hot_lane_taps);
+        let live_keys: std::collections::BTreeSet<String> = taps.iter().map(Tap::key).collect();
+        prune_stale_tap_clocks(&mut keeper.heartbeat.tap_clocks, &live_keys, now);
         let in_backoff = keeper
             .heartbeat
             .backoff_until
@@ -1774,15 +2120,15 @@ async fn keeper_main(options: &KeeperOptions) -> Result<String, Failure> {
             keeper.log.line("rate-limit backoff elapsed; resuming");
         }
         if !in_backoff && keeper.heartbeat.state != "day_budget_idle" {
-            let due: Vec<Tap> = keeper
-                .config
-                .taps
+            let due: Vec<Tap> = taps
                 .iter()
                 .filter(|tap| tap_due(tap, &keeper.heartbeat.tap_clocks, now))
                 .cloned()
                 .collect();
             if !due.is_empty() {
-                let interrupted = keeper.cycle(due, &mut sigterm, &mut sigint).await?;
+                let interrupted = keeper
+                    .cycle(due, &refused_hot, &mut sigterm, &mut sigint)
+                    .await?;
                 cycles_run += 1;
                 if let Some(signal) = interrupted {
                     shutdown_reason = Some(signal.to_owned());
@@ -1833,6 +2179,24 @@ async fn keeper_main(options: &KeeperOptions) -> Result<String, Failure> {
     }))?)
 }
 
+/// Cadence memory for taps that no longer exist (a hot lease expired, a config edit removed a
+/// mint) is kept for two days — a lease that comes back inside the window resumes its clock —
+/// then dropped, so hot-lane churn cannot grow the heartbeat without bound.
+fn prune_stale_tap_clocks(
+    clocks: &mut BTreeMap<String, TapClock>,
+    live_keys: &std::collections::BTreeSet<String>,
+    now: OffsetDateTime,
+) {
+    clocks.retain(|key, clock| {
+        live_keys.contains(key)
+            || clock
+                .last_attempt_at
+                .as_deref()
+                .and_then(parse_instant)
+                .is_some_and(|last| now - last < time::Duration::hours(48))
+    });
+}
+
 /// Poll for an already-delivered signal without waiting. Used between taps so a shutdown request
 /// interrupts the cycle at a commit boundary rather than mid-read.
 async fn pending_signal(
@@ -1848,10 +2212,96 @@ async fn pending_signal(
 }
 
 impl Keeper {
+    /// One tick's view of the hot lane: read the file (keeping the last good entries over a
+    /// malformed one, with a note, exactly like the config), lease under the bound, log the
+    /// transitions once, restate everything in the heartbeat, and return the hot taps plus the
+    /// refused mints. `[hot]` unconfigured returns nothing and clears the heartbeat field.
+    fn refresh_hot_lane(&mut self, now: OffsetDateTime) -> (Vec<Tap>, Vec<String>) {
+        let Some(hot_config) = self.config.hot.clone() else {
+            self.heartbeat.hot = None;
+            self.hot_entries.clear();
+            self.previously_leased.clear();
+            return (Vec::new(), Vec::new());
+        };
+        let path = self.config.root.join(HOT_REQUESTS_FILE_NAME);
+        let file_state = match read_hot_requests(&path) {
+            Ok(HotFileRead::Absent) => {
+                self.hot_entries.clear();
+                self.hot_note = None;
+                "absent"
+            }
+            Ok(HotFileRead::Present(entries)) => {
+                self.hot_entries = entries;
+                self.hot_note = None;
+                "ok"
+            }
+            Err(error) => {
+                self.hot_note = Some(format!(
+                    "hot-requests file is malformed, keeping the last good entries: {error}"
+                ));
+                "malformed_kept_last_good"
+            }
+        };
+        if self.hot_file_state != file_state {
+            self.log.line(&format!(
+                "hot-requests file state: {file_state}{}",
+                self.hot_note
+                    .as_deref()
+                    .map_or_else(String::new, |note| format!(" ({note})"))
+            ));
+            file_state.clone_into(&mut self.hot_file_state);
+        }
+        let (leases, refused) = hot_leases(&self.hot_entries, now, hot_config.max_concurrent_mints);
+        let leased_now: std::collections::BTreeSet<String> =
+            leases.iter().map(|lease| lease.mint.clone()).collect();
+        for lease in &leases {
+            if !self.previously_leased.contains(&lease.mint) {
+                self.log.line(&format!(
+                    "hot lease started mint={} until={}",
+                    lease.mint, lease.expires_at_wire
+                ));
+            }
+        }
+        for mint in self.previously_leased.difference(&leased_now) {
+            // The silent stop, with its note: hotness ended (TTL expiry, or a fresher lease
+            // took the slot) and the fast taps simply stop. Never an error.
+            self.log
+                .line(&format!("hot lease ended mint={mint}; hot taps stop"));
+        }
+        self.previously_leased = leased_now;
+        for mint in &refused {
+            if !self
+                .heartbeat
+                .hot
+                .as_ref()
+                .is_some_and(|status| status.refused_over_bound.iter().any(|held| held == mint))
+            {
+                self.log.line(&format!(
+                    "hot request refused over bound ({} concurrent): mint={mint}",
+                    hot_config.max_concurrent_mints
+                ));
+            }
+        }
+        self.heartbeat.hot = Some(HotStatusV1 {
+            file_state: file_state.to_owned(),
+            leased: leases
+                .iter()
+                .map(|lease| HotLeaseRecord {
+                    mint: lease.mint.clone(),
+                    expires_at: lease.expires_at_wire.clone(),
+                })
+                .collect(),
+            refused_over_bound: refused.clone(),
+            note: self.hot_note.clone(),
+        });
+        (hot_taps(&leases, &hot_config, &self.config.taps), refused)
+    }
+
     #[allow(clippy::too_many_lines)] // Budgets, taps, gaps and the closure are one decision walk.
     async fn cycle(
         &mut self,
         due: Vec<Tap>,
+        refused_hot: &[String],
         sigterm: &mut tokio::signal::unix::Signal,
         sigint: &mut tokio::signal::unix::Signal,
     ) -> Result<Option<&'static str>, Failure> {
@@ -1973,7 +2423,11 @@ impl Keeper {
                     )
                     .await?
                 }
-                TapKind::Candles | TapKind::Trades | TapKind::CoinExact | TapKind::Discovery => {
+                TapKind::Candles
+                | TapKind::Trades
+                | TapKind::CoinExact
+                | TapKind::Discovery
+                | TapKind::CalloutTop => {
                     run_pump_tap(
                         tap,
                         &self.config,
@@ -2034,6 +2488,19 @@ impl Keeper {
 
         let cycle_ended_wall = OffsetDateTime::now_utc();
         let cycle_ended = wall(cycle_ended_wall)?;
+        // Requested-hot mints the concurrency bound refused are durable defects of this cycle:
+        // her attention asked and the keeper deliberately did not tap, so the catalog says so
+        // rather than the request just vanishing.
+        for mint in refused_hot {
+            gaps.push(CycleGap {
+                subject: Some(format!("hot:{mint}")),
+                reason: "hot_concurrency_bound_refused".to_owned(),
+                lower: Boundary::Wall {
+                    value: cycle_started,
+                },
+                upper: Some(Boundary::Wall { value: cycle_ended }),
+            });
+        }
         if day_idle_entered {
             "day_budget_idle".clone_into(&mut self.heartbeat.state);
             gaps.push(CycleGap {
@@ -2187,13 +2654,31 @@ mod tests {
             "per_cycle_requests {} cannot afford the coincident schedule ({coincident})",
             config.per_cycle_requests
         );
+        // ... and the worst hot coincidence on top: every hot slot freshly leased in the same
+        // cycle, each wanting all four hot taps at once. This is the budget comment's math,
+        // asserted so an edit that breaks it is caught here instead of as live gap-noise.
+        let hot = config.hot.as_ref().expect("the starter config runs hot");
+        assert_eq!(hot.max_concurrent_mints, 3);
+        assert_eq!(hot.candles_cadence_seconds, 120);
+        assert_eq!(hot.trades_cadence_seconds, 120);
+        assert_eq!(hot.coin_exact_cadence_seconds, 1_800);
+        assert_eq!(hot.callout_top_cadence_seconds, 1_800);
+        let hot_worst = u32::try_from(hot.max_concurrent_mints).expect("small") * 4;
+        assert!(
+            coincident + hot_worst <= config.per_cycle_requests,
+            "per_cycle_requests {} cannot afford the coincident schedule plus a full hot lane \
+             ({coincident} + {hot_worst})",
+            config.per_cycle_requests
+        );
         assert!(!config.candles_review.is_empty());
         assert!(!config.trades_review.is_empty());
         assert!(config.coin_exact_review.is_some());
         assert!(config.discovery_review.is_some());
+        assert!(config.callout_top_review.is_some());
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Every refusal the config surface makes, exercised in one place.
     fn config_refusals_are_stated_before_anything_runs() {
         let dir = tempfile::tempdir().expect("temp dir");
         let review = dir.path().join("review.json");
@@ -2277,6 +2762,204 @@ mod tests {
                 .to_owned(),
         ));
         assert!(refused.is_err());
+        // A [hot] section without taps.callout_top_review is refused: a hot mint gets a
+        // callout_top read, and an unreviewed route may not be tapped.
+        let refused = load_config(&write(
+            "root = \"state\"\n[budgets]\nper_cycle_requests = 8\nper_day_requests = 100\n\
+             [taps]\ncandles_review = \"review.json\"\ntrades_review = \"review.json\"\n\
+             coin_exact_review = \"review.json\"\n[hot]\n\
+             [[mints]]\nmint = \"XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump\"\n\
+             taps = [\"candles\"]\ncandles_cadence_minutes = 5\n"
+                .to_owned(),
+        ));
+        assert!(refused.is_err());
+        // A [hot] section without a coin_exact review is refused for the same reason.
+        let real_callout =
+            repo_path("crates/joshi-pump-api/fixtures/row_projection_callout_top_v1.json");
+        let refused = load_config(&write(format!(
+            "root = \"state\"\n[budgets]\nper_cycle_requests = 8\nper_day_requests = 100\n\
+             [taps]\ncandles_review = \"review.json\"\ntrades_review = \"review.json\"\n\
+             callout_top_review = \"{}\"\n[hot]\n\
+             [[mints]]\nmint = \"XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump\"\n\
+             taps = [\"candles\"]\ncandles_cadence_minutes = 5\n",
+            real_callout.display()
+        )));
+        assert!(refused.is_err());
+        // A callout review for the wrong route is refused before it costs a request: the
+        // coin_exact row projection reviews coin_exact, not callout_top.
+        let wrong_route =
+            repo_path("crates/joshi-pump-api/fixtures/row_projection_coin_exact_v1.json");
+        let refused = load_config(&write(format!(
+            "root = \"state\"\n[budgets]\nper_cycle_requests = 8\nper_day_requests = 100\n\
+             [taps]\ncandles_review = \"review.json\"\ntrades_review = \"review.json\"\n\
+             coin_exact_review = \"{}\"\ncallout_top_review = \"{}\"\n[hot]\n\
+             [[mints]]\nmint = \"XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump\"\n\
+             taps = [\"candles\"]\ncandles_cadence_minutes = 5\n",
+            wrong_route.display(),
+            wrong_route.display()
+        )));
+        assert!(refused.is_err());
+    }
+
+    /// The hot-requests file is validated whole, exactly like the config: one bad entry refuses
+    /// the file (the caller keeps the last good read), while an absent file is the ordinary
+    /// quiet state and means no hot mints.
+    #[test]
+    fn hot_requests_file_is_validated_whole_and_absent_is_ordinary() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(HOT_REQUESTS_FILE_NAME);
+        assert!(matches!(
+            read_hot_requests(&path).expect("absent reads"),
+            HotFileRead::Absent
+        ));
+        let good = serde_json::json!({
+            "contract": HOT_REQUESTS_CONTRACT,
+            "schemaVersion": 1,
+            "authority": "operational_signal_derived_from_durable_acts_not_evidence",
+            "writtenAt": "2026-08-24T10:00:00.000000Z",
+            "requests": [{
+                "mint": "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump",
+                "firstRequestedAt": "2026-08-24T10:00:00.000000Z",
+                "lastRequestedAt": "2026-08-24T10:00:00.000000Z",
+                "expiresAt": "2026-08-24T10:30:00.000000Z",
+                "lastCommandKind": "record_focus",
+                "lastCommandId": "command-1",
+                "lastCommitSeq": "10",
+                "aFutureField": "tolerated"
+            }],
+        });
+        fs::write(&path, serde_json::to_vec(&good).expect("bytes")).expect("write");
+        let HotFileRead::Present(entries) = read_hot_requests(&path).expect("good file reads")
+        else {
+            panic!("present file read as absent");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].mint,
+            "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+        );
+
+        // One non-mint entry refuses the whole file.
+        let mut bad = good.clone();
+        bad["requests"][0]["mint"] = serde_json::json!("not-base58!");
+        fs::write(&path, serde_json::to_vec(&bad).expect("bytes")).expect("write");
+        assert!(read_hot_requests(&path).is_err());
+        // A wrong contract refuses the whole file.
+        let mut bad = good.clone();
+        bad["contract"] = serde_json::json!("joshi.something.else.v1");
+        fs::write(&path, serde_json::to_vec(&bad).expect("bytes")).expect("write");
+        assert!(read_hot_requests(&path).is_err());
+        // Torn bytes refuse the whole file.
+        fs::write(&path, b"{ not json").expect("write");
+        assert!(read_hot_requests(&path).is_err());
+    }
+
+    /// The lease sort: the freshest expiries hold the slots (each act refreshes an expiry, so
+    /// this is most-recent attention), the refused are named, the expired simply are not
+    /// leases, and the identical file yields the identical set across a restart.
+    #[test]
+    fn hot_leases_go_to_the_freshest_expiries_and_the_refused_are_named() {
+        let entry = |mint: &str, expires: &str| HotFileEntry {
+            mint: mint.to_owned(),
+            expires_at: expires.to_owned(),
+        };
+        let now = OffsetDateTime::parse(
+            "2026-08-24T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("clock");
+        let entries = vec![
+            entry("MintExpired111", "2026-08-24T09:59:00.000000Z"),
+            entry("MintOldest2222", "2026-08-24T10:05:00.000000Z"),
+            entry("MintMiddle3333", "2026-08-24T10:15:00.000000Z"),
+            entry("MintFresh44444", "2026-08-24T10:29:00.000000Z"),
+        ];
+        let (leases, refused) = hot_leases(&entries, now, 2);
+        assert_eq!(
+            leases
+                .iter()
+                .map(|lease| lease.mint.as_str())
+                .collect::<Vec<_>>(),
+            ["MintFresh44444", "MintMiddle3333"],
+            "freshest expiries hold the bounded slots"
+        );
+        assert_eq!(
+            refused,
+            vec!["MintOldest2222".to_owned()],
+            "the oldest live expiry is first out, named rather than dropped"
+        );
+        let (all, none_refused) = hot_leases(&entries, now, 8);
+        assert_eq!(all.len(), 3, "the expired entry is simply not a lease");
+        assert!(none_refused.is_empty());
+    }
+
+    /// Hot taps take a mint's clock keys only where they are faster than the standing watch
+    /// set, so DREGG's 5-minute trades keep their cadence while its candles accelerate, and a
+    /// discovery-only mint gets all four hot taps.
+    #[test]
+    fn hot_taps_take_over_only_where_they_are_faster() {
+        let hot = HotConfig {
+            max_concurrent_mints: 3,
+            candles_cadence_seconds: 120,
+            trades_cadence_seconds: 120,
+            coin_exact_cadence_seconds: 1_800,
+            callout_top_cadence_seconds: 1_800,
+        };
+        let watched = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump";
+        let unwatched = "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump";
+        let configured = vec![
+            Tap {
+                kind: TapKind::Candles,
+                subject: watched.to_owned(),
+                label: Some("DREGG".to_owned()),
+                cadence_seconds: 600,
+                cost: 1,
+            },
+            Tap {
+                kind: TapKind::Trades,
+                subject: watched.to_owned(),
+                label: Some("DREGG".to_owned()),
+                cadence_seconds: 60,
+                cost: 1,
+            },
+            Tap {
+                kind: TapKind::CoinExact,
+                subject: watched.to_owned(),
+                label: Some("DREGG".to_owned()),
+                cadence_seconds: 600,
+                cost: 1,
+            },
+        ];
+        let lease = |mint: &str| HotLease {
+            mint: mint.to_owned(),
+            expires_at: OffsetDateTime::from_unix_timestamp(1_787_000_000).expect("clock"),
+            expires_at_wire: "2026-08-24T10:30:00.000000Z".to_owned(),
+        };
+        let synthesized = hot_taps(&[lease(watched), lease(unwatched)], &hot, &configured);
+        let keys: Vec<String> = synthesized.iter().map(Tap::key).collect();
+        // Watched mint: candles accelerate (600s -> 120s), trades stay configured (60s is
+        // already faster), coin_exact stays configured (600s beats 1800s), callout_top is new.
+        assert!(keys.contains(&format!("candles:{watched}")));
+        assert!(!keys.contains(&format!("trades:{watched}")));
+        assert!(!keys.contains(&format!("coin_exact:{watched}")));
+        assert!(keys.contains(&format!("callout_top:{watched}")));
+        // Unwatched mint: all four.
+        for kind in ["candles", "trades", "coin_exact", "callout_top"] {
+            assert!(keys.contains(&format!("{kind}:{unwatched}")));
+        }
+        let effective = effective_taps(&configured, &synthesized);
+        let mut seen = std::collections::BTreeSet::new();
+        for tap in &effective {
+            assert!(seen.insert(tap.key()), "no key is scheduled twice");
+        }
+        let watched_candles = effective
+            .iter()
+            .find(|tap| tap.key() == format!("candles:{watched}"))
+            .expect("watched candles tap");
+        assert_eq!(
+            watched_candles.cadence_seconds, 120,
+            "the hot tap replaced the slower configured one under the same clock key"
+        );
     }
 
     #[test]
@@ -2638,6 +3321,57 @@ mod tests {
         assert_eq!(evidence, 1, "the assertion cites the exact retained body");
     }
 
+    /// A live-captured `callout_top` read (DREGG, 2026-08-24, 3 callout rows) promotes under
+    /// the reviewed v2 row projection through the shared admission path, and — because the
+    /// catalog declares this route's `{mint}` path segment a public subject — the retained
+    /// envelope restates the ask and the request-path mint lands as the shared
+    /// `mint:pump:<mint>` source event, exactly like a candles or `coin_exact` read.
+    #[test]
+    fn a_captured_callout_top_outcome_promotes_and_binds_its_request_mint() {
+        let outcome_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/callout_top_live_outcome_v1.json",
+        ))
+        .expect("callout_top fixture");
+        let review_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/row_projection_callout_top_v1.json",
+        ))
+        .expect("callout_top row projection");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut store = SqliteStore::open(
+            keeper_store_config(dir.path()).expect("store config"),
+            StoreMode::SingleWriter,
+        )
+        .expect("store opens");
+        store
+            .migrate(wall(OffsetDateTime::now_utc()).expect("clock"))
+            .expect("migrations");
+        let admitted =
+            admit_pump_outcome_bytes(&mut store, &outcome_bytes, &review_bytes, Instant::now())
+                .expect("callout_top admits");
+        assert!(admitted.completed);
+        assert_eq!(
+            admitted.prepared.decision.outcome,
+            SchemaTrustOutcome::Promoted
+        );
+        let events = &admitted
+            .prepared
+            .prepared
+            .admission_batch()
+            .store
+            .evidence
+            .source_events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].source_event_id.as_str(),
+            "mint:pump:XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+        );
+        assert_eq!(events[0].namespace.as_str(), "solana.token_mint");
+        assert_eq!(
+            events[0].event_kind.discriminator.as_str(),
+            "named_in_request_path"
+        );
+    }
+
     /// The same mint re-observed by a later sweep re-states an identical source event, and the
     /// store treats the restatement as idempotent rather than a conflict.
     #[test]
@@ -2834,6 +3568,8 @@ mod tests {
             trades_review: Vec::new(),
             coin_exact_review: None,
             discovery_review: None,
+            callout_top_review: None,
+            hot: None,
             taps: Vec::new(),
         }
     }

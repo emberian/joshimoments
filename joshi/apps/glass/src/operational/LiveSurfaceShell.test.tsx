@@ -257,8 +257,17 @@ describe("live surface shell", () => {
     await waitFor(() => {
       expect(attempts.some((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST")).toBe(true);
     });
-    const posted = attempts.find((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST");
-    const command = operatorCommandSchema.parse(JSON.parse(posted?.body ?? "{}"));
+    const posts = attempts.filter((attempt) => attempt.url.includes("/api/v1/operator/commands") && attempt.method === "POST");
+    const commands = posts.map((attempt) => operatorCommandSchema.parse(JSON.parse(attempt.body ?? "{}")));
+    // Entering the inspect lens emitted the automatic hot-scope assertion: scene-subject (so
+    // the selection instrument never scores it as a pick), the coin's mint in the payload.
+    const inspect = commands.find((entry) => entry.commandKind === "request_hot_scope");
+    expect(inspect?.subject).toEqual({ kind: "scene", key: SCENE_ID });
+    expect((inspect?.payload as { scope?: { subject?: unknown } }).scope?.subject).toEqual({ kind: "mint", key: MINT });
+    const postedIndex = commands.findIndex((entry) => entry.commandKind === "record_focus");
+    expect(postedIndex).toBeGreaterThanOrEqual(0);
+    const posted = posts[postedIndex];
+    const command = commands[postedIndex]!;
     expect(command.scene.sceneId).toBe(SCENE_ID);
     expect(command.scene.viewDigest).toBe(liveSnapshot.snapshotDigest);
     expect(command.subject).toEqual({ kind: "candidate", key: MINT });

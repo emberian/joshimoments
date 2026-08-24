@@ -2,6 +2,7 @@
 
 pub mod g0_inspector_smoke;
 mod g0_process_fault;
+pub mod hot_requests;
 pub mod live_follow;
 pub mod live_gesture;
 pub mod live_journal;
