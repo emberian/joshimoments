@@ -57,6 +57,29 @@ use thiserror::Error;
 /// Upper bound on observations one derivation will read back from the catalog.
 pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 
+/// Version of this module's derivation output: everything that decides the exact bytes
+/// [`derive_live_surface_with`] emits for an unchanged catalog — field selection, metadata
+/// claims, ordering, and the scene-identity preimage itself.
+///
+/// The follow ledger pins this value on every scene it records, so a remount can tell "this
+/// scene was derived by older code" (an immutable historical fact, kept byte-exact where an act
+/// retained the bytes and retired where it did not) apart from "this mount's own state is
+/// corrupt" (refused, loudly, as before).
+///
+/// **BUMP THIS WHENEVER A CODE CHANGE CAN ALTER THE DERIVED BYTES FOR AN UNCHANGED CATALOG.**
+/// Failing to bump it is exactly the bug that bricked every follow state on 2026-08-23: the
+/// candidate-metadata surface changed what a view contains, remount re-derived recorded scenes
+/// into different bytes, and the honest identity check refused every mount forever
+/// ("scene … does not re-derive to its recorded identity") while the launcher retried a failure
+/// no catalog advance could fix.
+///
+/// History:
+/// - (unrecorded): every derivation before this constant existed. A follow ledger recording no
+///   version is from this era, and its unretained scenes retire at the first upgraded remount.
+/// - `"2"`: candidate metadata claims (ticker, name, market cap) joined the view, and the
+///   derivation version joined the scene-identity preimage.
+pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "2";
+
 /// Exact, store-derived Glass scene plus the identities that justify every rendered value.
 #[derive(Debug)]
 pub struct LiveSurfaceDerivation {
@@ -71,6 +94,8 @@ pub struct LiveSurfaceReport {
     pub contract: &'static str,
     pub schema_version: u16,
     pub authority: &'static str,
+    /// The derivation version that produced these bytes: [`LIVE_SURFACE_DERIVATION_VERSION`].
+    pub derivation_version: &'static str,
     pub source_id: String,
     pub scene_id: String,
     pub view_digest: String,
@@ -411,6 +436,7 @@ pub fn derive_live_surface_with(
         contract: "joshi.core.live_surface",
         schema_version: 1,
         authority: "read_only_no_execution",
+        derivation_version: LIVE_SURFACE_DERIVATION_VERSION,
         source_id: source_id.to_string(),
         scene_id,
         view_digest: view.digest().to_string(),
@@ -2145,10 +2171,19 @@ fn source_health(
     }
 }
 
-/// Deterministic scene identity: the same catalog contents always re-derive the same scene.
+/// Deterministic scene identity: the same catalog contents at the same derivation version always
+/// name the same scene, and two derivation versions never name the same scene even over identical
+/// evidence — so an upgraded remount can mint a fresh scene at an unchanged watermark without
+/// colliding with the retired scene it supersedes.
 fn scene_identity(durable: &DurableSourceObservations) -> String {
+    scene_identity_under(LIVE_SURFACE_DERIVATION_VERSION, durable)
+}
+
+fn scene_identity_under(derivation_version: &str, durable: &DurableSourceObservations) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"joshi.core.live_surface.scene.v1\0");
+    hasher.update(b"joshi.core.live_surface.scene.v2\0");
+    hasher.update(derivation_version.as_bytes());
+    hasher.update(b"\0");
     hasher.update(durable.source_id.as_str().as_bytes());
     hasher.update(b"\0");
     hasher.update(durable.through_commit_seq.get().to_string().as_bytes());
@@ -2394,9 +2429,10 @@ struct CandleWire {
 #[cfg(test)]
 mod tests {
     use super::{
-        CandleRow, DecodedObservation, LiveSurfaceOptions, change_basis_points, decode_observation,
-        derive_live_surface_with, gap_shape, parse_candle_window, parse_coin_records,
-        source_identity, spacing_of,
+        CandleRow, DecodedObservation, LIVE_SURFACE_DERIVATION_VERSION, LiveSurfaceOptions,
+        MAX_LIVE_OBSERVATIONS, change_basis_points, decode_observation, derive_live_surface_with,
+        gap_shape, parse_candle_window, parse_coin_records, scene_identity_under, source_identity,
+        spacing_of,
     };
     use joshi_domain::{StableString, UtcTimestamp};
     use joshi_pump_adapter::{ProductReadInput, close_receipt, prepare_direct_product_read};
@@ -3270,5 +3306,45 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Two derivation versions never name the same scene over identical evidence, so an upgraded
+    /// remount can mint a fresh scene at an unchanged watermark without colliding with the
+    /// retired scene it supersedes — and the report says which version produced its bytes.
+    #[test]
+    fn scene_identity_separates_derivation_versions_over_identical_evidence() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = store_with_candles(root.path());
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let durable = store
+            .source_observations_as_known(&source, None, MAX_LIVE_OBSERVATIONS)
+            .expect("durable readback")
+            .expect("fixture store holds observations");
+        let current = scene_identity_under(LIVE_SURFACE_DERIVATION_VERSION, &durable);
+        let other = scene_identity_under("previous-era", &durable);
+        assert_ne!(
+            current, other,
+            "the derivation version is part of the scene-identity preimage"
+        );
+        assert_eq!(
+            scene_identity_under(LIVE_SURFACE_DERIVATION_VERSION, &durable),
+            current,
+            "identity stays deterministic at a fixed version"
+        );
+
+        let derived = derive_live_surface_with(
+            &store,
+            &source,
+            None,
+            &LiveSurfaceOptions {
+                attested_candle_subject: Some(SUBJECT.to_owned()),
+            },
+        )
+        .expect("fixture derivation");
+        assert_eq!(
+            derived.report.derivation_version,
+            LIVE_SURFACE_DERIVATION_VERSION
+        );
+        assert_eq!(derived.report.scene_id, current);
     }
 }
