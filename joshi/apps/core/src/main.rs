@@ -524,6 +524,7 @@ async fn main() -> Result<(), CliError> {
             let issued = launcher.issue_code(vec![
                 PairingScope::CockpitRead,
                 PairingScope::OperatorEvidenceWrite,
+                PairingScope::PresentationEvidenceWrite,
             ])?;
             if let Some(path) = &pairing_code_file {
                 write_pairing_code_file(path, issued.code.as_str())?;
@@ -613,6 +614,7 @@ async fn serve_follow_surface(
     let issued = launcher.issue_code(vec![
         PairingScope::CockpitRead,
         PairingScope::OperatorEvidenceWrite,
+        PairingScope::PresentationEvidenceWrite,
     ])?;
     if let Some(path) = &pairing_code_file {
         write_pairing_code_file(path, issued.code.as_str())?;
@@ -655,6 +657,7 @@ async fn serve_follow_surface(
                 && let Ok(issued) = poll_launcher.issue_code(vec![
                     PairingScope::CockpitRead,
                     PairingScope::OperatorEvidenceWrite,
+                    PairingScope::PresentationEvidenceWrite,
                 ])
                 && write_pairing_code_file(path, issued.code.as_str()).is_ok()
             {

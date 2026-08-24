@@ -316,6 +316,21 @@ async fn main() {
             state_dir.display()
         ))
     });
+    // A port that already answers means a session is probably already up. Two sessions over one
+    // cockpit-state contend on the follow overlay's writer lease and the second spins uselessly
+    // (observed live, 2026-08-23) — so this refuses by name instead, before starting anything.
+    for (label, address) in [
+        ("core follow surface", options.listen.clone()),
+        ("Glass cockpit", format!("127.0.0.1:{}", options.glass_port)),
+    ] {
+        if let Ok(parsed) = address.parse::<std::net::SocketAddr>()
+            && std::net::TcpStream::connect_timeout(&parsed, Duration::from_millis(400)).is_ok()
+        {
+            fail(&format!(
+                "{label} port {address} already answers — a JOSHI session appears to be up. Join it in the browser, take it down there (Ctrl-C), or pass a different --listen/--glass-port/--state for a second session"
+            ));
+        }
+    }
 
     // Stage 1: the keeper, unless the operator asked to watch a still catalog — or one is
     // already alive. The catalog is single-writer: a keeper running under launchd (or another
