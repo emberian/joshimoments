@@ -414,9 +414,11 @@ pub fn derive_live_surface_with(
         .count();
     let scene_id = scene_identity(&durable);
     let mut candidates = candidate_wires(&subjects, rendered_at)?;
-    // Newest observation first: the hunting order, and the order that makes the bound below
-    // keep the candidates an operator would actually look at. Deterministic: recency
-    // descending, absent recency last, ties broken by wire id.
+    // SELECTION is by recency — the bound keeps the candidates an operator would actually be
+    // hunting — but the SERVED ORDER is the contract's: strictly sorted, unique candidate ids.
+    // (The first version of this bound served recency-order and every mount on a real catalog
+    // refused with "candidates must be strictly sorted and unique" — the wire contract, not
+    // the board, owns ordering; the board sorts client-side from the served fields.)
     candidates.sort_by(|a, b| {
         b.last_observed_at
             .cmp(&a.last_observed_at)
@@ -436,6 +438,8 @@ pub fn derive_live_surface_with(
             ),
         });
     }
+    // The wire contract owns ordering: strictly sorted, unique ids, whatever the selection.
+    candidates.sort_by(|a, b| a.id.cmp(&b.id));
     let health = source_health(
         &durable,
         &watermark,
