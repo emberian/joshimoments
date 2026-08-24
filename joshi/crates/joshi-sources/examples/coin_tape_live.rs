@@ -2,17 +2,32 @@
 //!
 //! ```text
 //! coin_tape_live record  --root <dir> --mints <csv> [--seconds n] [--max-frames n]
-//!                        [--max-bytes n] [--key-file <path>]
+//!                        [--max-bytes n] [--inactivity-seconds n] [--key-file <path>]
+//!                        [--reconnect-attempts n] [--reconnect-backoff-seconds n]
+//!                        [--reconnect-backoff-cap-seconds n]
 //! coin_tape_live analyse --root <dir> [--bucket-seconds 60] [--trades <fetch-outcome.json>]...
 //! ```
 //!
-//! `record` opens ONE `PumpPortal` data socket, asks for the named mints' trades, and retains
-//! every inbound frame — trades, acknowledgements, provider control, anything — as exact bytes
-//! through the ordinary source-admission path. Three budgets bound it and this process checks all
-//! three itself rather than trusting the transport: a wall-clock ceiling, a frame ceiling and a
-//! byte ceiling. Exhausting one is a recorded stop. A socket that closes before the wall-clock
-//! ceiling produces an explicit coverage GAP carrying the exact unobserved window, because this
-//! feed exposes no replay cursor and therefore nothing can ever fill it in.
+//! `record` holds a `PumpPortal` trade subscription for the planned window and retains every
+//! inbound frame — trades, acknowledgements, provider control, anything — as exact bytes through
+//! the ordinary source-admission path. Three budgets bound it and this process checks all three
+//! itself rather than trusting the transport: a wall-clock ceiling, a frame ceiling and a byte
+//! ceiling. The frame and byte ceilings span the whole run; the inactivity ceiling is judged per
+//! connection, because it asks whether THIS socket is still delivering.
+//!
+//! Holding the window takes more than one socket. MEASURED 2026-08-23: a funded 40-minute session
+//! streamed 1690 frames and the provider closed the socket 72 seconds before the planned end.
+//! A provider that accepted the subscription and then hiccuped is reconnected to, under a doubling
+//! bounded backoff; each connection is its own SESSION with its own coverage window, and the span
+//! between the last thing a dying socket proved and the next socket's first word is a durable
+//! coverage GAP naming its cause. This feed exposes no replay cursor, so a gap is unrecoverable
+//! and is written down rather than smoothed over.
+//!
+//! The distinction that decides whether to reconnect is REFUSAL versus HICCUP. A provider that
+//! answers the subscription with a refusal — what an unfunded key gets — is never retried: it
+//! already said no, and re-asking is hammering. A refusal arriving on a RECONNECT (accepted
+//! earlier, refused now, which is what a plan expiring mid-run looks like) also terminates, under
+//! its own distinct reason.
 //!
 //! `analyse` reopens the catalog read-only in a later process and answers, from the retained bytes
 //! alone: what a frame carries, what clock it carries, whether its `txType` label is derivable
@@ -31,7 +46,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use joshi_admission::{
     AdmissionPolicy, PublicStoreReceiptV1, Sha256Digest, SourceDraftBatch, SourceFrameInput,
     source_drafts, source_frames,
@@ -68,6 +83,13 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const READBACK_LIMIT: usize = 200_000;
 const SEVERITY_DEGRADED: &str = "degraded";
 const SEVERITY_SCOPE_STOPPED: &str = "scope_stopped";
+/// Wall-versus-monotonic disagreement, inside one connection, that this run reads as a suspend
+/// rather than a slow loop.
+const SUSPEND_SKEW_MILLIS: i64 = 5_000;
+/// The head of the planned window spent connecting and asking, before the provider's first word.
+const CAUSE_AWAITING_FIRST_LIVENESS: &str = "awaiting_first_liveness";
+/// Time spent between sockets: the backoff, the handshake and the re-subscription.
+const CAUSE_BACKOFF_WAIT: &str = "backoff_wait";
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -82,13 +104,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 max_bytes: parse_flag(&arguments, "--max-bytes", 32 * 1024 * 1024)?,
                 inactivity_seconds: parse_flag(&arguments, "--inactivity-seconds", 45)?,
             };
+            let policy = ReconnectPolicy {
+                max_attempts: parse_flag(&arguments, "--reconnect-attempts", 6_u32)?,
+                initial_backoff: Duration::from_secs(parse_flag(
+                    &arguments,
+                    "--reconnect-backoff-seconds",
+                    2_u64,
+                )?),
+                max_backoff: Duration::from_secs(parse_flag(
+                    &arguments,
+                    "--reconnect-backoff-cap-seconds",
+                    60_u64,
+                )?),
+            };
             let key_file = flag(&arguments, "--key-file").map(PathBuf::from);
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             println!(
                 "{}",
-                runtime.block_on(record(&root, &mints, budget, key_file.as_deref()))?
+                runtime.block_on(record(&root, &mints, budget, policy, key_file.as_deref()))?
             );
         }
         "analyse" => {
@@ -103,8 +138,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn usage() -> Box<dyn Error> {
     "usage: coin_tape_live <record|analyse> --root <dir> [--mints <csv>] [--seconds n] \
-     [--max-frames n] [--max-bytes n] [--key-file <path>] [--bucket-seconds n] \
-     [--trades <fetch-outcome.json>]"
+     [--max-frames n] [--max-bytes n] [--inactivity-seconds n] [--key-file <path>] \
+     [--reconnect-attempts n] [--reconnect-backoff-seconds n] \
+     [--reconnect-backoff-cap-seconds n] [--bucket-seconds n] [--trades <fetch-outcome.json>]"
         .into()
 }
 
@@ -150,34 +186,87 @@ struct Budget {
     inactivity_seconds: u64,
 }
 
-/// Why the recorder stopped. Every stop is one of these; none of them is a silence.
+/// A bounded, doubling wait between reconnect attempts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Stop {
-    WallClockBudget,
+struct ReconnectPolicy {
+    /// Longest run of CONSECUTIVE failed attempts tolerated. Zero forbids reconnecting at all,
+    /// which is exactly the one-shot recorder this grew out of. The count is consecutive rather
+    /// than cumulative because a connection that actually delivered frames is evidence the
+    /// provider is serving us again, and a churning provider is still bounded by the wall clock.
+    max_attempts: u32,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+}
+
+impl ReconnectPolicy {
+    /// Wait before the `attempt`-th consecutive try, 1-based: the initial wait doubled once per
+    /// earlier consecutive failure, clamped to the ceiling.
+    fn backoff(self, attempt: u32) -> Duration {
+        let factor = 1_u32
+            .checked_shl(attempt.saturating_sub(1))
+            .unwrap_or(u32::MAX);
+        self.initial_backoff
+            .checked_mul(factor)
+            .unwrap_or(self.max_backoff)
+            .min(self.max_backoff)
+    }
+}
+
+/// Why ONE connection ended. This is not why the run ended: most of these are survivable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionEnd {
+    /// The wall clock reached the planned end while this connection was healthy.
+    PlannedWindowReached,
     FrameBudget,
     ByteBudget,
     ProviderClosedSocket,
     TransportError,
-    /// No frame for longer than the inactivity ceiling. MEASURED THE HARD WAY: a first run left a
-    /// half-open socket after the host suspended, and `next()` simply never returned again. From
-    /// inside the loop that is indistinguishable from a market that went quiet, so the tape has to
-    /// stop and say so rather than sit there accumulating an unobserved window it will later
-    /// report as coverage.
+    /// Nothing proved this socket alive for longer than the inactivity ceiling. MEASURED THE HARD
+    /// WAY: a first run left a half-open socket after the host suspended, and `next()` simply
+    /// never returned again. From inside the loop that is indistinguishable from a market that
+    /// went quiet, so the connection is abandoned rather than left to accumulate an unobserved
+    /// window it would later report as coverage.
     InactivityCeiling,
     /// The host's wall clock ran ahead of its monotonic clock, which means this process was
-    /// suspended. Everything between the last frame and the resume instant is unobserved.
+    /// suspended. Everything between the last liveness and the resume instant is unobserved, and
+    /// the socket that survived a suspend is almost certainly half-open.
     HostSuspended,
     /// The provider answered the subscription with a refusal instead of an acknowledgement.
     /// MEASURED 2026-08-22: a keyless connection is refused with "'subscribeTokenTrade' ...
     /// only available when connecting with an API key funded with at least 0.02 SOL". A window
-    /// after that frame is not quiet, it is unsubscribed, so the whole planned window is a gap.
+    /// after that frame is not quiet, it is unsubscribed.
     SubscriptionRefused,
+    /// A reconnect attempt could not establish a socket at all. No session ran; this exists so the
+    /// same decision function counts the attempt and spaces the next one.
+    ConnectFailed,
 }
 
-impl Stop {
+impl SessionEnd {
+    /// The run-level stop this end forces, or `None` when the run may reconnect and go on.
+    ///
+    /// The refusal arms are the whole reconnect/refusal distinction: a provider that ACCEPTED the
+    /// subscription and then dropped the socket is a hiccup and is retried; a provider that
+    /// ANSWERED WITH A REFUSAL said no, and re-asking is hammering. A refusal that arrives on a
+    /// reconnect — accepted at the start of the run, refused now — is the shape of a plan expiring
+    /// mid-run, and terminates under its own reason so the receipt cannot confuse the two.
+    const fn terminal(self, first_session: bool) -> Option<RunStop> {
+        match self {
+            Self::PlannedWindowReached => Some(RunStop::WallClockBudget),
+            Self::FrameBudget => Some(RunStop::FrameBudget),
+            Self::ByteBudget => Some(RunStop::ByteBudget),
+            Self::SubscriptionRefused if first_session => Some(RunStop::SubscriptionRefused),
+            Self::SubscriptionRefused => Some(RunStop::SubscriptionRefusedOnReconnect),
+            Self::ProviderClosedSocket
+            | Self::TransportError
+            | Self::InactivityCeiling
+            | Self::HostSuspended
+            | Self::ConnectFailed => None,
+        }
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
-            Self::WallClockBudget => "wall_clock_budget_exhausted",
+            Self::PlannedWindowReached => "wall_clock_budget_exhausted",
             Self::FrameBudget => "frame_budget_exhausted",
             Self::ByteBudget => "byte_budget_exhausted",
             Self::ProviderClosedSocket => "provider_closed_socket_before_planned_end",
@@ -185,15 +274,87 @@ impl Stop {
             Self::InactivityCeiling => "no_frame_within_inactivity_ceiling",
             Self::HostSuspended => "host_suspended_during_window",
             Self::SubscriptionRefused => "provider_refused_subscription",
+            Self::ConnectFailed => "reconnect_handshake_failed",
+        }
+    }
+}
+
+/// Why the whole chained run stopped. Every stop is one of these; none of them is a silence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunStop {
+    WallClockBudget,
+    FrameBudget,
+    ByteBudget,
+    SubscriptionRefused,
+    /// Accepted earlier in this run, refused on a later connection. A plan that expired mid-run
+    /// looks exactly like this, and it is NOT the same event as being refused at the door.
+    SubscriptionRefusedOnReconnect,
+    ReconnectAttemptsExhausted,
+}
+
+impl RunStop {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::WallClockBudget => "wall_clock_budget_exhausted",
+            Self::FrameBudget => "frame_budget_exhausted",
+            Self::ByteBudget => "byte_budget_exhausted",
+            Self::SubscriptionRefused => "provider_refused_subscription",
+            Self::SubscriptionRefusedOnReconnect => "provider_refused_subscription_on_reconnect",
+            Self::ReconnectAttemptsExhausted => "reconnect_attempts_exhausted",
         }
     }
 
-    /// A budget stop covered the window it promised. Anything else left an unobserved tail.
+    /// Whether the run stayed on the job until the wall clock the caller named ran out.
+    ///
+    /// This is NOT a claim that the window was fully observed: a run can reach its planned end
+    /// while waiting out a backoff, and then this is true and a gap still stands. Read it with
+    /// `totals.unobservedMillis`, never on its own.
     const fn planned_window_completed(self) -> bool {
-        matches!(
-            self,
-            Self::WallClockBudget | Self::FrameBudget | Self::ByteBudget
-        )
+        matches!(self, Self::WallClockBudget)
+    }
+
+    /// What kept the tail of the planned window unobserved. Reaching the planned end with a hole
+    /// still open means the run spent that tail between sockets.
+    const fn trailing_cause(self) -> &'static str {
+        match self {
+            Self::WallClockBudget => CAUSE_BACKOFF_WAIT,
+            other => other.as_str(),
+        }
+    }
+}
+
+/// What the run does after one connection ends.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Next {
+    Reconnect { attempt: u32, backoff: Duration },
+    Stop(RunStop),
+}
+
+/// The reconnect policy itself, with nothing else attached: given how a connection ended, how many
+/// consecutive attempts have already failed and how much of the planned window is left, either
+/// name the next attempt and its wait or name the run's terminal stop.
+fn next_step(
+    policy: ReconnectPolicy,
+    end: SessionEnd,
+    first_session: bool,
+    consecutive_failures: u32,
+    remaining: Duration,
+) -> Next {
+    if let Some(stop) = end.terminal(first_session) {
+        return Next::Stop(stop);
+    }
+    if remaining.is_zero() {
+        return Next::Stop(RunStop::WallClockBudget);
+    }
+    let attempt = consecutive_failures.saturating_add(1);
+    if attempt > policy.max_attempts {
+        return Next::Stop(RunStop::ReconnectAttemptsExhausted);
+    }
+    Next::Reconnect {
+        attempt,
+        // Never wait past the window the caller asked for: an attempt that could only land after
+        // the planned end is not an attempt, it is an overrun.
+        backoff: policy.backoff(attempt).min(remaining),
     }
 }
 
@@ -202,11 +363,440 @@ struct Captured {
     mono_ns: u64,
 }
 
+/// One poll of a live socket, in the terms the session loop reasons about rather than the
+/// transport's. `Quiet` is the absence of an answer within the poll window, which is deliberately
+/// NOT liveness: whether a silence is a quiet market, a dead socket or a suspended host is decided
+/// against the clocks at the top of the next iteration.
+enum WirePoll {
+    /// Bytes to retain, exactly as they arrived.
+    Frame(Bytes),
+    /// The socket proved itself alive without delivering anything retainable — a websocket ping or
+    /// pong. It carries no JSON body, so it feeds the inactivity clock and is counted, not stored.
+    Alive,
+    Quiet,
+    Closed,
+    Failed,
+}
+
+/// The one seam the session loop reaches the network through, so the reconnect and coverage
+/// behaviour can be driven by a scripted transport in the tests below.
+trait Wire {
+    async fn send_subscription(&mut self, text: String) -> Result<(), ()>;
+    async fn poll_within(&mut self, within: Duration) -> WirePoll;
+}
+
+/// The live socket behind that seam.
+struct SocketWire<S>(S);
+
+impl<S, E> Wire for SocketWire<S>
+where
+    S: Stream<Item = Result<Message, E>> + Sink<Message> + Unpin,
+{
+    async fn send_subscription(&mut self, text: String) -> Result<(), ()> {
+        // The error is discarded rather than reported: the endpoint this socket was built from
+        // carries the credential, and a transport error is free to quote the request it failed on.
+        self.0
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|_| ())
+    }
+
+    async fn poll_within(&mut self, within: Duration) -> WirePoll {
+        match tokio::time::timeout(within, self.0.next()).await {
+            Err(_) => WirePoll::Quiet,
+            Ok(None) => WirePoll::Closed,
+            Ok(Some(Err(_))) => WirePoll::Failed,
+            Ok(Some(Ok(message))) => match message {
+                Message::Text(text) => WirePoll::Frame(Bytes::from(text.as_bytes().to_vec())),
+                Message::Binary(binary) => WirePoll::Frame(Bytes::from(binary.to_vec())),
+                Message::Close(_) => WirePoll::Closed,
+                Message::Ping(_) | Message::Pong(_) => WirePoll::Alive,
+                Message::Frame(_) => WirePoll::Quiet,
+            },
+        }
+    }
+}
+
+/// Run-wide tape state: the frames captured so far, the total order they arrived in across every
+/// connection, and the sink that makes them durable. Sessions share one of these, so the frame and
+/// byte budgets span the whole chained run and the sequence never restarts.
+struct Tape<'a> {
+    process_start: Instant,
+    pending: Vec<Captured>,
+    sequence: u64,
+    frames: usize,
+    bytes: usize,
+    batches: usize,
+    commit: &'a mut dyn FnMut(Vec<Captured>, usize) -> Result<(), Box<dyn Error>>,
+}
+
+impl<'a> Tape<'a> {
+    fn new(
+        process_start: Instant,
+        commit: &'a mut dyn FnMut(Vec<Captured>, usize) -> Result<(), Box<dyn Error>>,
+    ) -> Self {
+        Self {
+            process_start,
+            pending: Vec::new(),
+            sequence: 0,
+            frames: 0,
+            bytes: 0,
+            batches: 0,
+            commit,
+        }
+    }
+
+    fn push(&mut self, frame: RawSourceFrame) -> Result<(), Box<dyn Error>> {
+        if frame.direction == FrameDirection::Inbound {
+            self.frames += 1;
+            self.bytes += frame.body.len();
+        }
+        self.pending.push(Captured {
+            frame,
+            mono_ns: u64::try_from(self.process_start.elapsed().as_nanos())?,
+        });
+        self.sequence += 1;
+        if self.pending.len() >= MAX_OBSERVATIONS_PER_BATCH {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        (self.commit)(std::mem::take(&mut self.pending), self.batches)?;
+        self.batches += 1;
+        Ok(())
+    }
+}
+
+/// The bounds one connection is judged against.
+#[derive(Clone, Copy, Debug)]
+struct SessionLimits {
+    /// Monotonic instant the planned window ends, taken at process start.
+    deadline: Instant,
+    /// The same instant on the wall clock, so the two can be compared against each other.
+    planned_end_millis: i64,
+    inactivity: Duration,
+    /// Run-wide, not per connection.
+    max_frames: usize,
+    max_bytes: usize,
+}
+
+/// What one connection did and what it can vouch for.
+#[derive(Clone, Copy, Debug)]
+struct SessionOutcome {
+    epoch: u64,
+    handshake_status: u16,
+    opened_at_millis: i64,
+    closed_at_millis: i64,
+    /// First proof the provider was speaking on this socket. Coverage starts here, not at connect:
+    /// the handshake and the subscription round trip observed nothing.
+    first_liveness_millis: Option<i64>,
+    last_liveness_millis: Option<i64>,
+    last_frame_millis: Option<i64>,
+    inbound_frames: usize,
+    inbound_bytes: usize,
+    transport_pings: usize,
+    end: SessionEnd,
+}
+
+impl SessionOutcome {
+    /// The interval this connection can honestly vouch for, as `(lower, upper)` wall milliseconds.
+    ///
+    /// A connection that stopped because the recorder told it to was reading a healthy socket right
+    /// up to that instant, so it vouches through the stop. A connection that ended on a FAULT
+    /// cannot vouch for anything after its last proof of liveness: between that proof and the close
+    /// the socket may already have been dead, and a half-open socket is indistinguishable from a
+    /// quiet market. A refused subscription vouches for nothing at all — it was never subscribed —
+    /// so it claims a zero-width window, which is the shape of a claim that says nothing.
+    fn claimed(&self, planned_end_millis: i64) -> (i64, i64) {
+        // A connection the provider never said a word on claims nothing, however it ended — a
+        // socket that opened as the planned end arrived has proved no coverage by outliving it.
+        let Some(lower) = self.first_liveness_millis else {
+            return (self.opened_at_millis, self.opened_at_millis);
+        };
+        let upper = match self.end {
+            SessionEnd::PlannedWindowReached => planned_end_millis,
+            SessionEnd::FrameBudget | SessionEnd::ByteBudget => self.closed_at_millis,
+            SessionEnd::SubscriptionRefused => lower,
+            _ => self.last_liveness_millis.unwrap_or(lower),
+        };
+        (lower, upper.max(lower))
+    }
+}
+
+/// Retain the exact bytes of the ask this connection made, under this connection's own epoch, so
+/// the catalog states which subjects each socket claimed coverage of without any later reader
+/// taking that on trust from a filename.
+fn retain_subscription(
+    tape: &mut Tape<'_>,
+    subscription: &[u8],
+    epoch: u64,
+    sent_at: i64,
+) -> Result<(), Box<dyn Error>> {
+    tape.push(RawSourceFrame {
+        contract_version: ADAPTER_CONTRACT_VERSION.to_owned(),
+        source: SourceId::PumpPortalWebSocket,
+        transport: Transport::WebSocket,
+        stream_class: StreamClass::LeasedHot,
+        direction: FrameDirection::OutboundControl,
+        content_type: ContentType::Json,
+        received_at: UnixMillis(sent_at),
+        connection_epoch: epoch,
+        sequence: tape.sequence,
+        http_status: None,
+        safe_headers: Vec::new(),
+        body: Bytes::from(subscription.to_vec()),
+    })
+}
+
+/// Hold one connection for as long as it is useful, retaining every frame it delivers.
+///
+/// Every budget is re-checked at the top of each iteration against BOTH clocks, because a
+/// monotonic deadline silently stretches across a host suspend and a wall clock alone cannot tell
+/// a suspend from a slow loop.
+async fn run_session<W: Wire>(
+    wire: &mut W,
+    tape: &mut Tape<'_>,
+    subscription: &[u8],
+    epoch: u64,
+    handshake_status: u16,
+    limits: SessionLimits,
+) -> Result<SessionOutcome, Box<dyn Error>> {
+    let opened_at_millis = now_millis()?;
+    let session_mono = Instant::now();
+    let mut outcome = SessionOutcome {
+        epoch,
+        handshake_status,
+        opened_at_millis,
+        closed_at_millis: opened_at_millis,
+        first_liveness_millis: None,
+        last_liveness_millis: None,
+        last_frame_millis: None,
+        inbound_frames: 0,
+        inbound_bytes: 0,
+        transport_pings: 0,
+        end: SessionEnd::TransportError,
+    };
+
+    // The ask is retained only after the send succeeded; an unsent ask was never made.
+    if wire
+        .send_subscription(String::from_utf8(subscription.to_vec())?)
+        .await
+        .is_err()
+    {
+        outcome.closed_at_millis = now_millis()?;
+        return Ok(outcome);
+    }
+    let sent_at = now_millis()?;
+    retain_subscription(tape, subscription, epoch, sent_at)?;
+
+    let inactivity_millis = i64::try_from(limits.inactivity.as_millis())?;
+    let end = loop {
+        if tape.frames >= limits.max_frames {
+            break SessionEnd::FrameBudget;
+        }
+        if tape.bytes >= limits.max_bytes {
+            break SessionEnd::ByteBudget;
+        }
+        let now = now_millis()?;
+        let wall_elapsed = now - opened_at_millis;
+        let mono_elapsed = i64::try_from(session_mono.elapsed().as_millis())?;
+        if wall_elapsed - mono_elapsed > SUSPEND_SKEW_MILLIS {
+            break SessionEnd::HostSuspended;
+        }
+        if now >= limits.planned_end_millis {
+            break SessionEnd::PlannedWindowReached;
+        }
+        if now - outcome.last_liveness_millis.unwrap_or(sent_at) > inactivity_millis {
+            break SessionEnd::InactivityCeiling;
+        }
+        let remaining = limits
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .min(limits.inactivity);
+        if remaining.is_zero() {
+            break SessionEnd::PlannedWindowReached;
+        }
+        let body = match wire.poll_within(remaining).await {
+            WirePoll::Quiet => continue,
+            WirePoll::Closed => break SessionEnd::ProviderClosedSocket,
+            WirePoll::Failed => break SessionEnd::TransportError,
+            WirePoll::Alive => {
+                outcome.transport_pings += 1;
+                let at = now_millis()?;
+                outcome.first_liveness_millis.get_or_insert(at);
+                outcome.last_liveness_millis = Some(at);
+                continue;
+            }
+            WirePoll::Frame(body) => body,
+        };
+        let received = now_millis()?;
+        outcome.first_liveness_millis.get_or_insert(received);
+        outcome.last_liveness_millis = Some(received);
+        outcome.last_frame_millis = Some(received);
+        outcome.inbound_frames += 1;
+        outcome.inbound_bytes += body.len();
+        let refused = classify_pumpportal_frame(&body).kind
+            == PumpPortalFrameKind::AuthenticationOrFundingRejected;
+        tape.push(RawSourceFrame::inbound_websocket(
+            SourceId::PumpPortalWebSocket,
+            StreamClass::LeasedHot,
+            UnixMillis(received),
+            epoch,
+            tape.sequence,
+            ContentType::Json,
+            body,
+        ))?;
+        // The refusal frame is retained first, then the connection ends: waiting out the
+        // inactivity ceiling after this frame would let the coverage claim swallow a window the
+        // provider had already said it would never serve.
+        if refused {
+            break SessionEnd::SubscriptionRefused;
+        }
+    };
+    outcome.closed_at_millis = now_millis()?;
+    outcome.end = end;
+    Ok(outcome)
+}
+
+/// One reconnect attempt as the receipt states it: which consecutive try it was, what it was
+/// answering, how long it waited first, and whether a socket came back.
+fn reconnect_record(
+    attempt: u32,
+    after: &str,
+    backoff: Duration,
+    outcome: &str,
+    handshake_status: Option<u16>,
+    at_millis: i64,
+) -> Value {
+    json!({
+        "attempt": attempt,
+        "afterEndReason": after,
+        "backoffMs": u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+        "outcome": outcome,
+        "handshakeStatus": handshake_status,
+        "atUnixMs": at_millis,
+    })
+}
+
+/// One interval of the planned window this run could not vouch for, and what made it so.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Unobserved {
+    lower_millis: i64,
+    upper_millis: i64,
+    cause: &'static str,
+    /// Index of the session whose coverage window this gap hangs from.
+    anchor: usize,
+}
+
+/// Everything in the planned window that no connection could vouch for, in order.
+///
+/// The walk is a complement: it carries a cursor through the sessions' claims and writes down every
+/// interval the cursor had to jump. Each jump is split at the instant the connection that opened it
+/// actually closed, because those two halves have different causes — before it the socket was
+/// faulting or silent while still nominally ours, after it this process was between sockets.
+fn unobserved_spans(
+    sessions: &[SessionOutcome],
+    run_opened_at_millis: i64,
+    planned_end_millis: i64,
+    stop: RunStop,
+) -> Vec<Unobserved> {
+    let mut spans: Vec<Unobserved> = Vec::new();
+    let mut cursor = run_opened_at_millis;
+    let mut previous: Option<(usize, &SessionOutcome)> = None;
+    for (index, session) in sessions.iter().enumerate() {
+        let (lower, upper) = session.claimed(planned_end_millis);
+        let (anchor, close, fault) = match previous {
+            None => (index, None, CAUSE_AWAITING_FIRST_LIVENESS),
+            Some((earlier, session)) => (
+                earlier,
+                Some(session.closed_at_millis),
+                session.end.as_str(),
+            ),
+        };
+        split_unobserved(
+            &mut spans,
+            cursor,
+            lower,
+            close,
+            fault,
+            CAUSE_BACKOFF_WAIT,
+            anchor,
+        );
+        cursor = cursor.max(upper);
+        previous = Some((index, session));
+    }
+    if let Some((index, session)) = previous {
+        split_unobserved(
+            &mut spans,
+            cursor,
+            planned_end_millis,
+            Some(session.closed_at_millis),
+            session.end.as_str(),
+            stop.trailing_cause(),
+            index,
+        );
+    }
+    merge_adjacent(spans)
+}
+
+/// Write one unobserved interval down, split at `close` into the half the connection was still
+/// nominally ours and the half spent between sockets.
+fn split_unobserved(
+    spans: &mut Vec<Unobserved>,
+    from: i64,
+    to: i64,
+    close: Option<i64>,
+    fault: &'static str,
+    between_sockets: &'static str,
+    anchor: usize,
+) {
+    if from >= to {
+        return;
+    }
+    let mut push = |lower, upper, cause| {
+        spans.push(Unobserved {
+            lower_millis: lower,
+            upper_millis: upper,
+            cause,
+            anchor,
+        });
+    };
+    match close {
+        Some(close) if close <= from => push(from, to, between_sockets),
+        Some(close) if close < to => {
+            push(from, close, fault);
+            push(close, to, between_sockets);
+        }
+        _ => push(from, to, fault),
+    }
+}
+
+/// Fold touching intervals that name the same cause into one, so the receipt does not report the
+/// same unbroken silence twice under one name.
+fn merge_adjacent(spans: Vec<Unobserved>) -> Vec<Unobserved> {
+    let mut merged: Vec<Unobserved> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if last.upper_millis == span.lower_millis && last.cause == span.cause => {
+                last.upper_millis = span.upper_millis;
+            }
+            _ => merged.push(span),
+        }
+    }
+    merged
+}
+
 #[allow(clippy::too_many_lines)] // One bounded connect/record/retain/gap walk, kept in one place.
 async fn record(
     root: &Path,
     mints: &str,
     budget: Budget,
+    policy: ReconnectPolicy,
     key_file: Option<&Path>,
 ) -> Result<String, Box<dyn Error>> {
     let keys: Vec<String> = mints
@@ -228,7 +818,9 @@ async fn record(
 
     // The credential is read from a 0600 file, never from a flag, and never rendered. It is
     // attached only when explicitly named, because PumpPortal documents this key as carrying
-    // wallet-signing authority; a keyless connection is the default for that reason.
+    // wallet-signing authority; a keyless connection is the default for that reason. It is read
+    // ONCE and held for the run: a reconnect re-presents what this run was launched with rather
+    // than picking up whatever landed in the file since.
     let endpoint = match key_file {
         None => ENDPOINT.to_owned(),
         Some(path) => {
@@ -239,8 +831,18 @@ async fn record(
             format!("{ENDPOINT}?api-key={key}")
         }
     };
-    let (mut socket, response) = tokio_tungstenite::connect_async(endpoint).await?;
-    let handshake_status = response.status().as_u16();
+    // The FIRST connect is not retried. Reconnect is for a provider that accepted this run and
+    // then hiccuped; a run that never got a socket at all has nothing to restate.
+    let (mut socket, response) = match tokio_tungstenite::connect_async(endpoint.clone()).await {
+        Ok(value) => value,
+        // The endpoint carries the credential as a query parameter and a transport error is free
+        // to quote the request it failed on, so a keyed run states the failure without its words.
+        Err(error) if key_file.is_none() => {
+            return Err(format!("the initial connect failed: {error}").into());
+        }
+        Err(_) => return Err("the initial connect failed while a credential was attached".into()),
+    };
+    let mut handshake_status = response.status().as_u16();
 
     let mut store = SqliteStore::open(catalog_config(root)?, StoreMode::SingleWriter)?;
     store.migrate(now_utc()?)?;
@@ -252,163 +854,131 @@ async fn record(
     let key_digest = Sha256Digest::of_bytes(keys.join(",").as_bytes()).to_string();
     let subject = format!("keys={}:{key_digest}", keys.len());
     let fingerprint_material = format!("pumpportal:{FEED_LOCATOR}:{subject}");
-    let mut sequence = 0_u64;
-    let mut pending: Vec<Captured> = Vec::new();
-    let mut receipts: Vec<PublicStoreReceiptV1> = Vec::new();
-    let mut chunk_index = 0_usize;
-
-    // The subscription request itself is retained, so the catalog states which subjects this
-    // window claims coverage of without any later reader taking that on trust from a filename.
     let subscribe = json!({"method": "subscribeTokenTrade", "keys": keys});
     let subscribe_bytes = serde_json::to_vec(&subscribe)?;
-    let sent_at = now_millis()?;
-    socket
-        .send(Message::Text(
-            String::from_utf8(subscribe_bytes.clone())?.into(),
-        ))
-        .await?;
-    pending.push(Captured {
-        frame: RawSourceFrame {
-            contract_version: ADAPTER_CONTRACT_VERSION.to_owned(),
-            source: SourceId::PumpPortalWebSocket,
-            transport: Transport::WebSocket,
-            stream_class: StreamClass::LeasedHot,
-            direction: FrameDirection::OutboundControl,
-            content_type: ContentType::Json,
-            received_at: UnixMillis(sent_at),
-            connection_epoch: 1,
-            sequence,
-            http_status: None,
-            safe_headers: Vec::new(),
-            body: Bytes::from(subscribe_bytes),
-        },
-        mono_ns: u64::try_from(process_start.elapsed().as_nanos())?,
-    });
-    sequence += 1;
 
-    let loop_start = Instant::now();
-    let deadline = loop_start + Duration::from_secs(budget.seconds);
-    let mut inbound_frames = 0_usize;
-    let mut inbound_bytes = 0_usize;
-    let mut last_frame_millis = sent_at;
-    // Liveness is broader than frames: a websocket ping proves the socket is alive even when the
-    // market is quiet, so it feeds the inactivity clock without being counted as a frame. Pings
-    // carry no JSON body and are not retained; their count states the liveness basis instead.
-    let mut last_liveness_millis = sent_at;
-    let mut transport_pings = 0_usize;
-    let stop = loop {
-        if inbound_frames >= budget.max_frames {
-            break Stop::FrameBudget;
-        }
-        if inbound_bytes >= budget.max_bytes {
-            break Stop::ByteBudget;
-        }
-        let now = now_millis()?;
-        // A suspended host is an unobserved window, not a quiet one. The two clocks are compared
-        // rather than trusted individually: a monotonic deadline silently stretches across a
-        // suspend, and a wall clock alone cannot tell a suspend from a slow loop.
-        let wall_elapsed = now - sent_at;
-        let mono_elapsed = i64::try_from(loop_start.elapsed().as_millis())?;
-        if wall_elapsed - mono_elapsed > 5_000 {
-            break Stop::HostSuspended;
-        }
-        if now >= planned_end_millis {
-            break Stop::WallClockBudget;
-        }
-        if now - last_liveness_millis > i64::try_from(budget.inactivity_seconds)? * 1_000 {
-            break Stop::InactivityCeiling;
-        }
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_secs(budget.inactivity_seconds));
-        if remaining.is_zero() {
-            break Stop::WallClockBudget;
-        }
-        let message = match tokio::time::timeout(remaining, socket.next()).await {
-            // A timeout here is only ever a silence: which kind it was is decided at the top of
-            // the next iteration, against both clocks.
-            Err(_) => continue,
-            Ok(None) => break Stop::ProviderClosedSocket,
-            Ok(Some(Err(_))) => break Stop::TransportError,
-            Ok(Some(Ok(message))) => message,
-        };
-        let body = match message {
-            Message::Text(text) => Bytes::from(text.as_bytes().to_vec()),
-            Message::Binary(binary) => Bytes::from(binary.to_vec()),
-            Message::Close(_) => break Stop::ProviderClosedSocket,
-            Message::Ping(_) | Message::Pong(_) => {
-                transport_pings += 1;
-                last_liveness_millis = now_millis()?;
-                continue;
-            }
-            Message::Frame(_) => continue,
-        };
-        let received = now_millis()?;
-        last_frame_millis = received;
-        last_liveness_millis = received;
-        inbound_frames += 1;
-        inbound_bytes += body.len();
-        let refused = classify_pumpportal_frame(&body).kind
-            == PumpPortalFrameKind::AuthenticationOrFundingRejected;
-        pending.push(Captured {
-            frame: RawSourceFrame::inbound_websocket(
-                SourceId::PumpPortalWebSocket,
-                StreamClass::LeasedHot,
-                UnixMillis(received),
-                1,
-                sequence,
-                ContentType::Json,
-                body,
-            ),
-            mono_ns: u64::try_from(process_start.elapsed().as_nanos())?,
-        });
-        sequence += 1;
-        // The refusal frame is retained first, then the run stops: waiting out the inactivity
-        // ceiling after this frame would let the coverage claim swallow a window the provider
-        // had already said it would never serve.
-        if refused {
-            break Stop::SubscriptionRefused;
-        }
-        if pending.len() >= MAX_OBSERVATIONS_PER_BATCH {
-            receipts.push(commit_frames(
+    let deadline = process_start + Duration::from_secs(budget.seconds);
+    let limits = SessionLimits {
+        deadline,
+        planned_end_millis,
+        inactivity: Duration::from_secs(budget.inactivity_seconds),
+        max_frames: budget.max_frames,
+        max_bytes: budget.max_bytes,
+    };
+    let mut sessions: Vec<SessionOutcome> = Vec::new();
+    let mut reconnects: Vec<Value> = Vec::new();
+    let (stop, total_frames, total_bytes, total_batches) = {
+        let mut commit = |captured: Vec<Captured>, chunk: usize| -> Result<(), Box<dyn Error>> {
+            commit_frames(
                 &mut store,
-                std::mem::take(&mut pending),
+                captured,
                 &namespace,
                 &clock_id,
                 &fingerprint_material,
-                chunk_index,
+                chunk,
                 process_start,
-            )?);
-            chunk_index += 1;
-        }
+            )?;
+            Ok(())
+        };
+        let mut tape = Tape::new(process_start, &mut commit);
+        let mut consecutive_failures = 0_u32;
+        let stop = 'run: loop {
+            let epoch = u64::try_from(sessions.len())? + 1;
+            let mut wire = SocketWire(socket);
+            let outcome = run_session(
+                &mut wire,
+                &mut tape,
+                &subscribe_bytes,
+                epoch,
+                handshake_status,
+                limits,
+            )
+            .await?;
+            // The dying socket is closed here rather than at the end of the run: a reconnect
+            // should not hold a second subscription open beside the one it is replacing.
+            drop(wire);
+            eprintln!(
+                "coin_tape_live: session {epoch} ended after {} inbound frames: {}",
+                outcome.inbound_frames,
+                outcome.end.as_str()
+            );
+            // A connection that actually delivered frames is proof the provider is serving this
+            // run again, so the consecutive-failure count starts over from it.
+            if outcome.inbound_frames > 0 {
+                consecutive_failures = 0;
+            }
+            let mut end = outcome.end;
+            let first_session = sessions.is_empty();
+            sessions.push(outcome);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let (attempt, backoff) =
+                    match next_step(policy, end, first_session, consecutive_failures, remaining) {
+                        Next::Stop(stop) => break 'run stop,
+                        Next::Reconnect { attempt, backoff } => (attempt, backoff),
+                    };
+                consecutive_failures = attempt;
+                eprintln!(
+                    "coin_tape_live: reconnect attempt {attempt}/{} in {:.1}s",
+                    policy.max_attempts,
+                    backoff.as_secs_f64()
+                );
+                tokio::time::sleep(backoff).await;
+                if Instant::now() >= deadline {
+                    break 'run RunStop::WallClockBudget;
+                }
+                // The provider's own words are withheld here for the same reason as above: the
+                // endpoint this attempt was built from carries the credential.
+                let after = end.as_str();
+                let established = tokio_tungstenite::connect_async(endpoint.clone())
+                    .await
+                    .ok();
+                if let Some((next_socket, response)) = established {
+                    socket = next_socket;
+                    handshake_status = response.status().as_u16();
+                    let at = now_millis()?;
+                    reconnects.push(reconnect_record(
+                        attempt,
+                        after,
+                        backoff,
+                        "connected",
+                        Some(handshake_status),
+                        at,
+                    ));
+                    break;
+                }
+                let at = now_millis()?;
+                reconnects.push(reconnect_record(
+                    attempt,
+                    after,
+                    backoff,
+                    "connect_failed",
+                    None,
+                    at,
+                ));
+                end = SessionEnd::ConnectFailed;
+            }
+        };
+        // Say why before doing anything that could fail, so a later refusal cannot hide the stop.
+        eprintln!(
+            "coin_tape_live: stopped after {} sessions and {} inbound frames: {}",
+            sessions.len(),
+            tape.frames,
+            stop.as_str()
+        );
+        tape.flush()?;
+        (stop, tape.frames, tape.bytes, tape.batches)
     };
     let closed_at_millis = now_millis()?;
-    // Say why before doing anything that could fail, so a later refusal cannot hide the stop.
-    eprintln!(
-        "coin_tape_live: stopped after {inbound_frames} inbound frames: {}",
-        stop.as_str()
-    );
-    if !pending.is_empty() {
-        receipts.push(commit_frames(
-            &mut store,
-            std::mem::take(&mut pending),
-            &namespace,
-            &clock_id,
-            &fingerprint_material,
-            chunk_index,
-            process_start,
-        )?);
-    }
-
-    let coverage = commit_coverage(
+    let spans = unobserved_spans(&sessions, opened_at_millis, planned_end_millis, stop);
+    let (coverage_ids, gap_ids) = commit_coverage(
         &mut store,
         &namespace,
         &clock_id,
         &subject,
-        opened_at_millis,
-        closed_at_millis,
         planned_end_millis,
-        stop,
+        &sessions,
+        &spans,
         process_start,
     )?;
     drop(store);
@@ -436,11 +1006,21 @@ async fn record(
         .sum();
     drop(reopened);
 
+    let claimed_millis: i64 = sessions
+        .iter()
+        .map(|session| {
+            let (lower, upper) = session.claimed(planned_end_millis);
+            upper - lower
+        })
+        .sum();
+    let unobserved_millis: i64 = spans
+        .iter()
+        .map(|span| span.upper_millis - span.lower_millis)
+        .sum();
     Ok(serde_json::to_string_pretty(&json!({
-        "contract": "joshi.coin_tape.record_receipt.v1",
+        "contract": "joshi.coin_tape.record_receipt.v2",
         "endpointHost": "pumpportal.fun",
         "credentialAttached": key_file.is_some(),
-        "handshakeStatus": handshake_status,
         "namespace": namespace,
         "subjects": keys,
         "budget": {
@@ -449,19 +1029,56 @@ async fn record(
             "maxInboundBytes": budget.max_bytes,
             "inactivityCeilingSeconds": budget.inactivity_seconds,
         },
+        "reconnect": {
+            "maxConsecutiveAttempts": policy.max_attempts,
+            "initialBackoffSeconds": policy.initial_backoff.as_secs_f64(),
+            "maxBackoffSeconds": policy.max_backoff.as_secs_f64(),
+            "attempts": reconnects,
+        },
         "openedAtUnixMs": opened_at_millis,
         "plannedEndUnixMs": planned_end_millis,
         "closedAtUnixMs": closed_at_millis,
-        "lastFrameAtUnixMs": last_frame_millis,
-        "lastLivenessAtUnixMs": last_liveness_millis,
-        "transportPings": transport_pings,
         "stopReason": stop.as_str(),
         "plannedWindowCompleted": stop.planned_window_completed(),
-        "inboundFrames": inbound_frames,
-        "inboundBytes": inbound_bytes,
-        "observationBatches": receipts.len(),
-        "coverageId": coverage.0,
-        "gapIds": coverage.1,
+        "plannedWindowCompletedMeans": "the wall clock the caller named ran out; it is NOT a claim \
+                                        that the window was fully observed, which is what \
+                                        totals.unobservedMillis states",
+        "sessions": sessions.iter().zip(&coverage_ids).map(|(session, coverage_id)| {
+            let (lower, upper) = session.claimed(planned_end_millis);
+            json!({
+                "connectionEpoch": session.epoch,
+                "handshakeStatus": session.handshake_status,
+                "openedAtUnixMs": session.opened_at_millis,
+                "closedAtUnixMs": session.closed_at_millis,
+                "firstLivenessAtUnixMs": session.first_liveness_millis,
+                "lastLivenessAtUnixMs": session.last_liveness_millis,
+                "lastFrameAtUnixMs": session.last_frame_millis,
+                "inboundFrames": session.inbound_frames,
+                "inboundBytes": session.inbound_bytes,
+                "transportPings": session.transport_pings,
+                "endReason": session.end.as_str(),
+                "coverageId": coverage_id,
+                "claimedWindowUnixMs": [lower, upper],
+            })
+        }).collect::<Vec<_>>(),
+        "gaps": spans.iter().zip(&gap_ids).map(|(span, gap_id)| json!({
+            "gapId": gap_id,
+            "reason": span.cause,
+            "lowerUnixMs": span.lower_millis,
+            "upperUnixMs": span.upper_millis,
+            "millis": span.upper_millis - span.lower_millis,
+            "recoverable": false,
+        })).collect::<Vec<_>>(),
+        "totals": {
+            "sessions": sessions.len(),
+            "inboundFrames": total_frames,
+            "inboundBytes": total_bytes,
+            "observationBatches": total_batches,
+            "transportPings": sessions.iter().map(|session| session.transport_pings).sum::<usize>(),
+            "plannedMillis": planned_end_millis - opened_at_millis,
+            "claimedMillis": claimed_millis,
+            "unobservedMillis": unobserved_millis,
+        },
         "restartReadback": {
             "integrity": verification.integrity,
             "observationsFromThisRun": stored_from_this_run.len(),
@@ -546,101 +1163,131 @@ fn frame_kind(body: &[u8]) -> &'static str {
     }
 }
 
-/// Retain the window this run claims, and the exact interval it promised but did not observe.
+/// Retain what each connection claims and every interval of the planned window nothing claimed.
+///
+/// Each connection gets its OWN coverage window, so a later reader who consults the windows alone
+/// can never be told this run observed a stretch it did not; the holes between them are separate
+/// gap records, each naming its cause. The windows go in one batch EACH because the catalog keys a
+/// window on `(source, scope, opening commit)` and every session here shares one scope: two windows
+/// in one batch would collide. The gaps go in a final batch, after every window they reference
+/// exists, under the severity that says a scope stopped.
 #[allow(clippy::too_many_arguments)] // Every boundary of the claim is named explicitly.
 fn commit_coverage(
     store: &mut SqliteStore,
     namespace: &str,
     clock_id: &str,
     subject: &str,
-    opened_at_millis: i64,
-    closed_at_millis: i64,
     planned_end_millis: i64,
-    stop: Stop,
+    sessions: &[SessionOutcome],
+    spans: &[Unobserved],
     process_start: Instant,
-) -> Result<(String, Vec<String>), Box<dyn Error>> {
+) -> Result<(Vec<String>, Vec<String>), Box<dyn Error>> {
     let persisted_at = now_utc()?;
-    let coverage_id = CoverageId::new(format!("coverage-{namespace}"))?;
     let scope = CoverageScope {
         source_id: DomainSourceId::new(SOURCE_ID)?,
         family: OpenVariant::known(COVERAGE_FAMILY)?,
         subject: Some(StableString::new(subject)?),
     };
-    let window = CoverageWindow {
-        coverage_id: coverage_id.clone(),
-        scope: scope.clone(),
-        lower: Boundary::Wall {
-            value: utc_from_millis(opened_at_millis)?,
-        },
-        upper: Some(Boundary::Wall {
-            value: utc_from_millis(closed_at_millis)?,
-        }),
-        state: OpenVariant::known("closed")?,
-        available_at: persisted_at,
-    };
-    let mut gap_ids = Vec::new();
-    let mut gaps = Vec::new();
-    // A refused subscription observed NOTHING: its gap starts at the window's own opening, so the
-    // claim nets to zero coverage instead of quietly keeping the seconds before the refusal.
-    let (gap_lower_millis, gap_name) = if stop == Stop::SubscriptionRefused {
-        (opened_at_millis, "refused-window")
-    } else {
-        (closed_at_millis, "unobserved-tail")
-    };
-    if !stop.planned_window_completed() && gap_lower_millis < planned_end_millis {
-        let gap_id = format!("gap-{namespace}-{gap_name}");
-        gap_ids.push(gap_id.clone());
-        gaps.push(CoverageGap {
-            gap_id: CoverageId::new(gap_id)?,
-            coverage_id: coverage_id.clone(),
+    let mut mono = u64::try_from(process_start.elapsed().as_nanos())?;
+    let mut coverage_ids = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let (lower, upper) = session.claimed(planned_end_millis);
+        let coverage_id = CoverageId::new(format!("coverage-{namespace}-s{:03}", session.epoch))?;
+        coverage_ids.push(coverage_id.as_str().to_owned());
+        let window = CoverageWindow {
+            coverage_id,
             scope: scope.clone(),
             lower: Boundary::Wall {
-                value: utc_from_millis(gap_lower_millis)?,
+                value: utc_from_millis(lower)?,
+            },
+            // A zero-width upper is not an accident: a connection that was refused, or that never
+            // heard a word, claims exactly nothing and says so in the shape of its own window.
+            upper: Some(Boundary::Wall {
+                value: utc_from_millis(upper)?,
+            }),
+            state: OpenVariant::known("closed")?,
+            available_at: persisted_at,
+        };
+        mono = mono.saturating_add(1);
+        commit_drafts(
+            store,
+            format!("{namespace}-coverage-s{:03}", session.epoch),
+            vec![EvidenceDraft::CoverageWindow(window)],
+            SEVERITY_DEGRADED,
+            clock_id,
+            persisted_at,
+            mono,
+        )?;
+    }
+
+    let mut gap_ids = Vec::with_capacity(spans.len());
+    let mut gaps = Vec::with_capacity(spans.len());
+    for (index, span) in spans.iter().enumerate() {
+        let anchor = coverage_ids
+            .get(span.anchor)
+            .ok_or("an unobserved span named a session that does not exist")?;
+        let gap_id = format!("gap-{namespace}-{index:03}-{}", span.cause);
+        gap_ids.push(gap_id.clone());
+        gaps.push(EvidenceDraft::CoverageGap(CoverageGap {
+            gap_id: CoverageId::new(gap_id)?,
+            coverage_id: CoverageId::new(anchor.clone())?,
+            scope: scope.clone(),
+            lower: Boundary::Wall {
+                value: utc_from_millis(span.lower_millis)?,
             },
             upper: Some(Boundary::Wall {
-                value: utc_from_millis(planned_end_millis)?,
+                value: utc_from_millis(span.upper_millis)?,
             }),
             // This feed exposes no replay cursor and no historical backfill, so the interval below
             // is not merely late: it is unrecoverable, and no later run can ever close it.
-            reason: OpenVariant::known(stop.as_str())?,
+            reason: OpenVariant::known(span.cause)?,
             detected_at: persisted_at,
-        });
+        }));
     }
-    let mut mono = u64::try_from(process_start.elapsed().as_nanos())?;
-    for (severity_index, severity) in [SEVERITY_DEGRADED, SEVERITY_SCOPE_STOPPED]
-        .into_iter()
-        .enumerate()
-    {
-        let mut drafts = Vec::new();
-        if severity_index == 0 {
-            drafts.push(EvidenceDraft::CoverageWindow(window.clone()));
-        } else {
-            drafts.extend(gaps.iter().cloned().map(EvidenceDraft::CoverageGap));
-        }
-        if drafts.is_empty() {
-            continue;
-        }
+    if !gaps.is_empty() {
         mono = mono.saturating_add(1);
-        let batch = source_drafts(SourceDraftBatch {
-            batch_id: StableString::new(format!("{namespace}-coverage-{severity}"))?,
-            drafts,
-            source_events: Vec::new(),
-            cursor_advances: Vec::new(),
-            registrations: vec![tape_source_registration()?],
-            policy: AdmissionPolicy {
-                retention_class: StableString::new("public_source")?,
-                content_encoding: None,
-                force_external: false,
-                gap_severity: StableString::new(severity)?,
-            },
-            committed_at: persisted_at,
-            writer_clock_id: StableString::new(clock_id)?,
-            committed_mono_ns: mono,
-            writer_build: StableString::new(env!("CARGO_PKG_VERSION"))?,
-        })?;
-        batch.commit(store)?;
+        commit_drafts(
+            store,
+            format!("{namespace}-coverage-gaps"),
+            gaps,
+            SEVERITY_SCOPE_STOPPED,
+            clock_id,
+            persisted_at,
+            mono,
+        )?;
     }
-    Ok((coverage_id.as_str().to_owned(), gap_ids))
+    Ok((coverage_ids, gap_ids))
+}
+
+/// One coverage batch through the ordinary source-admission path.
+fn commit_drafts(
+    store: &mut SqliteStore,
+    batch_id: String,
+    drafts: Vec<EvidenceDraft>,
+    severity: &str,
+    clock_id: &str,
+    persisted_at: UtcTimestamp,
+    mono: u64,
+) -> Result<(), Box<dyn Error>> {
+    let batch = source_drafts(SourceDraftBatch {
+        batch_id: StableString::new(batch_id)?,
+        drafts,
+        source_events: Vec::new(),
+        cursor_advances: Vec::new(),
+        registrations: vec![tape_source_registration()?],
+        policy: AdmissionPolicy {
+            retention_class: StableString::new("public_source")?,
+            content_encoding: None,
+            force_external: false,
+            gap_severity: StableString::new(severity)?,
+        },
+        committed_at: persisted_at,
+        writer_clock_id: StableString::new(clock_id)?,
+        committed_mono_ns: mono,
+        writer_build: StableString::new(env!("CARGO_PKG_VERSION"))?,
+    })?;
+    batch.commit(store)?;
+    Ok(())
 }
 
 /// The exact registration `joshi_admission::source_frames` emits for a `PumpPortal` frame.
@@ -974,6 +1621,11 @@ fn analyse(root: &Path, bucket_seconds: u64, trades: &[String]) -> Result<String
         "observedSeconds": observed_seconds,
         "inboundFramesPerSecond": (observed_seconds > 0.0)
             .then(|| count_as_f64(inbound.len()) / observed_seconds),
+        // A recording that reconnected did not watch this span continuously, and these bytes
+        // cannot say where the holes were. One outbound control frame is one connection, so
+        // outboundControlFrames above 1 means the span below has durable gaps in it; their exact
+        // intervals live in the coverage records the record run committed beside these frames.
+        "observedWindowIsContinuous": outbound <= 1,
         "frameKindCounts": kind_counts,
         "frameKindBytes": kind_bytes,
         "tradeFrameLeafPresence": trade_key_presence,
@@ -1369,4 +2021,548 @@ fn trailing_sequence(acquisition_id: &str) -> Result<u64, Box<dyn Error>> {
 
 fn millis_of(value: UtcTimestamp) -> i64 {
     i64::try_from(value.as_datetime().unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------------------------
+// The reconnect policy and the coverage walk, driven by a scripted transport. These are the parts
+// a live run cannot be relied on to exercise: a provider hiccup happens when it happens, and a
+// funded key is refused only on the night the plan lapses.
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CAUSE_AWAITING_FIRST_LIVENESS, CAUSE_BACKOFF_WAIT, Captured, Next, ReconnectPolicy,
+        RunStop, SessionEnd, SessionLimits, SessionOutcome, Tape, Unobserved, Wire, WirePoll,
+        next_step, now_millis, run_session, unobserved_spans,
+    };
+    use bytes::Bytes;
+    use std::{
+        collections::VecDeque,
+        error::Error,
+        time::{Duration, Instant},
+    };
+
+    const REFUSAL: &[u8] = br#"{"message":"'subscribeTokenTrade' is only available when connecting with an API key funded with at least 0.02 SOL"}"#;
+    const ACK: &[u8] = br#"{"message":"Successfully subscribed to token trades."}"#;
+    const TRADE: &[u8] = br#"{"signature":"s1","mint":"m1","txType":"buy","solAmount":1.0}"#;
+
+    fn policy() -> ReconnectPolicy {
+        ReconnectPolicy {
+            max_attempts: 3,
+            initial_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_mins(1),
+        }
+    }
+
+    #[test]
+    fn the_backoff_doubles_from_its_start_and_stops_at_the_ceiling() {
+        let policy = policy();
+        let waits: Vec<u64> = (1..=8).map(|n| policy.backoff(n).as_secs()).collect();
+        assert_eq!(waits, vec![2, 4, 8, 16, 32, 60, 60, 60]);
+        // A caller who asks for an absurd run of attempts still gets the ceiling, not an overflow.
+        assert_eq!(policy.backoff(u32::MAX), Duration::from_mins(1));
+    }
+
+    #[test]
+    fn a_refusal_at_the_door_is_terminal_and_is_never_retried() {
+        let step = next_step(
+            policy(),
+            SessionEnd::SubscriptionRefused,
+            true,
+            0,
+            Duration::from_mins(10),
+        );
+        assert_eq!(step, Next::Stop(RunStop::SubscriptionRefused));
+    }
+
+    #[test]
+    fn a_refusal_on_a_reconnect_is_terminal_under_its_own_distinct_reason() {
+        // Accepted at the start of the run, refused now: the shape of a plan expiring mid-run. It
+        // must not be retried, and it must not be reported as having been refused at the door.
+        let step = next_step(
+            policy(),
+            SessionEnd::SubscriptionRefused,
+            false,
+            0,
+            Duration::from_mins(10),
+        );
+        assert_eq!(step, Next::Stop(RunStop::SubscriptionRefusedOnReconnect));
+        assert_ne!(
+            RunStop::SubscriptionRefusedOnReconnect.as_str(),
+            RunStop::SubscriptionRefused.as_str()
+        );
+    }
+
+    #[test]
+    fn a_hiccup_reconnects_while_the_window_and_the_attempts_last() {
+        let hiccups = [
+            SessionEnd::ProviderClosedSocket,
+            SessionEnd::TransportError,
+            SessionEnd::InactivityCeiling,
+            SessionEnd::HostSuspended,
+            SessionEnd::ConnectFailed,
+        ];
+        for end in hiccups {
+            let step = next_step(policy(), end, false, 0, Duration::from_mins(10));
+            assert_eq!(
+                step,
+                Next::Reconnect {
+                    attempt: 1,
+                    backoff: Duration::from_secs(2)
+                },
+                "{end:?} is survivable"
+            );
+        }
+        assert_eq!(
+            next_step(
+                policy(),
+                SessionEnd::ProviderClosedSocket,
+                false,
+                2,
+                Duration::from_mins(10)
+            ),
+            Next::Reconnect {
+                attempt: 3,
+                backoff: Duration::from_secs(8)
+            }
+        );
+    }
+
+    #[test]
+    fn consecutive_attempts_are_capped_and_the_wait_never_outruns_the_window() {
+        assert_eq!(
+            next_step(
+                policy(),
+                SessionEnd::ProviderClosedSocket,
+                false,
+                3,
+                Duration::from_mins(10)
+            ),
+            Next::Stop(RunStop::ReconnectAttemptsExhausted)
+        );
+        // A backoff that would land after the planned end is clamped to what is left of it.
+        assert_eq!(
+            next_step(
+                policy(),
+                SessionEnd::ProviderClosedSocket,
+                false,
+                2,
+                Duration::from_millis(1_500)
+            ),
+            Next::Reconnect {
+                attempt: 3,
+                backoff: Duration::from_millis(1_500)
+            }
+        );
+        assert_eq!(
+            next_step(
+                policy(),
+                SessionEnd::ProviderClosedSocket,
+                false,
+                0,
+                Duration::ZERO
+            ),
+            Next::Stop(RunStop::WallClockBudget)
+        );
+    }
+
+    #[test]
+    fn a_budget_stop_ends_the_run_rather_than_opening_another_socket() {
+        for (end, stop) in [
+            (SessionEnd::PlannedWindowReached, RunStop::WallClockBudget),
+            (SessionEnd::FrameBudget, RunStop::FrameBudget),
+            (SessionEnd::ByteBudget, RunStop::ByteBudget),
+        ] {
+            assert_eq!(
+                next_step(policy(), end, false, 0, Duration::from_mins(10)),
+                Next::Stop(stop)
+            );
+        }
+        // Only the wall clock running out means the run stayed on the job to the end it promised.
+        assert!(RunStop::WallClockBudget.planned_window_completed());
+        assert!(!RunStop::FrameBudget.planned_window_completed());
+        assert!(!RunStop::ReconnectAttemptsExhausted.planned_window_completed());
+    }
+
+    #[test]
+    fn reconnecting_is_refused_outright_when_the_policy_allows_no_attempts() {
+        let policy = ReconnectPolicy {
+            max_attempts: 0,
+            ..policy()
+        };
+        assert_eq!(
+            next_step(
+                policy,
+                SessionEnd::ProviderClosedSocket,
+                true,
+                0,
+                Duration::from_mins(10)
+            ),
+            Next::Stop(RunStop::ReconnectAttemptsExhausted)
+        );
+    }
+
+    // -- the session loop against a scripted transport -----------------------------------------
+
+    struct ScriptedWire {
+        send_fails: bool,
+        script: VecDeque<WirePoll>,
+    }
+
+    impl ScriptedWire {
+        fn new(script: Vec<WirePoll>) -> Self {
+            Self {
+                send_fails: false,
+                script: script.into(),
+            }
+        }
+    }
+
+    impl Wire for ScriptedWire {
+        async fn send_subscription(&mut self, _text: String) -> Result<(), ()> {
+            if self.send_fails { Err(()) } else { Ok(()) }
+        }
+
+        async fn poll_within(&mut self, _within: Duration) -> WirePoll {
+            self.script.pop_front().unwrap_or(WirePoll::Closed)
+        }
+    }
+
+    fn limits(max_frames: usize) -> SessionLimits {
+        SessionLimits {
+            deadline: Instant::now() + Duration::from_mins(10),
+            planned_end_millis: now_millis().expect("a wall clock") + 600_000,
+            inactivity: Duration::from_secs(45),
+            max_frames,
+            max_bytes: 1 << 20,
+        }
+    }
+
+    /// Run one scripted connection and hand back what it decided and what it retained.
+    async fn drive(
+        wire: &mut ScriptedWire,
+        limits: SessionLimits,
+    ) -> (SessionOutcome, Vec<String>) {
+        let mut retained: Vec<String> = Vec::new();
+        let outcome = {
+            let mut commit =
+                |captured: Vec<Captured>, _chunk: usize| -> Result<(), Box<dyn Error>> {
+                    retained.extend(
+                        captured
+                            .into_iter()
+                            .map(|item| String::from_utf8_lossy(&item.frame.body).into_owned()),
+                    );
+                    Ok(())
+                };
+            let mut tape = Tape::new(Instant::now(), &mut commit);
+            let outcome = run_session(wire, &mut tape, b"{\"method\":\"x\"}", 1, 101, limits)
+                .await
+                .expect("the session loop");
+            tape.flush().expect("the retained frames");
+            outcome
+        };
+        (outcome, retained)
+    }
+
+    #[tokio::test]
+    async fn a_provider_close_ends_the_connection_after_everything_it_delivered_is_retained() {
+        let mut wire = ScriptedWire::new(vec![
+            WirePoll::Frame(Bytes::from_static(ACK)),
+            WirePoll::Frame(Bytes::from_static(TRADE)),
+            WirePoll::Closed,
+        ]);
+        let (outcome, retained) = drive(&mut wire, limits(1_000)).await;
+        assert_eq!(outcome.end, SessionEnd::ProviderClosedSocket);
+        assert_eq!(outcome.inbound_frames, 2);
+        assert_eq!(outcome.inbound_bytes, ACK.len() + TRADE.len());
+        // The ask and both answers, in the order they crossed the socket.
+        assert_eq!(retained.len(), 3);
+        assert!(retained[0].contains("method"));
+        assert!(outcome.first_liveness_millis.is_some());
+        assert_eq!(outcome.last_frame_millis, outcome.last_liveness_millis);
+    }
+
+    #[tokio::test]
+    async fn a_transport_error_ends_the_connection_and_is_not_confused_with_a_close() {
+        let mut wire = ScriptedWire::new(vec![
+            WirePoll::Frame(Bytes::from_static(ACK)),
+            WirePoll::Failed,
+        ]);
+        let (outcome, retained) = drive(&mut wire, limits(1_000)).await;
+        assert_eq!(outcome.end, SessionEnd::TransportError);
+        assert_eq!(retained.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_retained_before_the_connection_stops_on_it() {
+        let mut wire = ScriptedWire::new(vec![WirePoll::Frame(Bytes::from_static(REFUSAL))]);
+        let (outcome, retained) = drive(&mut wire, limits(1_000)).await;
+        assert_eq!(outcome.end, SessionEnd::SubscriptionRefused);
+        assert_eq!(outcome.inbound_frames, 1);
+        // The provider's exact words survive: the receipt never has to paraphrase the refusal.
+        assert_eq!(retained.len(), 2);
+        assert!(retained[1].contains("0.02 SOL"));
+        // And it claims nothing, however long the socket stayed open afterwards.
+        let (lower, upper) = outcome.claimed(outcome.closed_at_millis + 60_000);
+        assert_eq!(lower, upper);
+    }
+
+    #[tokio::test]
+    async fn a_websocket_ping_is_liveness_and_is_not_a_frame() {
+        let mut wire = ScriptedWire::new(vec![
+            WirePoll::Alive,
+            WirePoll::Frame(Bytes::from_static(TRADE)),
+            WirePoll::Closed,
+        ]);
+        let (outcome, retained) = drive(&mut wire, limits(1_000)).await;
+        assert_eq!(outcome.transport_pings, 1);
+        assert_eq!(outcome.inbound_frames, 1);
+        assert_eq!(retained.len(), 2);
+        // Liveness began at the ping, before any frame arrived.
+        assert!(outcome.first_liveness_millis <= outcome.last_frame_millis);
+    }
+
+    #[tokio::test]
+    async fn a_send_that_never_left_retains_no_ask_and_reads_as_a_transport_fault() {
+        let mut wire = ScriptedWire::new(vec![WirePoll::Frame(Bytes::from_static(ACK))]);
+        wire.send_fails = true;
+        let (outcome, retained) = drive(&mut wire, limits(1_000)).await;
+        assert_eq!(outcome.end, SessionEnd::TransportError);
+        assert!(retained.is_empty(), "an unsent ask was never made");
+    }
+
+    #[tokio::test]
+    async fn the_frame_budget_spans_the_whole_chained_run_and_not_one_connection() {
+        let mut retained = 0_usize;
+        let mut commit = |captured: Vec<Captured>, _chunk: usize| -> Result<(), Box<dyn Error>> {
+            retained += captured.len();
+            Ok(())
+        };
+        let mut tape = Tape::new(Instant::now(), &mut commit);
+        let limits = limits(1);
+        let mut first = ScriptedWire::new(vec![
+            WirePoll::Frame(Bytes::from_static(ACK)),
+            WirePoll::Frame(Bytes::from_static(TRADE)),
+        ]);
+        let one = run_session(&mut first, &mut tape, b"{}", 1, 101, limits)
+            .await
+            .expect("the first connection");
+        assert_eq!(one.end, SessionEnd::FrameBudget);
+        assert_eq!(one.inbound_frames, 1);
+
+        // The next connection inherits the spent budget rather than starting over on it.
+        let mut second = ScriptedWire::new(vec![WirePoll::Frame(Bytes::from_static(TRADE))]);
+        let two = run_session(&mut second, &mut tape, b"{}", 2, 101, limits)
+            .await
+            .expect("the second connection");
+        assert_eq!(two.end, SessionEnd::FrameBudget);
+        assert_eq!(two.inbound_frames, 0);
+        // And the total order never restarts: two asks and one answer, sequenced 0, 1, 2.
+        assert_eq!(tape.sequence, 3);
+        tape.flush().expect("the retained frames");
+        assert_eq!(retained, 3);
+    }
+
+    // -- the coverage walk ---------------------------------------------------------------------
+
+    fn ended(
+        epoch: u64,
+        open: i64,
+        close: i64,
+        liveness: Option<(i64, i64)>,
+        end: SessionEnd,
+    ) -> SessionOutcome {
+        SessionOutcome {
+            epoch,
+            handshake_status: 101,
+            opened_at_millis: open,
+            closed_at_millis: close,
+            first_liveness_millis: liveness.map(|(first, _)| first),
+            last_liveness_millis: liveness.map(|(_, last)| last),
+            last_frame_millis: liveness.map(|(_, last)| last),
+            inbound_frames: usize::from(liveness.is_some()),
+            inbound_bytes: 0,
+            transport_pings: 0,
+            end,
+        }
+    }
+
+    fn told(spans: &[Unobserved]) -> Vec<(i64, i64, &'static str)> {
+        spans
+            .iter()
+            .map(|span| (span.lower_millis, span.upper_millis, span.cause))
+            .collect()
+    }
+
+    /// Every claim plus every gap must add back up to exactly the window the caller asked for.
+    fn tiles(sessions: &[SessionOutcome], spans: &[Unobserved], open: i64, planned_end: i64) {
+        let claimed: i64 = sessions
+            .iter()
+            .map(|session| {
+                let (lower, upper) = session.claimed(planned_end);
+                upper - lower
+            })
+            .sum();
+        let unobserved: i64 = spans
+            .iter()
+            .map(|span| span.upper_millis - span.lower_millis)
+            .sum();
+        assert_eq!(claimed + unobserved, planned_end - open);
+    }
+
+    #[test]
+    fn an_undisturbed_run_owns_only_the_seconds_it_spent_getting_connected() {
+        let sessions = [ended(
+            1,
+            1_050,
+            61_002,
+            Some((1_300, 60_900)),
+            SessionEnd::PlannedWindowReached,
+        )];
+        let spans = unobserved_spans(&sessions, 1_000, 61_000, RunStop::WallClockBudget);
+        assert_eq!(
+            told(&spans),
+            vec![(1_000, 1_300, CAUSE_AWAITING_FIRST_LIVENESS)]
+        );
+        tiles(&sessions, &spans, 1_000, 61_000);
+    }
+
+    #[test]
+    fn a_hiccup_and_a_reconnect_leave_two_named_holes_that_meet_exactly() {
+        let sessions = [
+            ended(
+                1,
+                10,
+                20_000,
+                Some((300, 19_500)),
+                SessionEnd::ProviderClosedSocket,
+            ),
+            ended(
+                2,
+                22_100,
+                60_005,
+                Some((22_400, 59_900)),
+                SessionEnd::PlannedWindowReached,
+            ),
+        ];
+        let spans = unobserved_spans(&sessions, 0, 60_000, RunStop::WallClockBudget);
+        assert_eq!(
+            told(&spans),
+            vec![
+                (0, 300, CAUSE_AWAITING_FIRST_LIVENESS),
+                // Nothing after the dying socket's last word may be claimed, even though the
+                // socket was nominally still ours for another half second.
+                (19_500, 20_000, "provider_closed_socket_before_planned_end"),
+                (20_000, 22_400, CAUSE_BACKOFF_WAIT),
+            ]
+        );
+        // Both connections keep their own claim; the second hangs its gaps off the first.
+        assert_eq!(spans[1].anchor, 0);
+        assert_eq!(spans[2].anchor, 0);
+        tiles(&sessions, &spans, 0, 60_000);
+    }
+
+    #[test]
+    fn a_refused_run_nets_to_no_coverage_at_all() {
+        let sessions = [ended(
+            1,
+            10,
+            400,
+            Some((350, 350)),
+            SessionEnd::SubscriptionRefused,
+        )];
+        let spans = unobserved_spans(&sessions, 0, 60_000, RunStop::SubscriptionRefused);
+        assert_eq!(
+            told(&spans),
+            vec![
+                (0, 350, CAUSE_AWAITING_FIRST_LIVENESS),
+                (350, 60_000, "provider_refused_subscription"),
+            ]
+        );
+        let unobserved: i64 = spans
+            .iter()
+            .map(|span| span.upper_millis - span.lower_millis)
+            .sum();
+        assert_eq!(unobserved, 60_000, "the whole planned window is a gap");
+    }
+
+    #[test]
+    fn a_budget_stop_names_the_tail_it_chose_not_to_watch() {
+        let sessions = [ended(
+            1,
+            10,
+            30_000,
+            Some((300, 29_900)),
+            SessionEnd::FrameBudget,
+        )];
+        let spans = unobserved_spans(&sessions, 0, 60_000, RunStop::FrameBudget);
+        assert_eq!(
+            told(&spans),
+            vec![
+                (0, 300, CAUSE_AWAITING_FIRST_LIVENESS),
+                (30_000, 60_000, "frame_budget_exhausted"),
+            ]
+        );
+        tiles(&sessions, &spans, 0, 60_000);
+    }
+
+    #[test]
+    fn reaching_the_planned_end_inside_a_backoff_is_completed_and_still_holed() {
+        let sessions = [ended(
+            1,
+            10,
+            55_000,
+            Some((300, 54_000)),
+            SessionEnd::TransportError,
+        )];
+        let spans = unobserved_spans(&sessions, 0, 60_000, RunStop::WallClockBudget);
+        assert_eq!(
+            told(&spans),
+            vec![
+                (0, 300, CAUSE_AWAITING_FIRST_LIVENESS),
+                (54_000, 55_000, "transport_error_before_planned_end"),
+                (55_000, 60_000, CAUSE_BACKOFF_WAIT),
+            ]
+        );
+        // The clock genuinely ran out, and six seconds of the window were never watched. Both are
+        // true at once, which is why one flag can never stand in for the other.
+        assert!(RunStop::WallClockBudget.planned_window_completed());
+        tiles(&sessions, &spans, 0, 60_000);
+    }
+
+    #[test]
+    fn a_socket_that_opened_as_the_window_closed_cannot_claim_the_window() {
+        // It reached the planned end, which is the arm that vouches all the way to it — but it
+        // never heard the provider, so it has proved nothing and must claim nothing.
+        let silent = ended(1, 59_990, 60_003, None, SessionEnd::PlannedWindowReached);
+        assert_eq!(silent.claimed(60_000), (59_990, 59_990));
+    }
+
+    #[test]
+    fn a_connection_that_never_heard_a_word_claims_nothing_and_widens_the_hole() {
+        let sessions = [
+            ended(
+                1,
+                10,
+                20_000,
+                Some((300, 19_500)),
+                SessionEnd::ProviderClosedSocket,
+            ),
+            // Connected, asked, and was answered by nothing until the inactivity ceiling.
+            ended(2, 22_000, 67_000, None, SessionEnd::InactivityCeiling),
+        ];
+        let spans = unobserved_spans(&sessions, 0, 90_000, RunStop::ReconnectAttemptsExhausted);
+        assert_eq!(
+            told(&spans),
+            vec![
+                (0, 300, CAUSE_AWAITING_FIRST_LIVENESS),
+                (19_500, 20_000, "provider_closed_socket_before_planned_end"),
+                (20_000, 22_000, CAUSE_BACKOFF_WAIT),
+                (22_000, 67_000, "no_frame_within_inactivity_ceiling"),
+                (67_000, 90_000, "reconnect_attempts_exhausted"),
+            ]
+        );
+        tiles(&sessions, &spans, 0, 90_000);
+    }
 }
