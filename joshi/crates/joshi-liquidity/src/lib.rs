@@ -8,6 +8,7 @@
 pub mod action;
 pub mod chunk;
 pub mod dlmm_fee;
+pub mod grid;
 pub mod paper;
 pub mod pool_depth;
 pub mod position;
@@ -16,6 +17,7 @@ pub mod readout;
 pub mod replay;
 pub mod round_trip;
 pub mod tier;
+pub mod trade_derive;
 
 /// Stable semantic contract implemented by the current liquidity kernel.
 pub const LIQUIDITY_CONTRACT_VERSION: &str = "joshi.liquidity.v1";
