@@ -70,3 +70,19 @@ Derived V2 is deliberately descriptive and noncausal. Its exact manifest denies 
 hot-scope activation, truth mutation, and economic authority. Exact atom ratios are computed with
 Python integer cross-products and checked rational rounding; no atom value is coerced through a
 binary float. Input beyond the supported u64 boundary refuses.
+
+## scalplab: the probabilistic policy lab
+
+`joshi_analysis.scalplab` runs a pre-registered probabilistic evaluation over retained coin
+tapes (socket and polled catalogs, read strictly read-only). Its protocol lives in
+`src/joshi_analysis/scalplab/REGISTRATION.md` and was written before any model touched a real
+tape. It labels only floor-clearing up-legs (net of a declared venue floor), fits a small zoo
+(Hawkes, analog nearest-neighbour, logistic, CUSUM) under leave-one-coin-out splits, and emits
+calibration reports plus — only when the pre-registered candidate rule clears — a declared
+policy JSON a Rust harness variant can execute. It computes no PnL; economic verdicts belong
+to `crates/joshi-liquidity`.
+
+```bash
+uv run --locked python -m joshi_analysis.scalplab \
+  <tape-dir> [<tape-dir> ...] --out <dir> --author-knowledge "what you already knew"
+```
