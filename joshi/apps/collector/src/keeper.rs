@@ -942,6 +942,10 @@ async fn run_pump_tap(
         TapKind::Candles => {
             query.insert("interval".to_owned(), config.candles_interval.clone());
             query.insert("limit".to_owned(), config.candles_limit.to_string());
+            // The candle body never states its own unit. The retained request restating
+            // currency=SOL (catalog-declared public) is the only durable unit statement, and
+            // the surface refuses to render a price from a window that carries none.
+            query.insert("currency".to_owned(), "SOL".to_owned());
         }
         TapKind::Trades => {
             query.insert("limit".to_owned(), config.trades_limit.to_string());
