@@ -61,7 +61,7 @@ use crate::{
     live_gesture::{LiveGestureError, copy_blob_tree, source_catalog_config},
     live_surface::{
         LIVE_SURFACE_DERIVATION_VERSION, LiveSurfaceError, LiveSurfaceOptions,
-        MAX_LIVE_OBSERVATIONS, derive_live_surface_with, source_identity,
+        derive_live_surface_with, source_identity,
     },
     service::operator_capture,
 };
@@ -471,13 +471,15 @@ impl FollowRuntime {
                 .unwrap_or(0);
             (basis.max(state.futile_through), cutoff)
         };
+        // The newest-anchored limit-1 read is the probe: one payload, plus the catalog's max
+        // commit (`through_commit_seq`) and the source's TRUE delivered-through watermark.
         let probe = SqliteStore::open(
             source_catalog_config(&self.catalog).map_err(Box::new)?,
             StoreMode::ReadOnly,
         )
         .and_then(|store| {
             store
-                .source_observations_as_known(&self.source, None, 1)
+                .source_observations_newest_as_known(&self.source, None, 1)
                 .map(|durable| (store, durable))
         });
         let (source_store, durable) = match probe {
@@ -500,11 +502,23 @@ impl FollowRuntime {
             self.record_contact(CatalogContact::Unchanged { at })?;
             return Ok(TickOutcome::Unchanged);
         }
+        if durable.delivered_through.get() <= last_cutoff {
+            // The catalog advanced, but not for the followed source: journal writes, another
+            // source's traffic. The true watermark decides this on the live catalog itself, so
+            // no generation is copied only to be discarded; the inspected commit is remembered
+            // so quiet traffic is not re-examined on every poll.
+            let inspected = durable.through_commit_seq.get();
+            drop(source_store);
+            let mut state = self.lock()?;
+            state.futile_through = state.futile_through.max(inspected);
+            state.contact = CatalogContact::Unchanged { at };
+            return Ok(TickOutcome::Unchanged);
+        }
         let generation = build_generation(&self.catalog, &source_store, &self.root)?;
         drop(source_store);
         let advanced = generation
             .store
-            .source_observations_as_known(&self.source, None, MAX_LIVE_OBSERVATIONS)?
+            .source_observations_newest_as_known(&self.source, None, 1)?
             .is_some_and(|copied| copied.delivered_through.get() > last_cutoff);
         if !advanced {
             // The catalog advanced, but not for the followed source. Deriving here would mint a
@@ -808,8 +822,12 @@ fn derive_scene_fact(
     source: &SourceId,
     options: &LiveSurfaceOptions,
 ) -> Result<(ValidatedGlassViewV1, SceneFact), FollowError> {
+    // A limit-1 newest read carries the source's TRUE delivered-through, however many
+    // observations the catalog holds. The prefix read must never pick this cutoff: its watermark
+    // is the top of the oldest window, which stops moving the moment the catalog outgrows
+    // [`MAX_LIVE_OBSERVATIONS`] — the wedge that froze the live cockpit on 2026-08-24.
     let durable = store
-        .source_observations_as_known(source, None, MAX_LIVE_OBSERVATIONS)?
+        .source_observations_newest_as_known(source, None, 1)?
         .ok_or_else(|| FollowError::NoObservations(source.to_string()))?;
     let cutoff = durable.delivered_through;
     let derived = derive_live_surface_with(store, source, Some(cutoff), options)?;
@@ -1343,6 +1361,145 @@ mod tests {
         assert_eq!(
             runtime.tick().expect("post-restart tick"),
             TickOutcome::Unchanged
+        );
+    }
+
+    /// Ember's afternoon, measured live 2026-08-24: the keeper commits continuously, the catalog
+    /// outgrows [`crate::live_surface::MAX_LIVE_OBSERVATIONS`], and the cockpit froze — the
+    /// prefix read returned the oldest window forever, its watermark wedged at the moment the
+    /// window first filled, and every tick honestly reported `unchanged` against it. This test
+    /// IS that afternoon: more observations than the cap, keeper commits arriving AFTER the
+    /// window fills, and the tick MUST mint a new scene whose cutoff is the source's true
+    /// delivered-through. It fails on the wedged code.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One frozen afternoon replayed in order: over-cap mount,
+    // keeper commit, the tick that must advance, bystander quiet, advance again, remount.
+    fn a_catalog_past_the_render_cap_still_advances_on_keeper_commits() {
+        use crate::live_surface::MAX_LIVE_OBSERVATIONS;
+        /// The source's true watermark, established with the historical prefix semantics as an
+        /// independent authority: an unbounded prefix window ends at the true delivered-through.
+        fn true_watermark(catalog: &Path) -> u64 {
+            let store = SqliteStore::open(
+                source_catalog_config(catalog).expect("catalog config"),
+                StoreMode::ReadOnly,
+            )
+            .expect("open source catalog read-only");
+            let source = source_identity(FIXTURE_SOURCE).expect("source identity");
+            store
+                .source_observations_as_known(&source, None, usize::MAX)
+                .expect("unbounded prefix read")
+                .expect("the source delivered")
+                .delivered_through
+                .get()
+        }
+
+        let root = tempfile::tempdir().expect("temporary follow root");
+        let catalog = root.path().join("catalog");
+        let state = root.path().join("state");
+        seed_catalog(&catalog).expect("seeded fixture catalog");
+        // The keeper fills the catalog PAST the render cap before anyone follows it:
+        // 2 + 250 + 250 + 50 = 552 observations, 40 more than the 512-observation window.
+        extend_catalog(&catalog, 2..252, "batch-cap-fill-1").expect("keeper batch");
+        extend_catalog(&catalog, 252..502, "batch-cap-fill-2").expect("keeper batch");
+        extend_catalog(&catalog, 502..552, "batch-cap-fill-3").expect("keeper batch");
+
+        let runtime = FollowRuntime::mount(
+            &catalog,
+            &state,
+            FIXTURE_SOURCE,
+            &LiveSurfaceOptions::default(),
+        )
+        .expect("fresh follow mount over an over-cap catalog");
+        let watermark_at_mount = true_watermark(&catalog);
+        let feed = runtime.feed_wire().expect("feed");
+        assert_eq!(
+            feed.scenes[0].cutoff_commit_seq,
+            watermark_at_mount.to_string(),
+            "the head scene's cutoff is the source's true watermark, not the cap boundary"
+        );
+        assert_eq!(
+            feed.scenes[0].observation_count,
+            MAX_LIVE_OBSERVATIONS.to_string(),
+            "the render window is full"
+        );
+        // The truncation is stated inside the rendered scene itself, with the elision counted:
+        // an observation outside the render window is retained, never absent.
+        let head_id = SceneId::new(feed.scenes[0].scene_id.clone()).expect("scene id");
+        let (bytes, _) = runtime
+            .scene_bytes(&head_id)
+            .expect("lock")
+            .expect("head scene served");
+        let view: serde_json::Value = serde_json::from_slice(&bytes).expect("view JSON");
+        let coverage = view["payload"]["sources"][0]["coverage"]
+            .as_str()
+            .expect("source coverage");
+        assert!(
+            coverage.contains("40 older retained observations at this cutoff did not fit"),
+            "{coverage}"
+        );
+
+        // Keeper commits keep landing AFTER the window filled. The frozen cockpit was exactly
+        // this tick reporting `unchanged` forever; it must advance.
+        extend_catalog(&catalog, 552..553, "batch-cap-after-1").expect("keeper commit");
+        let TickOutcome::Advanced {
+            scene_id: advanced_id,
+        } = runtime.tick().expect("tick after keeper commit")
+        else {
+            panic!("a keeper commit past the render cap must still derive a new scene");
+        };
+        let watermark_after = true_watermark(&catalog);
+        assert!(watermark_after > watermark_at_mount, "new evidence landed");
+        let feed = runtime.feed_wire().expect("feed");
+        assert_eq!(feed.scenes[0].scene_id, advanced_id);
+        assert_eq!(
+            feed.scenes[0].cutoff_commit_seq,
+            watermark_after.to_string(),
+            "the minted scene's cutoff moved to the new true delivered-through"
+        );
+
+        // A commit carrying nothing for the followed source still mints nothing: the futile
+        // watermark keeps working over an over-cap catalog.
+        commit_bystander_frame(&catalog, 5).expect("bystander commit");
+        assert_eq!(
+            runtime.tick().expect("bystander tick"),
+            TickOutcome::Unchanged
+        );
+        assert_eq!(runtime.tick().expect("quiet tick"), TickOutcome::Unchanged);
+
+        // And the next real delivery advances again: the futile watermark did not wedge.
+        extend_catalog(&catalog, 553..554, "batch-cap-after-2").expect("keeper commit");
+        assert!(
+            matches!(
+                runtime.tick().expect("second advance tick"),
+                TickOutcome::Advanced { .. }
+            ),
+            "the head keeps following the keeper"
+        );
+        let final_watermark = true_watermark(&catalog);
+        let feed = runtime.feed_wire().expect("feed");
+        assert_eq!(
+            feed.scenes[0].cutoff_commit_seq,
+            final_watermark.to_string()
+        );
+        assert_eq!(
+            feed.scenes[0].observation_count,
+            MAX_LIVE_OBSERVATIONS.to_string()
+        );
+
+        // Same catalog, same cutoffs, same version: the remount re-derives every truncated
+        // scene to its recorded identity and serves, rather than bricking the state dir.
+        drop(runtime);
+        let runtime = FollowRuntime::mount(
+            &catalog,
+            &state,
+            FIXTURE_SOURCE,
+            &LiveSurfaceOptions::default(),
+        )
+        .expect("remount re-derives the over-cap scenes identically");
+        let feed = runtime.feed_wire().expect("feed");
+        assert_eq!(
+            feed.scenes[0].cutoff_commit_seq,
+            final_watermark.to_string()
         );
     }
 

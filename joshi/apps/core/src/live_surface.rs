@@ -55,6 +55,14 @@ use std::{
 use thiserror::Error;
 
 /// Upper bound on observations one derivation will read back from the catalog.
+///
+/// This is a render window bound, not a knowledge bound. When a source has delivered more than
+/// this at the cutoff, the derivation reads the NEWEST window — so a live head keeps tracking
+/// the source's true delivered-through watermark however large the catalog grows — and states
+/// the truncation in its report (`observationsTruncated`, with `observationsElided` counting
+/// what fell outside) and in the rendered source coverage. The elided observations are the
+/// oldest ones; falling outside this window is never a claim they did not happen: the catalog
+/// retains them, and an explicit-cutoff read still reaches them.
 pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 
 /// Version of this module's derivation output: everything that decides the exact bytes
@@ -78,7 +86,13 @@ pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 ///   version is from this era, and its unretained scenes retire at the first upgraded remount.
 /// - `"2"`: candidate metadata claims (ticker, name, market cap) joined the view, and the
 ///   derivation version joined the scene-identity preimage.
-pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "2";
+/// - `"3"`: the observation window became newest-anchored at the cutoff. An over-cap catalog
+///   previously rendered the OLDEST [`MAX_LIVE_OBSERVATIONS`] observations and took its
+///   watermark from that window, so a live head froze the moment the window first filled
+///   (observed live 2026-08-24: cutoff wedged at commit 356 while the keeper stood at 585).
+///   Window selection decides the derived bytes, so an over-cap catalog derives different bytes
+///   under this version, and the rendered coverage now states the truncation.
+pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "3";
 
 /// Exact, store-derived Glass scene plus the identities that justify every rendered value.
 #[derive(Debug)]
@@ -104,7 +118,11 @@ pub struct LiveSurfaceReport {
     pub delivered_through: String,
     pub rendered_at: String,
     pub observation_count: u64,
+    /// True when the source held more observations at the cutoff than the render window allows.
     pub observations_truncated: bool,
+    /// How many observations at or before the cutoff fell outside the render window: the oldest
+    /// ones. A render bound, never an absence claim — the catalog retains every one of them.
+    pub observations_elided: u64,
     pub candidate_count: u64,
     /// Retained `coin_exact` / `discovery_coins` bodies this cutoff held and parsed.
     pub coin_metadata_observations: u64,
@@ -193,8 +211,11 @@ pub fn derive_live_surface_with(
     cutoff: Option<CommitSeq>,
     options: &LiveSurfaceOptions,
 ) -> Result<LiveSurfaceDerivation, LiveSurfaceError> {
+    // The NEWEST window at the cutoff, carrying the source's true delivered-through. The prefix
+    // read must never serve a live surface: with an over-cap catalog its window and watermark
+    // stop at the moment the window first fills, which froze the live cockpit on 2026-08-24.
     let durable = store
-        .source_observations_as_known(source_id, cutoff, MAX_LIVE_OBSERVATIONS)?
+        .source_observations_newest_as_known(source_id, cutoff, MAX_LIVE_OBSERVATIONS)?
         .ok_or_else(|| LiveSurfaceError::NoObservations(source_id.to_string()))?;
     let watermark = store
         .source_as_of(source_id, durable.through_commit_seq)?
@@ -446,6 +467,7 @@ pub fn derive_live_surface_with(
         rendered_at: rendered_at.to_string(),
         observation_count: u64::try_from(durable.observations.len()).unwrap_or(u64::MAX),
         observations_truncated: durable.truncated,
+        observations_elided: durable.elided,
         candidate_count: u64::try_from(subjects.len()).unwrap_or(u64::MAX),
         coin_metadata_observations: u64::try_from(metadata_observations).unwrap_or(u64::MAX),
         coin_metadata_rows: u64::try_from(metadata_rows).unwrap_or(u64::MAX),
@@ -2123,15 +2145,32 @@ fn source_health(
         },
         last_observed_at: last_observed.map(|value| value.to_string()),
         last_ingested_at: last_ingested.map(|value| value.to_string()),
-        coverage: format!(
-            "{total} retained observation{} across commits {low} through {}, delivered through \
-             commit {}, rendered at commit {}. {event_clock_count} carr{} a provider event clock.",
-            if total == 1 { "" } else { "s" },
-            durable.delivered_through.get(),
-            watermark.delivered_through().get(),
-            durable.through_commit_seq.get(),
-            if event_clock_count == 1 { "ies" } else { "y" },
-        ),
+        coverage: {
+            let mut coverage = format!(
+                "{total} retained observation{} across commits {low} through {}, delivered \
+                 through commit {}, rendered at commit {}. {event_clock_count} carr{} a provider \
+                 event clock.",
+                if total == 1 { "" } else { "s" },
+                durable.delivered_through.get(),
+                watermark.delivered_through().get(),
+                durable.through_commit_seq.get(),
+                if event_clock_count == 1 { "ies" } else { "y" },
+            );
+            if durable.elided > 0 {
+                // A truncated window is a render bound, and it is stated: the observations that
+                // did not fit are the oldest, they are retained by the catalog, and nothing about
+                // this sentence is a claim they did not happen.
+                let _ = write!(
+                    coverage,
+                    " This is the newest render window the surface draws; {} older retained \
+                     observation{} at this cutoff did not fit and remain in the catalog, not \
+                     absent.",
+                    durable.elided,
+                    if durable.elided == 1 { "" } else { "s" },
+                );
+            }
+            coverage
+        },
         note: format!(
             "{quality_notes} observation{} recorded an exact adapter quality note. Provider bytes \
              are retained without an assertion layer beneath them. {} Coverage outside these \
@@ -3317,7 +3356,7 @@ mod tests {
         let store = store_with_candles(root.path());
         let source = source_identity("pump.api.product.v1").expect("source identity");
         let durable = store
-            .source_observations_as_known(&source, None, MAX_LIVE_OBSERVATIONS)
+            .source_observations_newest_as_known(&source, None, MAX_LIVE_OBSERVATIONS)
             .expect("durable readback")
             .expect("fixture store holds observations");
         let current = scene_identity_under(LIVE_SURFACE_DERIVATION_VERSION, &durable);
