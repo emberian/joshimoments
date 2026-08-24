@@ -11,6 +11,7 @@ type ShortcutOptions = {
   onRecordFocus(): void;
   onHoldCandidate(): void;
   onOpenHypothesisLab(): void;
+  onToggleSurface(): void;
 };
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -38,6 +39,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
  */
 const HOLD_KEYS = new Set([";", ":"]);
 
+/**
+ * The hunt/inspect lens toggle lives on the key NEXT TO the hold key, for the same reason
+ * the hold key is `;`: no major screen reader claims apostrophe for quick navigation, it
+ * needs no modifier, and it sits under the same finger — hold with `;`, flip the lens with
+ * `'`. The doubled quote is accepted so a held or sticky Shift never eats the switch.
+ */
+const SURFACE_KEYS = new Set(["'", '"']);
+
 export function useGlobalShortcuts(options: ShortcutOptions): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -52,6 +61,12 @@ export function useGlobalShortcuts(options: ShortcutOptions): void {
       if (HOLD_KEYS.has(event.key)) {
         event.preventDefault();
         options.onHoldCandidate();
+        return;
+      }
+
+      if (SURFACE_KEYS.has(event.key)) {
+        event.preventDefault();
+        options.onToggleSurface();
         return;
       }
 

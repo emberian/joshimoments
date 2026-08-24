@@ -10,13 +10,38 @@ import { memo, useCallback, useEffect, useMemo, useRef, type KeyboardEvent as Re
 // reading; Ember corrected that directly — she is primarily visual — so it is restored.
 // `operator/attention.ts` states exactly what each channel claims and refuses to claim.
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
-import { Activity, Bookmark, RefreshCw, Radio, Users } from "lucide-react";
+import { Activity, Bookmark, FastForward, RefreshCw, Radio, Users } from "lucide-react";
 
-import type { Candidate } from "../contract/v1";
+import type { Candidate, EvidenceClass, EvidenceRef } from "../contract/v1";
 import { basisPoints, candidateName, candidateSymbol, compactUsd, duration, sentenceCase, signedTone } from "../format";
+import { SPARKLINE_HEIGHT, SPARKLINE_WIDTH, sparklineSpec } from "./sparkline";
 import type { Density } from "../App";
 
 export type BoardFilter = "all" | Candidate["board"];
+
+/**
+ * The two renderings of the same feed. `column` is the evidence-forward card column the
+ * inspect workbench sits beside; `board` is the hunt board — dense single-glance rows, one
+ * coin per line, sized for scanning seventy candidates while price scrolls by. The variants
+ * differ ONLY in what a row paints: the listbox, `aria-activedescendant`, virtualizer, and
+ * all three attention channels (scroll-rectangle visibility, active-descendant reach,
+ * pointer entry) are the same lines of code, so what "seen" means cannot drift between them.
+ */
+export type FeedVariant = "column" | "board";
+
+/**
+ * Newer immutable scenes the shell knows about, rendered by the board as a loud pill at the
+ * top. Advancing stays the operator's own explicit act — the pill runs the same `advance`
+ * the command palette offers, nothing ever swaps on its own, and no single-letter shortcut
+ * exists for it (six of the eight existing letters already collide with screen-reader
+ * quick-nav). `count` is null when the feed lists scenes but the bound one is not among
+ * them, so how many are strictly newer is not knowable and is not claimed.
+ */
+export type AdvanceNotice = {
+  count: number | null;
+  derivedAt: string;
+  advance(): void;
+};
 
 const boards: Array<{ id: BoardFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -49,6 +74,9 @@ export const AttentionFeed = memo(function AttentionFeed({
   orderUpdatePending = false,
   pendingNewCount = 0,
   onAcceptOrderUpdate,
+  variant = "column",
+  boardBasis,
+  advanceNotice = null,
 }: {
   candidates: Candidate[];
   selectedId: string;
@@ -84,6 +112,11 @@ export const AttentionFeed = memo(function AttentionFeed({
   orderUpdatePending?: boolean;
   pendingNewCount?: number;
   onAcceptOrderUpdate?(): void;
+  variant?: FeedVariant;
+  /** The sort or filter rule the current tab actually applied, stated under the tabs. */
+  boardBasis?: string;
+  /** Newer scenes exist; rendered as the loud advance pill by the board variant only. */
+  advanceNotice?: AdvanceNotice | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // The parent has already frozen the accepted display order. Re-sorting here would let a
@@ -112,7 +145,9 @@ export const AttentionFeed = memo(function AttentionFeed({
   const rowVirtualizer = useVirtualizer({
     count: sorted.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => (density === "comfortable" ? 156 : 126),
+    estimateSize: () => (variant === "board"
+      ? (density === "comfortable" ? 58 : 40)
+      : (density === "comfortable" ? 156 : 126)),
     overscan: 5,
     initialRect: { width: 440, height: 640 },
     getItemKey: (index) => sorted[index]?.id ?? index,
@@ -229,16 +264,38 @@ export const AttentionFeed = memo(function AttentionFeed({
   const hasRows = sorted.length > 0;
 
   return (
-    <section className="panel attention-panel" aria-labelledby="attention-title">
+    <section className="panel attention-panel" data-variant={variant} aria-labelledby="attention-title">
       <div className="panel-header attention-header">
         <div>
-          <p className="eyebrow">Broad surface</p>
-          <h2 id="attention-title">Attention feed</h2>
+          <p className="eyebrow">{variant === "board" ? "Live hunt" : "Broad surface"}</p>
+          <h2 id="attention-title">{variant === "board" ? "Hunt board" : "Attention feed"}</h2>
         </div>
         <output className="count-badge" aria-live="polite">
           {sorted.length} visible
         </output>
       </div>
+
+      {/*
+        The advance affordance, loud where the hunt actually happens. It stays an explicit
+        operator act — this button and the palette entry run the same rebind, nothing swaps
+        on its own — but it no longer hides in a palette: while she is scanning the board,
+        "newer scenes exist" is exactly the fact that decides whether this board is still
+        worth scanning.
+      */}
+      {variant === "board" && advanceNotice && (
+        <div className="advance-notice">
+          <button type="button" className="advance-pill" onClick={advanceNotice.advance}>
+            <FastForward aria-hidden="true" />
+            {advanceNotice.count === null
+              ? "Newer scenes exist — advance"
+              : `${advanceNotice.count} newer scene${advanceNotice.count === 1 ? "" : "s"} — advance`}
+          </button>
+          <span className="advance-detail">
+            Newest derived {advanceNotice.derivedAt.slice(11, 16)} UTC. Advancing is your act;
+            this board never swaps on its own. Held coins and the journal stay.
+          </span>
+        </div>
+      )}
 
       {/*
         A radiogroup with a roving tabindex: one tab stop for six mutually exclusive filters,
@@ -274,6 +331,13 @@ export const AttentionFeed = memo(function AttentionFeed({
         ))}
       </div>
 
+      {/*
+        What the current tab's order actually is, said out loud. A sorted tab names its sort;
+        a tab whose metric no candidate carries says so rather than presenting the served
+        order as a ranking (`boardSemantics.ts` builds the sentence with the sort itself).
+      */}
+      {boardBasis !== undefined && <p className="board-basis">{boardBasis}</p>}
+
       {orderUpdatePending && onAcceptOrderUpdate && (
         <div className="pending-order" role="status">
           <span><strong>Updated order available</strong>{pendingNewCount > 0 ? ` · ${pendingNewCount} new` : ""}. Cards stay fixed until you accept it.</span>
@@ -285,6 +349,23 @@ export const AttentionFeed = memo(function AttentionFeed({
         One tab stop: J and K or the arrow keys move through the candidates, Enter selects the
         active one, and semicolon holds it.
       </p>
+
+      {/*
+        Column labels for the board's aligned cells. Decorative for readers (aria-hidden):
+        every cell below carries its own screen-reader words ("market cap", "old", "in 5
+        minutes"), so the labels here would only be announced twice.
+      */}
+      {variant === "board" && hasRows && (
+        <div className="board-columns" aria-hidden="true">
+          <span>#</span>
+          <span>coin</span>
+          <span className="board-col-spark">path</span>
+          <span className="board-col-number">age</span>
+          <span className="board-col-number">mcap</span>
+          <span className="board-col-number">5m</span>
+          <span className="board-col-badges" />
+        </div>
+      )}
 
       {/*
         The feed is a LISTBOX and its rows are options: one tab stop total, with
@@ -349,6 +430,9 @@ export const AttentionFeed = memo(function AttentionFeed({
                   onPointerEnter={() => onPointerCandidate?.(candidate.id)}
                   onMouseEnter={() => onPointerCandidate?.(candidate.id)}
                 >
+                  {variant === "board" ? (
+                    <BoardRow candidate={candidate} rank={rank} density={density} />
+                  ) : (
                   <div className="candidate-card">
                     <span
                       className="candidate-rank"
@@ -397,6 +481,7 @@ export const AttentionFeed = memo(function AttentionFeed({
                       <span className="source-chip">{candidate.board}</span>
                     </span>
                   </div>
+                  )}
                 </li>
               );
             })}
@@ -406,3 +491,122 @@ export const AttentionFeed = memo(function AttentionFeed({
     </section>
   );
 });
+
+/**
+ * A served figure this view does not carry. The dash keeps the board scannable; the words
+ * stay with it for readers and on hover, because a silent blank would be indistinguishable
+ * from a zero and a number without its absence stated is a lie by omission.
+ */
+function AbsentValue({ what }: { what: string }) {
+  return (
+    <span className="board-absent" title={`This view does not observe a ${what} for this coin.`}>
+      <span aria-hidden="true">—</span>
+      <span className="sr-only">{what} not observed</span>
+    </span>
+  );
+}
+
+const EVIDENCE_CLASS_ORDER: EvidenceClass[] = ["observed", "derived", "attested", "interpreted", "unknown"];
+const EVIDENCE_CLASS_GLYPH: Record<EvidenceClass, string> = {
+  observed: "O",
+  derived: "D",
+  attested: "A",
+  interpreted: "I",
+  unknown: "?",
+};
+
+/** Which provenance classes this candidate's evidence carries, for the compact claims glyph. */
+function evidenceClassesPresent(evidence: readonly EvidenceRef[]): EvidenceClass[] {
+  return EVIDENCE_CLASS_ORDER.filter((cls) => evidence.some((ref) => ref.evidenceClass === cls));
+}
+
+/** The full field-by-field provenance, one hover away behind the glyph. */
+function evidenceTitle(evidence: readonly EvidenceRef[]): string {
+  return [
+    "Field provenance in this view:",
+    ...evidence.map((ref) => `${ref.field}: ${ref.evidenceClass} (${ref.status}) — ${ref.note}`),
+  ].join("\n");
+}
+
+/**
+ * One hunt-board row: the pump.fun-shaped glance — ticker (or mint prefix when no ticker
+ * was observed), name, price path, age, market cap, and the 5-minute move colored by sign —
+ * with the epistemics COLLAPSED to chips instead of paragraphs. Nothing is deleted: the
+ * attention reason and social summary ride the row's hover title (and, in comfortable
+ * density, one truncated line), the field-by-field provenance rides the claims glyph's
+ * title, and the whole evidence workbench stays one lens switch away. Cells that the view
+ * does not observe render `AbsentValue`, never a fabricated zero.
+ */
+function BoardRow({ candidate, rank, density }: {
+  candidate: Candidate;
+  rank: Candidate["rank"];
+  density: Density;
+}) {
+  const spark = sparklineSpec(candidate.candles);
+  const { ageSeconds, marketCapUsd, change5mBps } = candidate.metrics;
+  const classes = evidenceClassesPresent(candidate.evidence);
+  return (
+    <div className="board-row" title={`${candidate.attentionReason}\n${candidate.socialSummary}`}>
+      <span
+        className="board-rank"
+        data-absent={rank === null}
+        aria-label={rank === null ? "This view states no rank for this candidate" : `Rank ${rank}`}
+      >
+        {rank ?? "—"}
+      </span>
+      <span className="board-identity">
+        <span className="board-title">
+          <strong className="board-ticker">{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
+          {candidate.name !== null && <span className="board-name">{candidate.name}</span>}
+        </span>
+        {density === "comfortable" && (
+          <span className="board-reason">{candidate.attentionReason}</span>
+        )}
+      </span>
+      <span className="board-cell board-spark">
+        {spark && (
+          <svg
+            className={`sparkline value-${spark.tone}`}
+            viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+            aria-hidden="true"
+            focusable="false"
+          >
+            {/* Hover honesty for the shape: it is the served path on its own bar clocks. */}
+            <title>Served price path over its own bar clocks; no interval or unit is stated.</title>
+            <polyline points={spark.points} fill="none" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+        )}
+      </span>
+      <span className="board-cell board-number">
+        {ageSeconds === null ? <AbsentValue what="coin age" /> : <>{duration(ageSeconds)}<span className="sr-only"> old</span></>}
+      </span>
+      <span className="board-cell board-number">
+        {marketCapUsd === null ? <AbsentValue what="market cap" /> : <>{compactUsd(marketCapUsd)}<span className="sr-only"> market cap</span></>}
+      </span>
+      <span className={`board-cell board-number board-move value-${signedTone(change5mBps)}`}>
+        {change5mBps === null ? <AbsentValue what="5-minute move" /> : <>{basisPoints(change5mBps)}<span className="sr-only"> in 5 minutes</span></>}
+      </span>
+      <span className="board-badges">
+        {candidate.watched === true && (
+          <span className="icon-label" title="Watched">
+            <Bookmark aria-hidden="true" size={13} />
+            <span className="sr-only">Watched</span>
+          </span>
+        )}
+        <span className={`board-chip lifecycle-${candidate.lifecycle}`}>{sentenceCase(candidate.lifecycle)}</span>
+        {candidate.symbol === null && (
+          <span
+            className="board-chip chip-absent"
+            title="No ticker or name was observed for this mint; its leading characters stand in."
+          >
+            no ticker
+          </span>
+        )}
+        <span className="board-chip chip-evidence" title={evidenceTitle(candidate.evidence)}>
+          <span aria-hidden="true">{classes.map((cls) => EVIDENCE_CLASS_GLYPH[cls]).join("·")}</span>
+          <span className="sr-only">evidence: {classes.join(", ")}</span>
+        </span>
+      </span>
+    </div>
+  );
+}

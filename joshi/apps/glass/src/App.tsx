@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Command, Database, Grid2X2, Search, ShieldCheck } from "lucide-react";
+import { Command, Crosshair, Database, Grid2X2, Microscope, Search, ShieldCheck } from "lucide-react";
 
 import { AttentionFeed, type BoardFilter } from "./components/AttentionFeed";
+import { boardView } from "./components/boardSemantics";
 import { CoinWorkbench } from "./components/CoinWorkbench";
 import { CommandPalette, type ShellCommand } from "./components/CommandPalette";
 import { EpisodeRail } from "./components/EpisodeRail";
@@ -36,6 +37,16 @@ import { useVenueReadouts } from "./venue/useVenueReadouts";
 
 export type Density = "comfortable" | "compact";
 
+/**
+ * The two lenses on one scene. `hunt` is the racing default of a live session: one dense
+ * board of coins, scannable at a glance, with the epistemics collapsed to chips. `inspect`
+ * is the evidence workbench this cockpit grew up as: the full prose, provenance, journal,
+ * and rails. Both read the exact same immutable snapshot and share every piece of state —
+ * selection, holds, the journal, and the scene's attention sets — so switching costs one
+ * gesture and loses nothing.
+ */
+export type GlassSurface = "hunt" | "inspect";
+
 function nextMode(mode: ReplayMode): ReplayMode {
   if (mode === "knowledge_cutoff") return "witnessed";
   if (mode === "witnessed") return "retrospective";
@@ -56,6 +67,7 @@ export function GlassApp({
   venueReadout,
   newerScene = null,
   unavailableLenses,
+  initialSurface = "inspect",
 }: {
   dataSource?: GlassDataSource;
   operatorSink?: OperatorCommandSink;
@@ -78,11 +90,15 @@ export function GlassApp({
   venueReadout?: HeldVenueLookup;
   /**
    * A newer immutable scene the shell learned about from the scene feed, with the act that
-   * rebinds this cockpit to it. Rendered as a command-palette action and nothing else: no new
+   * rebinds this cockpit to it. On the hunt board it renders as the loud advance pill —
+   * while she is scanning, "newer scenes exist" decides whether the board is still worth
+   * scanning — and it is always a command-palette action. What never changes: no new
    * single-letter key (six of the eight existing ones already collide with screen-reader
-   * quick-nav), no focus theft, and the current scene never changes without this explicit act.
+   * quick-nav), no focus theft, and the current scene never changes without this explicit
+   * act. `newerCount` is how many listed scenes are strictly newer than the bound one, or
+   * null when the feed no longer lists the bound scene and the count is not knowable.
    */
-  newerScene?: { sceneId: string; derivedAt: string; advance(): void } | null;
+  newerScene?: { sceneId: string; derivedAt: string; newerCount?: number | null; advance(): void } | null;
   /**
    * Replay lenses this shell's scenes structurally cannot serve, with the one reason why.
    *
@@ -92,8 +108,11 @@ export function GlassApp({
    * the backstop, never the UX.
    */
   unavailableLenses?: LensAvailability;
+  /** Which lens a session opens into. The live shell launches into `hunt`; fixtures inspect. */
+  initialSurface?: GlassSurface;
 }) {
   const [snapshot, setSnapshot] = useState<GlassSnapshotV1 | null>(null);
+  const [surface, setSurface] = useState<GlassSurface>(initialSurface);
   const [pendingMode, setPendingMode] = useState<ReplayMode | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [density, setDensity] = useState<Density>("comfortable");
@@ -245,15 +264,24 @@ export function GlassApp({
 
   const candidates = snapshot?.view.payload.candidates ?? [];
   const stableOrder = useStableCandidateOrder(candidates, snapshot?.view.sceneId ?? "scene-not-loaded");
+  /**
+   * The current tab's real sort or filter over the frozen display order, with its basis
+   * stated (`boardSemantics.ts`). Pure over one immutable scene's accepted order, so within
+   * a scene no tab's order can move under her; only her own tab switch or an explicit
+   * order acceptance reorders anything.
+   */
+  const boardLens = useMemo(
+    () => boardView(stableOrder.orderedCandidates, board),
+    [board, stableOrder.orderedCandidates],
+  );
   const visibleCandidates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return stableOrder.orderedCandidates
-      .filter((candidate) => {
-        const matchesBoard = board === "all" || candidate.board === board;
-        const searchable = `${candidate.mint} ${candidate.id} ${candidate.symbol ?? ""} ${candidate.name ?? ""} ${candidate.attentionReason} ${candidate.socialSummary} ${candidate.tags.join(" ")}`.toLowerCase();
-        return matchesBoard && (normalized.length === 0 || searchable.includes(normalized));
-      });
-  }, [board, query, stableOrder.orderedCandidates]);
+    if (normalized.length === 0) return boardLens.candidates;
+    return boardLens.candidates.filter((candidate) => {
+      const searchable = `${candidate.mint} ${candidate.id} ${candidate.symbol ?? ""} ${candidate.name ?? ""} ${candidate.attentionReason} ${candidate.socialSummary} ${candidate.tags.join(" ")}`.toLowerCase();
+      return searchable.includes(normalized);
+    });
+  }, [boardLens, query]);
 
   useEffect(() => {
     // A new scene is a new choice context: what was seen in the previous scene says nothing
@@ -482,6 +510,7 @@ export function GlassApp({
   }, [heldMintsBySubject, measuredVenues, venueReadout, venueSource]);
 
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
+  const toggleSurface = useCallback(() => setSurface((value) => value === "hunt" ? "inspect" : "hunt"), []);
   const cycleReplay = useCallback(() => {
     if (!snapshot || pendingMode !== null) return;
     // Cycle over the lenses that exist for this scene. When none besides the current one exist
@@ -499,13 +528,34 @@ export function GlassApp({
     const modes: ReplayMode[] = ["knowledge_cutoff", "witnessed", "retrospective"];
     return modes.some((mode) => mode !== snapshot.view.mode && !unavailableModes.has(mode));
   }, [snapshot, unavailableModes]);
-  const toggleProvenance = useCallback(() => setProvenanceOpen((value) => !value), []);
+  // The provenance panel, hypothesis lab, and journal are inspect-lens surfaces. Their
+  // commands stay honest from the hunt board by switching the lens first and then landing
+  // where they always landed — a command that could only act on an unmounted panel would be
+  // a command that can only fail. Under the inspect lens the lens switch is a no-op.
+  const toggleProvenance = useCallback(() => {
+    setSurface("inspect");
+    setProvenanceOpen((value) => !value);
+  }, []);
   const openCommands = useCallback(() => setCommandsOpen(true), []);
   const openInspector = useCallback(() => setSceneInspectorOpen(true), []);
   const recordFocus = useCallback(() => setCapturePreset({ type: "focus" }), []);
   const focusSearch = useCallback(() => searchRef.current?.focus(), []);
-  const openHypothesisLab = useCallback(() => document.querySelector<HTMLElement>("#hypothesis-lab")?.focus(), []);
-  const openJournal = useCallback(() => document.querySelector<HTMLElement>("#journal")?.focus(), []);
+  const openHypothesisLab = useCallback(() => {
+    if (surface === "inspect") {
+      document.querySelector<HTMLElement>("#hypothesis-lab")?.focus();
+      return;
+    }
+    setSurface("inspect");
+    requestAnimationFrame(() => document.querySelector<HTMLElement>("#hypothesis-lab")?.focus());
+  }, [surface]);
+  const openJournal = useCallback(() => {
+    if (surface === "inspect") {
+      document.querySelector<HTMLElement>("#journal")?.focus();
+      return;
+    }
+    setSurface("inspect");
+    requestAnimationFrame(() => document.querySelector<HTMLElement>("#journal")?.focus());
+  }, [surface]);
   const annotateChart = useCallback((anchor: import("./operator/contract").ChartAnchor) => setCapturePreset({ type: "annotation", anchor }), []);
 
   useGlobalShortcuts(useMemo(() => ({
@@ -519,7 +569,8 @@ export function GlassApp({
     onRecordFocus: recordFocus,
     onHoldCandidate: holdSelected,
     onOpenHypothesisLab: openHypothesisLab,
-  }), [cycleReplay, focusSearch, holdSelected, moveSelection, openCommands, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance]));
+    onToggleSurface: toggleSurface,
+  }), [cycleReplay, focusSearch, holdSelected, moveSelection, openCommands, openHypothesisLab, openInspector, recordFocus, toggleDensity, toggleProvenance, toggleSurface]));
 
   const shellCommands: ShellCommand[] = useMemo(() => [
     // First when present, because it is time-sensitive; still an explicit choice, never automatic.
@@ -530,6 +581,13 @@ export function GlassApp({
       run: newerScene.advance,
     }] : []),
     { id: "search", label: "Focus market search", detail: "Filter only this immutable view", shortcut: "/", run: focusSearch },
+    {
+      id: "surface",
+      label: surface === "hunt" ? "Open the evidence workbench" : "Open the hunt board",
+      detail: "The other lens on this same scene; selection, holds, and the journal stay",
+      shortcut: "'",
+      run: toggleSurface,
+    },
     // Offered only when another lens actually exists for this scene: a live scene is
     // witnessed-only, and a command that can only fail is not a command.
     ...(anotherLensAvailable ? [{ id: "replay", label: "Load the next replay mode", detail: "Fetch a distinct cutoff, witnessed, or retrospective DTO", shortcut: "R", run: cycleReplay }] : []),
@@ -542,12 +600,19 @@ export function GlassApp({
     // Deliberately no single-letter shortcut: the journal is reached by tab order or from here.
     { id: "journal", label: "Open the journal", detail: "Read what was said over this scene, verbatim, and append an entry", run: openJournal },
     { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
-  ], [anotherLensAvailable, cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
+  ], [anotherLensAvailable, cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, surface, toggleDensity, toggleProvenance, toggleSurface]);
 
   const closeCommands = useCallback(() => {
     setCommandsOpen(false);
     requestAnimationFrame(() => commandButtonRef.current?.focus());
   }, []);
+
+  // Stable while the same newer scene stands, so the memoized board is not re-rendered by
+  // every unrelated shell render.
+  const advanceNotice = useMemo(
+    () => (newerScene ? { count: newerScene.newerCount ?? null, derivedAt: newerScene.derivedAt, advance: newerScene.advance } : null),
+    [newerScene],
+  );
 
   if (!snapshot && loadError) {
     return <main className="load-state"><strong>Glass could not load its read-only snapshot.</strong><p>{loadError}</p></main>;
@@ -583,10 +648,31 @@ export function GlassApp({
     compared: interactedHere.slice(-3),
   };
 
+  // Rendered by both lenses: a refused hold she must hear about, and the rail that refuses
+  // to forget. The held rail is scene-independent state, so it survives the lens switch the
+  // same way it survives a scene advance.
+  const heldRefusalNotice = refusedHold && (
+    <p className="held-refusal" role="alert">
+      A hold was refused by the local core and is not retained: {refusedHold.error} The coin
+      stays listed below so it is not lost, but nothing has committed it.
+    </p>
+  );
+  const heldRail = (
+    <HeldCoins
+      entries={operatorJournal.entries}
+      candidates={candidates}
+      retained={heldObservations}
+      {...(venueLookup ? { venueReadout: venueLookup } : {})}
+      onSelect={selectCandidate}
+      onAppendNote={appendHoldNote}
+    />
+  );
+
   return (
     <div className="app" data-density={density}>
       <a className="skip-link" href="#held-coins">Skip to held coins</a>
-      <a className="skip-link skip-link-second" href="#selected-coin">Skip to selected coin</a>
+      {/* The workbench exists only under the inspect lens; a skip link must never point at nothing. */}
+      {surface === "inspect" && <a className="skip-link skip-link-second" href="#selected-coin">Skip to selected coin</a>}
       {/*
         Mounted from the first render so a hold announcement is an update to an existing live
         region rather than an insertion, which several screen readers drop. Polite on purpose:
@@ -606,6 +692,15 @@ export function GlassApp({
           <kbd>/</kbd>
         </label>
         <div className="header-actions">
+          {/*
+            The lens switch: cheap in both directions, pointer and keyboard alike. The
+            button names the lens it goes TO, and the apostrophe key (next to the hold
+            semicolon, equally uncontested by screen-reader quick-nav) does the same.
+          */}
+          <button type="button" className="header-button" onClick={toggleSurface} aria-label={surface === "hunt" ? "Switch to the inspect lens: the evidence workbench" : "Switch to the hunt lens: the dense candidate board"}>
+            {surface === "hunt" ? <Microscope aria-hidden="true" /> : <Crosshair aria-hidden="true" />}
+            <span>{surface === "hunt" ? "Inspect" : "Hunt"}</span><kbd>'</kbd>
+          </button>
           <button type="button" className="header-button" onClick={toggleDensity} aria-label={`Use ${density === "comfortable" ? "compact" : "comfortable"} density`}>
             <Grid2X2 aria-hidden="true" /><span>{density === "comfortable" ? "Comfortable" : "Compact"}</span><kbd>D</kbd>
           </button>
@@ -618,46 +713,83 @@ export function GlassApp({
       <div className="status-strip" id="top">
         <span><ShieldCheck aria-hidden="true" /> Read, record &amp; replay only</span>
         <span><Database aria-hidden="true" /> Contract v{snapshot.schemaVersion} · {snapshot.transport === "offline_fixture" ? "offline fixture" : "loopback core"} · commit {snapshot.view.asOf.catalogCommit}</span>
-        <span className="status-help">Move <kbd>J</kbd>/<kbd>K</kbd> · record focus <kbd>F</kbd> · scene <kbd>I</kbd> · replay <kbd>R</kbd></span>
+        <span className="status-help">Move <kbd>J</kbd>/<kbd>K</kbd> · hold <kbd>;</kbd> · lens <kbd>'</kbd> · record focus <kbd>F</kbd> · scene <kbd>I</kbd></span>
       </div>
 
-      <section className="replay-bar" aria-label="Replay controls">
-        <div>
-          <p className="eyebrow">Scene {snapshot.view.sceneId}</p>
-          <p className="replay-explanation" aria-live="polite">
-            {mode === "witnessed" && `Exact witnessed view · digest verified · rendered ${snapshot.view.asOf.renderedAt}`}
-            {mode === "retrospective" && `Separate later reconstruction · basis ${snapshot.view.basisSceneId ?? "missing"}`}
-            {mode === "knowledge_cutoff" && `Separate as-known reconstruction · catalog cutoff ${snapshot.view.asOf.catalogCommit}`}
-          </p>
-          {pendingMode && <p className="replay-pending" role="status">Loading a distinct {pendingMode.replaceAll("_", " ")} snapshot; the current view remains unchanged.</p>}
-          {loadError && <p className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains on screen.</p>}
-          {presentationWitness.status === "gap" && <p className="replay-error" role="alert">Presentation not witnessed: {presentationWitness.error}. Rich information is visible as an explicit presentation-coverage gap.</p>}
-        </div>
-        <ReplaySwitch
-          value={mode}
-          onChange={requestMode}
-          pending={pendingMode}
-          {...(unavailableLenses ? { unavailable: unavailableLenses } : {})}
-        />
-      </section>
+      {surface === "inspect" ? (
+        <section className="replay-bar" aria-label="Replay controls">
+          <div>
+            <p className="eyebrow">Scene {snapshot.view.sceneId}</p>
+            <p className="replay-explanation" aria-live="polite">
+              {mode === "witnessed" && `Exact witnessed view · digest verified · rendered ${snapshot.view.asOf.renderedAt}`}
+              {mode === "retrospective" && `Separate later reconstruction · basis ${snapshot.view.basisSceneId ?? "missing"}`}
+              {mode === "knowledge_cutoff" && `Separate as-known reconstruction · catalog cutoff ${snapshot.view.asOf.catalogCommit}`}
+            </p>
+            {pendingMode && <p className="replay-pending" role="status">Loading a distinct {pendingMode.replaceAll("_", " ")} snapshot; the current view remains unchanged.</p>}
+            {loadError && <p className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains on screen.</p>}
+            {presentationWitness.status === "gap" && <p className="replay-error" role="alert">Presentation not witnessed: {presentationWitness.error}. Rich information is visible as an explicit presentation-coverage gap.</p>}
+          </div>
+          <ReplaySwitch
+            value={mode}
+            onChange={requestMode}
+            pending={pendingMode}
+            {...(unavailableLenses ? { unavailable: unavailableLenses } : {})}
+          />
+        </section>
+      ) : (
+        /*
+          Hunt keeps the scene's honesty to one line: which immutable scene, which lens,
+          and — only when true — a load problem or the presentation-coverage gap, each
+          compressed to a short flagged phrase with the full sentence on hover. The replay
+          switch lives in the inspect lens; the R key and palette still work from here, and
+          the same one-line strip states the result.
+        */
+        <section className="hunt-strip" aria-label="Scene status">
+          <span className="eyebrow">Scene {snapshot.view.sceneId}</span>
+          <span className="hunt-mode">
+            {mode === "witnessed" && `witnessed · rendered ${snapshot.view.asOf.renderedAt.slice(11, 19)}Z`}
+            {mode === "retrospective" && `later reconstruction · basis ${snapshot.view.basisSceneId ?? "missing"}`}
+            {mode === "knowledge_cutoff" && `as-known reconstruction · cutoff commit ${snapshot.view.asOf.catalogCommit}`}
+          </span>
+          {pendingMode && <span className="replay-pending" role="status">loading a distinct {pendingMode.replaceAll("_", " ")} snapshot…</span>}
+          {loadError && <span className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains.</span>}
+          {presentationWitness.status === "gap" && (
+            <span
+              className="hunt-flag"
+              role="alert"
+              title={`Presentation not witnessed: ${presentationWitness.error ?? "no receipt"}. What is on screen is an explicit presentation-coverage gap, not a witnessed reveal.`}
+            >
+              presentation gap — reveal not witnessed
+            </span>
+          )}
+        </section>
+      )}
 
+      {surface === "hunt" ? (
+        /*
+          The hunt lens: the board IS the page. One dense scannable surface — held coins
+          that refuse to scroll away, then every candidate in tight rows — and nothing
+          else competing for the glance. The board is the SAME AttentionFeed (one listbox
+          tab stop, `aria-activedescendant`, the virtualizer) wired to the SAME three
+          attention channels as the inspect column, so the scene's seen/pointed sets have
+          one source of truth regardless of which lens she was in, and `;` holds the same
+          selected coin either way.
+        */
+        <main className="glass-layout hunt-layout">
+          {heldRefusalNotice}
+          {heldRail}
+          <AttentionFeed variant="board" candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
+            orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
+            boardBasis={boardLens.basis}
+            advanceNotice={advanceNotice} />
+        </main>
+      ) : (
       <main className="glass-layout">
-        {refusedHold && (
-          <p className="held-refusal" role="alert">
-            A hold was refused by the local core and is not retained: {refusedHold.error} The coin
-            stays listed below so it is not lost, but nothing has committed it.
-          </p>
-        )}
-        <HeldCoins
-          entries={operatorJournal.entries}
-          candidates={candidates}
-          retained={heldObservations}
-          {...(venueLookup ? { venueReadout: venueLookup } : {})}
-          onSelect={selectCandidate}
-          onAppendNote={appendHoldNote}
-        />
+        {heldRefusalNotice}
+        {heldRail}
         <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
-          orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder} />
+          orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
+          boardBasis={boardLens.basis} />
         <div id="selected-coin" tabIndex={-1}>
           <CoinWorkbench candidate={selected} episode={episode} socialEvents={snapshot.view.payload.socialEvents} onAnnotate={annotateChart} />
           {explorationBundle && <HypothesisLab key={explorationBundle.bundleId}
@@ -710,6 +842,7 @@ export function GlassApp({
           />
         </div>
       </main>
+      )}
 
       <CommandPalette open={commandsOpen} commands={shellCommands} candidates={candidates} onClose={closeCommands} onSelectCandidate={selectCandidate} />
       <OperatorCaptureDialog

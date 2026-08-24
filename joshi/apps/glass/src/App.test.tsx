@@ -57,8 +57,10 @@ describe("accessibility-first glass", () => {
     // The pinned shell-wide cost. This number moving is the point of the test: a new tab stop
     // is a cost to her hands and must fail loudly here, never slip in as a side effect. Before
     // the listbox restructure this same instant measured 74: six virtual-row buttons that
-    // mutated with every scroll, and five extra board-filter stops.
-    expect(countStops()).toBe(63);
+    // mutated with every scroll, and five extra board-filter stops. 63 -> 64 was the hunt
+    // lens landing: one header button that switches between the hunt board and this
+    // evidence workbench (also on the apostrophe key, next to the hold semicolon).
+    expect(countStops()).toBe(64);
 
     const feed = screen.getByRole("region", { name: /attention feed/i });
     const feedStops = () => [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]

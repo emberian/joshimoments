@@ -1009,3 +1009,129 @@ th { color: var(--muted); }
 .journal-entry-form label { font-size: 11px; color: var(--muted); }
 .journal-entry-form textarea { padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-3); color: var(--ink); font-size: 12px; resize: vertical; }
 .journal-entry-form .secondary-button { align-self: flex-start; }
+
+/* ------------------------------------------------------------------------------------------
+   Hunt mode: the board IS the page. One column, full width, dense rows built for scanning
+   seventy coins while price scrolls by. The epistemics collapse to chips; the prose stays
+   one hover (title) or one lens switch (') away. */
+.hunt-strip {
+  min-height: 40px;
+  padding: 8px 22px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #101516;
+  color: var(--muted);
+  font-size: 12px;
+}
+.hunt-strip .eyebrow { margin: 0; }
+.hunt-strip .replay-pending, .hunt-strip .replay-error { margin: 0; }
+.hunt-flag {
+  padding: 3px 9px;
+  border: 1px solid #6e403a;
+  border-radius: 999px;
+  background: #2c1816;
+  color: #efb2ab;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.hunt-layout { grid-template-columns: 1fr; }
+.hunt-layout .attention-panel { position: static; }
+
+/* The loud scene-advance affordance: newer scenes exist, and advancing is her act. */
+.advance-notice { margin: 2px 12px 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.advance-pill {
+  min-height: var(--target);
+  border: 1px solid #4e806c;
+  border-radius: 999px;
+  background: var(--mint);
+  color: #07100d;
+  font-weight: 800;
+  font-size: 13px;
+  padding: 8px 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.advance-pill:hover { filter: brightness(1.07); }
+.advance-pill svg { width: 17px; }
+.advance-detail { color: var(--muted); font-size: 11px; max-width: 46ch; }
+
+/* The tab's actual sort or filter rule, in words, under the tabs. */
+.board-basis { margin: 0; padding: 0 14px 8px; color: var(--faint); font-size: 11px; }
+
+/* Dense board rows: shared grid template with the aria-hidden column labels above them. */
+.board-columns, .board-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 72px 58px 78px 74px minmax(150px, auto);
+  gap: 10px;
+  align-items: center;
+}
+.board-columns {
+  padding: 4px 18px;
+  color: var(--faint);
+  font: 500 9px ui-monospace, "SFMono-Regular", Menlo, monospace;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.board-col-number { text-align: right; }
+[data-variant="board"] .feed-scroll { height: calc(100vh - 330px); min-height: 420px; }
+[data-variant="board"] .virtual-row { padding: 1px 7px; }
+.board-row {
+  width: 100%;
+  min-height: 50px;
+  padding: 6px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--ink);
+}
+.virtual-row:hover .board-row { background: #171e1f; }
+.virtual-row[aria-selected="true"] .board-row { background: #1a2723; border-color: #436b5d; box-shadow: inset 3px 0 0 var(--mint); }
+.feed-scroll:focus .virtual-row[aria-selected="true"] .board-row,
+.feed-scroll:focus-visible .virtual-row[aria-selected="true"] .board-row {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+.board-rank { color: #7e8b8d; font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace; }
+.board-rank[data-absent="true"] { color: var(--muted); opacity: .7; }
+.board-identity { min-width: 0; display: grid; gap: 2px; }
+.board-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.board-ticker { color: #eaf6f1; font: 600 13px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; }
+.board-name { min-width: 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-reason { min-width: 0; color: #8da09d; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-spark { display: flex; justify-content: flex-start; }
+.sparkline { width: 64px; height: 18px; display: block; }
+.board-number { font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace; text-align: right; white-space: nowrap; color: #c2cecc; }
+.board-absent { color: var(--faint); }
+.board-badges { display: flex; align-items: center; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.board-badges .icon-label { color: var(--amber); display: inline-flex; }
+.board-badges .icon-label svg { width: 13px; }
+.board-chip {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: #b8c5c3;
+  font-size: 9px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.board-chip.lifecycle-bonding { color: var(--amber); background: var(--amber-dim); }
+.board-chip.lifecycle-migrating { color: var(--blue); background: #1c2e3e; }
+.board-chip.lifecycle-graduated { color: var(--mint); background: var(--mint-dim); }
+.chip-absent { color: var(--amber); background: var(--amber-dim); }
+.chip-evidence { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: .06em; }
+[data-density="compact"] .board-row { min-height: 34px; padding-block: 3px; }
+[data-density="compact"] .board-reason { display: none; }
+
+/* The session line turns amber and counts down inside the final fifteen minutes. */
+.operational-session-bar span.session-expiry-countdown { color: var(--amber); font-weight: 700; }
+
+@media (max-width: 920px) {
+  .board-columns, .board-row { grid-template-columns: 30px minmax(0, 1fr) 52px 72px 62px; }
+  .board-spark, .board-badges, .board-col-spark, .board-col-badges { display: none; }
+  [data-variant="board"] .feed-scroll { height: 60vh; min-height: 0; }
+}

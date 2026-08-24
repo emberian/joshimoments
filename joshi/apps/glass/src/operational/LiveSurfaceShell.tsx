@@ -20,6 +20,50 @@ export type LiveSurfacePairing = {
   exchange(oneTimeCode: string, signal?: AbortSignal): Promise<Omit<PairingSessionDescriptor, "capability">>;
 };
 
+/** How close to expiry the session line turns into a countdown. */
+const EXPIRY_WARNING_MS = 15 * 60_000;
+
+/**
+ * The session-health line: one line, and honest BEFORE the lapse, not only after it.
+ *
+ * The pairing descriptor carries its own `expiresAt`, so this cockpit can know the lapse is
+ * coming instead of discovering it as a dead feed. Beyond fifteen minutes the line states
+ * the expiry instant and stays still; inside fifteen minutes it counts down and says what
+ * to do about it. The visible countdown is deliberately NOT a live region — a per-second
+ * announcement would be hostile — so a separate always-mounted status region announces the
+ * threshold once, when crossing into the final fifteen minutes.
+ */
+function SessionExpiryNote({ expiresAt }: { expiresAt: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  const remaining = Date.parse(expiresAt) - now;
+  const counting = remaining <= EXPIRY_WARNING_MS;
+
+  useEffect(() => {
+    if (remaining <= 0) return;
+    // Tick each second inside the countdown; otherwise sleep until the countdown starts.
+    const delay = counting ? 1_000 : Math.min(remaining - EXPIRY_WARNING_MS, 2_147_483_647);
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.max(delay, 250));
+    return () => window.clearTimeout(timer);
+  }, [counting, remaining]);
+
+  const wholeSeconds = Math.max(0, Math.floor(remaining / 1000));
+  const minutes = Math.floor(wholeSeconds / 60);
+  const seconds = wholeSeconds % 60;
+  return (
+    <span className={counting ? "session-expiry-countdown" : undefined}>
+      <ShieldCheck aria-hidden="true" />
+      {counting
+        ? `Session expires in ${minutes}m ${seconds}s — re-pair with a fresh code before it lapses`
+        : `Evidence-only session · expires ${expiresAt}`}
+      <span className="sr-only" role="status">
+        {counting
+          ? "The pairing session expires in under fifteen minutes. Re-pair with a fresh one-time code before it lapses."
+          : ""}
+      </span>
+    </span>
+  );
+}
+
 /**
  * The paired live-surface cockpit: exactly the ordinary keyboard Glass, reading one immutable
  * scene that `joshi-core live-surface-inspect` derived from a real catalog and is serving.
@@ -30,10 +74,10 @@ export type LiveSurfacePairing = {
  *
  * When the core follows a live catalog it also serves a scene *feed*: a list of immutable scenes,
  * newest first. This shell polls it gently. A newer scene is announced politely (a status line —
- * no focus theft, no swap) and offered as a command-palette action plus a session-bar button;
- * the cockpit rebinds only when the operator runs that action, and holds and the journal carry
- * across because the app is not remounted — only its data source changes, exactly the machinery
- * replay-mode selection already uses.
+ * no focus theft, no swap) and offered as the hunt board's advance pill, a session-bar button,
+ * and a command-palette action; the cockpit rebinds only when the operator runs one of those,
+ * and holds and the journal carry across because the app is not remounted — only its data source
+ * changes, exactly the machinery replay-mode selection already uses.
  */
 export function LiveSurfaceShell({
   session = glassPairingSession,
@@ -63,6 +107,16 @@ export function LiveSurfaceShell({
   const [boundSceneId, setBoundSceneId] = useState(launchSceneId);
   const [sceneAnnouncement, setSceneAnnouncement] = useState("");
   const announcedSceneRef = useRef<string | null>(null);
+  /**
+   * Whether the pairing gate is showing because a previously live session LAPSED, as opposed
+   * to never having been paired or the operator ending it herself. A lapsed session must say
+   * "session expired — re-pair", with what to do about it, instead of degrading into scene-feed
+   * error noise: once the capability is gone every route stops answering, and "unreachable"
+   * would be the wrong diagnosis of a known, dated fact.
+   */
+  const [expiredLapse, setExpiredLapse] = useState(false);
+  const wasPairedRef = useRef(false);
+  const lastExpiryRef = useRef<string | null>(null);
 
   useEffect(() => session.subscribe(() => setSessionVersion((value) => value + 1)), [session]);
   const paired = session.paired();
@@ -71,6 +125,26 @@ export function LiveSurfaceShell({
   useEffect(() => {
     setStatus(paired ? "paired" : "unpaired");
   }, [paired, sessionVersion]);
+
+  useEffect(() => {
+    if (descriptor) lastExpiryRef.current = descriptor.expiresAt;
+  }, [descriptor?.expiresAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Decide WHY the session ended by the clock, at the paired -> unpaired transition: the
+  // expiry timer, a poll-time self-clear, and a sleep/wake lapse all land here identically.
+  // An operator "End session" click clears a descriptor whose expiry is still ahead, so it
+  // stays an ordinary re-pair gate.
+  useEffect(() => {
+    if (paired) {
+      wasPairedRef.current = true;
+      setExpiredLapse(false);
+      return;
+    }
+    if (!wasPairedRef.current) return;
+    wasPairedRef.current = false;
+    const lastExpiry = lastExpiryRef.current;
+    if (lastExpiry !== null && Date.parse(lastExpiry) <= Date.now()) setExpiredLapse(true);
+  }, [paired]);
 
   useEffect(() => {
     if (!descriptor) return;
@@ -105,6 +179,13 @@ export function LiveSurfaceShell({
   const newerScene = newestScene !== null && boundSceneId !== null && newestScene.sceneId !== boundSceneId
     ? newestScene
     : null;
+  // How many listed scenes are strictly newer than the bound one (the feed is newest-first,
+  // so that is the bound scene's index). When the feed no longer lists the bound scene the
+  // count is not knowable and is not claimed: null renders as "newer scenes exist".
+  const boundSceneIndex = boundSceneId === null
+    ? -1
+    : (sceneFeed.feed?.scenes.findIndex((scene) => scene.sceneId === boundSceneId) ?? -1);
+  const newerCount = newerScene === null ? null : boundSceneIndex > 0 ? boundSceneIndex : null;
 
   const advance = useCallback(() => {
     if (!newerScene) return;
@@ -122,14 +203,14 @@ export function LiveSurfaceShell({
     announcedSceneRef.current = newerScene.sceneId;
     setSceneAnnouncement(
       `A newer scene exists, derived at ${newerScene.derivedAt.slice(11, 16)} UTC. `
-        + 'Open commands with Cmd+K or Ctrl+K and choose "Advance to the newer scene". '
-        + "Held coins and the journal stay.",
+        + "The advance button at the top of the board, in the session bar, or in the "
+        + "command palette (Cmd+K or Ctrl+K) rebinds to it. Held coins and the journal stay.",
     );
   }, [newerScene]);
 
   const newerSceneForApp = useMemo(
-    () => (newerScene ? { sceneId: newerScene.sceneId, derivedAt: newerScene.derivedAt, advance } : null),
-    [advance, newerScene],
+    () => (newerScene ? { sceneId: newerScene.sceneId, derivedAt: newerScene.derivedAt, newerCount, advance } : null),
+    [advance, newerCount, newerScene],
   );
 
   // Feed trouble is stated, never silently blank — and never mistaken for "no newer scene".
@@ -179,7 +260,15 @@ export function LiveSurfaceShell({
         <section className="operational-card" aria-labelledby="live-surface-title">
           <div className="operational-icon" aria-hidden="true"><LockKeyhole /></div>
           <p className="eyebrow">Local live surface</p>
-          <h1 id="live-surface-title">Pair this Glass session</h1>
+          <h1 id="live-surface-title">{expiredLapse ? "Session expired — pair again" : "Pair this Glass session"}</h1>
+          {expiredLapse && (
+            <p role="alert" className="operational-error">
+              This session&rsquo;s pairing capability reached its stated expiry and was discarded, so
+              the core no longer answers it. Nothing recorded is lost: every committed act is
+              durable in the store. Run <code>joshi-core live-surface-inspect</code> again and
+              pair with the fresh one-time code it prints.
+            </p>
+          )}
           <p id="live-surface-help">
             Enter the one-time code printed by <code>joshi-core live-surface-inspect</code>. It is
             consumed once. The capability stays in this page&rsquo;s memory and disappears on reload.
@@ -224,7 +313,7 @@ export function LiveSurfaceShell({
       */}
       <p className="sr-only" role="status">{sceneAnnouncement}</p>
       <nav className="operational-session-bar" aria-label="Live surface session">
-        <span><ShieldCheck aria-hidden="true" /> Evidence-only session · expires {descriptor.expiresAt}</span>
+        <SessionExpiryNote expiresAt={descriptor.expiresAt} />
         <span>Scene {boundSceneId ?? launchSceneId}</span>
         {feedNote && <span>{feedNote}</span>}
         {newerScene && (
@@ -247,6 +336,10 @@ export function LiveSurfaceShell({
         operatorReader={runtime.operatorReader}
         presentationSink={runtime.presentationSink}
         launchMode="witnessed"
+        // A live session opens hunting: the dense board is the default lens, and the
+        // evidence workbench stays one gesture away (the apostrophe key, the header
+        // button, or the palette).
+        initialSurface="hunt"
         newerScene={newerSceneForApp}
         // A live scene exists only as witnessed. The as-known and retrospective lenses are
         // structurally unavailable — separate reconstructions do not exist for it — so they

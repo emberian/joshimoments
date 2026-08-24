@@ -102,13 +102,18 @@ const liveSnapshot: GlassSnapshotV1 = {
   view: liveView,
 };
 
-function pairedSession(): MemoryOnlyPairingSession {
+/** An exact-microsecond wire instant for a millisecond clock value. */
+function microInstant(unixMs: number): string {
+  return new Date(unixMs).toISOString().replace(/Z$/, "000Z");
+}
+
+function pairedSession(expiresAt = "2099-08-18T00:00:00.000000Z"): MemoryOnlyPairingSession {
   const session = new MemoryOnlyPairingSession();
   session.establish("jpc1_" + "a".repeat(64), {
     sessionId: canonicalPairingSessionId(window.location.origin, "1", "1"),
     origin: window.location.origin,
     epoch: "1",
-    expiresAt: "2099-08-18T00:00:00.000000Z",
+    expiresAt,
     scopes: OPERATIONAL_SESSION_SCOPES,
     authority: "read_only_no_execution",
   });
@@ -229,10 +234,14 @@ describe("live surface shell", () => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+    // A live session opens on the hunt board: the mint renders as a dense board row.
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
     const snapshotAttempt = attempts.find((attempt) => attempt.url.includes("/api/v1/glass/snapshot"));
     expect(snapshotAttempt?.url).toContain(`basisSceneId=${SCENE_ID}`);
     expect(snapshotAttempt?.token).toMatch(/^jpc1_/);
+    // One gesture switches to the inspect lens; the evidence workbench remains whole there.
+    await user.keyboard("'");
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     // The lazy chart resolves after the feed; an empty series must read as an absence. It says
     // "not attached", not "not observed": a retained candle window that reached no candidate is
     // an absence on this screen without being an absence in the catalog.
@@ -279,7 +288,8 @@ describe("live surface shell", () => {
         pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
       />,
     );
-    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+    // The board is where she is racing, so the gesture is proven from the board itself.
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
 
     await user.keyboard(";");
 
@@ -380,7 +390,7 @@ describe("live surface shell", () => {
         sceneFeedIntervalMs={25}
       />,
     );
-    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
     const sessionBar = screen.getByRole("navigation", { name: /live surface session/i });
     expect(within(sessionBar).getByText(`Scene ${SCENE_ID}`)).toBeInTheDocument();
 
@@ -389,7 +399,8 @@ describe("live surface shell", () => {
     const rail = await screen.findByRole("region", { name: /held coins/i });
     expect(within(rail).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
 
-    // The feed grows a newer scene. Nothing on screen swaps; a polite status line appears.
+    // The feed grows a newer scene. Nothing on screen swaps; a polite status line appears,
+    // and the board grows its loud advance pill with the honest count of newer scenes.
     feedScenes.unshift(
       feedEntry(SCENE2, secondSnapshot.snapshotDigest, "4", "2026-08-22T18:03:00.000000Z"),
     );
@@ -397,9 +408,12 @@ describe("live surface shell", () => {
       await screen.findByText(/a newer scene exists, derived at 18:03 utc/i),
     ).toBeInTheDocument();
     expect(within(sessionBar).getByText(`Scene ${SCENE_ID}`)).toBeInTheDocument();
+    const pill = await screen.findByRole("button", { name: /1 newer scene — advance/i });
+    // The session bar keeps its own smaller affordance; both run the same explicit act.
+    expect(within(sessionBar).getByRole("button", { name: /^advance to the newer scene$/i })).toBeInTheDocument();
 
-    // Advancing is the operator's own act, through the existing command palette.
-    await user.click(within(sessionBar).getByRole("button", { name: /^advance to the newer scene$/i }));
+    // Advancing is the operator's own act — here, the board's pill.
+    await user.click(pill);
 
     await waitFor(() => {
       expect(within(sessionBar).getByText(`Scene ${SCENE2}`)).toBeInTheDocument();
@@ -416,6 +430,7 @@ describe("live surface shell", () => {
     expect(within(railAfter).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     // Once bound to the newest scene, no advance affordance remains to invite tail-chasing.
     expect(within(sessionBar).queryByRole("button", { name: /^advance to the newer scene$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /newer scene.*advance/i })).not.toBeInTheDocument();
   });
 
   it("offers the advance inside the command palette, with no single-letter shortcut", async () => {
@@ -453,7 +468,7 @@ describe("live surface shell", () => {
         sceneFeedIntervalMs={25}
       />,
     );
-    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
     await screen.findByText(/a newer scene exists/i);
     await user.click(screen.getByRole("button", { name: /commands/i }));
     const dialog = await screen.findByRole("dialog");
@@ -481,22 +496,11 @@ describe("live surface shell", () => {
         pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
       />,
     );
-    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
 
-    const asKnown = screen.getByRole("radio", { name: /earlier knowledge cutoff/i });
-    const later = screen.getByRole("radio", { name: /retrospective replay/i });
-    const witnessed = screen.getByRole("radio", { name: /witnessed replay/i });
-    expect(asKnown).toBeDisabled();
-    expect(later).toBeDisabled();
-    expect(witnessed).toBeChecked();
-    expect(witnessed).not.toBeDisabled();
-    // The reason renders next to the switch and inside each disabled lens's accessible name:
-    // one visible paragraph plus one screen-reader sentence per disabled lens.
-    expect(screen.getAllByText(/a live scene is witnessed-only/i)).toHaveLength(3);
-    expect(screen.getAllByText(/does not exist for this scene/i)).toHaveLength(2);
-
-    // R cycles only over lenses that exist. With none, it does nothing: no request that can
-    // only answer 409 is ever sent, and no failure banner appears.
+    // R cycles only over lenses that exist. With none, it does nothing — from the hunt board
+    // exactly as from the workbench: no request that can only answer 409 is ever sent, and no
+    // failure banner appears.
     await user.keyboard("r");
     expect(
       attempts.filter(
@@ -513,15 +517,73 @@ describe("live surface shell", () => {
     expect(
       within(dialog).queryByRole("button", { name: /load the next replay mode/i }),
     ).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // The replay switch itself lives in the inspect lens, one gesture away, where the
+    // unavailable lenses render disabled with the one reason.
+    await user.keyboard("'");
+    const asKnown = await screen.findByRole("radio", { name: /earlier knowledge cutoff/i });
+    const later = screen.getByRole("radio", { name: /retrospective replay/i });
+    const witnessed = screen.getByRole("radio", { name: /witnessed replay/i });
+    expect(asKnown).toBeDisabled();
+    expect(later).toBeDisabled();
+    expect(witnessed).toBeChecked();
+    expect(witnessed).not.toBeDisabled();
+    // The reason renders next to the switch and inside each disabled lens's accessible name:
+    // one visible paragraph plus one screen-reader sentence per disabled lens.
+    expect(screen.getAllByText(/a live scene is witnessed-only/i)).toHaveLength(3);
+    expect(screen.getAllByText(/does not exist for this scene/i)).toHaveLength(2);
   });
 
   it("keeps the live surface free of axe-detectable violations", async () => {
     stubCore([]);
     const { container } = render(<LiveSurfaceShell session={pairedSession()} launchSceneId={SCENE_ID} />);
-    await screen.findByRole("heading", { name: MINT_LABEL });
+    await screen.findByRole("option", { name: MINT_LABEL });
     const results = await axe.run(container, {
       rules: { region: { enabled: false }, "color-contrast": { enabled: false } },
     });
     expect(results.violations).toEqual([]);
+  });
+
+  /**
+   * Session health surfaces BEFORE the lapse, not only after it. The pairing descriptor
+   * carries its own `expiresAt`, so inside the final fifteen minutes the one session line
+   * turns into a countdown that says what to do about it — no new banner, no second line.
+   */
+  it("counts down the pairing expiry in the session bar before it lapses", async () => {
+    stubCore([]);
+    render(
+      <LiveSurfaceShell
+        session={pairedSession(microInstant(Date.now() + 10 * 60_000))}
+        launchSceneId={SCENE_ID}
+      />,
+    );
+    await screen.findByRole("option", { name: MINT_LABEL });
+    const sessionBar = screen.getByRole("navigation", { name: /live surface session/i });
+    expect(
+      within(sessionBar).getByText(/session expires in \d+m \d+s — re-pair with a fresh code before it lapses/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A lapsed session is a known, dated fact, and it must present as one: a single clear
+   * "session expired" state with re-pair instructions. It must NOT degrade into feed error
+   * noise — once the capability is gone every route stops answering, and "scene feed
+   * unreachable" would be the wrong diagnosis of an expiry the descriptor stated in advance.
+   */
+  it("states a lapsed session as expired with re-pair instructions, not as an unreachable feed", async () => {
+    stubCore([]);
+    render(
+      <LiveSurfaceShell
+        session={pairedSession(microInstant(Date.now() + 150))}
+        launchSceneId={SCENE_ID}
+      />,
+    );
+    expect(
+      await screen.findByRole("heading", { name: /session expired — pair again/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/pair with the fresh one-time code it prints/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/one-time pairing code/i)).toBeInTheDocument();
+    expect(screen.queryByText(/scene feed unreachable/i)).not.toBeInTheDocument();
   });
 });
