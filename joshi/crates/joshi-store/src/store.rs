@@ -4,7 +4,7 @@ use crate::{
     OperatorCaptureMetadata, PreparedBlob, PreparedExport, ProjectionRegistration, Result,
     SceneMode, SourceRegistration, StoreConfig, StoreError, StoreIngestBatch, StoreMode,
     StoredScene, VerificationReport, VerifyDepth,
-    blob::{prepare_export_file, sha256_hex, verify_file},
+    blob::{prepare_export_file, sha256_hex, sha256_hex_file, verify_file},
     migration,
     model::{
         ChoiceMemberDraft, CommandDraft, CommandReceipt, ExportDraft, ExportReceipt,
@@ -1704,12 +1704,17 @@ impl SqliteStore {
         })
     }
 
-    /// Creates a consistent online `SQLite` backup and closes over referenced immutable artifacts.
+    /// Creates a consistent online `SQLite` backup and reports the commit it was cut at.
+    ///
+    /// This is the copy [`Self::backup_to`] makes, without the evidence manifest around it: same
+    /// bytes, same `max_commit_seq`, none of the catalog-sized SHA-256 or the referenced-artifact
+    /// queries. A caller that wants a working catalog copy — a follow generation, a read overlay
+    /// — never reads those, and on a 260 MB catalog the digest alone costs ~0.8 s every time.
     ///
     /// # Errors
     ///
-    /// Fails if the destination exists, backup fails, or referenced artifacts are missing/corrupt.
-    pub fn backup_to(&self, destination: &Path) -> Result<BackupManifest> {
+    /// Fails if the destination exists or the backup fails.
+    pub fn backup_catalog_to(&self, destination: &Path) -> Result<CommitSeq> {
         if destination.exists() {
             return Err(StoreError::RestoreDestinationExists(destination.to_owned()));
         }
@@ -1718,12 +1723,46 @@ impl SqliteStore {
         }
         let mut target = Connection::open(destination)?;
         let backup = rusqlite::backup::Backup::new(&self.connection, &mut target)?;
-        backup.run_to_completion(16, std::time::Duration::from_millis(10), None)?;
+        // `step(-1)` copies every remaining page in ONE call, holding a single read transaction
+        // on the source for the whole copy. Two reasons that is right here and
+        // `run_to_completion` was not:
+        //
+        // - rusqlite's `run_to_completion` sleeps its pause after EVERY step, `More` included,
+        //   not only on `Busy`/`Locked`. At the 16-pages/10 ms it was called with, a 260 MB
+        //   catalog (≈64k pages) spent ≈40 s asleep to do ≈1 s of copying — measured
+        //   2026-08-24, and it grows a second for every 6.5 MB the catalog gains.
+        // - A stepped copy drops the source read lock between steps, and SQLite restarts the
+        //   whole copy when an external process writes the source in that window. The sibling
+        //   keeper writes continuously, so the stepped shape was also racing itself.
+        //
+        // The sibling writer stays undisturbed either way: the catalog is WAL, where a reader
+        // never blocks a writer. Holding the read transaction for ≈1 s only defers a WAL
+        // checkpoint for that long.
+        loop {
+            match backup.step(-1)? {
+                rusqlite::backup::StepResult::Done => break,
+                // `-1` leaves nothing more to copy, so `More` is unreachable; `Busy`/`Locked`
+                // mean another connection holds the destination. Every non-`Done` outcome this
+                // `#[non_exhaustive]` enum has or could grow means "not finished", and the
+                // answer to all of them is the retry the previous stepped loop already did.
+                _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
         drop(backup);
         target.close().map_err(|(_, error)| error)?;
-        let catalog_bytes =
-            fs::read(destination).map_err(|source| StoreError::io(destination, source))?;
-        let max = self.max_commit_seq()?;
+        self.max_commit_seq()
+    }
+
+    /// Creates a consistent online `SQLite` backup and closes over referenced immutable artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the destination exists, backup fails, or referenced artifacts are missing/corrupt.
+    pub fn backup_to(&self, destination: &Path) -> Result<BackupManifest> {
+        let max = self.backup_catalog_to(destination)?;
+        // Streamed, never `fs::read`: the digest is over a file the size of the whole catalog,
+        // and slurping it cost a 260 MB allocation on top of the hashing.
+        let catalog_digest = sha256_hex_file(destination)?;
         let mut referenced_exports =
             self.referenced_artifacts("export_manifest", "relative_path")?;
         referenced_exports
@@ -1734,7 +1773,7 @@ impl SqliteStore {
         referenced_exports.sort();
         Ok(BackupManifest {
             catalog_path: destination.to_owned(),
-            catalog_digest: ValueDigest::new(format!("sha256:{}", sha256_hex(&catalog_bytes)))
+            catalog_digest: ValueDigest::new(format!("sha256:{catalog_digest}"))
                 .map_err(|error| StoreError::InvalidBatch(error.to_string()))?,
             max_commit_seq: max,
             referenced_blobs: self.referenced_artifacts("blob_object", "relative_path")?,

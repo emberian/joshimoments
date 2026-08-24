@@ -203,6 +203,26 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// Raw lowercase SHA-256 of a file's exact bytes, read in fixed-size chunks.
+///
+/// Same digest as `sha256_hex` over the same bytes; the difference is that a catalog-sized
+/// file never has to fit in one allocation to be hashed.
+pub(crate) fn sha256_hex_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path).map_err(|source| StoreError::io(path, source))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|source| StoreError::io(path, source))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn install_immutable(root: &Path, relative: &Path, bytes: &[u8], digest: &str) -> Result<()> {
     validate_relative_path(relative)?;
     let destination = root.join(relative);

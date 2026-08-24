@@ -346,6 +346,7 @@ impl FollowRuntime {
         let bytes =
             fs::read(state_file(root)).map_err(|error| FollowError::Io(error.to_string()))?;
         let persisted: PersistedFollowState = serde_json::from_slice(&bytes)?;
+        sweep_abandoned_pending(root)?;
         // Schema 1 predates derivation-version recording; schema 2 added the per-scene version
         // and retirement notes. Both are readable: an old ledger is exactly the upgrade case.
         if persisted.contract != "joshi.core.live_follow_state"
@@ -857,6 +858,28 @@ fn derive_scene_fact(
     Ok((derived.view, fact))
 }
 
+/// Remove `pending-*` directories a previous process abandoned mid-backup.
+///
+/// A pending directory is a half-written catalog copy that is never opened as a store and never
+/// named by the ledger: [`build_generation`] renames it to `gen-<basis>` before anything reads
+/// it, so an act can no more live in one than in a directory that was never created. A crash
+/// during a backup therefore leaves one behind that only names a dead pid, and nothing ever
+/// reclaims it — [`FollowRuntime::fresh_mount`] sweeps them, but a remount used not to, so on a
+/// followed catalog that crashed once a full catalog-sized copy leaked per crash (observed live
+/// 2026-08-24: a 136 MB `pending-60064` beside a 257 MB generation).
+///
+/// Sweeping every `pending-*`, not just this process's, matches `fresh_mount`: one state
+/// directory is served by one process, since its generations are opened `SingleWriter`.
+fn sweep_abandoned_pending(root: &Path) -> Result<(), FollowError> {
+    for entry in fs::read_dir(root).map_err(|error| FollowError::Io(error.to_string()))? {
+        let entry = entry.map_err(|error| FollowError::Io(error.to_string()))?;
+        if entry.file_name().to_string_lossy().starts_with("pending-") {
+            fs::remove_dir_all(entry.path()).map_err(|error| FollowError::Io(error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Back the source catalog up into a fresh generation directory named by its basis commit.
 ///
 /// The source is only ever read through the consistent `SQLite` backup API, so the sibling writer
@@ -871,9 +894,14 @@ fn build_generation(
         fs::remove_dir_all(&pending).map_err(|error| FollowError::Io(error.to_string()))?;
     }
     fs::create_dir_all(&pending).map_err(|error| FollowError::Io(error.to_string()))?;
-    let manifest = source_store.backup_to(&pending.join("catalog.sqlite"))?;
+    // `backup_catalog_to`, not `backup_to`: a generation wants a working catalog copy and the
+    // commit it was cut at, and nothing here ever reads the evidence manifest's SHA-256 over the
+    // whole copied file — which on a 260 MB catalog is ~0.8 s of hashing, per mount and per
+    // advancing tick, thrown away.
+    let basis = source_store
+        .backup_catalog_to(&pending.join("catalog.sqlite"))?
+        .get();
     copy_blob_tree(&catalog.join("blobs"), &pending.join("blobs")).map_err(Box::new)?;
-    let basis = manifest.max_commit_seq.get();
     let dir = root.join(format!("gen-{basis}"));
     if dir.exists() {
         // A same-basis generation can only be a stale leftover; the fresh copy replaces it.
@@ -1333,6 +1361,21 @@ mod tests {
         // Restart: everything above dies; the retained state re-verifies and serves again.
         drop(app);
         drop(runtime);
+        // A previous process that died mid-backup leaves a catalog-sized `pending-<pid>` copy
+        // nothing will ever name again. The remount reclaims it rather than growing the state
+        // directory by one catalog per crash.
+        let abandoned = follow_root(&state).join("pending-999999");
+        fs::create_dir_all(&abandoned).expect("abandoned pending copy");
+        fs::write(abandoned.join("catalog.sqlite"), b"half a backup").expect("partial bytes");
+        let retained_generations: Vec<PathBuf> = fs::read_dir(follow_root(&state))
+            .expect("follow root")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("gen-"))
+            })
+            .collect();
+        assert!(!retained_generations.is_empty(), "the act's generation");
         let runtime = FollowRuntime::mount(
             &catalog,
             &state,
@@ -1340,6 +1383,17 @@ mod tests {
             &LiveSurfaceOptions::default(),
         )
         .expect("remount from retained state");
+        assert!(
+            !abandoned.exists(),
+            "an abandoned pending copy is reclaimed"
+        );
+        for generation in &retained_generations {
+            assert!(
+                generation.is_dir(),
+                "the sweep takes pending copies only, never a generation: {}",
+                generation.display()
+            );
+        }
         let (app, capability) = paired_app(runtime.clone(), &state).await;
         let (_, feed) = get_json(&app, &capability, "/api/v1/glass/scenes").await;
         assert_eq!(scene_ids(&feed), vec![scene2.clone(), scene1.clone()]);
