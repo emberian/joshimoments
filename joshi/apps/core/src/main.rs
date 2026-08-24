@@ -535,7 +535,7 @@ async fn main() -> Result<(), CliError> {
                 "live surface mounted from {}: scene {scene_id}\n\
                  Glass needs: VITE_JOSHI_CORE_URL=http://{listen} \
                  VITE_JOSHI_LAUNCH_SCENE_ID={scene_id}\n\
-                 one-time pairing code (Cockpit read + operator evidence; no signing or \
+                 one-time pairing code (Cockpit read + operator & presentation evidence; no signing or \
                  execution): {}",
                 catalog.display(),
                 issued.code.as_str()
@@ -626,7 +626,7 @@ async fn serve_follow_surface(
          scene feed: http://{listen}/api/v1/glass/scenes (poll gently; new scenes accumulate, \
          nothing is swapped)\n\
          Glass needs: VITE_JOSHI_CORE_URL=http://{listen} VITE_JOSHI_LAUNCH_SCENE_ID={scene_id}\n\
-         one-time pairing code (Cockpit read + operator evidence; no signing or execution): {}",
+         one-time pairing code (Cockpit read + operator & presentation evidence; no signing or execution): {}",
         catalog.display(),
         issued.code.as_str()
     );
