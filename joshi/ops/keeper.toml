@@ -17,8 +17,18 @@ key_file = "~/.helius-key"
 [budgets]
 # Hard ceilings the keeper enforces on itself. When the day budget is spent it idles until UTC
 # midnight and writes that down durably; nothing here is a hint.
-per_cycle_requests = 8
-per_day_requests = 1500
+#
+# The arithmetic these numbers rest on, so a future edit can redo it instead of trusting it:
+# a fully coincident cycle is wallet (1 signatures page + 3 transactions = 4) + candles x2 +
+# trades x2 + coin_exact x2 + discovery x1 = 11 requests. That coincidence is the schedule, not
+# an accident — every cadence below divides 30 minutes — so the cycle ceiling affords it rather
+# than deferring taps into gap-noise every half hour. Steady state per day: wallet 48x4=192,
+# candles 2x144=288, trades 2x288=576, coin_exact 2x144=288, discovery 288 — 1632 in all, about
+# 1.1 requests per minute. 2000 leaves ~22% headroom for restarts and cadence drift while still
+# being a hard stop well short of anything impolite. Only the 192 wallet requests touch the
+# Helius credential; every pump read is an anonymous product-route GET.
+per_cycle_requests = 11
+per_day_requests = 2000
 # Scheduler granularity; taps fire on their own cadences, this is only how often they are checked.
 tick_seconds = 30
 # Rate-limit backoff: doubles from the initial on consecutive throttled cycles, capped.
@@ -37,6 +47,20 @@ transactions = 3
 # bytes are still retained but quarantined. These live in the repo beside their measurements.
 candles_review = "../crates/joshi-pump-api/fixtures/schema_review_candles_v1.json"
 trades_review = "../crates/joshi-pump-api/fixtures/schema_review_trades_v1.json"
+# coin_exact carries a coin's name, symbol and market caps — plural on purpose: the provider
+# asserts TWO market caps per coin (market_cap_usd and usd_market_cap) and they disagree on
+# every document measured; both are retained verbatim as claims and nothing anywhere reconciles
+# or averages them. The gate is a ROW projection (the document is the single row): the earlier
+# whole-document fingerprint pinned one bonding coin's exact field set and refused BOTH watched
+# coins live on 2026-08-24, because graduated coins carry fields (inverted, pump_swap_pool,
+# website, banner_uri) that coin did not — the digest reported which coin arrived, not provider
+# drift. The projection requires what the normalizer reads and closes everything else reviewed;
+# an unreviewed leaf still quarantines the document, and the bytes still land either way.
+coin_exact_review = "../crates/joshi-pump-api/fixtures/row_projection_coin_exact_v1.json"
+# discovery is a ROW-projection review, not a document fingerprint, because /coins pages carry
+# heterogeneous rows: every row must show the reviewed required leaves and nothing outside the
+# closed reviewed set, or the whole page quarantines with its reason named.
+discovery_review = "../crates/joshi-pump-api/fixtures/row_projection_discovery_coins_v1.json"
 # One newest-anchored 1s candle window per tap; 1000 bars of 1s tape is ~16 minutes on a coin
 # that trades every second, comfortably overlapping a 10-minute cadence.
 candles_interval = "1s"
@@ -44,16 +68,31 @@ candles_limit = 1000
 # The trades route caps limit at 100.
 trades_limit = 100
 
+[discovery]
+# The catalog-level sweep that lets NEW coins reach the attention feed at all: one page of
+# /coins?sort=last_trade_timestamp&order=DESC&limit=70&offset=0 per cadence, the exact ask the
+# candidate finder proved out. The provider silently clamps limit to 70, so the keeper asks for
+# exactly 70 and retains the ask beside the answer. Every promoted row's mint becomes a durable
+# solana.token_mint source event; a refused or empty page is a durable gap, never a silence —
+# on this route an empty page is byte-identical to past-the-end, so it is never evidence that
+# nothing matched.
+cadence_minutes = 5
+
 [[mints]]
 mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
 label = "DREGG"
-taps = ["candles", "trades"]
+taps = ["candles", "trades", "coin_exact"]
 candles_cadence_minutes = 10
 trades_cadence_minutes = 5
+# coin_exact refreshes the coin's own record — name, symbol, both market caps, graduation state.
+# Reserve fields in it go stale after graduation (measured: launch constants survive a 97% move),
+# which is a fact about the provider the catalog retains, not one the keeper repairs.
+coin_exact_cadence_minutes = 10
 
 [[mints]]
 mint = "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump"
 label = "SOLVE"
-taps = ["candles", "trades"]
+taps = ["candles", "trades", "coin_exact"]
 candles_cadence_minutes = 10
 trades_cadence_minutes = 5
+coin_exact_cadence_minutes = 10
