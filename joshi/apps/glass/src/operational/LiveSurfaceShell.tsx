@@ -248,6 +248,15 @@ export function LiveSurfaceShell({
         presentationSink={runtime.presentationSink}
         launchMode="witnessed"
         newerScene={newerSceneForApp}
+        // A live scene exists only as witnessed. The as-known and retrospective lenses are
+        // structurally unavailable — separate reconstructions do not exist for it — so they
+        // render disabled with that reason instead of as clickable controls that can only fail
+        // into the core's 409 mode_mismatch backstop.
+        unavailableLenses={{
+          modes: ["knowledge_cutoff", "retrospective"],
+          reason: "A live scene is witnessed-only; separate as-known and retrospective "
+            + "reconstructions do not exist for it.",
+        }}
         {...(pendingOperatorQueue ? { pendingOperatorQueue } : {})}
       />
     </div>

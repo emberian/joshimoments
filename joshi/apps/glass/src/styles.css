@@ -210,10 +210,13 @@ kbd {
 .segment[data-active="true"] { color: #d8f9eb; background: #20453a; box-shadow: inset 0 0 0 1px #3c6a59; }
 .segment input { position: absolute; opacity: 0; }
 .segment:has(input:disabled) { cursor: wait; opacity: .58; }
+/* A lens the scene structurally lacks is a fact, not a pending load: no wait cursor. */
+.segment[data-unavailable] { cursor: not-allowed; opacity: .45; }
 .segment:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 3px; }
 .segment-copy { display: grid; }
 .segment-copy > span { font-size: 13px; font-weight: 700; }
 .segment-copy small { font-size: 9px; color: inherit; opacity: 0.76; white-space: nowrap; }
+.replay-unavailable { margin: 5px 0 0; max-width: 360px; color: var(--muted); font-size: 10px; }
 
 .glass-layout {
   max-width: 1920px;
@@ -373,6 +376,8 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .coin-header h1 { margin: 0; font: 500 23px ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: -0.04em; }
 .coin-header h1 span { color: var(--muted); font: 500 15px Inter, ui-sans-serif, sans-serif; letter-spacing: 0; }
 .mint { max-width: 390px; margin: 6px 0 0; color: #728082; font: 400 10px ui-monospace, "SFMono-Regular", Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Where the rendered ticker and name came from, and when: provenance next to the identity. */
+.identity-provenance { margin: 4px 0 0; color: #8da09d; font-size: 10px; }
 .coin-tags { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .tag { border: 1px solid #344143; background: #171e20; }
 

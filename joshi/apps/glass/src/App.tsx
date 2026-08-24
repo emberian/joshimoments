@@ -9,7 +9,7 @@ import { HeldCoins, type HeldVenueLookup, type RetainedObservation } from "./com
 import { JournalRail } from "./components/JournalRail";
 import { HypothesisLab } from "./components/HypothesisLab";
 import { emptyCaptureContext, OperatorCaptureDialog, OperatorPanel, type CapturePreset, type ChoiceSets } from "./components/OperatorCapture";
-import { ReplaySwitch } from "./components/ReplaySwitch";
+import { ReplaySwitch, type LensAvailability } from "./components/ReplaySwitch";
 import { ReplayInterviewQueue } from "./components/ReplayInterviewQueue";
 import { SceneInspector } from "./components/SceneInspector";
 import { SourcePanel } from "./components/SourcePanel";
@@ -55,6 +55,7 @@ export function GlassApp({
   pendingOperatorQueue,
   venueReadout,
   newerScene = null,
+  unavailableLenses,
 }: {
   dataSource?: GlassDataSource;
   operatorSink?: OperatorCommandSink;
@@ -82,6 +83,15 @@ export function GlassApp({
    * quick-nav), no focus theft, and the current scene never changes without this explicit act.
    */
   newerScene?: { sceneId: string; derivedAt: string; advance(): void } | null;
+  /**
+   * Replay lenses this shell's scenes structurally cannot serve, with the one reason why.
+   *
+   * A live scene exists only as witnessed — separate as-known and retrospective reconstructions
+   * do not exist for it — so those lenses render disabled with the reason, the R key skips them,
+   * and no request that can only 409 is ever manufactured. The core's mode_mismatch answer stays
+   * the backstop, never the UX.
+   */
+  unavailableLenses?: LensAvailability;
 }) {
   const [snapshot, setSnapshot] = useState<GlassSnapshotV1 | null>(null);
   const [pendingMode, setPendingMode] = useState<ReplayMode | null>(null);
@@ -193,8 +203,16 @@ export function GlassApp({
     };
   }, [launchMode, resolvedDataSource]);
 
+  const unavailableModes = useMemo(
+    () => new Set(unavailableLenses?.modes ?? []),
+    [unavailableLenses],
+  );
+
   const requestMode = useCallback((mode: ReplayMode) => {
     if (!snapshot || pendingMode !== null || mode === snapshot.view.mode) return;
+    // A lens the scene structurally lacks is never requested: the switch renders it disabled
+    // with the reason, so reaching here with one is a programming error, not an operator act.
+    if (unavailableModes.has(mode)) return;
     const basisSceneId = snapshot.view.mode === "witnessed"
       ? snapshot.view.sceneId
       : snapshot.view.basisSceneId;
@@ -223,7 +241,7 @@ export function GlassApp({
       .finally(() => {
         if (!controller.signal.aborted) setPendingMode(null);
       });
-  }, [pendingMode, resolvedDataSource, snapshot]);
+  }, [pendingMode, resolvedDataSource, snapshot, unavailableModes]);
 
   const candidates = snapshot?.view.payload.candidates ?? [];
   const stableOrder = useStableCandidateOrder(candidates, snapshot?.view.sceneId ?? "scene-not-loaded");
@@ -465,8 +483,22 @@ export function GlassApp({
 
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
   const cycleReplay = useCallback(() => {
-    if (snapshot && pendingMode === null) requestMode(nextMode(snapshot.view.mode));
-  }, [pendingMode, requestMode, snapshot]);
+    if (!snapshot || pendingMode !== null) return;
+    // Cycle over the lenses that exist for this scene. When none besides the current one exist
+    // (a live scene is witnessed-only), R deliberately does nothing rather than manufacturing a
+    // request that can only fail.
+    let candidate = nextMode(snapshot.view.mode);
+    for (let step = 0; step < 2 && unavailableModes.has(candidate); step += 1) {
+      candidate = nextMode(candidate);
+    }
+    if (candidate === snapshot.view.mode || unavailableModes.has(candidate)) return;
+    requestMode(candidate);
+  }, [pendingMode, requestMode, snapshot, unavailableModes]);
+  const anotherLensAvailable = useMemo(() => {
+    if (!snapshot) return false;
+    const modes: ReplayMode[] = ["knowledge_cutoff", "witnessed", "retrospective"];
+    return modes.some((mode) => mode !== snapshot.view.mode && !unavailableModes.has(mode));
+  }, [snapshot, unavailableModes]);
   const toggleProvenance = useCallback(() => setProvenanceOpen((value) => !value), []);
   const openCommands = useCallback(() => setCommandsOpen(true), []);
   const openInspector = useCallback(() => setSceneInspectorOpen(true), []);
@@ -498,7 +530,9 @@ export function GlassApp({
       run: newerScene.advance,
     }] : []),
     { id: "search", label: "Focus market search", detail: "Filter only this immutable view", shortcut: "/", run: focusSearch },
-    { id: "replay", label: "Load the next replay mode", detail: "Fetch a distinct cutoff, witnessed, or retrospective DTO", shortcut: "R", run: cycleReplay },
+    // Offered only when another lens actually exists for this scene: a live scene is
+    // witnessed-only, and a command that can only fail is not a command.
+    ...(anotherLensAvailable ? [{ id: "replay", label: "Load the next replay mode", detail: "Fetch a distinct cutoff, witnessed, or retrospective DTO", shortcut: "R", run: cycleReplay }] : []),
     { id: "density", label: "Toggle density", detail: "Keep large targets; reduce surrounding detail", shortcut: "D", run: toggleDensity },
     { id: "provenance", label: "Toggle provenance", detail: "Inspect field lineage and the full as-of vector", shortcut: "P", run: toggleProvenance },
     { id: "scene-inspector", label: "Inspect current scene", detail: "Review exact digest, choice context, clocks, and receipts", shortcut: "I", run: openInspector },
@@ -508,7 +542,7 @@ export function GlassApp({
     // Deliberately no single-letter shortcut: the journal is reached by tab order or from here.
     { id: "journal", label: "Open the journal", detail: "Read what was said over this scene, verbatim, and append an entry", run: openJournal },
     { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
-  ], [cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
+  ], [anotherLensAvailable, cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, toggleDensity, toggleProvenance]);
 
   const closeCommands = useCallback(() => {
     setCommandsOpen(false);
@@ -599,7 +633,12 @@ export function GlassApp({
           {loadError && <p className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains on screen.</p>}
           {presentationWitness.status === "gap" && <p className="replay-error" role="alert">Presentation not witnessed: {presentationWitness.error}. Rich information is visible as an explicit presentation-coverage gap.</p>}
         </div>
-        <ReplaySwitch value={mode} onChange={requestMode} pending={pendingMode} />
+        <ReplaySwitch
+          value={mode}
+          onChange={requestMode}
+          pending={pendingMode}
+          {...(unavailableLenses ? { unavailable: unavailableLenses } : {})}
+        />
       </section>
 
       <main className="glass-layout">

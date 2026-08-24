@@ -8,11 +8,14 @@ import type { ChartAnchor } from "../operator/contract";
 /**
  * The lineage this exact view carries for one metric field, or an explicit absence. Nothing here
  * names a provider, a projection or a fixture that the served evidence list does not name.
+ *
+ * The knowledge clock travels with the number: a rendered value whose age is hidden reads as
+ * current, and this project has measured double-digit basis points of drift inside 30 seconds.
  */
 function fieldLineage(candidate: Candidate, field: string): string {
   const reference = candidate.evidence.find((item) => item.field === field);
   if (!reference) return "This view carries no lineage for this field";
-  return `${sentenceCase(reference.evidenceClass)} · ${reference.sourceId}`;
+  return `${sentenceCase(reference.evidenceClass)} · ${reference.sourceId} · known ${clock(reference.knownAt)}Z`;
 }
 
 const MarketChart = lazy(() => import("./MarketChart").then((module) => ({ default: module.MarketChart })));
@@ -43,6 +46,9 @@ export const CoinWorkbench = memo(function CoinWorkbench({
               {candidateSymbol(candidate.symbol, candidate.mint)} <span>{candidateName(candidate.name)}</span>
             </h1>
             <p className="mint" title={candidate.mint}>{candidate.mint}</p>
+            {candidate.symbol !== null && (
+              <p className="identity-provenance">Ticker and name: {fieldLineage(candidate, "symbol")}</p>
+            )}
           </div>
         </div>
         <div className="coin-tags" aria-label="Coin tags">
@@ -68,7 +74,9 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         <article className="metric-card">
           <span>5-minute move</span>
           <strong>{basisPoints(candidate.metrics.change5mBps)}</strong>
-          <small>{sentenceCase(candidate.metrics.activity)} tape</small>
+          <small>{candidate.metrics.change5mBps === null
+            ? `${sentenceCase(candidate.metrics.activity)} tape`
+            : fieldLineage(candidate, "metrics.change5mBps")}</small>
         </article>
         <article className="metric-card quote-card">
           <span>Observed exit value</span>

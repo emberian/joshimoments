@@ -15,10 +15,13 @@ import { LiveSurfaceShell } from "./LiveSurfaceShell";
 
 const SCENE_ID = "scene-live-fbb74550298579109d9d9b96d373a571";
 const MINT = "14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump";
+/** How a candidate with no observed ticker renders: the mint's leading characters, never a `$`. */
+const MINT_LABEL = /14m1ke…/;
 
 /**
  * The shape a live chain-only cut actually has: a real mint, real clocks, real observation
- * identities, no ticker, no price, and an empty price series. Nothing here is a market claim.
+ * identities, no ticker (null, never a placeholder string), no price, and an empty price
+ * series. Nothing here is a market claim.
  */
 const liveView: GlassViewV1 = {
   contract: "joshi.glass.view",
@@ -51,8 +54,8 @@ const liveView: GlassViewV1 = {
     candidates: [{
       id: MINT,
       mint: MINT,
-      symbol: "unobserved",
-      name: MINT,
+      symbol: null,
+      name: null,
       board: "watch",
       lifecycle: "unknown",
       firstKnownAt: "2026-08-19T21:48:26.000000Z",
@@ -69,7 +72,7 @@ const liveView: GlassViewV1 = {
       },
       attentionReason: "Named by 3 retained provider observations at slot 440345975.",
       socialSummary: "No social source was acquired in this cut.",
-      tags: ["chain_observed", "no_price_observed"],
+      tags: ["chain_observed", "no_price_observed", "ticker_unobserved"],
       watched: false,
       episodeId: null,
       evidence: [{
@@ -226,7 +229,7 @@ describe("live surface shell", () => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     const snapshotAttempt = attempts.find((attempt) => attempt.url.includes("/api/v1/glass/snapshot"));
     expect(snapshotAttempt?.url).toContain(`basisSceneId=${SCENE_ID}`);
     expect(snapshotAttempt?.token).toMatch(/^jpc1_/);
@@ -276,7 +279,7 @@ describe("live surface shell", () => {
         pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
       />,
     );
-    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
 
     await user.keyboard(";");
 
@@ -311,7 +314,7 @@ describe("live surface shell", () => {
     });
 
     const rail = await screen.findByRole("region", { name: /held coins/i });
-    expect(within(rail).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+    expect(within(rail).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     expect(await within(rail).findByText(/retained by the catalog at commit 7/i)).toBeInTheDocument();
     // Nothing was measured about this venue, so nothing about it is claimed.
     expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(4);
@@ -377,14 +380,14 @@ describe("live surface shell", () => {
         sceneFeedIntervalMs={25}
       />,
     );
-    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     const sessionBar = screen.getByRole("navigation", { name: /live surface session/i });
     expect(within(sessionBar).getByText(`Scene ${SCENE_ID}`)).toBeInTheDocument();
 
     // Hold first, so the survival of the hold across the advance is observable.
     await user.keyboard(";");
     const rail = await screen.findByRole("region", { name: /held coins/i });
-    expect(within(rail).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+    expect(within(rail).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
 
     // The feed grows a newer scene. Nothing on screen swaps; a polite status line appears.
     feedScenes.unshift(
@@ -410,7 +413,7 @@ describe("live surface shell", () => {
     });
     // ...and the held coin is still held: the rail derives from the journal, not from the scene.
     const railAfter = screen.getByRole("region", { name: /held coins/i });
-    expect(within(railAfter).getByRole("heading", { name: /unobserved/i })).toBeInTheDocument();
+    expect(within(railAfter).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     // Once bound to the newest scene, no advance affordance remains to invite tail-chasing.
     expect(within(sessionBar).queryByRole("button", { name: /^advance to the newer scene$/i })).not.toBeInTheDocument();
   });
@@ -450,7 +453,7 @@ describe("live surface shell", () => {
         sceneFeedIntervalMs={25}
       />,
     );
-    expect(await screen.findByRole("heading", { name: new RegExp(MINT, "i") })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
     await screen.findByText(/a newer scene exists/i);
     await user.click(screen.getByRole("button", { name: /commands/i }));
     const dialog = await screen.findByRole("dialog");
@@ -461,10 +464,61 @@ describe("live surface shell", () => {
     expect(entry.querySelector("kbd")).toBeNull();
   });
 
+  /**
+   * The lens honesty rule: a live scene exists only as witnessed, so the as-known and
+   * retrospective lenses are structurally unavailable — a fact about the scene, presented as
+   * one. They render disabled with the reason; they are not clickable controls that fail into
+   * a red 409 banner, and the R key never manufactures the request that could only fail.
+   */
+  it("presents as-known and later as structurally unavailable for a live scene", async () => {
+    const attempts: Attempt[] = [];
+    stubCore(attempts);
+    const user = userEvent.setup();
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
+
+    const asKnown = screen.getByRole("radio", { name: /earlier knowledge cutoff/i });
+    const later = screen.getByRole("radio", { name: /retrospective replay/i });
+    const witnessed = screen.getByRole("radio", { name: /witnessed replay/i });
+    expect(asKnown).toBeDisabled();
+    expect(later).toBeDisabled();
+    expect(witnessed).toBeChecked();
+    expect(witnessed).not.toBeDisabled();
+    // The reason renders next to the switch and inside each disabled lens's accessible name:
+    // one visible paragraph plus one screen-reader sentence per disabled lens.
+    expect(screen.getAllByText(/a live scene is witnessed-only/i)).toHaveLength(3);
+    expect(screen.getAllByText(/does not exist for this scene/i)).toHaveLength(2);
+
+    // R cycles only over lenses that exist. With none, it does nothing: no request that can
+    // only answer 409 is ever sent, and no failure banner appears.
+    await user.keyboard("r");
+    expect(
+      attempts.filter(
+        (attempt) =>
+          attempt.url.includes("mode=knowledge_cutoff") || attempt.url.includes("mode=retrospective"),
+      ),
+    ).toHaveLength(0);
+    expect(screen.queryByText(/replay load failed/i)).not.toBeInTheDocument();
+
+    // The command palette offers no "next replay mode" act either: a command that can only
+    // fail is not a command.
+    await user.click(screen.getByRole("button", { name: /commands/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).queryByRole("button", { name: /load the next replay mode/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps the live surface free of axe-detectable violations", async () => {
     stubCore([]);
     const { container } = render(<LiveSurfaceShell session={pairedSession()} launchSceneId={SCENE_ID} />);
-    await screen.findByRole("heading", { name: new RegExp(MINT, "i") });
+    await screen.findByRole("heading", { name: MINT_LABEL });
     const results = await axe.run(container, {
       rules: { region: { enabled: false }, "color-contrast": { enabled: false } },
     });
