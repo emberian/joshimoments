@@ -201,13 +201,26 @@ fn forward_lines<R>(
     });
 }
 
-/// How long ago the keeper last rewrote its heartbeat file, from the file's own mtime.
-fn heartbeat_age(root: &Path) -> Option<Duration> {
-    root.join("heartbeat.json")
+/// Whether a keeper is ALIVE according to its heartbeat: the file was rewritten within the
+/// last few ticks AND its own state field does not say "shutdown". The mtime alone is not
+/// liveness — a keeper's final heartbeat on clean shutdown is fresh by mtime, and adopting it
+/// would leave a session watching a catalog nothing advances while believing it live.
+fn keeper_heartbeat_alive(root: &Path) -> bool {
+    let fresh = root
+        .join("heartbeat.json")
         .metadata()
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < Duration::from_secs(90));
+    if !fresh {
+        return false;
+    }
+    let state = std::fs::read(root.join("heartbeat.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("state")?.as_str().map(str::to_owned));
+    state.as_deref() != Some("shutdown")
 }
 
 /// The heartbeat's own words, if the keeper has written any, for honest progress lines.
@@ -338,8 +351,7 @@ async fn main() {
     // mtime — the keeper rewrites it every tick, so a heartbeat older than a few ticks means a
     // stopped keeper, and a fresh one means this launcher must not own that lifecycle.
     let mut keeper: Option<Child> = None;
-    let external_keeper =
-        heartbeat_age(&keeper_root).is_some_and(|age| age < Duration::from_secs(90));
+    let external_keeper = keeper_heartbeat_alive(&keeper_root);
     if external_keeper {
         eprintln!(
             "joshi-up: a keeper is already running (heartbeat {} is fresh); adopting it — it will not be started or stopped by this session",
