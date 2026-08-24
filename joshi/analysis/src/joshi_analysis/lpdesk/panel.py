@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import dial as dial_mod
 from . import frontier as frontier_mod
+from .cadence import both_sides_calibration, oscillation_rows, shuffle_split
 from .events import decode_transaction_events
 from .layouts import (
     decode_bin_array_liquidity,
@@ -301,6 +302,8 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
     frontier_oracle_panel = None
     frontier_error = None
     frontier_oracle_note = None
+    pseudo_tape: list[dial_mod.SwapRecord] = []
+    hoisted_cost_fraction = Decimal("0.0001")
     if tape and active_tvl and active_tvl > 0 and reconstruction is not None:
         tvl = reconstruction.time_weighted_deployed_quote
         recenters = (
@@ -309,6 +312,7 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
         # Rent is recoverable and excluded; the per-recenter cost is the measured tx fee.
         per_recenter = reconstruction.tx_fees_quote / max(recenters, 1)
         cost_fraction = per_recenter / tvl if tvl > 0 else Decimal("0.0001")
+        hoisted_cost_fraction = max(cost_fraction, Decimal(0))
         frontier_panel = frontier_mod.sweep(
             tape,
             bin_step=identity.bin_step,
@@ -322,7 +326,7 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
         # interval. Real path, modeled flow; both statements travel with the panel.
         if len(oracle_path) >= 10 and dial_reading is not None:
             fee_per_s = dial_reading.fee_flow_quote_per_day / Decimal(86_400)
-            pseudo: list[dial_mod.SwapRecord] = []
+            pseudo = pseudo_tape
             prev_t: int | None = None
             for t, twa in oracle_path:
                 fee = fee_per_s * Decimal(t - prev_t) if prev_t is not None else Decimal(0)
@@ -388,6 +392,194 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
                     "the static active-bin read."
                 ),
             }
+
+    # --- both-sides calibration: her "we hit both sides decently often", measured -----
+    both_sides = None
+    oscillation = None
+    her_recenter_interval_s = None
+    if reconstruction is not None:
+        recenter_times = sorted(
+            {e.block_time for e in ledger if e.kind in ("rebalance", "withdraw")}
+        )
+        gaps = [b - a for a, b in pairwise(recenter_times) if b > a]
+        if gaps:
+            gaps.sort()
+            her_recenter_interval_s = gaps[len(gaps) // 2]
+    if len(oracle_path) >= 10:
+        both_sides = {
+            "source": (
+                "oracle path, time-weighted-average bin per interval: touch rates are "
+                "FLOORS (intra-interval excursions are averaged away)"
+            ),
+            "window_s": oracle_path[-1][0] - oracle_path[0][0],
+            "herMedianRecenterIntervalS": her_recenter_interval_s,
+            "widths": [
+                panel.as_dict()
+                for panel in both_sides_calibration(
+                    oracle_path,
+                    widths=(1, 2, 3, 5, 6, 8, 13, 21),
+                    horizons_s=(300, 900, 1800, 3600),
+                )
+            ],
+        }
+        oscillation = oscillation_rows(oracle_path, identity.bin_step)
+    if tape and len(tape) >= 3 and both_sides is not None:
+        both_sides["denseWindow"] = {
+            "source": "dense swap tape, per-swap end bins: no averaging floor, short window",
+            "window_s": tape[-1].block_time - tape[0].block_time,
+            "widths": [
+                panel.as_dict()
+                for panel in both_sides_calibration(
+                    [(r.block_time, float(r.end_bin_id)) for r in tape],
+                    widths=(1, 2, 3, 5),
+                    horizons_s=(15, 30, 60, 90),
+                )
+            ],
+        }
+
+    # --- shuffle versus full recenter, split and priced from the reconciled ledger ----
+    shuffle = None
+    if ledger:
+        shuffle = shuffle_split(ledger, identity.value_in_quote).as_dict()
+
+    # --- the frontier as a function of attention cadence, kappa-calibrated ------------
+    attention_frontier = None
+    shaped_frontier = None
+    if pseudo_tape and calibration is not None:
+        kappa = Decimal(str(calibration["kappa"]))
+
+        def run_cell(cell, **kw):
+            result = frontier_mod.simulate_policy(
+                pseudo_tape,
+                cell,
+                bin_step=identity.bin_step,
+                x_decimals=identity.x_decimals,
+                y_decimals=identity.y_decimals,
+                active_bin_tvl_quote=active_tvl,
+                recenter_cost_fraction=hoisted_cost_fraction,
+                **kw,
+            )
+            calibrated_net = (
+                kappa * result.fees_quote
+                + result.final_value_quote
+                - result.recenter_cost_quote
+                - Decimal(1)
+            )
+            return result, calibrated_net
+
+        hodl_net = None
+        rows = []
+        widths = (1, 2, 3, 5, 6, 8)
+        cadences: list[int | None] = [60, 300, 900, 3600, 14400, None]
+        for cadence in cadences:
+            for width in widths:
+                cell = frontier_mod.PolicyCell(width, 0, 0, never_recenter=cadence is None)
+                result, calibrated = run_cell(
+                    cell, attention_interval_s=cadence if cadence is not None else None
+                )
+                if hodl_net is None:
+                    p0 = identity.quote_per_base_display(pseudo_tape[0].end_bin_id)
+                    p1 = identity.quote_per_base_display(pseudo_tape[-1].end_bin_id)
+                    hodl_net = (Decimal(1) / 2 + Decimal(1) / 2 * p1 / p0) - Decimal(1)
+                rows.append(
+                    {
+                        "cadence_s": cadence,
+                        "halfWidthBins": width,
+                        "calibratedNet": str(calibrated),
+                        "modelFees": str(result.fees_quote),
+                        "recenters": result.recenter_count,
+                    }
+                )
+        wide_cell = frontier_mod.PolicyCell(34, 0, 0, never_recenter=True)
+        _, wide_net = run_cell(wide_cell)
+        best_by_cadence = {}
+        for row in rows:
+            key = row["cadence_s"]
+            if key not in best_by_cadence or Decimal(row["calibratedNet"]) > Decimal(
+                best_by_cadence[key]["calibratedNet"]
+            ):
+                best_by_cadence[key] = row
+        crossover = None
+        for cadence in cadences:
+            if cadence is None:
+                continue
+            if Decimal(best_by_cadence[cadence]["calibratedNet"]) <= wide_net:
+                crossover = cadence
+                break
+        attention_frontier = {
+            "note": (
+                "attended cells recenter only at the first event after each attention "
+                "tick; kappa-calibrated fees, exact path arithmetic; the crossover is "
+                "the fastest cadence at which the best attended-narrow cell no longer "
+                "beats unattended-wide ON THIS WINDOW"
+            ),
+            "windowS": pseudo_tape[-1].block_time - pseudo_tape[0].block_time,
+            "hodl5050Net": str(hodl_net),
+            "unattendedWideNet_w34": str(wide_net),
+            "bestByCadence": [best_by_cadence[c] for c in cadences],
+            "allRows": rows,
+            "crossoverCadenceS": crossover,
+        }
+
+        shaped_rows = []
+        for width in (2, 3, 5, 6, 8):
+            cell = frontier_mod.PolicyCell(width, 0, 0)
+            _base_result, base_net = run_cell(cell)
+            for shaping in (
+                frontier_mod.CusumShaping(0.5, 3.0),
+                frontier_mod.CusumShaping(0.5, 6.0),
+            ):
+                shaped_result, shaped_net = run_cell(cell, shaping=shaping)
+                shaped_rows.append(
+                    {
+                        "halfWidthBins": width,
+                        "shaping": shaping.name(),
+                        "calibratedNet": str(shaped_net),
+                        "symmetricNet": str(base_net),
+                        "rescue": str(shaped_net - base_net),
+                        "reshapes": shaped_result.reshape_count,
+                        "recenters": shaped_result.recenter_count,
+                    }
+                )
+        shaped_frontier = {
+            "note": (
+                "asymmetric shaping: CUSUM on bin increments (declared k, h in bins); "
+                "the adverse side is withheld as trend-riding inventory earning no fees; "
+                "every reshape pays one shuffle at the measured cost fraction. 'rescue' "
+                "is shaped-minus-symmetric calibrated net for the same width"
+            ),
+            "rows": shaped_rows,
+        }
+
+    # --- the DAMM v2 arm: mechanism grounded, yield proxied, absence stated -----------
+    damm_v2_arm = {
+        "mechanism": (
+            "DAMM v2 (cp-amm) is a constant-product pool: a position is a share of the "
+            "whole curve — full-range by construction, nothing to recenter, no rent "
+            "churn, no attention required. Its fee is base fee (schedulers: time, rate "
+            "limit, market cap) PLUS a dynamic fee with the same volatility-accumulator "
+            "family as the DLMM (max_volatility_accumulator, variable_fee_control, "
+            "volatility_reference), capped at a max numerator."
+        ),
+        "mechanismProvenance": (
+            "MeteoraAg/damm-v2 @ 2565067, programs/cp-amm/src/state/fee.rs, retained at "
+            "analysis/fixtures/lpdesk/damm_v2_state_fee_2565067.rs"
+        ),
+        "proxy": (
+            "the unattended-wide rows of the attention frontier (cadence None) are the "
+            "measured PROXY for this arm on this pool's own path: full-range-like, "
+            "never recentered, flat fee intensity. Direction of error: DAMM v2's dynamic "
+            "fee RAISES the fee rate in high-sigma regimes (to a cap), so the flat-fee "
+            "proxy UNDERSTATES a DAMM v2 position's fee take exactly when sigma is high, "
+            "and slightly overstates it in quiet regimes if the base fee is lower."
+        ),
+        "absence": (
+            "no measured DAMM v2 SOL/USDC yield: the dammv2 API did not answer "
+            "(retained probes), and a chain-derived yield needs a fee-volume tape of a "
+            "chosen DAMM v2 pool (~100 further requests) that this budget does not "
+            "cover. That tape is the next bounded read if this arm matters."
+        ),
+    }
 
     # --- activity history from signature pages ---------------------------------------
     by_hour: dict[int, int] = {}
@@ -465,6 +657,14 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
             frontier_panel.as_dict() if frontier_panel else {"absent": frontier_error}
         ),
         "dial_calibration": calibration or {"absent": "needs both the dial and her books"},
+        "both_sides": both_sides or {"absent": "oracle path too short"},
+        "oscillation": oscillation or {"absent": "oracle path too short"},
+        "shuffle_split": shuffle or {"absent": "no ledger"},
+        "attention_frontier": attention_frontier
+        or {"absent": "needs the pseudo tape and the kappa calibration"},
+        "shaped_frontier": shaped_frontier
+        or {"absent": "needs the pseudo tape and the kappa calibration"},
+        "damm_v2_arm": damm_v2_arm,
         "frontier_oracle": (
             {"note": frontier_oracle_note, **frontier_oracle_panel.as_dict()}
             if frontier_oracle_panel
