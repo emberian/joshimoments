@@ -685,3 +685,14 @@ believing any Glass failure tonight. Rust gates are unaffected (103 pump, 41 liq
   widened so absence is expressible (realizedNetSol nullable -> "Not reconciled").
 - Gate at that commit: fmt clean, workspace clippy -D warnings 0, Rust 228 tests across 7 crates,
   Glass 191 tests / 28 files, typecheck clean.
+
+## Standing intention: eventual public release (recorded 2026-08-25)
+
+Ember wants to publish this repository once it is real enough. Her readiness marker: she sits
+in for ~an hour a day, two days in a row. At that point, run a publication-audit lane BEFORE
+any release: full-tree linkage inventory (name/email/wallet/pump-account composite — no single
+secret exists, the composite is the question), third-party review of retained fixtures and
+named-wallet research, license confirmation (workspace currently AGPL-3.0-or-later), verbatim
+check on the book-derived microstructure corpus, and a release-shape recommendation (as-is vs
+fresh-history export vs code-public/steering-private split). Until then: keep commits and docs
+publication-clean — no new personal detail beyond what the work needs.
