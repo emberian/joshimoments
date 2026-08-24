@@ -68,5 +68,5 @@ Ember is PRIMARILY VISUAL and uses a pointer. She uses a screen reader sometimes
 keyboard-only, and designing as if she were is a mistake this project already made (a repo doc said
 so, an agent believed it, and it shaped real decisions before she corrected it). Keyboard paths must
 work — six of eight single-letter shortcuts collide with NVDA/JAWS quick-nav, which is why the hold
-key is `;` — but visual scanning is her main channel and should be treated as first-class. The shell still has 51 focusable stops at first paint and the virtualized feed's tab stops
-mutate as she scrolls — the listbox/`aria-activedescendant` restructure is a real, unstarted lane.
+key is `;` — but visual scanning is her main channel and should be treated as first-class. (The listbox/`aria-activedescendant` restructure has since landed: the feed is one tab stop,
+scroll-invariant, and hunt mode renders through the same frozen architecture.)
