@@ -92,7 +92,20 @@ pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 ///   (observed live 2026-08-24: cutoff wedged at commit 356 while the keeper stood at 585).
 ///   Window selection decides the derived bytes, so an over-cap catalog derives different bytes
 ///   under this version, and the rendered coverage now states the truncation.
-pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "3";
+/// - `"4"`: the rendered candidate set became bounded and recency-ordered. Hours of discovery
+///   sweeps had accumulated 1,191 subjects into one 6.4 MB view that no longer fit the bounded
+///   Glass response contract (observed live 2026-08-24: every snapshot answered 500). Candidates
+///   now serve newest-observation-first, at most [`MAX_RENDERED_CANDIDATES`], with the elision
+///   counted in the report and stated in the view's unrendered notes — an elided candidate
+///   remains observed in the catalog; falling out of render is a bound, never a denial.
+pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "4";
+
+/// The most candidates one scene renders. The bounded Glass response contract is 4 MiB and a
+/// candidate wire with its evidence rows runs a few KB (measured 5.4 KB average on the catalog
+/// that broke: 1,191 subjects, 6.4 MB), so 300 leaves the response comfortably inside its bound
+/// with headroom for hot coins' larger candle paths — while being more than any board renders
+/// attentively. Elision is counted and stated, never silent.
+pub const MAX_RENDERED_CANDIDATES: usize = 300;
 
 /// Exact, store-derived Glass scene plus the identities that justify every rendered value.
 #[derive(Debug)]
@@ -124,6 +137,10 @@ pub struct LiveSurfaceReport {
     /// ones. A render bound, never an absence claim — the catalog retains every one of them.
     pub observations_elided: u64,
     pub candidate_count: u64,
+    /// Candidates actually rendered into the view, after the recency bound.
+    pub candidates_rendered: u64,
+    /// Observed subjects elided by [`MAX_RENDERED_CANDIDATES`]; stated in the view's notes.
+    pub candidates_elided: u64,
     /// Retained `coin_exact` / `discovery_coins` bodies this cutoff held and parsed.
     pub coin_metadata_observations: u64,
     /// Coin records those bodies carried (a discovery page holds many rows).
@@ -396,7 +413,29 @@ pub fn derive_live_surface_with(
         .filter(|draft| !draft.metadata.is_empty())
         .count();
     let scene_id = scene_identity(&durable);
-    let candidates = candidate_wires(&subjects, rendered_at)?;
+    let mut candidates = candidate_wires(&subjects, rendered_at)?;
+    // Newest observation first: the hunting order, and the order that makes the bound below
+    // keep the candidates an operator would actually look at. Deterministic: recency
+    // descending, absent recency last, ties broken by wire id.
+    candidates.sort_by(|a, b| {
+        b.last_observed_at
+            .cmp(&a.last_observed_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let candidates_elided = candidates.len().saturating_sub(MAX_RENDERED_CANDIDATES);
+    let candidates_rendered = candidates.len().min(MAX_RENDERED_CANDIDATES);
+    if candidates_elided > 0 {
+        candidates.truncate(MAX_RENDERED_CANDIDATES);
+        unrendered.push(UnrenderedObservation {
+            observation_id: format!("candidates:elided:{candidates_elided}"),
+            locator: None,
+            reason: format!(
+                "{candidates_elided} additional observed subject(s) were elided by recency at \
+                 the bounded response contract ({MAX_RENDERED_CANDIDATES} rendered); they remain \
+                 observed in the catalog, and elision is a render bound, never a denial"
+            ),
+        });
+    }
     let health = source_health(
         &durable,
         &watermark,
@@ -469,6 +508,8 @@ pub fn derive_live_surface_with(
         observations_truncated: durable.truncated,
         observations_elided: durable.elided,
         candidate_count: u64::try_from(subjects.len()).unwrap_or(u64::MAX),
+        candidates_rendered: u64::try_from(candidates_rendered).unwrap_or(u64::MAX),
+        candidates_elided: u64::try_from(candidates_elided).unwrap_or(u64::MAX),
         coin_metadata_observations: u64::try_from(metadata_observations).unwrap_or(u64::MAX),
         coin_metadata_rows: u64::try_from(metadata_rows).unwrap_or(u64::MAX),
         coin_metadata_subjects: u64::try_from(metadata_subjects).unwrap_or(u64::MAX),
@@ -3136,6 +3177,8 @@ mod tests {
         assert_eq!(derived.report.coin_metadata_observations, 1);
         assert_eq!(derived.report.coin_metadata_rows, 3);
         assert_eq!(derived.report.candidate_count, 3);
+        assert_eq!(derived.report.candidates_rendered, 3);
+        assert_eq!(derived.report.candidates_elided, 0);
 
         let view: serde_json::Value =
             serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
