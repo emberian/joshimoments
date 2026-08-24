@@ -264,7 +264,12 @@ fn governing_gate(route: RouteId) -> GateKind {
         | RouteId::CoinSearch
         | RouteId::CalloutTop
         | RouteId::CalloutByUser
-        | RouteId::CalloutLeaderboard => GateKind::RowProjection,
+        | RouteId::CalloutLeaderboard
+        // Reviewed 2026-08-24 from live material: heterogeneous rows on both (movers rows carry
+        // optional recommendation/deploy keys; community rows have nullable media/mention
+        // leaves), so the row projection is the gate exactly as on the discovery feeds.
+        | RouteId::BoardMovers
+        | RouteId::CommunityCallouts => GateKind::RowProjection,
         _ => GateKind::Unmeasured,
     }
 }
@@ -372,6 +377,20 @@ fn declared_clocks(route: RouteId) -> &'static [(&'static str, ClockUnit, &'stat
              time), while the sibling candles route carries the same name as an epoch-millis \
              number; declared in normalize::semantics",
         )],
+        RouteId::CommunityCallouts => &[
+            (
+                "createdAt",
+                ClockUnit::Iso8601Utc,
+                "measured 2026-08-24 on the real coin-communities host: ISO-8601 UTC with \
+                 MICROSECONDS, while /callout/top and /callout/list state the same event in \
+                 epoch milliseconds — two callout hosts, two encodings for one occurrence",
+            ),
+            (
+                "maxMultiplierAt",
+                ClockUnit::Iso8601Utc,
+                "measured 2026-08-24: ISO-8601 UTC with microseconds, nullable",
+            ),
+        ],
         _ => &[],
     }
 }
@@ -382,7 +401,10 @@ fn undeclared_clock_suspects(route: RouteId) -> &'static [&'static str] {
     match route {
         RouteId::SolPrice => &["asOfTimestamp"],
         RouteId::BalanceSummary | RouteId::BalanceTokens => &["updatedAt"],
-        RouteId::CommunityMessages | RouteId::CommunityCallouts => &["createdAt"],
+        // community_callouts left this list 2026-08-24: its clocks are measured and declared
+        // above. The messages sibling has still never been called by this collector.
+        RouteId::CommunityMessages => &["createdAt"],
+        RouteId::InMemoryCoin => &["creationTime", "graduationDate", "lastRecommendedAt"],
         _ => &[],
     }
 }
@@ -432,12 +454,14 @@ const HOMONYMS: &[Homonym] = &[
             ),
             (
                 RouteId::CommunityCallouts,
-                "unit never measured; nothing has ever called this route",
+                "measured 2026-08-24: ISO-8601 UTC with MICROSECONDS (occurrence time) — the \
+                 same event family the frontend-api callout routes state in epoch millis",
             ),
         ],
-        evidence: "the callout unit was measured 2026-08-22; the community routes have never \
-                   been called, and a tag that cannot tell those apart is how a unit error \
-                   survives",
+        evidence: "the frontend-api callout unit was measured 2026-08-22 and the \
+                   coin-communities unit 2026-08-24: one event family, two hosts, two \
+                   encodings, so a join on this name must normalise out loud; the messages \
+                   route remains uncalled",
         severity: AuditSeverity::Observation,
     },
     Homonym {
@@ -1558,6 +1582,22 @@ fn measured_limit_clamp(route: RouteId) -> Option<usize> {
         // limit=71, limit=100 and limit=1000 each returned exactly 70 rows with HTTP 200 and no
         // warning of any kind (measured 2026-08-22; see the catalog entry).
         RouteId::DiscoveryCoins => Some(70),
+        // limit=200 and limit=500 each returned exactly 150 rows with HTTP 200 and no warning,
+        // while 5, 70 (bare) and 150 were honoured (measured 2026-08-24).
+        RouteId::BoardMovers => Some(150),
+        _ => None,
+    }
+}
+
+/// The query parameter whose requested value bounds this route's page, where one exists. The
+/// paged kinds name it structurally; `board_movers` is not paged — there is no offset — but its
+/// `limit` bounds the single window and silently clamps at 150 (measured 2026-08-24), so
+/// ask-vs-delivered is exactly as decidable there as on /coins.
+fn clamp_parameter(spec: RouteSpec) -> Option<&'static str> {
+    match spec.pagination {
+        PaginationKind::OffsetLimit => Some("limit"),
+        PaginationKind::PageSize => Some("size"),
+        _ if spec.id == RouteId::BoardMovers => Some("limit"),
         _ => None,
     }
 }
@@ -1574,17 +1614,13 @@ fn check_limit_clamp(
     parsed: &ParsedBody,
 ) {
     const CHECK: &str = "audit/narrowing/limit_clamp";
-    let parameter = match spec.pagination {
-        PaginationKind::OffsetLimit => "limit",
-        PaginationKind::PageSize => "size",
-        _ => {
-            auditor.clear(
-                CHECK,
-                AuditFamily::SilentNarrowing,
-                "not a limit-paged route; no requested page size exists to be clamped",
-            );
-            return;
-        }
+    let Some(parameter) = clamp_parameter(spec) else {
+        auditor.clear(
+            CHECK,
+            AuditFamily::SilentNarrowing,
+            "not a limit-paged route; no requested page size exists to be clamped",
+        );
+        return;
     };
     let Some(requested_raw) = acquisition.resolved_public_query.get(parameter) else {
         auditor.undecidable(
@@ -1763,6 +1799,8 @@ fn check_empty_page(auditor: &mut Auditor, route: RouteId, parsed: &ParsedBody) 
             | RouteId::CalloutTop
             | RouteId::CalloutByUser
             | RouteId::CalloutLeaderboard
+            | RouteId::BoardMovers
+            | RouteId::CommunityCallouts
     );
     if !collection {
         auditor.clear(
@@ -1789,10 +1827,15 @@ fn check_empty_page(auditor: &mut Auditor, route: RouteId, parsed: &ParsedBody) 
             "measured 2026-08-22: an offset past the end answers a bare [] under HTTP 200, \
              byte-identical to a filter that matched nothing"
         }
-        RouteId::CalloutTop | RouteId::CalloutByUser => {
+        RouteId::CalloutTop | RouteId::CalloutByUser | RouteId::CommunityCallouts => {
             "an empty callout answer is retained as an absent record and never as evidence \
              that nobody called (and /callout/list keyed by a mint instead of a user answers \
              empty for the ordinary reason that no user has that id)"
+        }
+        RouteId::BoardMovers => {
+            "no empty movers board has ever been observed (bare reads answer 70 rows); an \
+             empty one would be a provider condition worth a look, never a statement that \
+             nothing moves"
         }
         _ => {
             "no measured empty-page semantics exist for this route; absence may not be read \

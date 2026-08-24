@@ -14,30 +14,44 @@ root = "../state/keeper"
 # Owner-only Helius credential, read at each wallet sweep and never rendered anywhere.
 key_file = "~/.helius-key"
 
+# The coin-communities SHARED product key (x-api-key), read at each community tap and never
+# rendered anywhere. NOT a credential of Ember's: the pump.fun app bundle ships this same key to
+# every visitor on earth, it identifies the product rather than a person, and it rotates with
+# app deployments. When the community taps start failing 401, re-extract it:
+#   grep -o 'cc_[0-9a-f]\{64\}' <a fresh copy of the app's early bundle chunks>  > this file
+# What those requests send to api.coin-communities.xyz (a NEW third party): the mint asked
+# about (a public chain fact), this shared key, our IP and user agent. No wallet, no session —
+# the same exposure class as swap-api.
+community_key_file = "~/.coin-communities-key"
+
 [budgets]
 # Hard ceilings the keeper enforces on itself. When the day budget is spent it idles until UTC
 # midnight and writes that down durably; nothing here is a hint.
 #
 # The arithmetic these numbers rest on, so a future edit can redo it instead of trusting it:
 # a fully coincident cycle is wallet (1 signatures page + 3 transactions = 4) + candles x2 +
-# trades x2 + coin_exact x2 + discovery x1 = 11 requests. That coincidence is the schedule, not
-# an accident — every cadence below divides 30 minutes — so the cycle ceiling affords it rather
-# than deferring taps into gap-noise every half hour. Steady state per day: wallet 48x4=192,
-# candles 2x144=288, trades 2x288=576, coin_exact 2x144=288, discovery 288 — 1632 in all, about
-# 1.1 requests per minute. Only the 192 wallet requests touch the Helius credential; every pump
-# read is an anonymous product-route GET.
+# trades x2 + coin_exact x2 + community_callouts x2 + discovery x1 + movers x1 = 14 requests.
+# That coincidence is the schedule, not an accident — every cadence below divides 30 minutes —
+# so the cycle ceiling affords it rather than deferring taps into gap-noise every half hour.
+# Steady state per day: wallet 48x4=192, candles 2x144=288, trades 2x288=576,
+# coin_exact 2x144=288, community_callouts 2x48=96, discovery 288, movers 288 — 2016 in all,
+# about 1.4 requests per minute. Only the 192 wallet requests touch the Helius credential; every
+# pump read is an anonymous product-route GET (the community reads add the shared bundle key,
+# which identifies nobody).
 #
 # The hot lane ([hot] below) adds on top of that: the worst coincident cycle is three freshly
-# leased hot mints each wanting candles + trades + coin_exact + callout_top in the same cycle,
-# 3x4 = 12 requests, so 11 + 12 = 23 and the ceiling is 24. Per day, one fully hot mint costs
-# 30 candles + 30 trades + 2 coin_exact + 2 callout_top = 64 requests per hour, so the 3000 cap
-# affords base 1632 + about 21 hot-mint-hours (1368/64) — seven hours of triple-hot attention —
-# at a worst case of ~2.1 requests per minute. Hotness needs a fresh act every 30 minutes, so
-# sustained worst case means Ember is actually sitting there refreshing it. The day cap stays
-# an absolute stop: a hot tap that would bust it defers with a durable note and the keeper
-# idles until UTC midnight, exactly as before.
-per_cycle_requests = 24
-per_day_requests = 3000
+# leased hot mints each wanting candles + trades + coin_exact + callout_top +
+# community_callouts in the same cycle, 3x5 = 15 requests, so 14 + 15 = 29 and the ceiling is
+# 30. Per day, one fully hot mint costs 30 candles + 30 trades + 2 coin_exact + 2 callout_top +
+# 6 community_callouts = 70 requests per hour, so the 3500 cap affords base 2016 + about 21
+# hot-mint-hours (1484/70) — seven hours of triple-hot attention, the same affordance the old
+# 3000 cap bought before the movers and community taps existed — at a worst case of ~2.4
+# requests per minute. Hotness needs a fresh act every 30 minutes, so sustained worst case
+# means Ember is actually sitting there refreshing it. The day cap stays an absolute stop: a
+# tap that would bust it defers with a durable note and the keeper idles until UTC midnight,
+# exactly as before.
+per_cycle_requests = 30
+per_day_requests = 3500
 # Scheduler granularity; taps fire on their own cadences, this is only how often they are checked.
 tick_seconds = 30
 # Rate-limit backoff: doubles from the initial on consecutive throttled cycles, capped.
@@ -75,6 +89,16 @@ discovery_review = "../crates/joshi-pump-api/fixtures/row_projection_discovery_c
 # an empty page ({"callouts":[]}) is refused as row-uncheckable and retained as an absent
 # record, never as evidence that nobody called the coin.
 callout_top_review = "../crates/joshi-pump-api/fixtures/row_projection_callout_top_v1.json"
+# movers is a ROW-projection review like discovery: heterogeneous compact-key rows. The review
+# draws the decoded-vs-inferred line — the volume family the board exists for is inferred from
+# key names, decoded by nothing in the app, and every extracted value's tag says so.
+movers_review = "../crates/joshi-pump-api/fixtures/row_projection_board_movers_v1.json"
+# community_callouts carries the counters Ember actually sees in the app — likes, replies,
+# follower counts, spam flags, mentions — from the separate coin-communities service. Reviewed
+# 2026-08-24 over 154 rows / two mints; clocks there are ISO-8601 with microseconds while the
+# frontend-api callout routes use epoch millis, and the review + normalizer tags keep the two
+# from ever being joined silently.
+community_callouts_review = "../crates/joshi-pump-api/fixtures/row_projection_community_callouts_v1.json"
 # One newest-anchored 1s candle window per tap; 1000 bars of 1s tape is ~16 minutes on a coin
 # that trades every second, comfortably overlapping a 10-minute cadence.
 candles_interval = "1s"
@@ -100,6 +124,13 @@ trades_cadence_minutes = 2
 # One coin record and one callout read per 30-minute lease: cadence equals TTL on purpose.
 coin_exact_cadence_minutes = 30
 callout_top_cadence_minutes = 30
+# POLL OR LOSE: the community route is a fixed newest-50 window — limit inert, no pagination,
+# history beyond the window unreachable (measured 2026-08-24) — so whatever this cadence misses
+# between reads is gone if 50 rows roll over. At 10 minutes a hot coin gets three reads per
+# lease and would have to print 50 callouts in 10 minutes (the busiest coin measured did 50 in
+# ~two days) to lose one. Faster would fight the provider's GLOBAL shared budget (~1 req/s for
+# every pump.fun visitor together; 429s are ordinary) for no realistic coverage gain.
+community_callouts_cadence_minutes = 10
 
 [discovery]
 # The catalog-level sweep that lets NEW coins reach the attention feed at all: one page of
@@ -111,21 +142,40 @@ callout_top_cadence_minutes = 30
 # nothing matched.
 cadence_minutes = 5
 
+[movers]
+# The second catalog-level sweep, beside discovery: one page of
+# advanced-indexer.pump.fun/boards/movers?limit=150 per cadence — the only feed anywhere in the
+# catalog carrying per-coin windowed volume (5m/15m/1h/24h, SOL and USD, as undecoded compact
+# keys whose tags say the meaning is inferred) plus a provider-stated serverTs. limit is
+# honoured to 150 then silently clamps (measured 2026-08-24), so the keeper asks exactly 150
+# and retains the ask. The board is a PERSONALISED recommendation feed: position is not rank,
+# membership is not a census, and absence from it is never evidence of absence. Every promoted
+# row's mint becomes a durable solana.token_mint source event under the keeper's movers source,
+# establishment "observed_in_promoted_movers_row" — distinct on purpose from discovery's.
+cadence_minutes = 5
+
 [[mints]]
 mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
 label = "DREGG"
-taps = ["candles", "trades", "coin_exact"]
+taps = ["candles", "trades", "coin_exact", "community_callouts"]
 candles_cadence_minutes = 10
 trades_cadence_minutes = 5
 # coin_exact refreshes the coin's own record — name, symbol, both market caps, graduation state.
 # Reserve fields in it go stale after graduation (measured: launch constants survive a 97% move),
 # which is a fact about the provider the catalog retains, not one the keeper repairs.
 coin_exact_cadence_minutes = 10
+# The social counters for a held coin: likes/replies/followers/spam flags from the newest-50
+# community window. POLL OR LOSE applies here too, but a watched coin's callout rate is orders
+# of magnitude below 50-per-half-hour (DREGG's whole window held 4 rows on 2026-08-24), so 30
+# minutes keeps the accumulated tape gap-free while spending 48 requests a day per coin against
+# the provider's shared global budget.
+community_callouts_cadence_minutes = 30
 
 [[mints]]
 mint = "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump"
 label = "SOLVE"
-taps = ["candles", "trades", "coin_exact"]
+taps = ["candles", "trades", "coin_exact", "community_callouts"]
 candles_cadence_minutes = 10
 trades_cadence_minutes = 5
 coin_exact_cadence_minutes = 10
+community_callouts_cadence_minutes = 30

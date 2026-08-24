@@ -24,11 +24,13 @@ pub enum RouteId {
     CommunityCallouts,
     Candles,
     Trades,
+    BoardMovers,
+    InMemoryCoin,
     LiveChat,
 }
 
 impl RouteId {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::CoinExact,
         Self::SolPrice,
         Self::BalanceSummary,
@@ -47,6 +49,8 @@ impl RouteId {
         Self::CommunityCallouts,
         Self::Candles,
         Self::Trades,
+        Self::BoardMovers,
+        Self::InMemoryCoin,
         Self::LiveChat,
     ];
 }
@@ -72,6 +76,8 @@ impl fmt::Display for RouteId {
             Self::CommunityCallouts => "community_callouts",
             Self::Candles => "candles",
             Self::Trades => "trades",
+            Self::BoardMovers => "board_movers",
+            Self::InMemoryCoin => "in_memory_coin",
             Self::LiveChat => "live_chat",
         })
     }
@@ -511,31 +517,73 @@ impl RouteSpec {
                 &[],
                 false,
             ),
+            // CORRECTED 2026-08-24. The earlier entry pointed this route at profile-api.pump.fun
+            // behind a user session; the app's own service registry and the 2026-08-24 surface
+            // recon (docs/reference/PUMP_API_MAP.md) both say the community subsurface is a
+            // SEPARATE product — api.coin-communities.xyz — whose /public routes want no user
+            // session, only the shared `x-api-key` product key declared below. This collector has
+            // still never called the messages route; the recon verified it LIVE and its rows add
+            // `parentCalloutId`, the join from chat back to the callout it discusses. It stays
+            // un-collectable until reviewed material exists.
             RouteId::CommunityMessages => Self::http(
                 id,
-                "https://profile-api.pump.fun",
+                "https://api.coin-communities.xyz",
                 "/api/v1/communities/{mint}/messages/public",
-                AccessClass::AuthenticatedUserSession,
-                Stability::AuthenticatedUnverified,
-                PaginationKind::Cursor,
-                "provider thread order; moderation/censoring unknown",
+                AccessClass::ObservedPublicProduct,
+                Stability::UndocumentedObserved,
+                PaginationKind::None,
+                "recon-verified 2026-08-24: newest-window feed like its callout sibling; \
+                 never called by this collector",
                 &["mint"],
                 &["limit", "cursor"],
                 &["cursor"],
                 false,
             ),
+            // CORRECTED AND MEASURED LIVE 2026-08-24 (two mints, four reads). The earlier entry
+            // pointed at profile-api.pump.fun behind a user session; the live service is
+            // api.coin-communities.xyz and its /public routes are anonymous-with-shipped-key: the
+            // only credential is the `x-api-key` product key the app bundle ships to every
+            // visitor (see [`Self::shared_product_key_header`] — the key is public by
+            // construction, rotates, and never lands in this repo, a fixture, or an envelope).
+            //
+            // Envelope {"callouts":[...]}, a FIXED NEWEST-50 WINDOW. `limit` is INERT — limit=3
+            // returned the same 50 rows byte-identically — and no pagination exists (the recon
+            // measured offset/page/cursor all inert; both names stay allowlisted only so inertia
+            // can be re-measured). History beyond the newest 50 is unreachable through this
+            // route, so our own accumulated tape is the only thing that holds more: the
+            // poll-or-lose fact the keeper cadence note in ops/keeper.toml prices. Two reads 3 s
+            // apart were BYTE-IDENTICAL including calloutPrice/calloutMarketCap, so the
+            // /callout/list SOL trap (read-time recompute) does NOT reproduce here — consistent
+            // with a materialised view whose refresh cadence is unmeasured.
+            //
+            // CLOCKS: createdAt and maxMultiplierAt are ISO-8601 UTC with MICROSECONDS, while
+            // /callout/top and /callout/list state the same events in epoch milliseconds — two
+            // callout routes on two hosts with two time encodings; any join must normalise
+            // explicitly, and normalize::semantics names the clock per route. Prices are
+            // USD-denominated JSON numbers. Rows carry what /callout/top does not: likeCount,
+            // replyCount, followerCount, the isSpam/isHarmful moderation flags, mentions, and a
+            // stable uuid `id` keying the detail/replies routes — the counters Ember actually
+            // sees in the app.
+            //
+            // WHAT LEAVES THE PROCESS toward this NEW third party: the mint asked about (a
+            // public chain fact, declared a public subject below), the shared bundle key every
+            // pump.fun visitor sends, our IP and user agent. No wallet, no session, no cookie —
+            // the same exposure class as swap-api, plus the shared key. The key buys a GLOBAL
+            // budget shared with every pump.fun visitor (~1 request/second, measured by the
+            // recon), so a 429 here is ordinary weather and never evidence of absence.
             RouteId::CommunityCallouts => Self::http(
                 id,
-                "https://profile-api.pump.fun",
+                "https://api.coin-communities.xyz",
                 "/api/v1/communities/{mint}/callouts/public",
-                AccessClass::AuthenticatedUserSession,
-                Stability::AuthenticatedUnverified,
-                PaginationKind::Cursor,
-                "provider callout order; revisions unknown",
+                AccessClass::ObservedPublicProduct,
+                Stability::UndocumentedObserved,
+                PaginationKind::None,
+                "measured 2026-08-24: fixed newest-50 window, newest first; limit inert, no \
+                 pagination, history beyond the window unreachable; ISO-8601 microsecond clocks",
                 &["mint"],
                 &["limit", "cursor"],
                 &["cursor"],
-                false,
+                true,
             ),
             // Measured live 2026-08-22 against a real mainnet mint. The provider itself
             // enumerates the accepted intervals in its 400 body: 1s, 15s, 30s, 1m, 5m, 15m, 30m,
@@ -598,6 +646,71 @@ impl RouteSpec {
                 &["mint"],
                 &["limit", "cursor", "before"],
                 &["cursor", "before"],
+                true,
+            ),
+            // Measured live 2026-08-24 over five reads, 525 rows, on a host new to this catalog:
+            // advanced-indexer.pump.fun, anonymous and keyless. Envelope
+            // {"board","version","serverTs","entries":[...]} — `serverTs` is epoch milliseconds
+            // and PROVIDER-STATED: the first provider-side availability instant on any discovery
+            // feed in this catalog. It rides in the retained exact bytes; nothing normalizes it
+            // yet, deliberately, because the row gate certifies rows and the envelope is outside
+            // them.
+            //
+            // Rows use compact keys. The app's own decoder (bundle chunk 09373ik9or5q1) pins
+            // m/n/t/i = mint/name/symbol/image_uri, mc = usd_market_cap, age = SECONDS since
+            // creation (a duration, not an instant), gd = graduation (`complete` iff gd > 0),
+            // dw = dev wallet, plus pl/lv/desc/vid/ic/rid/ms. The volume family (v v5 v15 v1h
+            // v24h and vUsd*) and the trade counts (tx5, txc) are NOT decoded by the app: their
+            // meanings are INFERRED from the names, normalize::semantics tags them as inferred,
+            // and nothing downstream may treat them as measured until a stability check pins
+            // them. This is the flow field the /coins entry documents as missing.
+            //
+            // `limit` is honoured to 150 and then SILENTLY CLAMPS: limit=200 and limit=500 each
+            // returned exactly 150 rows, HTTP 200, no warning — the /coins-clamps-to-70 family.
+            // A bare call returns 70.
+            //
+            // `rid` is a recommendation id and the app's URL builder can send userId, session_id
+            // and country: this board is a PERSONALISED recommendation feed, not a census.
+            // Position is not rank and two clients can be served different boards. Those
+            // personalisation parameters are deliberately NOT allowlisted here — this collector
+            // must never ask for a personalised board, so a request naming them is refused
+            // before any I/O (the never-public floor would refuse retaining them anyway).
+            RouteId::BoardMovers => Self::http(
+                id,
+                "https://advanced-indexer.pump.fun",
+                "/boards/movers",
+                AccessClass::ObservedPublicProduct,
+                Stability::UndocumentedObserved,
+                PaginationKind::None,
+                "measured 2026-08-24: personalised recommendation board, position is not rank; \
+                 envelope serverTs is a provider availability instant; limit honoured to 150 \
+                 then silently clamped",
+                &[],
+                &["limit"],
+                &[],
+                true,
+            ),
+            // Measured live 2026-08-24 against two mints (one graduated, one bonding-history):
+            // a single rich live-state object with 69 keys, identical key sets on both reads.
+            // Carries volumeSol/volumeUsd (cumulative), buyCount/sellCount/txCount, numHolders,
+            // top10HoldersPercent, devHoldingsPercent, sniperCount, progress and graduationDate —
+            // per-coin flow and holder numbers no frontend-api coin route carries. Keys prefixed
+            // `_` (_dirtyBoards, _lastLruTouchTs, _lastTradeTs, _lastUpdated) are provider cache
+            // internals that leak into the response; retained like everything else, read by
+            // nothing. Anonymous, keyless. Un-reviewed: retained bytes quarantine until a
+            // reviewed projection exists, and nothing taps it on a cadence yet.
+            RouteId::InMemoryCoin => Self::http(
+                id,
+                "https://advanced-indexer.pump.fun",
+                "/in-memory-coin/{mint}",
+                AccessClass::ObservedPublicProduct,
+                Stability::UndocumentedObserved,
+                PaginationKind::None,
+                "measured 2026-08-24: one current in-memory live-state object; two mints \
+                 answered identical key sets",
+                &["mint"],
+                &[],
+                &[],
                 true,
             ),
             RouteId::LiveChat => Self {
@@ -673,9 +786,18 @@ impl RouteSpec {
             // candles/trades segment, and its body rows name `coinMint` — retaining the resolved
             // ask corroborates the rows rather than revealing anything. `{user}` on the sibling
             // callout routes stays redacted exactly as before.
-            RouteId::CoinExact | RouteId::Candles | RouteId::Trades | RouteId::CalloutTop => {
-                &["mint"]
-            }
+            //
+            // `community_callouts` and `in_memory_coin` join on the same reasoning (2026-08-24,
+            // for the keeper's community tap): the mint is a public chain fact and the community
+            // rows restate it as `tokenAddress`. `{mint}` on the un-collectable community
+            // messages route stays undeclared until something actually collects it — retention
+            // declarations are made when they are used, not in advance.
+            RouteId::CoinExact
+            | RouteId::Candles
+            | RouteId::Trades
+            | RouteId::CalloutTop
+            | RouteId::CommunityCallouts
+            | RouteId::InMemoryCoin => &["mint"],
             _ => &[],
         }
     }
@@ -716,11 +838,14 @@ impl RouteSpec {
             // `before` is allowlisted on trades (as on candles) but stays undeclared: it is a
             // wall-clock seek into a subject's history — reading interest, not page shape — and
             // the catalog already pins it sensitive, like every cursor and pageToken here.
+            // `board_movers` restates `limit` because its clamp family (honoured to 150, then
+            // silently clamped) is undecidable without the ask, exactly like /coins at 70.
             RouteId::CalloutTop
             | RouteId::CalloutLeaderboard
             | RouteId::CommunityMessages
             | RouteId::CommunityCallouts
-            | RouteId::Trades => &["limit"],
+            | RouteId::Trades
+            | RouteId::BoardMovers => &["limit"],
             RouteId::CalloutByUser => &["limit", "sortBy", "sortOrder"],
             // A retained candle window does not restate its own interval or denomination;
             // without these the bytes cannot say which series they are.
@@ -730,7 +855,30 @@ impl RouteSpec {
             | RouteId::BalanceSummary
             | RouteId::CalloutRecent
             | RouteId::UserProfile
+            | RouteId::InMemoryCoin
             | RouteId::LiveChat => &[],
+        }
+    }
+
+    /// The request header this route needs carrying the provider's SHARED product key, or `None`
+    /// for the (ordinary) routes that need nothing.
+    ///
+    /// This exists for exactly one service today: api.coin-communities.xyz answers its `/public`
+    /// routes only when the request carries the `x-api-key` the pump.fun bundle ships to every
+    /// visitor. That key is NOT a user credential — every browser on earth sends the same one, it
+    /// identifies the product rather than a person, and it rotates with the app deployment — so
+    /// these routes stay [`AccessClass::ObservedPublicProduct`] and never touch the session
+    /// machinery. The key VALUE never appears in this catalog, in a fixture, or on a retained
+    /// envelope: the client takes it from [`crate::client::ClientConfig::shared_product_keys`]
+    /// (keyed by origin, supplied by the operator at run time, extractable from the app bundle
+    /// with `grep -o 'cc_[0-9a-f]\{64\}'` over the shipped chunks) and stamps the envelope's
+    /// `session_class` as `shared_product_key` so the retained record states that the key was
+    /// sent without stating the key.
+    #[must_use]
+    pub fn shared_product_key_header(self) -> Option<&'static str> {
+        match self.id {
+            RouteId::CommunityMessages | RouteId::CommunityCallouts => Some("x-api-key"),
+            _ => None,
         }
     }
 }
@@ -834,6 +982,31 @@ mod tests {
                 !query_parameter_never_public(name),
                 "{name} states page shape, not a subject, and must stay declarable"
             );
+        }
+    }
+
+    /// The shared-product-key declaration stays exactly as narrow as the one service that needs
+    /// it: only coin-communities routes carry it, never a session route (the key is not a user
+    /// credential and must not blur into one), and never a route on any other origin.
+    #[test]
+    fn the_shared_product_key_is_declared_only_for_the_coin_communities_origin() {
+        for route in RouteId::ALL {
+            let spec = RouteSpec::for_id(route);
+            match spec.shared_product_key_header() {
+                Some(header) => {
+                    assert_eq!(header, "x-api-key");
+                    assert_eq!(spec.origin, "https://api.coin-communities.xyz");
+                    assert!(
+                        !spec.requires_session(),
+                        "{route}: a shared product key is not a session and must not imply one"
+                    );
+                }
+                None => assert_ne!(
+                    spec.origin, "https://api.coin-communities.xyz",
+                    "{route}: every coin-communities route needs the shipped key (measured \
+                     2026-08-24: a keyless read answers 401)"
+                ),
+            }
         }
     }
 }

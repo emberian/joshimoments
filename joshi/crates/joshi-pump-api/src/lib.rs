@@ -70,4 +70,14 @@ pub use trust::{
 pub const SOURCE_CONTRACT: &str = "joshi.pump_api.acquisition.v1";
 
 /// Versioned route/access and fingerprint policy.
+///
+/// This string gates admission, promotion and identity (see the digest-ripple note in
+/// `docs/reference/PUMP_API_MAP.md` §8): bumping it retires every previously retained
+/// acquisition from admission and promotion, so a bump is a migration wanting Ember's call,
+/// never an edit. The catalog HAS been extended additively under this version — 2026-08-24: the
+/// `callout_top` public-subject declaration, then `board_movers`/`in_memory_coin` added and the
+/// community routes corrected to their real origin. Additive route additions and per-route
+/// corrections keep the
+/// version because no existing envelope's meaning moves; a change to what an EXISTING route's
+/// retained envelopes claim is what forces the bump.
 pub const ROUTE_CATALOG: &str = "joshi.pump_api.catalog.2026-08-16.v1";

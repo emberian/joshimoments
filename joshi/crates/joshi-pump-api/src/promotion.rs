@@ -613,7 +613,8 @@ fn ordered_membership(route: RouteId, root: &RawValue) -> Result<Vec<String>, ()
                 | RouteId::DiscoveryCoins
                 | RouteId::CurrentlyLive
                 | RouteId::CoinSearch
-                | RouteId::BalanceTokens => &["mint"],
+                | RouteId::BalanceTokens
+                | RouteId::InMemoryCoin => &["mint"],
                 RouteId::CalloutRecent
                 | RouteId::CalloutTop
                 | RouteId::CalloutByUser
@@ -623,6 +624,8 @@ fn ordered_membership(route: RouteId, root: &RawValue) -> Result<Vec<String>, ()
                 | RouteId::UserProfile
                 | RouteId::Following => &["address", "userId"],
                 RouteId::CommunityMessages => &["id"],
+                // Measured 2026-08-24: `m` is the movers row's mint per the app's own decoder.
+                RouteId::BoardMovers => &["m"],
                 RouteId::Trades => &["signature"],
                 RouteId::Candles => &["timestamp", "time"],
                 RouteId::SolPrice | RouteId::BalanceSummary => &["asOfTimestamp", "updatedAt"],

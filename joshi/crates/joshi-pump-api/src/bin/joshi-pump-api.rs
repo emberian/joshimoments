@@ -82,6 +82,12 @@ enum Command {
         enable_observed_product_route: bool,
         #[arg(long)]
         enable_authenticated_route: bool,
+        /// File holding the provider's SHARED product key for a route whose catalog entry
+        /// declares one (coin-communities' `x-api-key`). The key is shipped to every visitor in
+        /// the app bundle — it identifies the product, not a person — and is read here at run
+        /// time precisely so it never lands in this repo or an envelope.
+        #[arg(long)]
+        shared_key_file: Option<PathBuf>,
     },
     /// Sign the SIWS login challenge with a wallet file and report the session's identity and
     /// expiry. Prints NO token. Proves the login works without retaining anything.
@@ -275,6 +281,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             wallet_file,
             enable_observed_product_route,
             enable_authenticated_route,
+            shared_key_file,
         } => {
             let request_file: RequestFile = strict_file(&request)?;
             if request_file.contract != "joshi.pump_api.request.v1" {
@@ -302,6 +309,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 AccessClass::ReconnaissanceOnly => {
                     return Err("reconnaissance-only route has no direct collector".into());
                 }
+            }
+            if let Some(path) = shared_key_file {
+                let key = fs::read_to_string(&path)
+                    .map_err(|error| format!("shared key file {}: {error}", path.display()))?;
+                let key = key.trim();
+                if key.is_empty() || key.contains(char::is_whitespace) {
+                    return Err("shared key file must hold one non-empty token".into());
+                }
+                config
+                    .shared_product_keys
+                    .insert(spec.origin.to_owned(), key.to_owned());
             }
             if session_file.is_some() && wallet_file.is_some() {
                 return Err("--session-file and --wallet-file are mutually exclusive".into());

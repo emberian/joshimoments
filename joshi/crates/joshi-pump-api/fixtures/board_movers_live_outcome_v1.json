@@ -1,0 +1,74 @@
+{
+  "contract": "joshi.pump_api.fetch_outcome.v1",
+  "requestGroupId": "reqgrp:pump-api:e2eee1b3a686503e77ebf36879512e40:1787612131280199-2cb658f024713ead480e52d3bb52049b",
+  "attempts": [
+    {
+      "contract": "joshi.pump_api.acquisition.v1",
+      "catalogVersion": "joshi.pump_api.catalog.2026-08-16.v1",
+      "acquisitionId": "acq:pump-api:e2eee1b3a686503e77ebf36879512e40:1787612131280199-2cb658f024713ead480e52d3bb52049b",
+      "requestGroupId": "reqgrp:pump-api:e2eee1b3a686503e77ebf36879512e40:1787612131280199-2cb658f024713ead480e52d3bb52049b",
+      "attemptOrdinal": "1",
+      "routeId": "board_movers",
+      "transport": "http",
+      "accessClass": "observed_public_product",
+      "stability": "undocumented_observed",
+      "sessionClass": "public",
+      "sourceLocator": "https://advanced-indexer.pump.fun/boards/movers",
+      "resolvedPublicQuery": {
+        "limit": "5"
+      },
+      "requestFingerprint": "sha256:b77388060a07c0b962ce92af6de59d06572c9eafac1227829c7d96357454199d",
+      "httpStatus": 200,
+      "safeResponseHeaders": [
+        {
+          "name": "content-type",
+          "value": "application/json; charset=utf-8"
+        },
+        {
+          "name": "date",
+          "value": "Mon, 24 Aug 2026 22:55:31 GMT"
+        },
+        {
+          "name": "etag",
+          "value": "W/\"1169-HKUswUHX9phWU8xC3V9IV+tISA4\""
+        }
+      ],
+      "clocks": {
+        "startedAt": "2026-08-24T22:55:31.310354Z",
+        "receivedAt": "2026-08-24T22:55:31.709824Z",
+        "monotonicClockId": "mono:pump-api:e2eee1b3a686503e77ebf36879512e40:92024:1787612131278558",
+        "startedMonotonicNs": "31985708",
+        "receivedMonotonicNs": "431262458",
+        "elapsedNs": "399276750"
+      },
+      "body": {
+        "status": "exact",
+        "boundary": "http_entity_body_post_transfer_decoding_identity_encoding",
+        "mediaType": "application/json; charset=utf-8",
+        "bytesBase64": "eyJib2FyZCI6Im1vdmVycyIsInZlcnNpb24iOjAsInNlcnZlclRzIjoxNzg3NjEyMTMxNjgxLCJlbnRyaWVzIjpbeyJtIjoiRENvcDNtRnpXbjF3Skw5SjljVFoySzh4RjdZSDE0cTdMYVVoc3V5UXB1bXAiLCJjIjoic29sYW5hOm1haW5uZXQiLCJuIjoiRnJvZ2VDb2luIiwidCI6IkZST0dFIiwiaSI6Imh0dHBzOi8vYXBpLnZvcnRleGRlcGxveWVyLmNvbS9pbWFnZS81NjE1NWU5OS0xZWQ5LTRiNTUtOTVjMS1jODM3Zjc4ZWQwNjAud2VicCIsIm1jIjoyNzk3ODcuNjE2MjM4MDgxOTQsInYiOjEzMTMyLjIyMTk5MjUzNTk4NiwidlVzZCI6MTI3MzI4Ni4xMzkyMTAwOTkxLCJwIjoxMDAsInY1IjoyNTQuMzA5NjcyOTE1MDA3MTMsInYxNSI6OTE4LjExMTUyMzQzMDAyODYsInYxaCI6NDY4MS41OTcxMzM3MTA4NjUsInYyNGgiOjEzMTAyLjEzMjA3NDQwODY5NywidlVzZDUiOjI0ODM2LjQ3MTk4Mjc4MTk2OCwidlVzZDE1Ijo4OTc4Ni4xOTU2NzkxMzY5OSwidlVzZDFoIjo0NTY5OTEuNTg5NDU0MzQzOCwidlVzZDI0aCI6MTI3MDM2Ny40MDEzNDczODY5LCJ0eDUiOjUzMywiYWdlIjo5NTE2LCJrb2wiOjAsInNuIjo0OCwibWgiOmZhbHNlLCJocyI6ZmFsc2UsInBnIjoicHVtcCIsInBsIjoicHVtcCIsImdkIjoxNzg3NjAyNjE2NDA1LCJhdGgiOjQwOTUxNy44NSwiYmMiOjEyNDA3LCJzYyI6NTc0MSwidHhjIjoxODE0OCwibmgiOjE2NjcsInQxMCI6MjYuMDczMiwiZGgiOjUuNDg1LCJ0dyI6ZmFsc2UsIndzIjpmYWxzZSwidGciOmZhbHNlLCJjYiI6ZmFsc2UsImR3IjoiNHR6NnV0NzFpdEpjZzhkWThOcWU2d2pEUTdBcTg1dmI5cVpzU1FiVjdtaTgiLCJsdiI6ZmFsc2UsIm5wIjowLCJpYyI6ZmFsc2UsInNvIjowLCJibyI6NS40ODUsInBhIjoiU09MIiwiaWgiOnRydWUsInRmIjo5LjMwMjU2NTk0Mzk5NjA1OCwidGZVc2QiOjkxMC40MjQzNzE0NTEwMDI4fSx7Im0iOiI1ZGtQbmdRbWVxVFVONTdScWh4ZEE2eENhejdBS2R6UW9ITGRrOXhocHVtcCIsImMiOiJzb2xhbmE6bWFpbm5ldCIsIm4iOiJmeGNrc3RhciIsInQiOiJmY2tzdHIiLCJpIjoiaHR0cHM6Ly9pcGZzLmlvL2lwZnMvYmFma3JlaWRnaWNtd2h2b21ldXR3bGxvaGJmbHJzZ2YydWx0ZzZibWxpeGd4cmd2d2k2bHluanhhc2kiLCJtYyI6MjQ0MjM0LjI3MjQ2ODMwNzE0LCJ2IjoxNzA1OS42MDc5NjQ2NjkwMzQsInZVc2QiOjE2NTUxMDYuNDI4OTIwNDE4LCJwIjoxMDAsInY1IjoyNjMuMjE0OTA4MTUyOTgzOSwidjE1Ijo4NjEuODgyNzAzNzY4OTc5OSwidjFoIjo2MzI4LjY0ODI5NDU4MTkxMjUsInYyNGgiOjE2ODkwLjkxMTQ2NDg3NTIwNCwidlVzZDUiOjI1NzI1LjU5ODM5MjY4NzA5LCJ2VXNkMTUiOjg0MzM0LjIwNzYxNzE2MTQ1LCJ2VXNkMWgiOjYxNzgyMi42ODA4Mjc4Nzc3LCJ2VXNkMjRoIjoxNjM4NzM0LjQ3NzU3Mjg1NDEsInR4NSI6Mzc5LCJhZ2UiOjgwOTcsImtvbCI6NCwic24iOjAsIm1oIjpmYWxzZSwiaHMiOnRydWUsInBnIjoicHVtcCIsInBsIjoicHVtcCIsImdkIjoxNzg3NjA0Njc0MTQzLCJhdGgiOjUwOTQ1Ni44OCwiYmMiOjE0NjQ3LCJzYyI6MTE0NjgsInR4YyI6MjYxMTUsIm5oIjoyMjEzLCJ0MTAiOjE2LjM3ODksImRoIjowLCJ0dyI6dHJ1ZSwid3MiOmZhbHNlLCJ0ZyI6ZmFsc2UsImNiIjpmYWxzZSwiZHciOiI4SEthbVVzYlRrR01qSmRXN2gybUhtemREc2E5ZDJoVGZ5d2dpZkZzY1pmIiwibHYiOmZhbHNlLCJucCI6MCwiaWMiOmZhbHNlLCJzbyI6MCwiYm8iOjAuNjg3MSwicGEiOiJTT0wiLCJkZXNjIjoiVGhpcyBoYXMgYmVlbiBnb2luZyBmb3IgdG9vIGxvbmcsIGl0J3MgdGltZSB0byB0YWtlIGJhY2sgd2hhdCdzIG91cnMuIFxuRk9SIFRIRSBHQU1FUlNcbkZPUiBUSEUgQ09NTVVOSVRZIiwiaWgiOnRydWUsInRmIjo4MS43NjQ3NDcxMzcwMzcwOSwidGZVc2QiOjgwMDguNjI3MTExNjY3NzIyfSx7Im0iOiJBcFp1eGRwek1yYkVZVEdFemVZOWFmaDVwajlkNnFQUkpDVGdRWWlpcGJLZyIsImMiOiJzb2xhbmE6bWFpbm5ldCIsIm4iOiJDeWJlckxlZWsiLCJ0IjoiQ1lCRVJMRUVLIiwiaSI6IiIsIm1jIjoxMjMwODk4MC43NzQ2ODEwNjcsInYiOjY3NTk1LjI0MjAzOTI4NzI0LCJ2VXNkIjo2NTI0MjQ2LjQ2NDU3OTgyLCJwIjoxMDAsInY1Ijo2MzUuMjU4NzA5MDk4OTksInYxNSI6MTQxNy42NjgxNjY5MjM5ODcsInYxaCI6NjQ5NC42NTE3MTgwNzE2NiwidjI0aCI6MTk5MTcxLjc5OTI0MzE4ODUyLCJ2VXNkNSI6NjIwNzkuNTc4ODAxNjg5MTc1LCJ2VXNkMTUiOjEzODY1OS40MTYwMjkwODg3NSwidlVzZDFoIjo2MzQ2NDQuNDUyODcyMDk2NCwidlVzZDI0aCI6MTkyMTAwOTcuNjc4OTQ5NDY4LCJ0eDUiOjI2OSwiYWdlIjo4MDg0NzcsImtvbCI6NSwic24iOjAsIm1oIjpmYWxzZSwiaHMiOmZhbHNlLCJwZyI6InJheWRpdW1fY3BtbSIsInBsIjoicmF5ZGl1bV9jcG1tIiwiZ2QiOjAsImF0aCI6MjU4ODE0NTUuMTQsImJjIjoyNjUyMiwic2MiOjE3OTU1LCJ0eGMiOjQ0NDc3LCJuaCI6NzgxOTYsInQxMCI6OTc0NS4xMzU4LCJkaCI6MCwidHciOmZhbHNlLCJ3cyI6ZmFsc2UsInRnIjpmYWxzZSwiY2IiOmZhbHNlLCJkdyI6IkhvazluYlY4OXlCU0tDdHR4ZTNnb3FhandiaXFRYTltdEh2UUJzYkpIM05wIiwibHYiOmZhbHNlLCJucCI6MCwiaWMiOmZhbHNlLCJzbyI6MCwiYm8iOjAsInBhIjoiU09MIiwiaWgiOnRydWUsInRmIjoxMDMuMzA2Njg2OTkxMDAwOTIsInRmVXNkIjo5OTcxLjI3MDgxMzU3NzA2Nn0seyJtIjoiMlVmTnZnNVVjdEhoOXdETkNXZVVzZERlSmJxYk1tNWFFTTZLNkFzaHB1bXAiLCJjIjoic29sYW5hOm1haW5uZXQiLCJuIjoiRlVOSE9VU0UiLCJ0IjoiRlVOSE9VU0UiLCJpIjoiaHR0cHM6Ly9tZXRhZGF0YS5qN3RyYWNrZXIuaW8vaW1hZ2VzL1VJVmhlNmtVSWUiLCJtYyI6MTEyMTkzLjE5NzUxNTA5NjEyLCJ2Ijo4MzIzLjA1MjkwMTA3OTk3MywidlVzZCI6ODEwOTY0LjI3NzQ5NDU4MzksInAiOjEwMCwidjUiOjI1Mi43ODE5MTM4MzQwMDUzLCJ2MTUiOjY1NC4wMDM2NjkzMzgwMTEzLCJ2MWgiOjcyOTYuODI3NzU1MzEyOTI2NSwidjI0aCI6ODMxMS43Mzk0NTA0NjA4OTUsInZVc2Q1IjoyNDY5Ny43OTM2NTgxNzQ4NiwidlVzZDE1Ijo2Mzk3Mi4zODE4OTgwNzcyLCJ2VXNkMWgiOjcxMjA2Mi45MDU2MzgwNjU1LCJ2VXNkMjRoIjo4MDk4NjAuMTI2ODY4Nzc3OSwidHg1Ijo0NzksImFnZSI6MTA5MjksImtvbCI6MjAsInNuIjo5MSwibWgiOmZhbHNlLCJocyI6dHJ1ZSwicGciOiJwdW1wIiwicGwiOiJwdW1wIiwiZ2QiOjE3ODc2MDkzNjEwODUsImF0aCI6MjA2MTQ2LjY1LCJiYyI6ODQxNywic2MiOjY3ODMsInR4YyI6MTUyMDAsIm5oIjo5MTUsInQxMCI6MjAuMTk1NywiZGgiOjAsInR3Ijp0cnVlLCJ3cyI6dHJ1ZSwidGciOmZhbHNlLCJjYiI6dHJ1ZSwiZHciOiJGNVh2Q2U0MjMzbTZtSFJia2txMlpzRnZxclBBblJyREJFeGVReTJmd2FnUSIsImx2IjpmYWxzZSwibnAiOjAsImljIjpmYWxzZSwic28iOjAsImJvIjo5LjU4ODYsInBhIjoiU09MIiwiaWgiOnRydWUsInRmIjo2My4yOTQxMzc1MTUwMDE5MywidGZVc2QiOjYxNzMuNDk0MjA3ODkyMzE3fSx7Im0iOiJBaTY2TEhaRzlNQ3pnMVdLZGF3d3FkdVZBWHBORFV1VjhNM3V5cTVwcHVtcCIsImMiOiJzb2xhbmE6bWFpbm5ldCIsIm4iOiJDYXRlY29pbiIsInQiOiJDQVRFIiwiaSI6Imh0dHBzOi8vaW1hZ2VkZWxpdmVyeS5uZXQvV0wxSk9JSmlNX05BQ2hwNnJ0QjZDdy9jb2luLWltYWdlL0FpNjZMSFpHOU1DemcxV0tkYXd3cWR1VkFYcE5EVXVWOE0zdXlxNXBwdW1wIiwibWMiOjY4NTQ1MDgyLjU1Mjg5MjM2LCJ2Ijo0MDE2MzUxLjI5NjA2MzkzNDUsInZVc2QiOjMyMzIyNTcxMi43MTgxNTQ5LCJwIjoxMDAsInY1Ijo0MzguMzc2NzE0NTA3MjE4MiwidjE1Ijo5OTguMzgwNTIzNjI0MDE2OSwidjFoIjo2MjkyLjM5NDI0NDAxNDQ0LCJ2MjRoIjoyNDQ4ODUuMjIyNzMyNDI3NywidlVzZDUiOjQyODAyLjg5NjgxMzEyOTYzNSwidlVzZDE1Ijo5NzU5NC42Mzc1NzQ0NzEzMywidlVzZDFoIjo2MTQzNzkuNjY2MzM2MDQxNSwidlVzZDI0aCI6MjM0NjE0NjkuNjY1OTMwODUsInR4NSI6MzEwLCJhZ2UiOjI1MjkwNTMsImtvbCI6ODMsInNuIjo4LCJtaCI6ZmFsc2UsImhzIjpmYWxzZSwicGciOiJwdW1wIiwicGwiOiJwdW1wIiwiZ2QiOjE3ODUwODM1NjMwMDAsImF0aCI6OTYyMjk1NzAuODU4NjgwOTYsImJjIjoyMDU1MzUsInNjIjoxNDg3NzcsInR4YyI6MzU0MzEyLCJuaCI6MTQzOTk3LCJ0MTAiOjEyLjAxMzUsImRoIjowLCJ0dyI6ZmFsc2UsIndzIjpmYWxzZSwidGciOmZhbHNlLCJjYiI6dHJ1ZSwiZHciOiJEOWdRNlJoS0Vwbm9iUEJVZFdZNWJQUXQycDN6R2szaVZ6NkNocFVpMkFyQSIsImx2IjpmYWxzZSwibnAiOjAsImljIjpmYWxzZSwic28iOjAsImJvIjowLCJwYSI6IlNPTCIsImloIjp0cnVlLCJ0ZiI6OTc1Mi40NDAzNzgyODk5OSwidGZVc2QiOjk1MjAwOS43NTE5NDUwOTV9XX0=",
+        "byteLength": "4457",
+        "blobId": "sha256:21c3693d031380b247ca71fabc2304f6926308fd0fa27aef24b1487e79e1fb28"
+      }
+    }
+  ],
+  "coverageWindows": [
+    {
+      "windowId": "window:pump-api:e2eee1b3a686503e77ebf36879512e40:1787612131280199-2cb658f024713ead480e52d3bb52049b",
+      "observedFrom": "2026-08-24T22:55:31.310354Z",
+      "observedTo": "2026-08-24T22:55:31.709824Z",
+      "scope": {
+        "routeId": "board_movers",
+        "requestFingerprint": "sha256:b77388060a07c0b962ce92af6de59d06572c9eafac1227829c7d96357454199d",
+        "orderSemantics": "measured 2026-08-24: personalised recommendation board, position is not rank; envelope serverTs is a provider availability instant; limit honoured to 150 then silently clamped",
+        "cursorInFingerprint": null,
+        "pageSize": "5"
+      },
+      "acquisitionIds": [
+        "acq:pump-api:e2eee1b3a686503e77ebf36879512e40:1787612131280199-2cb658f024713ead480e52d3bb52049b"
+      ],
+      "completeness": "one_response_page_observed_feed_completion_unknown"
+    }
+  ],
+  "coverageGaps": [],
+  "completed": true
+}

@@ -95,6 +95,18 @@ const DISCOVERY_PAGE_LIMIT: u32 = 70;
 /// distinct establishment without colliding with the request-path events the per-mint taps land.
 const DISCOVERY_SOURCE_ID: &str = "joshi.keeper.discovery.v1";
 const DISCOVERY_ROWS_CONTRACT: &str = "joshi.keeper.discovery_rows.v1";
+/// The movers board is a second catalog-level feed with the same shape of consequence — every
+/// promoted row's mint becomes a durable source event — and a distinct establishment (observed
+/// on a personalised recommendation board, NOT in the neutral-ish discovery page), so it gets
+/// its own source identity exactly as discovery did.
+const MOVERS_SOURCE_ID: &str = "joshi.keeper.movers.v1";
+const MOVERS_ROWS_CONTRACT: &str = "joshi.keeper.movers_rows.v1";
+const DEFAULT_MOVERS_CADENCE_MINUTES: u64 = 5;
+/// The widest measured-honest movers ask: `limit` is honoured to 150 and then silently clamps
+/// (limit=200 and limit=500 each returned exactly 150 rows, HTTP 200, no warning — measured
+/// 2026-08-24). The keeper asks for exactly the clamp and the retained request restates it, so
+/// a short page stays provably short.
+const MOVERS_PAGE_LIMIT: u32 = 150;
 /// Cadences are minutes, not seconds: this loop spends Ember's API quota unattended.
 const MINIMUM_CADENCE_SECONDS: u64 = 60;
 // --- The hot-attention seam. ---------------------------------------------------------------
@@ -117,6 +129,12 @@ const DEFAULT_HOT_TRADES_CADENCE_MINUTES: u64 = 2;
 /// while one unrefreshed lease lives each runs once, and a refreshed lease refreshes them too.
 const DEFAULT_HOT_COIN_EXACT_CADENCE_MINUTES: u64 = 30;
 const DEFAULT_HOT_CALLOUT_TOP_CADENCE_MINUTES: u64 = 30;
+/// The community-callout window is a fixed newest-50 with no pagination (measured 2026-08-24),
+/// so cadence is what keeps rows from rolling out unobserved: 10 minutes is three reads per
+/// 30-minute hot lease, and a coin would have to print 50 callouts in 10 minutes to lose one.
+const DEFAULT_HOT_COMMUNITY_CALLOUTS_CADENCE_MINUTES: u64 = 10;
+/// Bound on the coin-communities product-key file; the key is ~67 bytes.
+const MAX_COMMUNITY_KEY_BYTES: u64 = 4 * 1024;
 /// The callout ask, exactly as the reviewed material asked it: the row-projection review's
 /// 80-mint sweep of 2026-08-23 read `/callout/top/{mint}?limit=50`. The `limit` name is
 /// catalog-declared public on this route, so the retained request restates the ask.
@@ -162,10 +180,19 @@ struct KeeperConfigFile {
     root: String,
     /// Owner-only Helius credential file for the wallet sweep. Pump product routes are free.
     key_file: Option<String>,
+    /// The coin-communities SHARED product key file — the `x-api-key` the pump.fun app bundle
+    /// ships to every visitor, extracted at use time (`grep -o 'cc_[0-9a-f]\{64\}'` over the
+    /// shipped chunks). Not a user credential: every browser sends the same value. Read at each
+    /// community tap and never rendered anywhere; required as soon as anything taps the
+    /// community-callouts route.
+    community_key_file: Option<String>,
     budgets: BudgetsSection,
     wallet: Option<WalletSection>,
     taps: TapsSection,
     discovery: Option<DiscoverySection>,
+    /// The movers-board sweep: a second catalog-level tap beside discovery, carrying the flow
+    /// field (volume/trade-count compact keys) and the provider's own `serverTs`.
+    movers: Option<MoversSection>,
     /// Opt-in hot-attention lane: when present, mints named in `<root>/hot-requests.json` (the
     /// operational file core writes on qualifying operator acts) are tapped on the fast
     /// cadences below while their TTL lives.
@@ -207,6 +234,12 @@ struct TapsSection {
     /// Required as soon as a `[hot]` section exists: a hot mint gets one `callout_top` read,
     /// and an unreviewed route may not be tapped.
     callout_top_review: Option<String>,
+    /// Required as soon as a `[movers]` section exists; a row-projection review, because movers
+    /// rows are heterogeneous exactly like discovery rows.
+    movers_review: Option<String>,
+    /// Required as soon as anything taps the community-callouts route (a `[hot]` section, or a
+    /// mint naming the `community_callouts` tap).
+    community_callouts_review: Option<String>,
     candles_interval: Option<String>,
     candles_limit: Option<u32>,
     trades_limit: Option<u32>,
@@ -220,12 +253,19 @@ struct DiscoverySection {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MoversSection {
+    cadence_minutes: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HotSection {
     max_concurrent_mints: Option<usize>,
     candles_cadence_minutes: Option<u64>,
     trades_cadence_minutes: Option<u64>,
     coin_exact_cadence_minutes: Option<u64>,
     callout_top_cadence_minutes: Option<u64>,
+    community_callouts_cadence_minutes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,6 +277,7 @@ struct MintSection {
     candles_cadence_minutes: Option<u64>,
     trades_cadence_minutes: Option<u64>,
     coin_exact_cadence_minutes: Option<u64>,
+    community_callouts_cadence_minutes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,10 +294,19 @@ enum TapKind {
     /// One page of the promoted `/coins` discovery feed per cadence, catalog-level rather than
     /// per-mint: the tap that lets NEW coins reach the catalog at all.
     Discovery,
+    /// One page of the advanced-indexer movers board per cadence, catalog-level like discovery:
+    /// the only feed in the catalog carrying per-coin windowed volume (as undecoded compact
+    /// keys, tagged inferred) and a provider-stated `serverTs`. A personalised recommendation
+    /// board — position is not rank and membership is not a census.
+    Movers,
     /// One `GET /callout/top/{mint}` per hot lease: who called this coin out and at what
     /// multiple, as the provider retrospectively scores it. Hot lane only — nothing in the
     /// standing watch set taps it.
     CalloutTop,
+    /// One coin-communities `callouts/public` read per cadence: the social counters the app
+    /// actually renders (likes/replies/followers, spam flags, mentions), for hot leases and for
+    /// configured mints. A fixed newest-50 window with no pagination — poll-or-lose.
+    CommunityCallouts,
 }
 
 impl TapKind {
@@ -267,7 +317,9 @@ impl TapKind {
             Self::Trades => "trades",
             Self::CoinExact => "coin_exact",
             Self::Discovery => "discovery",
+            Self::Movers => "movers",
             Self::CalloutTop => "callout_top",
+            Self::CommunityCallouts => "community_callouts",
         }
     }
 }
@@ -311,6 +363,15 @@ struct KeeperConfig {
     /// Present exactly when a `[hot]` section exists; validated at load to be a row-projection
     /// review for the `callout_top` route.
     callout_top_review: Option<Vec<u8>>,
+    /// Present exactly when a `[movers]` section exists; validated at load to be a
+    /// row-projection review for the `board_movers` route.
+    movers_review: Option<Vec<u8>>,
+    /// Present exactly when something taps the community-callouts route (a `[hot]` section or a
+    /// mint naming the tap); validated at load to review `community_callouts`.
+    community_callouts_review: Option<Vec<u8>>,
+    /// The coin-communities shared-product-key file; present exactly when the community tap is
+    /// configured. Read at tap time, like the Helius credential, and rendered nowhere.
+    community_key_file: Option<PathBuf>,
     /// The hot-attention lane's bounds and cadences; `None` means the keeper never reads the
     /// hot-requests file and operator focus stays durable-only.
     hot: Option<HotConfig>,
@@ -325,6 +386,7 @@ struct HotConfig {
     trades_cadence_seconds: u64,
     coin_exact_cadence_seconds: u64,
     callout_top_cadence_seconds: u64,
+    community_callouts_cadence_seconds: u64,
 }
 
 fn resolve(base: &Path, value: &str) -> PathBuf {
@@ -483,10 +545,26 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
                         cost: 1,
                     });
                 }
+                "community_callouts" => {
+                    let cadence = mint.community_callouts_cadence_minutes.ok_or_else(|| {
+                        format!(
+                            "mint {} needs community_callouts_cadence_minutes",
+                            mint.mint
+                        )
+                    })?;
+                    require_gentle_cadence("community_callouts_cadence_minutes", cadence)?;
+                    taps.push(Tap {
+                        kind: TapKind::CommunityCallouts,
+                        subject: mint.mint.clone(),
+                        label: mint.label.clone(),
+                        cadence_seconds: cadence * 60,
+                        cost: 1,
+                    });
+                }
                 other => {
                     return Err(format!(
-                        "mint {} names unknown tap {other:?}; taps are \"candles\", \"trades\" \
-                         and \"coin_exact\"",
+                        "mint {} names unknown tap {other:?}; taps are \"candles\", \"trades\", \
+                         \"coin_exact\" and \"community_callouts\"",
                         mint.mint
                     )
                     .into());
@@ -547,6 +625,40 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
     } else {
         None
     };
+    let movers_review = if let Some(movers) = &file.movers {
+        let path = file.taps.movers_review.as_deref().ok_or(
+            "a [movers] section exists but taps.movers_review is absent; \
+             movers rows may not reach the catalog ungated",
+        )?;
+        let bytes = read_bounded_file(
+            &resolve(&base, path),
+            MAX_CONFIG_BYTES,
+            "taps.movers_review",
+        )?;
+        let review = RowProjectionReviewV1::from_slice(&bytes)
+            .map_err(|error| format!("taps.movers_review does not parse: {error}"))?;
+        if review.route_id != RouteId::BoardMovers.to_string() {
+            return Err(format!(
+                "taps.movers_review reviews route {:?}, not board_movers",
+                review.route_id
+            )
+            .into());
+        }
+        let cadence = movers
+            .cadence_minutes
+            .unwrap_or(DEFAULT_MOVERS_CADENCE_MINUTES);
+        require_gentle_cadence("movers.cadence_minutes", cadence)?;
+        taps.push(Tap {
+            kind: TapKind::Movers,
+            subject: "movers".to_owned(),
+            label: None,
+            cadence_seconds: cadence * 60,
+            cost: 1,
+        });
+        Some(bytes)
+    } else {
+        None
+    };
     let (hot, callout_top_review) = if let Some(section) = &file.hot {
         let path = file.taps.callout_top_review.as_deref().ok_or(
             "a [hot] section exists but taps.callout_top_review is absent; \
@@ -591,6 +703,10 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
             .callout_top_cadence_minutes
             .unwrap_or(DEFAULT_HOT_CALLOUT_TOP_CADENCE_MINUTES);
         require_gentle_cadence("hot.callout_top_cadence_minutes", callout_top)?;
+        let community = section
+            .community_callouts_cadence_minutes
+            .unwrap_or(DEFAULT_HOT_COMMUNITY_CALLOUTS_CADENCE_MINUTES);
+        require_gentle_cadence("hot.community_callouts_cadence_minutes", community)?;
         (
             Some(HotConfig {
                 max_concurrent_mints,
@@ -598,9 +714,47 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
                 trades_cadence_seconds: trades * 60,
                 coin_exact_cadence_seconds: coin_exact * 60,
                 callout_top_cadence_seconds: callout_top * 60,
+                community_callouts_cadence_seconds: community * 60,
             }),
             Some(bytes),
         )
+    } else {
+        (None, None)
+    };
+    // Anything that would read the community-callouts route — the hot lane always does, and a
+    // mint may name the tap directly — needs both the reviewed row projection and the shared
+    // product-key file. An unreviewed route may not be tapped, and a declared route without its
+    // key would burn a request on a guaranteed 401.
+    let community_configured = file.hot.is_some()
+        || taps
+            .iter()
+            .any(|tap| tap.kind == TapKind::CommunityCallouts);
+    let (community_callouts_review, community_key_file) = if community_configured {
+        let path = file.taps.community_callouts_review.as_deref().ok_or(
+            "the community-callouts route is tapped (a [hot] section exists or a mint names \
+             the tap) but taps.community_callouts_review is absent; an unreviewed route may \
+             not be tapped",
+        )?;
+        let bytes = read_bounded_file(
+            &resolve(&base, path),
+            MAX_CONFIG_BYTES,
+            "taps.community_callouts_review",
+        )?;
+        let review = RowProjectionReviewV1::from_slice(&bytes)
+            .map_err(|error| format!("taps.community_callouts_review does not parse: {error}"))?;
+        if review.route_id != RouteId::CommunityCallouts.to_string() {
+            return Err(format!(
+                "taps.community_callouts_review reviews route {:?}, not community_callouts",
+                review.route_id
+            )
+            .into());
+        }
+        let key_path = file.community_key_file.as_deref().ok_or(
+            "the community-callouts route is tapped but community_key_file is absent; the \
+             route answers 401 without the shipped product key (extract the current one with \
+             `grep -o 'cc_[0-9a-f]\\{64\\}'` over the app bundle chunks)",
+        )?;
+        (Some(bytes), Some(resolve(&base, key_path)))
     } else {
         (None, None)
     };
@@ -644,6 +798,9 @@ fn load_config(path: &Path) -> Result<KeeperConfig, Failure> {
         coin_exact_review,
         discovery_review,
         callout_top_review,
+        movers_review,
+        community_callouts_review,
+        community_key_file,
         hot,
         taps,
     })
@@ -980,6 +1137,10 @@ fn hot_taps(leases: &[HotLease], hot: &HotConfig, configured: &[Tap]) -> Vec<Tap
             (TapKind::Trades, hot.trades_cadence_seconds),
             (TapKind::CoinExact, hot.coin_exact_cadence_seconds),
             (TapKind::CalloutTop, hot.callout_top_cadence_seconds),
+            (
+                TapKind::CommunityCallouts,
+                hot.community_callouts_cadence_seconds,
+            ),
         ] {
             if configured_at_least_as_fast(&kind, &lease.mint, cadence_seconds) {
                 continue;
@@ -1254,6 +1415,20 @@ async fn run_pump_tap(
                     "a callout_top tap ran without its review; load_config must forbid this",
                 )?,
             ),
+            TapKind::Movers => (
+                RouteId::BoardMovers,
+                config
+                    .movers_review
+                    .as_deref()
+                    .ok_or("a movers tap ran without its review; load_config must forbid this")?,
+            ),
+            TapKind::CommunityCallouts => (
+                RouteId::CommunityCallouts,
+                config.community_callouts_review.as_deref().ok_or(
+                    "a community_callouts tap ran without its review; load_config must forbid \
+                     this",
+                )?,
+            ),
             TapKind::Wallet { .. } => return Err("wallet tap dispatched to the pump path".into()),
         };
     let mut query = BTreeMap::new();
@@ -1280,9 +1455,17 @@ async fn run_pump_tap(
             query.insert("sort".to_owned(), DISCOVERY_SORT.to_owned());
             query.insert("order".to_owned(), DISCOVERY_ORDER.to_owned());
         }
-        TapKind::CoinExact | TapKind::Wallet { .. } => {}
+        TapKind::Movers => {
+            // The widest measured-honest page; `limit` is catalog-declared public, so the
+            // retained request restates the ask and the 150-clamp stays provable.
+            query.insert("limit".to_owned(), MOVERS_PAGE_LIMIT.to_string());
+        }
+        // The community window is fixed at the newest 50 whatever is asked (limit measured
+        // inert 2026-08-24), so the keeper asks plainly and sends nothing.
+        TapKind::CommunityCallouts | TapKind::CoinExact | TapKind::Wallet { .. } => {}
     }
 
+    let now = wall(OffsetDateTime::now_utc())?;
     let mut client_config = ClientConfig {
         request_budget: 1,
         // One attempt, no internal retries: backoff is the keeper's job and is durable there.
@@ -1292,8 +1475,52 @@ async fn run_pump_tap(
         ..ClientConfig::default()
     };
     client_config.enabled_routes = [route].into_iter().collect();
+    if tap.kind == TapKind::CommunityCallouts {
+        // The shared product key is read at tap time exactly like the Helius credential: never
+        // held in config memory across ticks, never rendered anywhere. An unreadable or
+        // malformed key file is a durable gap, not a doomed request.
+        let key_file = config.community_key_file.as_deref().ok_or(
+            "a community_callouts tap ran without a key file; load_config must forbid this",
+        )?;
+        let key = read_bounded_file(key_file, MAX_COMMUNITY_KEY_BYTES, "community key file")
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| "community key file is not UTF-8".to_owned())?;
+                let token = text.trim();
+                if token.is_empty() || token.contains(char::is_whitespace) {
+                    return Err("community key file must hold one non-empty token".to_owned());
+                }
+                Ok(token.to_owned())
+            });
+        match key {
+            Ok(key) => {
+                client_config
+                    .shared_product_keys
+                    .insert("https://api.coin-communities.xyz".to_owned(), key);
+            }
+            Err(detail) => {
+                let (lower, upper) = failed_tap_window(clock, now)?;
+                return Ok(TapRun {
+                    status: "failed_before_request",
+                    requests: 0,
+                    commit_seq: None,
+                    schema_trust: None,
+                    throttled: false,
+                    success: false,
+                    detail: Some(detail),
+                    gaps: vec![CycleGap {
+                        subject: Some(tap.key()),
+                        reason: "community_product_key_unavailable".to_owned(),
+                        lower,
+                        upper,
+                    }],
+                    newest_wallet_signature: None,
+                });
+            }
+        }
+    }
     let sessions: Arc<dyn SessionProvider> = Arc::new(NoSession);
-    let now = wall(OffsetDateTime::now_utc())?;
     let client = match PumpApiClient::new(client_config, identity.clone(), sessions) {
         Ok(client) => client,
         Err(error) => {
@@ -1316,9 +1543,11 @@ async fn run_pump_tap(
             });
         }
     };
-    // The catalog-level discovery route has no path subject; every per-mint route restates its
-    // mint, which the admission path binds into the durable `mint:pump:<mint>` source event.
-    let path = if tap.kind == TapKind::Discovery {
+    // The catalog-level feeds (discovery, movers) have no path subject; every per-mint route
+    // restates its mint, which the admission path binds into the durable `mint:pump:<mint>`
+    // source event — community_callouts included, since its `{mint}` is catalog-declared a
+    // public subject.
+    let path = if matches!(tap.kind, TapKind::Discovery | TapKind::Movers) {
         BTreeMap::new()
     } else {
         [("mint".to_owned(), tap.subject.clone())]
@@ -1382,25 +1611,32 @@ async fn run_pump_tap(
     let mut success = admitted.completed;
     let mut detail = None;
     let mut gaps = Vec::new();
-    if tap.kind == TapKind::Discovery && admitted.completed {
+    let rows_spec = match tap.kind {
+        TapKind::Discovery => Some(&DISCOVERY_ROWS_SPEC),
+        TapKind::Movers => Some(&MOVERS_ROWS_SPEC),
+        _ => None,
+    };
+    if let Some(spec) = rows_spec
+        && admitted.completed
+    {
         if promoted {
             // The rows only exist as a promoted projection; the follow-up batch is what turns
             // each row's mint into a durable source event the attention surface can hunt.
-            let facts = commit_discovery_row_mints(store, &admitted, review_bytes, stamp)?;
+            let facts = commit_promoted_row_mints(store, &admitted, review_bytes, stamp, spec)?;
             detail = Some(format!(
                 "rows={} distinctMints={} rowsCommitSeq={}",
                 facts.row_count, facts.distinct_mints, facts.rows_commit_seq
             ));
         } else {
             // The exact bytes and the refusal are already durable in the page batch; this gap
-            // states the *keeper-level* consequence — no discovery rows landed for this window —
-            // so an unchanging watch set stays distinguishable from an unwatched market. The row
-            // gate refuses empty pages by design: past-the-end and matched-nothing are the same
-            // two bytes on this route, so an empty page is never read as absence.
+            // states the *keeper-level* consequence — no feed rows landed for this window — so
+            // an unchanging watch set stays distinguishable from an unwatched market. The row
+            // gate refuses empty pages by design: on the discovery route past-the-end and
+            // matched-nothing are the same two bytes, so an empty page is never read as absence.
             let (lower, upper) = failed_tap_window(clock, now)?;
             gaps.push(CycleGap {
                 subject: Some(tap.key()),
-                reason: "discovery_page_refused_no_rows_landed".to_owned(),
+                reason: spec.refused_gap_reason.to_owned(),
                 lower,
                 upper,
             });
@@ -1425,25 +1661,76 @@ async fn run_pump_tap(
 }
 
 // ---------------------------------------------------------------------------
-// Discovery rows: promoted page rows become durable mint source events.
+// Catalog-level feed rows: promoted page rows become durable mint source events.
 // ---------------------------------------------------------------------------
 
-/// What the discovery follow-up batch durably stated about one promoted page.
-struct DiscoveryRowsFacts {
+/// What one feed's follow-up batch durably stated about one promoted page.
+struct FeedRowsFacts {
     row_count: usize,
     distinct_mints: usize,
     rows_commit_seq: String,
 }
 
-fn discovery_registration() -> Result<SourceRegistration, Failure> {
+/// The pinned identities of one catalog-level feed's row-mints seam. Two feeds share the exact
+/// mechanism — a promoted page's rows re-derived through the same reviewed projection that gated
+/// it, each distinct row mint a durable `solana.token_mint` source event under the feed's own
+/// source — while every durable identity stays feed-scoped, because "observed on the discovery
+/// page" and "observed on a personalised recommendation board" are different establishments.
+struct FeedRowsSpec {
+    source_id: &'static str,
+    registration_namespace: &'static str,
+    contract: &'static str,
+    /// `SourceEventId` prefix, e.g. `mint:pump-discovery:`.
+    event_prefix: &'static str,
+    event_kind: &'static str,
+    /// The row leaf carrying the mint, as the provider spells it (`mint` on /coins, `m` on the
+    /// movers board per the app's own decoder).
+    mint_field: &'static str,
+    assertion_kind: &'static str,
+    assertion_id_prefix: &'static str,
+    semantic_key_prefix: &'static str,
+    batch_id_prefix: &'static str,
+    refused_gap_reason: &'static str,
+}
+
+static DISCOVERY_ROWS_SPEC: FeedRowsSpec = FeedRowsSpec {
+    source_id: DISCOVERY_SOURCE_ID,
+    registration_namespace: "keeper_discovery",
+    contract: DISCOVERY_ROWS_CONTRACT,
+    event_prefix: "mint:pump-discovery:",
+    event_kind: "observed_in_promoted_discovery_row",
+    mint_field: "mint",
+    assertion_kind: "keeper_discovery_row_mints",
+    assertion_id_prefix: "assertion:keeper-discovery-rows:",
+    semantic_key_prefix: "keeper.discovery_rows:",
+    batch_id_prefix: "batch:keeper-discovery-rows:",
+    refused_gap_reason: "discovery_page_refused_no_rows_landed",
+};
+
+static MOVERS_ROWS_SPEC: FeedRowsSpec = FeedRowsSpec {
+    source_id: MOVERS_SOURCE_ID,
+    registration_namespace: "keeper_movers",
+    contract: MOVERS_ROWS_CONTRACT,
+    event_prefix: "mint:pump-movers:",
+    event_kind: "observed_in_promoted_movers_row",
+    mint_field: "m",
+    assertion_kind: "keeper_movers_row_mints",
+    assertion_id_prefix: "assertion:keeper-movers-rows:",
+    semantic_key_prefix: "keeper.movers_rows:",
+    batch_id_prefix: "batch:keeper-movers-rows:",
+    refused_gap_reason: "movers_page_refused_no_rows_landed",
+};
+
+fn feed_rows_registration(spec: &FeedRowsSpec) -> Result<SourceRegistration, Failure> {
     let build = env!("CARGO_PKG_VERSION");
     let material = format!(
-        "joshi.source.registration.v1\0{DISCOVERY_SOURCE_ID}\0keeper_discovery\0{DISCOVERY_ROWS_CONTRACT}\0{build}"
+        "joshi.source.registration.v1\0{}\0{}\0{}\0{build}",
+        spec.source_id, spec.registration_namespace, spec.contract
     );
     Ok(SourceRegistration {
-        source_id: SourceId::new(DISCOVERY_SOURCE_ID)?,
-        namespace: StableString::new("keeper_discovery")?,
-        contract_version: StableString::new(DISCOVERY_ROWS_CONTRACT)?,
+        source_id: SourceId::new(spec.source_id)?,
+        namespace: StableString::new(spec.registration_namespace)?,
+        contract_version: StableString::new(spec.contract)?,
         collector_build: StableString::new(build)?,
         configuration_digest: ValueDigest::new(
             Sha256Digest::of_bytes(material.as_bytes()).to_string(),
@@ -1451,18 +1738,18 @@ fn discovery_registration() -> Result<SourceRegistration, Failure> {
     })
 }
 
-/// The `mint` leaf of one promoted row, exactly as the provider spelled it. The row projection
-/// requires `$/mint:string` on every row, so a promoted row without one is an internal
-/// inconsistency worth stopping for, never a row to skip quietly.
-fn promoted_row_mint(record: &NormalizedRecord) -> Result<String, Failure> {
+/// The mint leaf of one promoted row, exactly as the provider spelled it. The row projection
+/// requires the leaf on every row, so a promoted row without one is an internal inconsistency
+/// worth stopping for, never a row to skip quietly.
+fn promoted_row_mint(record: &NormalizedRecord, mint_field: &str) -> Result<String, Failure> {
     record
         .fields
         .iter()
-        .find(|field| field.field == "mint" && field.encoding == "utf8")
+        .find(|field| field.field == mint_field && field.encoding == "utf8")
         .and_then(|field| field.value.clone())
         .ok_or_else(|| {
             format!(
-                "promoted discovery row {} carries no utf8 mint leaf; \
+                "promoted feed row {} carries no utf8 {mint_field} leaf; \
                  the row projection requires one",
                 record.ordinal
             )
@@ -1481,27 +1768,33 @@ struct AssertionValueMaterialV1<'a> {
     extension: &'a serde_json::Value,
 }
 
-/// Commit one follow-up batch for a promoted discovery page: one durable source event per
-/// distinct row mint, plus one assertion binding those events to the exact retained page body.
+/// Commit one follow-up batch for a promoted catalog-level feed page: one durable source event
+/// per distinct row mint, plus one assertion binding those events to the exact retained page
+/// body.
 ///
 /// The mints are re-derived through the same promoted row projection that gated the page — the
 /// review the config named, over the acquisition the admission just committed — so nothing here
-/// is read from anywhere the gate did not certify. Event identities are
-/// `mint:pump-discovery:<mint>` under the keeper's own discovery source: the store holds one
-/// event per (source, namespace, natural key), and `mint:pump:<mint>` already belongs to the
-/// pump product source with the `named_in_request_path` establishment, which would be a lie
-/// here. Convergence with the census (`mint:<mint>`) and the per-mint taps happens on the shared
-/// `solana.token_mint` namespace and the natural key itself, exactly as those sources converge
-/// with each other.
+/// is read from anywhere the gate did not certify. Event identities are feed-scoped
+/// (`mint:pump-discovery:<mint>`, `mint:pump-movers:<mint>`) under the keeper's own feed
+/// sources: the store holds one event per (source, namespace, natural key), and
+/// `mint:pump:<mint>` already belongs to the pump product source with the
+/// `named_in_request_path` establishment, which would be a lie here. Convergence with the census
+/// (`mint:<mint>`) and the per-mint taps happens on the shared `solana.token_mint` namespace and
+/// the natural key itself, exactly as those sources converge with each other.
+///
+/// The movers envelope's provider-stated `serverTs` is deliberately NOT read here: this walk
+/// consumes only rows the gate certified, and the envelope sits outside the row projection. The
+/// instant stays in the retained exact bytes for a reviewed envelope projection to earn later.
 #[allow(clippy::too_many_lines)] // The whole rows-to-durable-events walk is one auditable piece.
-fn commit_discovery_row_mints(
+fn commit_promoted_row_mints(
     store: &mut SqliteStore,
     admitted: &AdmittedPumpRead,
     review_bytes: &[u8],
     stamp: CycleStamp<'_>,
-) -> Result<DiscoveryRowsFacts, Failure> {
+    spec: &FeedRowsSpec,
+) -> Result<FeedRowsFacts, Failure> {
     let review = RowProjectionReviewV1::from_slice(review_bytes)
-        .map_err(|error| format!("discovery review failed to re-parse: {error}"))?;
+        .map_err(|error| format!("feed row review failed to re-parse: {error}"))?;
     let acquisition = &admitted.prepared.acquisition;
     let normalization = normalize_with_row_projection(acquisition, &review);
     if normalization.disposition != "accepted_provider_assertions" {
@@ -1519,15 +1812,15 @@ fn commit_discovery_row_mints(
     let row_mints = normalization
         .records
         .iter()
-        .map(promoted_row_mint)
+        .map(|record| promoted_row_mint(record, spec.mint_field))
         .collect::<Result<Vec<_>, _>>()?;
     let distinct: std::collections::BTreeSet<&String> = row_mints.iter().collect();
 
-    let source_id = SourceId::new(DISCOVERY_SOURCE_ID)?;
+    let source_id = SourceId::new(spec.source_id)?;
     let mut events = Vec::with_capacity(distinct.len());
     let mut links = Vec::with_capacity(distinct.len());
     for mint in &distinct {
-        let event_id = SourceEventId::new(format!("mint:pump-discovery:{mint}"))?;
+        let event_id = SourceEventId::new(format!("{}{mint}", spec.event_prefix))?;
         events.push(SourceEventRecord {
             source_event_id: event_id.clone(),
             source_id: source_id.clone(),
@@ -1535,8 +1828,10 @@ fn commit_discovery_row_mints(
             natural_key: StableString::new((*mint).clone())?,
             source_order_key: None,
             // The establishment, and nothing stronger: this mint appeared in a promoted row of
-            // one discovery page. Not a launch, not a trade, not a holding, not a price.
-            event_kind: OpenVariant::known("observed_in_promoted_discovery_row")?,
+            // one feed page. Not a launch, not a trade, not a holding, not a price — and on the
+            // movers board, not even a neutral listing: the feed is a personalised
+            // recommendation.
+            event_kind: OpenVariant::known(spec.event_kind)?,
         });
         links.push(AssertionSourceEvent {
             source_event_id: event_id,
@@ -1548,14 +1843,14 @@ fn commit_discovery_row_mints(
         .clocks
         .received_at
         .parse()
-        .map_err(|_| "discovery acquisition carries an invalid receive clock")?;
+        .map_err(|_| "feed acquisition carries an invalid receive clock")?;
     let upper = received_at
         .as_datetime()
         .checked_add(time::Duration::microseconds(1))
         .and_then(|value| UtcTimestamp::new(value).ok())
-        .ok_or("discovery observation instant interval overflows")?;
+        .ok_or("feed observation instant interval overflows")?;
     let extension = json!({
-        "contract": DISCOVERY_ROWS_CONTRACT,
+        "contract": spec.contract,
         "acquisitionId": acquisition.acquisition_id,
         "routeId": acquisition.route_id,
         "pageCommitSeq": admitted.receipt.commit_seq,
@@ -1568,7 +1863,7 @@ fn commit_discovery_row_mints(
         // above is a projection of this list, never the other way around.
         "mints": row_mints,
     });
-    let assertion_kind = OpenVariant::known("keeper_discovery_row_mints")?;
+    let assertion_kind = OpenVariant::known(spec.assertion_kind)?;
     let producer = StableString::new("joshi-collector-keeper")?;
     let producer_version = StableString::new(env!("CARGO_PKG_VERSION"))?;
     let digest = Sha256Digest::of_bytes(&serde_json::to_vec(&AssertionValueMaterialV1 {
@@ -1583,8 +1878,8 @@ fn commit_discovery_row_mints(
         .acquisition_id
         .trim_start_matches("acq:pump-api:");
     let assertion = AssertionDraft {
-        assertion_id: AssertionId::new(format!("assertion:keeper-discovery-rows:{page_key}"))?,
-        semantic_key: StableString::new(format!("keeper.discovery_rows:{page_key}"))?,
+        assertion_id: AssertionId::new(format!("{}{page_key}", spec.assertion_id_prefix))?,
+        semantic_key: StableString::new(format!("{}{page_key}", spec.semantic_key_prefix))?,
         assertion_kind,
         producer,
         producer_version,
@@ -1609,11 +1904,11 @@ fn commit_discovery_row_mints(
         extension,
     };
     let batch = source_drafts(SourceDraftBatch {
-        batch_id: StableString::new(format!("batch:keeper-discovery-rows:{page_key}"))?,
+        batch_id: StableString::new(format!("{}{page_key}", spec.batch_id_prefix))?,
         drafts: vec![EvidenceDraft::Assertion(assertion)],
         source_events: events,
         cursor_advances: Vec::new(),
-        registrations: vec![discovery_registration()?],
+        registrations: vec![feed_rows_registration(spec)?],
         policy: AdmissionPolicy::public_source()?,
         committed_at,
         writer_clock_id: StableString::new(stamp.clock_id)?,
@@ -1621,7 +1916,7 @@ fn commit_discovery_row_mints(
         writer_build: StableString::new(env!("CARGO_PKG_VERSION"))?,
     })?;
     let receipt = batch.commit(store)?;
-    Ok(DiscoveryRowsFacts {
+    Ok(FeedRowsFacts {
         row_count: row_mints.len(),
         distinct_mints: distinct.len(),
         rows_commit_seq: receipt.commit_seq,
@@ -2427,7 +2722,9 @@ impl Keeper {
                 | TapKind::Trades
                 | TapKind::CoinExact
                 | TapKind::Discovery
-                | TapKind::CalloutTop => {
+                | TapKind::Movers
+                | TapKind::CalloutTop
+                | TapKind::CommunityCallouts => {
                     run_pump_tap(
                         tap,
                         &self.config,
@@ -2629,6 +2926,13 @@ mod tests {
                     .iter()
                     .any(|tap| tap.kind == TapKind::CoinExact && tap.subject == mint)
             );
+            assert!(
+                config
+                    .taps
+                    .iter()
+                    .any(|tap| tap.kind == TapKind::CommunityCallouts && tap.subject == mint),
+                "both watched mints keep their social counters"
+            );
         }
         assert_eq!(
             config
@@ -2638,6 +2942,15 @@ mod tests {
                 .count(),
             1,
             "exactly one catalog-level discovery sweep"
+        );
+        assert_eq!(
+            config
+                .taps
+                .iter()
+                .filter(|tap| tap.kind == TapKind::Movers)
+                .count(),
+            1,
+            "exactly one catalog-level movers sweep"
         );
         for tap in &config.taps {
             assert!(
@@ -2663,7 +2976,8 @@ mod tests {
         assert_eq!(hot.trades_cadence_seconds, 120);
         assert_eq!(hot.coin_exact_cadence_seconds, 1_800);
         assert_eq!(hot.callout_top_cadence_seconds, 1_800);
-        let hot_worst = u32::try_from(hot.max_concurrent_mints).expect("small") * 4;
+        assert_eq!(hot.community_callouts_cadence_seconds, 600);
+        let hot_worst = u32::try_from(hot.max_concurrent_mints).expect("small") * 5;
         assert!(
             coincident + hot_worst <= config.per_cycle_requests,
             "per_cycle_requests {} cannot afford the coincident schedule plus a full hot lane \
@@ -2675,6 +2989,9 @@ mod tests {
         assert!(config.coin_exact_review.is_some());
         assert!(config.discovery_review.is_some());
         assert!(config.callout_top_review.is_some());
+        assert!(config.movers_review.is_some());
+        assert!(config.community_callouts_review.is_some());
+        assert!(config.community_key_file.is_some());
     }
 
     #[test]
@@ -2895,7 +3212,7 @@ mod tests {
 
     /// Hot taps take a mint's clock keys only where they are faster than the standing watch
     /// set, so DREGG's 5-minute trades keep their cadence while its candles accelerate, and a
-    /// discovery-only mint gets all four hot taps.
+    /// discovery-only mint gets all five hot taps.
     #[test]
     fn hot_taps_take_over_only_where_they_are_faster() {
         let hot = HotConfig {
@@ -2904,6 +3221,7 @@ mod tests {
             trades_cadence_seconds: 120,
             coin_exact_cadence_seconds: 1_800,
             callout_top_cadence_seconds: 1_800,
+            community_callouts_cadence_seconds: 600,
         };
         let watched = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump";
         let unwatched = "GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump";
@@ -2938,13 +3256,21 @@ mod tests {
         let synthesized = hot_taps(&[lease(watched), lease(unwatched)], &hot, &configured);
         let keys: Vec<String> = synthesized.iter().map(Tap::key).collect();
         // Watched mint: candles accelerate (600s -> 120s), trades stay configured (60s is
-        // already faster), coin_exact stays configured (600s beats 1800s), callout_top is new.
+        // already faster), coin_exact stays configured (600s beats 1800s), callout_top and
+        // community_callouts are new.
         assert!(keys.contains(&format!("candles:{watched}")));
         assert!(!keys.contains(&format!("trades:{watched}")));
         assert!(!keys.contains(&format!("coin_exact:{watched}")));
         assert!(keys.contains(&format!("callout_top:{watched}")));
-        // Unwatched mint: all four.
-        for kind in ["candles", "trades", "coin_exact", "callout_top"] {
+        assert!(keys.contains(&format!("community_callouts:{watched}")));
+        // Unwatched mint: all five.
+        for kind in [
+            "candles",
+            "trades",
+            "coin_exact",
+            "callout_top",
+            "community_callouts",
+        ] {
             assert!(keys.contains(&format!("{kind}:{unwatched}")));
         }
         let effective = effective_taps(&configured, &synthesized);
@@ -3253,7 +3579,7 @@ mod tests {
             SchemaTrustOutcome::Promoted,
             "the fixture page must promote under its own review"
         );
-        let facts = commit_discovery_row_mints(
+        let facts = commit_promoted_row_mints(
             &mut store,
             &admitted,
             &review_bytes,
@@ -3263,6 +3589,7 @@ mod tests {
                 clock_id: "clock-test",
                 process_start: Instant::now(),
             },
+            &DISCOVERY_ROWS_SPEC,
         )
         .expect("row mints commit");
         assert_eq!(facts.row_count, 3, "the fixture page carries three rows");
@@ -3372,6 +3699,148 @@ mod tests {
         );
     }
 
+    /// A live-captured movers page (limit=5, 2026-08-24) promotes under its reviewed row
+    /// projection through the shared admission path, and the follow-up batch lands every row's
+    /// `m` mint as a durable `solana.token_mint` source event under the keeper's own movers
+    /// source — establishment `observed_in_promoted_movers_row`, distinct on purpose from both
+    /// discovery's row events and the request-path events, because "recommended to us on a
+    /// personalised board" is its own claim.
+    #[test]
+    fn a_promoted_movers_page_lands_every_row_mint_as_a_durable_source_event() {
+        let outcome_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/board_movers_live_outcome_v1.json",
+        ))
+        .expect("movers fixture");
+        let review_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/row_projection_board_movers_v1.json",
+        ))
+        .expect("movers row projection");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut store = SqliteStore::open(
+            keeper_store_config(dir.path()).expect("store config"),
+            StoreMode::SingleWriter,
+        )
+        .expect("store opens");
+        store
+            .migrate(wall(OffsetDateTime::now_utc()).expect("clock"))
+            .expect("migrations");
+        let admitted =
+            admit_pump_outcome_bytes(&mut store, &outcome_bytes, &review_bytes, Instant::now())
+                .expect("movers fixture admits");
+        assert!(admitted.completed);
+        assert_eq!(
+            admitted.prepared.decision.outcome,
+            SchemaTrustOutcome::Promoted,
+            "the fixture page must promote under its own review"
+        );
+        assert!(
+            admitted
+                .prepared
+                .prepared
+                .admission_batch()
+                .store
+                .evidence
+                .source_events
+                .is_empty(),
+            "the movers request names no path subject, so the admission binds no mint"
+        );
+        let facts = commit_promoted_row_mints(
+            &mut store,
+            &admitted,
+            &review_bytes,
+            CycleStamp {
+                run_tag: "keeper-test",
+                ordinal: 1,
+                clock_id: "clock-test",
+                process_start: Instant::now(),
+            },
+            &MOVERS_ROWS_SPEC,
+        )
+        .expect("movers row mints commit");
+        assert_eq!(facts.row_count, 5, "the fixture page carries five rows");
+        assert_eq!(facts.distinct_mints, 5);
+        drop(store);
+        let connection = Connection::open_with_flags(
+            dir.path().join("catalog/catalog.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .expect("read-only reopen");
+        let events: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM source_event JOIN source_event_contract
+                 USING (source_event_id)
+                 WHERE event_namespace='solana.token_mint' AND source_id=?1
+                   AND source_event_id LIKE 'mint:pump-movers:%'
+                   AND event_kind='observed_in_promoted_movers_row'",
+                [MOVERS_SOURCE_ID],
+                |row| row.get(0),
+            )
+            .expect("events");
+        assert_eq!(events, 5);
+    }
+
+    /// A live-captured coin-communities callouts read (DREGG, 2026-08-24, 4 rows) promotes
+    /// under its reviewed row projection through the shared admission path, its envelope states
+    /// `shared_product_key` (the shipped bundle key was sent; the key itself appears nowhere),
+    /// and — because the catalog declares this route's `{mint}` a public subject — the
+    /// request-path mint lands as the shared `mint:pump:<mint>` source event, exactly like a
+    /// `callout_top` read.
+    #[test]
+    fn a_captured_community_callouts_outcome_promotes_and_binds_its_request_mint() {
+        let outcome_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/community_callouts_live_outcome_v1.json",
+        ))
+        .expect("community_callouts fixture");
+        let review_bytes = fs::read(repo_path(
+            "crates/joshi-pump-api/fixtures/row_projection_community_callouts_v1.json",
+        ))
+        .expect("community_callouts row projection");
+        assert!(
+            !String::from_utf8_lossy(&outcome_bytes).contains("cc_"),
+            "no product-key material may ever ride in a retained envelope"
+        );
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut store = SqliteStore::open(
+            keeper_store_config(dir.path()).expect("store config"),
+            StoreMode::SingleWriter,
+        )
+        .expect("store opens");
+        store
+            .migrate(wall(OffsetDateTime::now_utc()).expect("clock"))
+            .expect("migrations");
+        let admitted =
+            admit_pump_outcome_bytes(&mut store, &outcome_bytes, &review_bytes, Instant::now())
+                .expect("community_callouts admits");
+        assert!(admitted.completed);
+        assert_eq!(
+            admitted.prepared.decision.outcome,
+            SchemaTrustOutcome::Promoted
+        );
+        let outcome: FetchOutcome = serde_json::from_slice(&outcome_bytes).expect("fixture parses");
+        assert_eq!(
+            outcome.attempts.last().expect("attempt").session_class,
+            "shared_product_key",
+            "the envelope states that the shipped key was sent, without the key"
+        );
+        let events = &admitted
+            .prepared
+            .prepared
+            .admission_batch()
+            .store
+            .evidence
+            .source_events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].source_event_id.as_str(),
+            "mint:pump:XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+        );
+        assert_eq!(events[0].namespace.as_str(), "solana.token_mint");
+        assert_eq!(
+            events[0].event_kind.discriminator.as_str(),
+            "named_in_request_path"
+        );
+    }
+
     /// The same mint re-observed by a later sweep re-states an identical source event, and the
     /// store treats the restatement as idempotent rather than a conflict.
     #[test]
@@ -3411,7 +3880,7 @@ mod tests {
                 cursor_advances: Vec::new(),
                 registrations: vec![
                     keeper_registration().expect("registration"),
-                    discovery_registration().expect("discovery registration"),
+                    feed_rows_registration(&DISCOVERY_ROWS_SPEC).expect("discovery registration"),
                 ],
                 policy: AdmissionPolicy::public_source().expect("policy"),
                 committed_at: now,
@@ -3569,6 +4038,9 @@ mod tests {
             coin_exact_review: None,
             discovery_review: None,
             callout_top_review: None,
+            movers_review: None,
+            community_callouts_review: None,
+            community_key_file: None,
             hot: None,
             taps: Vec::new(),
         }

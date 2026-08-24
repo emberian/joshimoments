@@ -22,7 +22,7 @@ use crate::model::{
 };
 use crate::{ROUTE_CATALOG, SOURCE_CONTRACT};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ClientConfig {
     pub enabled_routes: BTreeSet<RouteId>,
     pub request_budget: usize,
@@ -32,6 +32,36 @@ pub struct ClientConfig {
     pub maximum_attempts: usize,
     pub maximum_backoff: Duration,
     pub user_agent: String,
+    /// Shared PRODUCT keys by origin, for the routes whose catalog entry declares a
+    /// [`RouteSpec::shared_product_key_header`]. These are the provider's own
+    /// shipped-to-every-visitor keys (coin-communities' `x-api-key`), not user credentials: the
+    /// operator supplies the current value at run time and it never lands in an envelope, a
+    /// fixture, or a log — the envelope's `session_class` says `shared_product_key` and no more.
+    /// A declared route with no key here refuses before any I/O.
+    pub shared_product_keys: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientConfig")
+            .field("enabled_routes", &self.enabled_routes)
+            .field("request_budget", &self.request_budget)
+            .field("response_limit_bytes", &self.response_limit_bytes)
+            .field("request_timeout", &self.request_timeout)
+            .field("minimum_host_interval", &self.minimum_host_interval)
+            .field("maximum_attempts", &self.maximum_attempts)
+            .field("maximum_backoff", &self.maximum_backoff)
+            .field("user_agent", &self.user_agent)
+            .field(
+                "shared_product_keys",
+                &format!(
+                    "[{} origin(s), values withheld]",
+                    self.shared_product_keys.len()
+                ),
+            )
+            .finish()
+    }
 }
 
 impl Default for ClientConfig {
@@ -51,6 +81,7 @@ impl Default for ClientConfig {
             maximum_attempts: 3,
             maximum_backoff: Duration::from_secs(30),
             user_agent: "joshi-pump-api/0.1 read-only personal accessibility client".to_owned(),
+            shared_product_keys: BTreeMap::new(),
         }
     }
 }
@@ -67,6 +98,12 @@ pub enum PumpApiError {
     MissingPathParameter { route: String, name: String },
     #[error("query parameter {name:?} is not allowlisted for route {route}")]
     QueryNotAllowed { route: String, name: String },
+    #[error(
+        "route {0} needs the provider's shared product key and no key is configured for its \
+         origin; extract the current one from the app bundle (grep -o 'cc_[0-9a-f]{{64}}') and \
+         supply it via ClientConfig::shared_product_keys"
+    )]
+    SharedProductKeyMissing(String),
     #[error("request budget exhausted before route {0}")]
     RequestBudget(String),
     #[error("invalid source URL or header: {0}")]
@@ -163,8 +200,33 @@ impl PumpApiClient {
         } else {
             None
         };
+        // A catalog-declared shared product key is resolved before any I/O: a declared route with
+        // no configured key is a typed refusal, never a doomed request. The value is attached as
+        // the declared header and appears nowhere else; the envelope's session_class states that
+        // the key was sent without stating the key.
+        let shared_key = match spec.shared_product_key_header() {
+            Some(header) => {
+                let value = self
+                    .config
+                    .shared_product_keys
+                    .get(spec.origin)
+                    .ok_or_else(|| PumpApiError::SharedProductKeyMissing(spec.id.to_string()))?;
+                let name = HeaderName::from_bytes(header.as_bytes())
+                    .map_err(|error| PumpApiError::InvalidRequest(error.to_string()))?;
+                let value = HeaderValue::from_str(value)
+                    .map_err(|error| PumpApiError::InvalidRequest(error.to_string()))?;
+                Some((name, value))
+            }
+            None => None,
+        };
         let session_class = session.as_ref().map_or_else(
-            || "public".to_owned(),
+            || {
+                if shared_key.is_some() {
+                    "shared_product_key".to_owned()
+                } else {
+                    "public".to_owned()
+                }
+            },
             |material| format!("authenticated:{}", sha256(material.class().as_bytes())),
         );
         if !self.try_consume_request_budget() {
@@ -210,6 +272,9 @@ impl PumpApiClient {
                 .header(ACCEPT, "application/json")
                 .header(ACCEPT_ENCODING, "identity")
                 .header(USER_AGENT, self.config.user_agent.as_str());
+            if let Some((name, value)) = shared_key.as_ref() {
+                builder = builder.header(name.clone(), value.clone());
+            }
             if let Some(material) = session.as_ref() {
                 if let Some(bearer) = material.bearer_secret() {
                     let value = HeaderValue::from_str(&format!("Bearer {bearer}"))

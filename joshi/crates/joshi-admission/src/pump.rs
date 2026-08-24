@@ -315,10 +315,15 @@ fn mint_source_event(
 }
 
 fn requires_private_retention(access_class: AccessClass, session_class: &str) -> bool {
+    // `shared_product_key` is the provider's own shipped-to-every-visitor product key
+    // (coin-communities' x-api-key): every browser sends the same value, it identifies the
+    // product rather than a person, and the key itself never reaches an envelope — so a read
+    // made with it carries nothing of Ember's and retains as public, exactly like a bare
+    // anonymous read.
     !matches!(
         access_class,
         AccessClass::OfficiallyDescribedPublic | AccessClass::ObservedPublicProduct
-    ) || !matches!(session_class, "none" | "public")
+    ) || !matches!(session_class, "none" | "public" | "shared_product_key")
 }
 
 /// Acknowledge pre-I/O occurrence reservations after an exact durable receipt.
@@ -512,10 +517,18 @@ mod tests {
             AccessClass::ObservedPublicProduct,
             "none"
         ));
+        assert!(
+            !requires_private_retention(AccessClass::ObservedPublicProduct, "shared_product_key"),
+            "the shipped product key is not a user credential; reads made with it are public"
+        );
         assert!(requires_private_retention(
             AccessClass::AuthenticatedUserSession,
             "authenticated:fixture"
         ));
+        assert!(
+            requires_private_retention(AccessClass::AuthenticatedUserSession, "shared_product_key"),
+            "a shared key never launders a session route into public retention"
+        );
         assert!(requires_private_retention(
             AccessClass::ObservedPublicProduct,
             "authenticated:fixture"

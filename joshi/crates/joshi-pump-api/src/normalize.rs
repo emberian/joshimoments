@@ -316,11 +316,21 @@ pub(crate) fn records(
         RouteId::CalloutLeaderboard => nested_array(root, &["callouts"]),
         RouteId::BalanceTokens => nested_array(root, &["tokens", "data"]),
         RouteId::CommunityMessages => nested_array(root, &["messages", "data"]),
+        // Measured live 2026-08-24 on the real coin-communities host (two mints, four reads):
+        // the envelope is {"callouts":[...]}, so the predicted key was right and is now a
+        // measurement.
         RouteId::CommunityCallouts => nested_array(root, &["callouts", "data"]),
+        // Measured live 2026-08-24 over five reads: {"board","version","serverTs","entries":[…]}.
+        // The envelope's provider-stated `serverTs` stays in the retained exact bytes — rows are
+        // what this reader yields and what the row gate certifies.
+        RouteId::BoardMovers => nested_array(root, &["entries"]),
         RouteId::LiveChat => Ok(Vec::new()),
-        RouteId::CoinExact | RouteId::SolPrice | RouteId::BalanceSummary | RouteId::UserProfile => {
-            Ok(vec![root.to_owned()])
-        }
+        // in_memory_coin measured live 2026-08-24 against two mints: one bare state object.
+        RouteId::CoinExact
+        | RouteId::SolPrice
+        | RouteId::BalanceSummary
+        | RouteId::UserProfile
+        | RouteId::InMemoryCoin => Ok(vec![root.to_owned()]),
     }
 }
 
@@ -405,15 +415,10 @@ pub(crate) fn extracted_fields(route: RouteId) -> &'static [&'static str] {
 }
 
 #[allow(clippy::too_many_lines)]
-// Auditable field policy is intentionally centralized by route.
-// The measured callout arm and the never-called CommunityCallouts arm coincide today, and that
-// coincidence is empirical rather than structural: one list came from live bytes, the other is a
-// prediction awaiting its first call. Merging them (what the lint wants) would couple them so a
-// future re-measurement of one silently rewrites the other.
-#[expect(
-    clippy::match_same_arms,
-    reason = "identical bodies are separate measurements"
-)]
+// Auditable field policy is intentionally centralized by route. (Until 2026-08-24 the
+// CommunityCallouts arm was a prediction that coincided with the measured callout arm; the live
+// measurement replaced it with the real, entirely different row shape, which is exactly why the
+// two were never merged.)
 fn allowed_fields(route: RouteId) -> &'static [&'static str] {
     match route {
         // Every name below was seen in a live 2026-08-22 body on at least one of these four
@@ -556,32 +561,96 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "onePointTwoXPercent",
             "averageTimeToPeak",
         ],
-        // The same names under a route NOTHING has ever called. It is a separate arm so that a
-        // later reader cannot mistake this list for a measurement: `profile-api.pump.fun` is a
-        // different host behind a different session class, and its callout rows have never been
-        // seen. The first live call must re-measure this before anything believes a field of it.
+        // MEASURED 2026-08-24 over 154 rows from two mints on the real host,
+        // api.coin-communities.xyz (the earlier list here was a prediction copied from the
+        // frontend-api callout routes, and the real rows share almost nothing with it). Every
+        // name below was present on every row measured; extraction is presence-filtered anyway.
+        //
+        // Deliberately NOT extracted, all still in the retained exact bytes: `content`
+        // (untrusted free text, the one thing a caller controls), `username`/`displayName`
+        // (user content), `mediaUrl`/`profileImageUrl`/`userTwitterUrl` (media/URLs), `liked`
+        // (relative to a viewer this keyless client deliberately is not), and
+        // `mentions`/`mentionedUserIds` (arrays, never scalars — the mention graph stays whole
+        // in the bytes for a later reviewed projection).
         RouteId::CommunityCallouts => &[
-            "calloutId",
+            "id",
+            "communityId",
+            "businessId",
             "userId",
-            "user_uuid",
-            "coinMint",
+            "walletAddress",
+            "tokenAddress",
             "createdAt",
             "calloutPrice",
-            "calloutPriceUsd",
-            "marketCap",
-            "multiple",
-            "maxPriceSol",
-            "maxPriceUsd",
+            "calloutMarketCap",
+            "multiplier",
             "maxMultiplier",
             "maxMultiplierAt",
-            "peakTimestamp",
-            "likes",
-            "viewCount",
-            "commentCount",
+            "likeCount",
             "replyCount",
-            "repostCount",
-            "quoteCount",
-            "updateCount",
+            "followerCount",
+            "isSpam",
+            "isHarmful",
+            "deletedAt",
+            "deletedReason",
+            "source",
+        ],
+        // MEASURED 2026-08-24 over 525 rows / five reads of /boards/movers. Two tiers, and the
+        // tier is the point:
+        //
+        //   * app-decoded — the shipped decoder itself maps m/n/t/mc/age/gd/dw/pl/lv/ic/ms, so
+        //     those meanings are the provider's own;
+        //   * name-inferred — the volume family (v, v5, v15, v1h, v24h and the vUsd twins), the
+        //     trade counts (tx5, txc) and bonding progress (p) appear on every row and are
+        //     decoded by NOTHING in the app. Their meanings are inferred from the names, the
+        //     semantics tag says exactly that, and nothing downstream may treat them as
+        //     measured quantities until a stability check pins them. They are extracted under
+        //     their WIRE names — never renamed — because renaming an undecoded field is how a
+        //     fabricated number gets born.
+        //
+        // Deliberately NOT extracted: i/desc/vid (media and free text), rid (a recommendation
+        // id — the personalisation artifact stays in the bytes as evidence the board is a
+        // recommendation feed), and the wholly undecoded remainder (bc c cb dh hs ih kol mh nh
+        // np pa pg sc sn so t10 tf tfUsd tg tw ws), which stays byte-retained and unread until
+        // someone reviews what any of it means.
+        RouteId::BoardMovers => &[
+            "m", "n", "t", "mc", "age", "gd", "dw", "pl", "lv", "ic", "ms", "p", "v", "v5", "v15",
+            "v1h", "v24h", "vUsd", "vUsd5", "vUsd15", "vUsd1h", "vUsd24h", "tx5", "txc",
+        ],
+        // MEASURED 2026-08-24 against two mints, identical 69-key sets. The extraction takes
+        // identity, the flow/holder numbers no frontend-api coin route carries, and state
+        // flags; the fee/tip family, media, free text and the `_`-prefixed provider cache
+        // internals stay byte-retained and unread.
+        RouteId::InMemoryCoin => &[
+            "mint",
+            "name",
+            "ticker",
+            "dev",
+            "program",
+            "platform",
+            "chain",
+            "pair",
+            "quoteMint",
+            "creationTime",
+            "graduationDate",
+            "marketCapUsd",
+            "athMarketCapUsd",
+            "currentMarketPrice",
+            "volumeSol",
+            "volumeUsd",
+            "buyCount",
+            "sellCount",
+            "txCount",
+            "numHolders",
+            "top10HoldersPercent",
+            "devHoldingsPercent",
+            "sniperCount",
+            "snipersOwnedPercent",
+            "progress",
+            "coinCreatedSupply",
+            "isCurrentlyLive",
+            "isBanned",
+            "isNsfw",
+            "mayhemState",
         ],
         RouteId::UserSearch | RouteId::UserProfile | RouteId::Following => &[
             "address",
@@ -721,6 +790,73 @@ fn callout_semantics(route: RouteId, field: &str) -> Option<&'static str> {
     })
 }
 
+/// What a coin-communities callout leaf means, MEASURED 2026-08-24 on the real host over two
+/// mints and four reads — and deliberately a separate table from [`callout_semantics`], because
+/// the two callout surfaces state the same events in DIFFERENT clock encodings.
+///
+/// THE CLOCK. `createdAt` and `maxMultiplierAt` here are ISO-8601 UTC strings with MICROSECOND
+/// precision (`2026-08-24T21:45:30.638480Z`), while /callout/top and /callout/list state the
+/// same occurrence in epoch MILLISECONDS. Same event family, two hosts, two encodings: the tag
+/// names the clock so a join has to normalise out loud, never silently. Both remain OCCURRENCE
+/// times; nothing on this route states when the provider learned of a callout.
+///
+/// THE PRICES. `calloutPrice`/`calloutMarketCap` are USD-denominated JSON numbers, and two reads
+/// 3 s apart were BYTE-IDENTICAL — the /callout/list SOL trap (SOL numbers recomputed at read
+/// time) does not reproduce here, consistent with a materialised view.
+///
+/// THE COUNTERS. likeCount/replyCount/followerCount are the social counters the app renders.
+/// Byte-identical reads mean it is unmeasured whether they are as-of-the-callout or
+/// as-of-view-refresh, so the tag refuses to pick.
+fn community_callout_semantics(route: RouteId, field: &str) -> Option<&'static str> {
+    if route != RouteId::CommunityCallouts {
+        return None;
+    }
+    Some(match field {
+        "createdAt" => "callout_occurrence_time_iso8601_micros_utc_no_availability_time_exists",
+        "maxMultiplierAt" => "retrospective_peak_time_iso8601_micros_utc_as_of_view",
+        "calloutPrice" => "callout_usd_price_as_of_the_callout_event",
+        "calloutMarketCap" => "callout_usd_market_cap_as_of_the_callout_event",
+        "likeCount" | "replyCount" | "followerCount" => {
+            "provider_social_counter_unknown_whether_as_of_callout_or_view_refresh"
+        }
+        "isSpam" | "isHarmful" | "deletedReason" => "provider_moderation_assertion",
+        "deletedAt" => "provider_moderation_time_observed_only_null",
+        "multiplier" => "current_multiple_as_of_view_never_pre_event_feature",
+        _ => return None,
+    })
+}
+
+/// What a movers-board leaf means, split by who decoded it — MEASURED 2026-08-24 in the sense
+/// that the mapping below is read out of the app's own shipped decoder, not observed behaviour.
+///
+/// The volume family, trade counts and progress are decoded by NOTHING in the app: their tags
+/// say `inferred_from_name` so the inference travels with every value and no downstream reader
+/// can mistake it for a measured quantity. `age` is a DURATION (seconds since creation — the
+/// decoder computes `Date.now() - age*1000`), not an instant, which is exactly the kind of fact
+/// that silently fabricates a timestamp when lost.
+fn movers_semantics(route: RouteId, field: &str) -> Option<&'static str> {
+    if route != RouteId::BoardMovers {
+        return None;
+    }
+    Some(match field {
+        "m" | "dw" => "provider_identifier",
+        "mc" => "provider_usd_market_cap_assertion_per_app_decoder",
+        "age" => "provider_age_seconds_duration_not_an_instant_per_app_decoder",
+        "gd" => "provider_graduation_marker_complete_iff_positive_per_app_decoder",
+        "pl" => "provider_execution_venue",
+        "ms" => "provider_mayhem_state_per_app_decoder",
+        "v" | "v5" | "v15" | "v1h" | "v24h" => {
+            "undecoded_compact_key_inferred_from_name_sol_volume_window_unmeasured"
+        }
+        "vUsd" | "vUsd5" | "vUsd15" | "vUsd1h" | "vUsd24h" => {
+            "undecoded_compact_key_inferred_from_name_usd_volume_window_unmeasured"
+        }
+        "tx5" | "txc" => "undecoded_compact_key_inferred_from_name_trade_count_unmeasured",
+        "p" => "undecoded_compact_key_inferred_from_name_bonding_progress_unmeasured",
+        _ => return None,
+    })
+}
+
 fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str {
     // MEASURED 2026-08-22, and the reason this function takes the row's `complete` flag at all: a
     // coin with complete=true was observed carrying virtual_sol_reserves=30000000000 and
@@ -733,6 +869,12 @@ fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str 
         return tag;
     }
     if let Some(tag) = callout_semantics(route, field) {
+        return tag;
+    }
+    if let Some(tag) = community_callout_semantics(route, field) {
+        return tag;
+    }
+    if let Some(tag) = movers_semantics(route, field) {
         return tag;
     }
     // MEASURED 2026-08-23 from the retained live bodies: the two swap-api routes carry the SAME
@@ -768,7 +910,14 @@ fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str 
         | "pump_swap_pool"
         | "quote_mint"
         | "token_program"
-        | "chain_id" => "provider_identifier",
+        | "chain_id"
+        | "tokenAddress"
+        | "communityId"
+        | "businessId"
+        | "dev"
+        | "pair"
+        | "quoteMint"
+        | "chain" => "provider_identifier",
         // Units MEASURED on the coin routes, so the unit travels in the tag.
         "created_timestamp"
         | "last_trade_timestamp"
@@ -777,7 +926,9 @@ fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str 
         | "last_reply"
         | "thumbnail_updated_at" => "provider_event_time_epoch_millis_unparsed",
         // Units NOT measured on these, so the tag stays silent rather than guessing one.
-        "createdAt" | "calloutTimestamp" | "timestamp" | "time" => "provider_event_time_unparsed",
+        // `creationTime`/`graduationDate` arrive on in_memory_coin, unit unmeasured.
+        "createdAt" | "calloutTimestamp" | "timestamp" | "time" | "creationTime"
+        | "graduationDate" => "provider_event_time_unparsed",
         // MEASURED 2026-08-22 and NOT a detail: on /coins and /coins/currently-live every other
         // time on the row is epoch MILLISECONDS and `updated_at` alone is epoch SECONDS. Read as
         // milliseconds it lands on 21 January 1970 — which reads as a plausible stale record
@@ -792,7 +943,14 @@ fn semantics(route: RouteId, field: &str, bonded: Option<bool>) -> &'static str 
         // The highest market cap the provider has ever recorded for this coin, with the instant
         // it says that happened. It is an outcome as of the read: comparing it to the current
         // market cap yields a drawdown, never a forecast.
-        "ath_market_cap" => "retrospective_peak_as_of_acquisition_never_pre_event_feature",
+        "ath_market_cap" | "athMarketCapUsd" => {
+            "retrospective_peak_as_of_acquisition_never_pre_event_feature"
+        }
+        // in_memory_coin's running totals: provider aggregates whose window (cumulative since
+        // when?) nothing has measured, and which this codebase can never recompute from tape.
+        "volumeSol" | "volumeUsd" | "buyCount" | "sellCount" | "txCount" => {
+            "provider_cumulative_aggregate_window_unmeasured_unverifiable"
+        }
         "num_participants" => "provider_live_audience_count",
         // These arrive as JSON strings holding 28-significant-digit decimals. Tagging them
         // `utf8` alone would let a later reader mistake a price for a name, and the provider
@@ -1067,8 +1225,11 @@ mod tests {
         }
     }
 
-    /// `createdAt` was measured as epoch milliseconds on the callout routes and has never been
-    /// measured anywhere else, so the tag must stay silent everywhere else.
+    /// `createdAt` carries a MEASURED unit exactly where one was measured — epoch milliseconds
+    /// on the frontend-api callout routes (2026-08-22), ISO-8601 with microseconds on the
+    /// coin-communities callout route (2026-08-24) — and stays silent on the messages route,
+    /// which nothing has ever called. One event family, two hosts, two encodings: the tags are
+    /// what force a join to normalise out loud.
     #[test]
     fn the_callout_clock_is_typed_only_where_it_was_measured() {
         assert_eq!(
@@ -1081,7 +1242,26 @@ mod tests {
         );
         assert_eq!(
             semantics(RouteId::CommunityCallouts, "createdAt", None),
-            "provider_event_time_unparsed"
+            "callout_occurrence_time_iso8601_micros_utc_no_availability_time_exists"
+        );
+    }
+
+    /// The movers volume family is extracted under its WIRE names with tags that say the
+    /// meaning is inferred, never measured — renaming an undecoded field is how a fabricated
+    /// number gets born, and the tag is the tripwire.
+    #[test]
+    fn movers_undecoded_keys_declare_their_inference() {
+        assert_eq!(
+            semantics(RouteId::BoardMovers, "vUsd5", None),
+            "undecoded_compact_key_inferred_from_name_usd_volume_window_unmeasured"
+        );
+        assert_eq!(
+            semantics(RouteId::BoardMovers, "age", None),
+            "provider_age_seconds_duration_not_an_instant_per_app_decoder"
+        );
+        assert_eq!(
+            semantics(RouteId::BoardMovers, "m", None),
+            "provider_identifier"
         );
     }
 
