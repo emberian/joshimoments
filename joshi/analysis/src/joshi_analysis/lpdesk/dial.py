@@ -41,6 +41,9 @@ class SwapRecord:
     end_bin_id: int
     fee_quote: Decimal  # the swap's fee valued in display quote units at its own end bin
     volume_quote: Decimal  # amount_in valued the same way
+    #: the bin the swap started from; with the end bin it bounds the swap's whole
+    #: traversal, so a path built from both is floor-free within each swap
+    start_bin_id: int | None = None
 
 
 @dataclass(frozen=True)

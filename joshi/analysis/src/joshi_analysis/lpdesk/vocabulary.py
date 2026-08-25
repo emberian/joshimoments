@@ -45,7 +45,10 @@ ONE_POOL_ONE_WINDOW_FITS_NOTHING = (
 AUTHOR_KNOWLEDGE = (
     "The policy axes were declared AFTER reading the operator's reconstructed history and "
     "her stated ~6.4%/24h figure; they bracket her actual width and cadence on purpose. "
-    "Nothing in this panel is a blind experiment."
+    "The both-sides refutation was then challenged by the operator with a chart showing "
+    'two-sided chop — verbatim: "ok well maybe you look somewhere wrong etc." — and the '
+    "floor-free recount was fetched and computed AFTER that challenge, knowing what it "
+    "was checking. Nothing in this panel is a blind experiment."
 )
 
 #: Label for any number a provider computed rather than the chain stating it directly.

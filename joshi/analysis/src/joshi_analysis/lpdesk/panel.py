@@ -21,9 +21,17 @@ from pathlib import Path
 
 from . import dial as dial_mod
 from . import frontier as frontier_mod
-from .cadence import both_sides_calibration, oscillation_rows, shuffle_split
+from .cadence import (
+    both_sides_calibration,
+    cluster_by_gap,
+    fine_path_from_swaps,
+    oscillation_rows,
+    shuffle_split,
+)
+from .damm import damm_yield, decode_damm_swaps
 from .events import decode_transaction_events
 from .layouts import (
+    METEORA_DLMM_PROGRAM_ID,
     decode_bin_array_liquidity,
     decode_lb_pair,
     decode_oracle,
@@ -49,7 +57,8 @@ class RetainedRun:
     """The retention log, indexed for replay."""
 
     manifest: dict
-    account_infos: dict[str, dict]  # address -> latest getAccountInfo response
+    account_infos: dict[str, dict]  # address -> FIRST getAccountInfo response of the log
+    account_infos_latest: dict[str, dict]  # address -> latest response (later sessions)
     multiple_accounts: list[tuple[list[str], dict]]
     program_accounts: list[tuple[list, list]]
     signatures: dict[str, list[dict]]  # address -> concatenated pages, newest first
@@ -59,7 +68,7 @@ class RetainedRun:
 
 def load_run(retention_dir: Path) -> RetainedRun:
     manifest = json.loads((retention_dir / "manifest.json").read_text())
-    run = RetainedRun(manifest, {}, [], [], {}, {}, {})
+    run = RetainedRun(manifest, {}, {}, [], [], {}, {}, {})
     with (retention_dir / "rpc_log.jsonl").open() as handle:
         for line in handle:
             row = json.loads(line)
@@ -70,8 +79,9 @@ def load_run(retention_dir: Path) -> RetainedRun:
             response = row["response"]
             if method == "getAccountInfo":
                 result = response.get("result") or {}
-                run.account_infos[params[0]] = result
-                run.received_unix_ms[params[0]] = row["received_unix_ms"]
+                run.account_infos.setdefault(params[0], result)
+                run.account_infos_latest[params[0]] = result
+                run.received_unix_ms.setdefault(params[0], row["received_unix_ms"])
             elif method == "getMultipleAccounts":
                 run.multiple_accounts.append((params[0], response.get("result") or {}))
             elif method == "getProgramAccounts":
@@ -173,6 +183,7 @@ def _swap_records(
                     end_bin_id=end_bin,
                     fee_quote=fee_quote,
                     volume_quote=volume_quote,
+                    start_bin_id=event["start_bin_id"],
                 )
             )
     records.sort(key=lambda r: (r.block_time, r.slot))
@@ -189,11 +200,27 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
     identity, pair = _pool_identity(run, pool_address)
 
     # --- reconstruction --------------------------------------------------------------
-    ledger = build_ledger(list(run.transactions.values()), identity, wallet)
+    # The books cover the span the WALLET acquisition covered contiguously. Later
+    # sessions retain fresh POOL windows whose bodies incidentally include her newest
+    # recenters, but with an uncovered gap between the spans; folding those in would
+    # corrupt per-position sums, so they are excluded and the coverage horizon is the
+    # books' own clock.
+    coverage_end = (manifest.get("finished_unix_ms") or manifest["started_unix_ms"]) // 1000
+    ledger = build_ledger(
+        [
+            tx
+            for tx in run.transactions.values()
+            if (tx.get("blockTime") or 0) <= coverage_end + 60
+        ],
+        identity,
+        wallet,
+    )
 
     bin_arrays = []
     for params, rows in run.program_accounts:
         filters = params[1].get("filters") if len(params) > 1 else None
+        if params[0] != METEORA_DLMM_PROGRAM_ID:
+            continue  # a later session's cp-amm discovery also used a dataSize filter
         if not filters or not any("dataSize" in f for f in filters):
             continue
         for row in rows:
@@ -205,6 +232,8 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
     open_positions = manifest.get("open_positions") or []
     for params, rows in run.program_accounts:
         filters = params[1].get("filters") if len(params) > 1 else None
+        if params[0] != METEORA_DLMM_PROGRAM_ID:
+            continue
         if not filters or any("dataSize" in f for f in filters):
             continue
         pend_x = pend_y = 0
@@ -231,7 +260,7 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
             reconstruction = reconstruct(
                 ledger,
                 identity,
-                now_unix=now,
+                now_unix=coverage_end,
                 open_position_values=open_values,
                 pending_fees=pending,
                 sol_is_base=WSOL_MINT in (identity.token_x_mint, identity.token_y_mint),
@@ -244,7 +273,17 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
     # --- the dense swap tape and the dial --------------------------------------------
     pool_sig_rows = run.signatures.get(pool_address, [])
     pool_sigs = {r["signature"] for r in pool_sig_rows}
-    tape = _swap_records(run, identity, pool_sigs & set(run.transactions))
+    all_swaps = _swap_records(run, identity, pool_sigs & set(run.transactions))
+    clusters = cluster_by_gap(all_swaps) if all_swaps else []
+    # The dial and dense frontier read the ORIGINAL acquisition's window (kappa pairs it
+    # with her books from the same hours); later sessions' windows are their own sections.
+    original_end = coverage_end
+    tape = []
+    for cluster in clusters:
+        if cluster[0].block_time - 3600 < original_end:
+            tape = cluster  # last cluster starting before/near the original window end
+    if not tape and clusters:
+        tape = clusters[0]
 
     active_id = manifest.get("active_id_at_fetch", pair.active_id)
     active_tvl = None
@@ -437,6 +476,91 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
             ],
         }
 
+
+    # --- TASK 1: both sides, floor-free, on the freshest retained window --------------
+    # The operator pushed back on the refutation with a chart showing visible two-sided
+    # chop. Her challenge, verbatim, is in this section's authorKnowledge. The answer is
+    # a comparison: the oracle's time-averaged path versus the swap-level path (start AND
+    # end bin per swap — floor-free within the window) over the SAME span, so any hiding
+    # by averaging is itself visible.
+    both_sides_fresh = None
+    if clusters:
+        fresh_cluster = clusters[-1]
+        fresh_start = fresh_cluster[0].block_time
+        fresh_end = fresh_cluster[-1].block_time
+        widths_fresh = (1, 2, 3, 5, 6, 8, 13)
+        horizons_fresh = (30, 60, 130, 180)
+        fine = fine_path_from_swaps(fresh_cluster)
+        dense_panels = (
+            both_sides_calibration(fine, widths=widths_fresh, horizons_s=horizons_fresh)
+            if len(fine) >= 3
+            else []
+        )
+        oracle_overlap_panels = []
+        latest_oracle = (
+            run.account_infos_latest.get(oracle_address) if oracle_address else None
+        )
+        if latest_oracle:
+            observations = decode_oracle(latest_oracle["value"], oracle_address)
+            twa_path = []
+            for earlier, later in pairwise(observations):
+                span = later.last_updated_at - earlier.last_updated_at
+                if span > 0:
+                    twa_path.append(
+                        (
+                            later.last_updated_at,
+                            (later.cumulative_active_bin_id - earlier.cumulative_active_bin_id)
+                            / span,
+                        )
+                    )
+            overlap = [pt for pt in twa_path if fresh_start <= pt[0] <= fresh_end + 60]
+            if len(overlap) >= 3:
+                oracle_overlap_panels = both_sides_calibration(
+                    overlap, widths=widths_fresh, horizons_s=horizons_fresh
+                )
+        price_now = identity.quote_per_base_display(fresh_cluster[-1].end_bin_id)
+        both_sides_fresh = {
+            "authorKnowledge": (
+                'the operator challenged the earlier refutation with a chart showing '
+                'two-sided chop: "ok well maybe you look somewhere wrong etc." — this '
+                "section was fetched and computed AFTER that challenge, to answer it"
+            ),
+            "window": {
+                "start_unix": fresh_start,
+                "end_unix": fresh_end,
+                "span_s": fresh_end - fresh_start,
+                "swaps": len(fresh_cluster),
+                "coverageStatement": (
+                    "target was 1-2 hours; the enhanced-history route answers 403 on "
+                    "this key and 73-78% of pool transactions are failed spam, so at "
+                    "~50 real swaps/min a contiguous hour costs ~3000 body reads — "
+                    "outside this budget. This window is every swap, floor-free, for "
+                    "the span shown; nothing is bridged across its edges."
+                ),
+            },
+            "binsVsBand": {
+                "binStepBps": identity.bin_step,
+                "herHalfWidthBins": 6,
+                "herBandHalfWidthBps": 6 * identity.bin_step,
+                "quotePerBaseNow": str(price_now),
+                "herBandHalfWidthQuote": str(price_now * Decimal(6 * identity.bin_step) / 10_000),
+                "herMedianRecenterIntervalS": her_recenter_interval_s,
+                "reading": (
+                    "a two-sided hit at her width needs the price to cross BOTH "
+                    "+24 bps and -24 bps from the band center inside one recenter "
+                    "interval; a chart candle that looks dramatic on a day-scaled axis "
+                    "is measured here in bins of 4 bps each"
+                ),
+            },
+            "densePanels": [panel.as_dict() for panel in dense_panels],
+            "oracleOverlapPanels": [panel.as_dict() for panel in oracle_overlap_panels],
+            "comparisonNote": (
+                "densePanels and oracleOverlapPanels cover the same clock span; a touch "
+                "present in dense and absent in oracle is the averaging floor, made "
+                "visible as asked"
+            ),
+        }
+
     # --- shuffle versus full recenter, split and priced from the reconciled ledger ----
     shuffle = None
     if ledger:
@@ -574,12 +698,61 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
             "and slightly overstates it in quiet regimes if the base fee is lower."
         ),
         "absence": (
-            "no measured DAMM v2 SOL/USDC yield: the dammv2 API did not answer "
-            "(retained probes), and a chain-derived yield needs a fee-volume tape of a "
-            "chosen DAMM v2 pool (~100 further requests) that this budget does not "
-            "cover. That tape is the next bounded read if this arm matters."
+            "the dammv2 API did not answer (retained probes); the measured block below "
+            "is chain-derived instead: pool discovered by on-chain liquidity ranking "
+            "across all SOL/USDC cp-amm pools, tape from retained bodies"
         ),
     }
+    damm_discovery_path = Path(retention_dir) / "damm_v2_discovery.json"
+    if damm_discovery_path.exists():
+        discovery = json.loads(damm_discovery_path.read_text())
+        damm_pool = discovery["top_pool"]
+        damm_swaps = decode_damm_swaps(list(run.transactions.values()), damm_pool)
+        vault_a = vault_b = None
+        for _addresses, result in run.multiple_accounts:
+            values = result.get("value") or []
+            infos = []
+            for value in values:
+                parsed = (value or {}).get("data", {})
+                if isinstance(parsed, dict) and "parsed" in parsed:
+                    infos.append(parsed["parsed"]["info"])
+            if len(infos) == 2 and {i["mint"] for i in infos} == {WSOL_MINT, USDC_MINT}:
+                by_mint = {i["mint"]: int(i["tokenAmount"]["amount"]) for i in infos}
+                vault_a = by_mint.get(WSOL_MINT)
+                vault_b = by_mint.get(USDC_MINT)
+        if len(damm_swaps) >= 2:
+            yield_panel = damm_yield(
+                damm_swaps,
+                pool=damm_pool,
+                a_decimals=9,
+                b_decimals=6,
+                quote_is_b=True,
+                vault_a_atoms=vault_a,
+                vault_b_atoms=vault_b,
+            )
+            damm_v2_arm["measured"] = yield_panel.as_dict()
+            damm_v2_arm["measuredNotes"] = [
+                "pool chosen as the liquidity-ranked top of all SOL/USDC cp-amm pools "
+                f"({discovery.get('candidates')} candidates, gPA retained); decimals 9/6 "
+                "attributed from the mints, an outside attribution",
+                "yield_per_day is LP take (claiming+compounding) over event-stated "
+                "reserves: the measured cadence-None point, NO kappa involved",
+                "window is minutes long and stated; a day-scale yield claim needs a "
+                "day-scale tape",
+            ]
+            if attention_frontier is not None:
+                attention_frontier["dammV2MeasuredCadenceNone"] = {
+                    "pool": damm_pool,
+                    "yieldPerDay": str(yield_panel.yield_per_day),
+                    "windowS": yield_panel.window_end_unix - yield_panel.window_start_unix,
+                    "note": (
+                        "MEASURED unattended full-range arm; replaces the "
+                        "wide-never-recenter PROXY as the cadence-None comparison. Its "
+                        "yield excludes inventory drift (a full-range CP position's "
+                        "vs-HODL divergence term, small over minutes), while the proxy "
+                        "rows include path arithmetic; stated rather than hidden."
+                    ),
+                }
 
     # --- activity history from signature pages ---------------------------------------
     by_hour: dict[int, int] = {}
@@ -658,6 +831,7 @@ def build_panel(retention_dir: Path, *, now_unix: int | None = None) -> dict:
         ),
         "dial_calibration": calibration or {"absent": "needs both the dial and her books"},
         "both_sides": both_sides or {"absent": "oracle path too short"},
+        "both_sides_fresh": both_sides_fresh or {"absent": "no retained swap clusters"},
         "oscillation": oscillation or {"absent": "oracle path too short"},
         "shuffle_split": shuffle or {"absent": "no ledger"},
         "attention_frontier": attention_frontier

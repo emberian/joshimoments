@@ -36,9 +36,46 @@ __all__ = [
     "BothSidesPanel",
     "ShuffleSplit",
     "both_sides_calibration",
+    "cluster_by_gap",
+    "fine_path_from_swaps",
     "oscillation_rows",
     "shuffle_split",
 ]
+
+
+def cluster_by_gap(records, max_gap_s: int = 300) -> list[list]:
+    """Splits time-ordered records into contiguous clusters at gaps over ``max_gap_s``.
+
+    A retention log grown across sessions holds windows hours apart; any statistic that
+    integrates over time must see one contiguous window, never a gap pretending to be
+    quiet time.
+    """
+    ordered = sorted(records, key=lambda r: (r.block_time, r.slot))
+    clusters: list[list] = []
+    for record in ordered:
+        if clusters and record.block_time - clusters[-1][-1].block_time <= max_gap_s:
+            clusters[-1].append(record)
+        else:
+            clusters.append([record])
+    return clusters
+
+
+def fine_path_from_swaps(records) -> list[tuple[float, float]]:
+    """A floor-free ``(t, bin)`` path from swap events, start and end bin per swap.
+
+    Each swap contributes its start bin then its end bin (epsilon-offset in time to keep
+    order under sorting), so the path covers every bin the swap itself traversed. What
+    it still cannot see: nothing — within the covered window every trade that moved the
+    price is on it; between retained windows there is no path at all, and the caller
+    must not bridge.
+    """
+    path: list[tuple[float, float]] = []
+    for index, record in enumerate(sorted(records, key=lambda r: (r.block_time, r.slot))):
+        base = float(record.block_time) + index * 1e-6
+        if record.start_bin_id is not None:
+            path.append((base, float(record.start_bin_id)))
+        path.append((base + 5e-7, float(record.end_bin_id)))
+    return path
 
 
 @dataclass(frozen=True)
