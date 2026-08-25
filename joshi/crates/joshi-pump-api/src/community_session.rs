@@ -55,6 +55,11 @@ const CHALLENGE_URL: &str = "https://api.coin-communities.xyz/api/v1/users/auth/
 const VERIFY_URL: &str = "https://api.coin-communities.xyz/api/v1/users/auth/wallet/verify";
 /// Refresh: exchange the stored refresh token for a rotated pair. Security `x-api-key` only.
 const REFRESH_URL: &str = "https://api.coin-communities.xyz/api/v1/users/token/refresh";
+/// The websocket origin the per-community social push channel lives on. The ticket mint below is
+/// the ONLY bearer-carrying POST besides the auth handshake, and it mints a READ-ONLY subscription
+/// ticket (`docs/reference/PUMP_API_MAP.md` §4.6/§4.7): nothing about it posts, likes, moderates,
+/// or otherwise mutates community state.
+const WS_ORIGIN: &str = "wss://api.coin-communities.xyz";
 /// The chain discriminator the app sends on the challenge and verify bodies.
 const CHAIN_TYPE: &str = "svm";
 /// The shared product-key header name the handshake POSTs carry (same header the gated GETs use).
@@ -99,6 +104,16 @@ pub enum CommunityAuthError {
     SessionCleared,
     /// Session material was requested from a session that is not live.
     NotLive,
+    /// A websocket-ticket subject was not shaped like a public token address and was refused
+    /// before any request was built. The subject is interpolated into a URL path, so anything
+    /// that is not plainly a base58 mint is rejected rather than encoded around.
+    UnsafeSubject,
+    /// The ticket mint returned a non-success status. `429` here is the shared ~1 rps product
+    /// bucket's ordinary weather, not a refusal; other `4xx` are refusals. The body is not
+    /// captured: a failed mint body may echo request material.
+    TicketRejected(u16),
+    /// The ticket mint succeeded but carried no non-empty `ticket` string.
+    NoTicket,
 }
 
 impl From<WalletKeyError> for CommunityAuthError {
@@ -142,6 +157,12 @@ impl fmt::Display for CommunityAuthError {
                 formatter.write_str("refresh token is dead; session cleared, re-handshake required")
             }
             Self::NotLive => formatter.write_str("session is not live"),
+            Self::UnsafeSubject => formatter
+                .write_str("ws-ticket subject is not shaped like a public token address; refused"),
+            Self::TicketRejected(status) => {
+                write!(formatter, "ws ticket mint rejected with status {status}")
+            }
+            Self::NoTicket => formatter.write_str("ws ticket mint succeeded but carried no ticket"),
         }
     }
 }
@@ -392,6 +413,16 @@ impl CommunitySessionProvider {
         self.locked().access_expires_at
     }
 
+    /// Install a freshly handshaken session in place of the wrapped one.
+    ///
+    /// This is the caller's answer to [`CommunityAuthError::SessionCleared`]: a dead refresh
+    /// token cannot be refreshed, the app re-runs the full handshake, and the new session then
+    /// replaces the cleared one HERE so every holder of this provider sees the rotation. The
+    /// swap is whole — both tokens and the expiry move together under the lock.
+    pub fn replace(&self, session: CommunitySession) {
+        *self.locked() = session;
+    }
+
     /// Whether the wrapped session is live right now.
     #[must_use]
     pub fn is_live(&self) -> bool {
@@ -454,6 +485,157 @@ impl SessionProvider for CommunitySessionProvider {
         // already-held one, and a dead refresh token then requires Ember's wallet again.
         self.locked().access_expires_at = time::OffsetDateTime::UNIX_EPOCH;
     }
+}
+
+/// A short-lived, single-use subscription ticket for the per-community social push websocket.
+///
+/// The ticket is a credential (whoever holds it may open the socket the bearer paid for), so it is
+/// wrapped and never rendered; the ONE way it leaves this type is inside the connect URL
+/// [`Self::socket_url`] builds, and that URL therefore inherits the same discipline as a keyed
+/// endpoint: never logged, never retained, and connect errors are stated without quoting it.
+/// Tickets are single-use — mint a fresh one for every (re)connect, never store one.
+pub struct WsTicket {
+    value: SecretString,
+}
+
+impl fmt::Debug for WsTicket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WsTicket")
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl WsTicket {
+    /// The `wss://` connect URL for one community's socket, with the ticket as its query.
+    ///
+    /// The returned string CONTAINS THE TICKET. Treat it like a keyed endpoint: hand it to the
+    /// websocket connector and nothing else; never log it, retain it, or quote a transport error
+    /// that may echo it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommunityAuthError::UnsafeSubject`] when the token address is not shaped like a
+    /// public mint, and [`CommunityAuthError::Transport`] if URL construction fails.
+    pub fn socket_url(&self, token_address: &str) -> Result<String, CommunityAuthError> {
+        if !token_address_is_public_mint(token_address) {
+            return Err(CommunityAuthError::UnsafeSubject);
+        }
+        let mut url = url::Url::parse(&format!(
+            "{WS_ORIGIN}/api/v1/communities/{token_address}/ws"
+        ))
+        .map_err(|error| CommunityAuthError::Transport(error.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("ticket", self.value.expose_secret());
+        Ok(url.into())
+    }
+}
+
+/// Whether a websocket-ticket subject is plainly a public token address: base58-alphabet
+/// characters only, at a Solana-key length. The subject lands inside a URL path, so this guard
+/// exists to make traversal or query smuggling structurally impossible, not to validate mints.
+fn token_address_is_public_mint(token_address: &str) -> bool {
+    (32..=44).contains(&token_address.len())
+        && token_address
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+}
+
+/// Pull the ws `ticket` out of a mint response body, tolerating the same `data` wrapper the auth
+/// bodies use. Empty is absent.
+fn ticket_from_body(text: &str) -> Option<SecretString> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    nonempty_str(&value, "ticket").map(SecretString::from)
+}
+
+impl CommunitySessionProvider {
+    /// Mint one single-use ticket for one community's websocket:
+    /// `POST /api/v1/communities/{token_address}/ws/ticket`, bearer + shared `x-api-key`.
+    ///
+    /// This is a READ-ONLY subscription mint (the map's §4.7 note): it grants a push
+    /// subscription and mutates no community state. The service's `OpenAPI` declares no request
+    /// body, so none is sent; a `400`/`411`/`415`/`422` first answer is retried once inside this
+    /// call with an empty JSON object body in case the deployed handler differs from its SDK,
+    /// and the FIRST status is reported if both are refused. The response body is parsed for the
+    /// ticket and never surfaced; failed-mint bodies are dropped unread beyond status.
+    ///
+    /// This call spends the same shared ~1 rps GLOBAL product-key bucket as the handshake and
+    /// every community GET: pace it, treat `429` as weather, and never mint in parallel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommunityAuthError::UnsafeSubject`] for a non-mint-shaped subject,
+    /// [`CommunityAuthError::NotLive`] when the session is not live (call
+    /// [`Self::ensure_fresh`] first), [`CommunityAuthError::TicketRejected`] with the status on
+    /// a non-success answer, and [`CommunityAuthError::NoTicket`] when a success carries none.
+    pub async fn mint_ws_ticket(
+        &self,
+        token_address: &str,
+    ) -> Result<WsTicket, CommunityAuthError> {
+        if !token_address_is_public_mint(token_address) {
+            return Err(CommunityAuthError::UnsafeSubject);
+        }
+        let (bearer, product_key) = {
+            let session = self.locked();
+            if !session.is_live() {
+                return Err(CommunityAuthError::NotLive);
+            }
+            (
+                session.access.expose_secret().to_owned(),
+                session.product_key.expose_secret().to_owned(),
+            )
+        };
+        let http = build_http()?;
+        let url = format!("{ORIGIN}/api/v1/communities/{token_address}/ws/ticket");
+        let first = post_ticket(&http, &url, &bearer, &product_key, None).await?;
+        let first_status = first.status();
+        let response = if first_status.is_success() {
+            first
+        } else if matches!(first_status.as_u16(), 400 | 411 | 415 | 422) {
+            let second = post_ticket(&http, &url, &bearer, &product_key, Some(b"{}")).await?;
+            if second.status().is_success() {
+                second
+            } else {
+                return Err(CommunityAuthError::TicketRejected(first_status.as_u16()));
+            }
+        } else {
+            return Err(CommunityAuthError::TicketRejected(first_status.as_u16()));
+        };
+        let text = response
+            .text()
+            .await
+            .map_err(|error| CommunityAuthError::Transport(error.to_string()))?;
+        ticket_from_body(&text)
+            .map(|value| WsTicket { value })
+            .ok_or(CommunityAuthError::NoTicket)
+    }
+}
+
+/// The one place the ticket POST is shaped: bearer + shared product key + browser origin, and a
+/// body only when the caller names one. The bearer and key are written into headers and appear
+/// nowhere else.
+async fn post_ticket(
+    http: &reqwest::Client,
+    url: &str,
+    bearer: &str,
+    product_key: &str,
+    body: Option<&[u8]>,
+) -> Result<reqwest::Response, CommunityAuthError> {
+    let mut builder = http
+        .post(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(reqwest::header::ORIGIN, BROWSER_ORIGIN)
+        .header(API_KEY_HEADER, product_key);
+    if let Some(body) = body {
+        builder = builder
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_vec());
+    }
+    builder
+        .send()
+        .await
+        .map_err(|error| CommunityAuthError::Transport(error.to_string()))
 }
 
 /// A redirect-refusing HTTP client for the handshake POSTs, matching the SIWS login's posture.
@@ -595,6 +777,13 @@ pub fn community_origin() -> &'static str {
     ORIGIN
 }
 
+/// The websocket origin the per-community push channel lives on, exposed for the same reason as
+/// [`community_origin`].
+#[must_use]
+pub fn community_ws_origin() -> &'static str {
+    WS_ORIGIN
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,6 +923,81 @@ mod tests {
         };
         let material = live.material().expect("a live session yields material");
         assert_eq!(material.class(), "community:test");
+    }
+
+    #[test]
+    fn a_ws_ticket_subject_must_be_shaped_like_a_public_mint() {
+        assert!(token_address_is_public_mint(
+            "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+        ));
+        // Path traversal, query smuggling, emptiness, and off-length subjects are all refused
+        // before any URL is built.
+        assert!(!token_address_is_public_mint(""));
+        assert!(!token_address_is_public_mint(
+            "../users/me/xxxxxxxxxxxxxxxxxxxxxxxxx"
+        ));
+        assert!(!token_address_is_public_mint(
+            "abc?ticket=stolenxxxxxxxxxxxxxxxxxxxxxxxx"
+        ));
+        assert!(!token_address_is_public_mint("short"));
+        assert!(!token_address_is_public_mint(&"a".repeat(45)));
+    }
+
+    #[test]
+    fn ticket_parses_from_ticket_and_data_wrapper_only_when_nonempty() {
+        assert!(ticket_from_body(r#"{"ticket":"tkt-123"}"#).is_some());
+        assert!(ticket_from_body(r#"{"data":{"ticket":"tkt-456"}}"#).is_some());
+        assert!(ticket_from_body(r#"{"ticket":""}"#).is_none());
+        assert!(ticket_from_body(r#"{"nope":1}"#).is_none());
+        assert!(ticket_from_body("not json").is_none());
+    }
+
+    #[test]
+    fn the_socket_url_carries_the_ticket_percent_encoded_and_debug_stays_redacted() {
+        let ticket = WsTicket {
+            value: SecretString::from("tkt+/= special".to_owned()),
+        };
+        let mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump";
+        let url = ticket.socket_url(mint).expect("a mint-shaped subject");
+        assert!(url.starts_with(&format!(
+            "wss://api.coin-communities.xyz/api/v1/communities/{mint}/ws?ticket="
+        )));
+        // The raw ticket text must not appear unencoded, and the encoded form must round-trip.
+        assert!(!url.contains("tkt+/= special"));
+        let parsed = url::Url::parse(&url).expect("the built URL parses");
+        let (_, round_tripped) = parsed
+            .query_pairs()
+            .find(|(name, _)| name == "ticket")
+            .expect("a ticket query parameter");
+        assert_eq!(round_tripped, "tkt+/= special");
+        assert!(matches!(
+            ticket.socket_url("../smuggle/xxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+            Err(CommunityAuthError::UnsafeSubject)
+        ));
+        assert!(!format!("{ticket:?}").contains("tkt"));
+    }
+
+    #[test]
+    fn a_ticket_mint_on_a_dead_session_is_refused_without_io() {
+        let dead = CommunitySession {
+            access: SecretString::from("aaa".to_owned()),
+            refresh: SecretString::from("rrr".to_owned()),
+            product_key: SecretString::from("cc".to_owned()),
+            access_expires_at: time::OffsetDateTime::UNIX_EPOCH,
+            label: "community:test".to_owned(),
+        };
+        let provider = CommunitySessionProvider::new(dead);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a current-thread runtime");
+        let outcome = runtime
+            .block_on(provider.mint_ws_ticket("XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"));
+        assert!(matches!(outcome, Err(CommunityAuthError::NotLive)));
+        let unsafe_subject = runtime.block_on(provider.mint_ws_ticket("not-a-mint"));
+        assert!(matches!(
+            unsafe_subject,
+            Err(CommunityAuthError::UnsafeSubject)
+        ));
     }
 
     #[test]

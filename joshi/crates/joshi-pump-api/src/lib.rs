@@ -33,7 +33,7 @@ pub use catalog::{AccessClass, PaginationKind, RouteId, RouteSpec, Stability, Tr
 pub use client::{ClientConfig, PumpApiClient, PumpApiError};
 pub use community_session::{
     CommunityAuthError, CommunitySession, CommunitySessionProvider, CommunityWalletSigner,
-    community_origin,
+    WsTicket, community_origin, community_ws_origin,
 };
 pub use identity::{AcquisitionReservation, IdentityStore};
 pub use model::{

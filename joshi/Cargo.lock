@@ -1256,9 +1256,11 @@ dependencies = [
 name = "joshi-collector"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bs58",
  "bytes",
  "clap",
+ "futures-util",
  "joshi-admission",
  "joshi-domain",
  "joshi-evidence",
@@ -1275,6 +1277,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "toml",
  "zeroize",
 ]

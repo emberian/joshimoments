@@ -1,0 +1,65 @@
+# JOSHI availability clock — the ws-vs-poll availability consumer
+# (apps/collector/src/bin/availability_clock.rs, `availability_clock run --config <this file>`).
+#
+# A SEPARATE PROCESS from the keeper, on purpose: the keeper owns state/keeper single-writer and
+# is running live; this consumer writes its own durable record under `root` below and only READS
+# the keeper's config and hot-requests file to derive its watch set. Ember edits this file; the
+# consumer re-reads it (and the keeper's watch inputs) every tick, keeper-style: a broken edit
+# keeps the last good config and says so in the heartbeat note. Relative paths resolve against
+# this file's directory.
+
+# The keeper config this consumer derives its watch set and community product key from. Parsed
+# TOLERANTLY (unknown fields ignored): only `root`, `community_key_file` and the `[[mints]]`
+# community_callouts taps are read. The hot-requests file is found under the keeper root exactly
+# where the keeper reads it.
+keeper_config = "keeper.toml"
+
+# This consumer's own durable state root. `<root>/<run-id>/events.jsonl` is the record,
+# `<root>/<run-id>/receipt.json` the receipt, `<root>/identity` the acquisition-id namespace.
+root = "../state/availability"
+
+# Ember's own wallet (the SIWS/shitcoims wallet, address Sh1WNJ…ccuE — NOT the keeper.toml
+# holdings wallet), mode 0600. It signs EXACTLY ONE CLASS OF THING: the server-issued printable
+# authentication challenge, through the guarded signer in joshi-pump-api::community_session.
+# Nothing transaction-shaped is ever constructed or signed.
+wallet_key_file = "~/.shitcoims-wallet"
+
+[sockets]
+# Hard cap on concurrent community sockets; slots go hot-requests-first (freshest expiry), then
+# the keeper watch set's community_callouts mints, in file order.
+max_concurrent = 3
+# The only client->server frame is {"eventType":"ping"}; the server answers pong, which is how a
+# quiet socket proves itself alive. The inactivity ceiling must comfortably exceed the ping
+# interval or every quiet community reads as a dead socket.
+ping_interval_seconds = 25
+inactivity_ceiling_seconds = 90
+# Reconnect discipline (ported from coin_tape_live): consecutive failures, doubling backoff,
+# capped. A refusal at the ticket mint or the upgrade handshake is TERMINAL, never retried.
+# The attempt ceiling is sized for the MEASURED weather, not the happy path: the shared bucket
+# saturates for an hour+ at US prime time (the keeper's own community taps were failing 03:17 to
+# 04:17Z on 2026-08-25), a ticket-mint 429 costs one consecutive attempt, and a chain that burns
+# its attempts in four minutes of weather is dead for the night. 24 attempts at a 300s cap spans
+# roughly the measured saturation at ~1 paced request per 3 minutes — patient, still bounded.
+reconnect_max_attempts = 24
+reconnect_backoff_initial_seconds = 2
+reconnect_backoff_cap_seconds = 300
+
+[rest_poll]
+# The comparison lane: the same community_callouts read the keeper's hot lane polls, at the hot
+# cadence, so the availability gap is MEASURED against a real poll schedule rather than modeled.
+cadence_minutes = 10
+# The first poll runs early to establish the pre-run baseline window (rows that existed before
+# any ws coverage are excluded from the gap distribution, not counted as ws misses).
+first_poll_delay_seconds = 45
+
+[budgets]
+# Everything this process sends toward api.coin-communities.xyz — handshake POSTs, refreshes,
+# ticket mints, REST polls — shares the provider's ~1 rps GLOBAL product-key bucket with every
+# pump.fun visitor on earth. One request at a time, this far apart, 429-aware with doubling
+# backoff; never parallel across mints.
+min_gap_seconds = 3
+# Absolute run-total ceiling on bucket requests; hitting it stops the run with a durable reason.
+# Budget arithmetic for a 150-minute default run, 3 mints: login 2 + tickets 3 + REST polls
+# 3x15=45 + reconnect tickets (weather-dependent, bounded by 6 per chain) <= ~70; 200 is slack
+# for a 429-stormy night without ever being able to melt the bucket.
+max_bucket_requests = 200
