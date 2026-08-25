@@ -162,6 +162,23 @@ class ReadScene(unittest.TestCase):
         self.assertIn(str(1700000000), out)       # first bar retained
         self.assertIn(str(1700000000 + 3999), out)  # last bar retained
 
+    def test_wide_scene_candidates_elided_with_stated_boundaries(self):
+        wide = json.loads(json.dumps(SCENE_SNAPSHOT))
+        wide["view"]["payload"]["candidates"] = [
+            {"id": f"cand-{i}", "symbol": f"C{i}", "blurb": "y" * 6000}
+            for i in range(40)
+        ]
+        session, tools = make_tools()
+        session.routes["/api/v1/glass/scenes/scene-live-1234"] = (
+            200, json.dumps(wide).encode())
+        out = tools.read_scene("scene-live-1234")
+        self.assertIn('"candidatesKept": 24', out)
+        self.assertIn('"count": 16', out)
+        self.assertIn('"firstDroppedId": "cand-24"', out)
+        self.assertIn('"lastDroppedId": "cand-39"', out)
+        self.assertIn("cand-23", out)          # last kept candidate present
+        self.assertNotIn('"id": "cand-24"', out)  # dropped body absent
+
 
 JOURNAL_BODY = {
     "contract": "joshi.core.operator_command_readback",
@@ -265,13 +282,29 @@ class ListScenes(unittest.TestCase):
         self.assertFalse(out["feedServed"])
         self.assertIn("feed not served", out["note"])
 
-    def test_served_feed_passes_through(self):
+    def test_served_feed_is_bounded_with_total_stated(self):
+        session, tools = make_tools()
+        feed = {"contract": "joshi.core.scene_feed",
+                "scenes": [{"sceneId": f"scene-{i}"} for i in range(40)]}
+        session.routes["/api/v1/glass/scenes"] = (200, json.dumps(feed).encode())
+        out = json.loads(tools.list_scenes())
+        self.assertTrue(out["feedServed"])
+        self.assertEqual(out["scenesTotal"], 40)
+        self.assertEqual(len(out["newestFirst"]), 15)
+        self.assertEqual(out["newestFirst"][0]["sceneId"], "scene-0")
+        self.assertIn("newest 15 of 40", out["note"])
+        self.assertEqual(out["feedEnvelope"],
+                         {"contract": "joshi.core.scene_feed"})
+
+    def test_small_feed_has_no_elision_note(self):
         session, tools = make_tools()
         feed = {"scenes": [{"sceneId": "scene-b"}, {"sceneId": "scene-a"}]}
         session.routes["/api/v1/glass/scenes"] = (200, json.dumps(feed).encode())
         out = json.loads(tools.list_scenes())
-        self.assertTrue(out["feedServed"])
-        self.assertEqual(out["feed"], feed)
+        self.assertEqual(out["scenesTotal"], 2)
+        self.assertEqual([s["sceneId"] for s in out["newestFirst"]],
+                         ["scene-b", "scene-a"])
+        self.assertNotIn("note", out)
 
     def test_other_failures_are_errors_not_absence(self):
         session, tools = make_tools()

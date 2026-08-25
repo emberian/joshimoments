@@ -1,0 +1,49 @@
+# JOSHI resident core — the analyst + developer service (apps/resident/resident_service.py).
+#
+# Ember edits this file; the service re-reads it by mtime on every request, so edits take
+# effect without a restart (a broken edit keeps the last good config and says so in
+# /api/v1/status). Relative paths resolve against this file's directory.
+# `listen` and `state_dir` are read at boot; lane settings apply to new jobs.
+
+# The repository the developer lane cuts worktrees from.
+repo = ".."
+
+[service]
+# Loopback only; the service refuses to bind anything else.
+listen = "127.0.0.1:43290"
+# Session state, job records, worktrees, transcripts. Never inside the repo.
+state_dir = "~/.local/state/joshi-resident-service"
+# The local-auth token (minted on first boot, mode 0600). Every request needs
+# X-Resident-Token: <its contents>. Local-user trust, same boundary as the
+# pairing-code file.
+# token_file = defaults to <state_dir>/service-token
+
+[core]
+# The running joshi-core the analyst pairs with — the cockpit's own admission
+# path, never a bypass.
+listen = "127.0.0.1:43219"
+origin = "http://127.0.0.1:4173"
+# One-time pairing codes appear here (joshi-core --pairing-code-file). The
+# service consumes a code and deletes the file; the core then mints a fresh
+# one for the next local client.
+pairing_code_file = "../state/keeper/cockpit-state/pairing-code"
+# The live state root, named so the developer lane can fence it out.
+state_root = "../state"
+
+[analyst]
+model = "claude-opus-5"
+
+# The read-only analysis bench: named catalogs, all opened sqlite mode=ro.
+# The keeper catalog has a LIVE writer; read-only mode never takes its lock.
+[analyst.catalogs]
+keeper = "../state/keeper/catalog/catalog.sqlite"
+duck-tape = "../state/tapes/duck-tape/catalog.sqlite"
+duck-tape-polled = "../state/tapes/duck-tape-polled/catalog.sqlite"
+fleet-tape-1 = "../state/tapes/fleet-tape-1/catalog.sqlite"
+
+[developer]
+model = "claude-opus-5"
+# Worktrees live under the state dir, outside the repo and outside state/.
+# worktree_root = defaults to <state_dir>/worktrees
+base = "main"
+max_turns = 40

@@ -22,10 +22,19 @@ import joshi_evidence
 # bar-time range stated) so one tool result cannot drown a turn. The scene
 # route itself is bounded at 4MB; a turn is not the place for all of it.
 MAX_SCENE_TEXT = 120_000
+# A live board scene can carry ~1000 subjects; candle elision alone leaves it
+# megabytes wide. When still over MAX_SCENE_TEXT, candidates beyond this many
+# (in served order) are elided with the exact count and boundary ids stated.
+MAX_SCENE_CANDIDATES = 24
 
 FEED_ROUTE = "/api/v1/glass/scenes"
 SCENE_ROUTE = "/api/v1/glass/scenes/{scene_id}"
 JOURNAL_ROUTE = "/api/v1/operator/commands?sceneId={scene_id}"
+
+# The feed accumulates every scene the core ever derived (hundreds on a
+# long-lived core) and a turn only ever needs the newest few. Bounded so one
+# tool result cannot drown the turn; the total is always stated.
+MAX_FEED_SCENES = 15
 
 
 class ToolError(Exception):
@@ -83,6 +92,11 @@ class ResidentTools:
             view, elisions = _elide_candles(view)
             body = json.dumps(view, indent=1)
             header["elided"] = elisions
+        if len(body) > MAX_SCENE_TEXT:
+            view, kept, dropped = _elide_candidates(view)
+            body = json.dumps(view, indent=1)
+            header["candidatesElided"] = dropped
+            header["candidatesKept"] = kept
         return json.dumps(header, indent=1) + "\n" + body
 
     # ------------------------------------------------------------------
@@ -184,7 +198,22 @@ class ResidentTools:
             body = json.loads(raw)
         except ValueError as error:
             raise ToolError(f"scene feed answered 200 with unparseable bytes: {error}")
-        return json.dumps({"feedServed": True, "feed": body}, indent=1)
+        scenes = body.get("scenes")
+        if not isinstance(scenes, list):
+            return json.dumps({"feedServed": True, "feed": body}, indent=1)
+        out = {
+            "feedServed": True,
+            "scenesTotal": len(scenes),
+            "newestFirst": scenes[:MAX_FEED_SCENES],
+        }
+        if len(scenes) > MAX_FEED_SCENES:
+            out["note"] = (f"showing the newest {MAX_FEED_SCENES} of "
+                           f"{len(scenes)} scenes; each entry keeps its exact "
+                           f"feed fields; older scenes exist and are not shown")
+        extra = {key: value for key, value in body.items() if key != "scenes"}
+        if extra:
+            out["feedEnvelope"] = extra
+        return json.dumps(out, indent=1)
 
 
 # ----------------------------------------------------------------------
@@ -223,6 +252,29 @@ def _render_command(command: dict) -> dict:
         "words": words,
         "payload": payload,
     }
+
+
+def _elide_candidates(view: dict) -> tuple[dict, int, dict]:
+    """Keep the first MAX_SCENE_CANDIDATES candidates in served order; state
+    exactly what was dropped (count and boundary ids), never silently.
+
+    Returns (view, kept_count, dropped_summary)."""
+    view = json.loads(json.dumps(view))  # deep copy; never mutate the caller's
+    payload = view.get("payload") or {}
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) <= MAX_SCENE_CANDIDATES:
+        return view, len(candidates or []), {"count": 0}
+    dropped = candidates[MAX_SCENE_CANDIDATES:]
+    dropped_summary = {
+        "count": len(dropped),
+        "firstDroppedId": (dropped[0] or {}).get("id"),
+        "lastDroppedId": (dropped[-1] or {}).get("id"),
+        "note": (f"scene too wide for one turn: kept the first "
+                 f"{MAX_SCENE_CANDIDATES} candidates in served order, "
+                 f"dropped {len(dropped)} — they exist and are not shown"),
+    }
+    payload["candidates"] = candidates[:MAX_SCENE_CANDIDATES]
+    return view, MAX_SCENE_CANDIDATES, dropped_summary
 
 
 def _elide_candles(view: dict) -> tuple[dict, list[dict]]:

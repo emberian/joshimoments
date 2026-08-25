@@ -105,15 +105,24 @@ class ResidentEngine:
     """Runs the resident's turns through the Claude Agent SDK."""
 
     def __init__(self, tools: ResidentTools, state_dir: Path,
-                 model: str = DEFAULT_MODEL):
+                 model: str = DEFAULT_MODEL,
+                 extra_specs: list[tuple] | None = None,
+                 system_prompt_extra: str = ""):
+        """extra_specs extends the jailed tool surface: a list of
+        (name, description, {arg: type}, callable) exactly like the base
+        specs. Every extra callable must be as read-only and bounded as the
+        base four — the jail is only as tight as its loosest tool."""
         self.tools = tools
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.model = model
+        self.system_prompt = SYSTEM_PROMPT + (system_prompt_extra or "")
+        self.extra_specs = list(extra_specs or [])
         self.sdk_session_id: str | None = None
         self.rotate_next = False       # set on a limit; consumed next turn
         self._limit_reason: str | None = None
         self._turn_tool_calls: list = []
+        self._allowed_tools: list[str] = []
         self._server = self._build_server()
 
     # ------------------------------------------------------------------
@@ -162,7 +171,9 @@ class ResidentEngine:
             ("read_scene",
              "Read one immutable JOSHI scene: the served snapshot with its "
              "candidates, price bars, and holds context. Reports the "
-             "viewDigest you must cite when journaling about this scene.",
+             "viewDigest you must cite when journaling about this scene. "
+             "Bounded: on a wide board scene, candle arrays and candidates "
+             "past the first 24 are elided with exact counts stated.",
              {"scene_id": str},
              tools.read_scene),
             ("read_journal",
@@ -182,16 +193,18 @@ class ResidentEngine:
              {"scene_id": str, "view_digest": str, "words": str},
              tools.append_note),
             ("list_scenes",
-             "List the scenes this core serves, newest first, where a scene "
-             "feed route is mounted. On an older core the honest answer is "
-             "feedServed=false — the scene in your turn context is then the "
-             "only known scene.",
+             "List the scenes this core serves, newest first, bounded to the "
+             "newest 15 with the total stated. On an older core the honest "
+             "answer is feedServed=false — the scene in your turn context is "
+             "then the only known scene.",
              {},
              tools.list_scenes),
         ]
+        specs = specs + self.extra_specs
         sdk_tools = []
         for name, description, schema, call in specs:
             sdk_tools.append(tool(name, description, schema)(self._wrap(name, call)))
+        self._allowed_tools = [f"mcp__joshi__{name}" for name, *_ in specs]
         return create_sdk_mcp_server(name="joshi", tools=sdk_tools)
 
     # ------------------------------------------------------------------
@@ -204,15 +217,12 @@ class ResidentEngine:
         config_dir = self.state_dir / "claude-config"
         config_dir.mkdir(parents=True, exist_ok=True)
         return ClaudeAgentOptions(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt,
             model=self.model,
             max_turns=MAX_TOOL_TURNS,
             mcp_servers={"joshi": self._server},
             tools=[],  # no Claude Code host tools — the jailed surface only
-            allowed_tools=["mcp__joshi__read_scene",
-                           "mcp__joshi__read_journal",
-                           "mcp__joshi__append_note",
-                           "mcp__joshi__list_scenes"],
+            allowed_tools=list(self._allowed_tools),
             permission_mode="bypassPermissions",
             setting_sources=[],  # never load the host user's CLAUDE.md
             resume=self.sdk_session_id or None,
