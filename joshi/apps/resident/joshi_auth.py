@@ -41,6 +41,10 @@ def probe_accounts(max_age: float = 60.0) -> list[dict]:
     return rows
 
 
+# Sort key: usable accounts (rank 0) rank ahead of unusable ones (rank 2), and
+# the negated weekly utilization puts the busiest usable account first so it
+# drains before fresher ones -- accounts are sticky, so spreading load across
+# them would cold prompt caches.
 def _health(row: dict) -> tuple[int, float]:
     q = row.get("quota") or {}
     status = q.get("status", "unknown")
