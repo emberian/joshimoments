@@ -1,72 +1,123 @@
-# JOSHI — session handoff, 2026-08-23 morning
+# JOSHI — session handoff, 2026-08-25 (seed for the curated continuation)
 
-Seed for a fresh session. The repo is the source of truth; this is orientation, not history.
-`GOAL.md` carries the full done-log and every correction Ember made along the way.
+The repo is the source of truth; this is orientation. GOAL.md carries the long done-log and
+every correction. docs/planning/REORIENTATION.md is the forward program (five ranked thrusts).
+docs/reference/PUMP_API_MAP.md maps the provider surface. The reader of this file is assumed to
+be the curated continuation of the session that wrote it.
 
 ## Where things stand
 
-Tree clean, all lanes integrated and gated: fmt clean, workspace clippy `-D warnings` clean,
-joshi-core 81, Glass 252, pump-api/adapter/admission 164, liquidity/market-math 100, store/operator
-included, analysis 291 (ruff clean).
+Tree clean and gated at HEAD. Ember has a live session (joshi-up: keeper + follow core + glass,
+started from committed release binaries). The day landed, in order: hunt mode (live sessions
+open on a dense recency-ordered board; `'` toggles inspect), hot attention (hold / hot-scope /
+inspect → keeper leases the coin: 1s candles with units, trades, coin_exact, callout_top,
+community callouts), the socket recorder with reconnect-and-restate, the self-writing session
+debrief (state/s2/), scalplab (pre-registered probabilistic lab, armed, INSUFFICIENT_DATA
+verdicts with real diagnostics), the LP desk (her wSOL/USDC book reconstructed to the atom),
+the social taps (movers volume + community callout counters flowing through the keeper), boot
+perf (51s → 0.7s warm; the backup was 99.96% nanosleep), and the bounded candidate render
+(1,343 subjects → 300 by recency, elision stated — the 6.4MB/500 fix, derivation v4).
 
-**The window composes.** `keeper -> catalog -> follow-mode -> scene` works end to end for both the
-wallet source and the price source. The keeper commits real bounded cycles with hard budgets, a
-heartbeat, and clean SIGTERM coherence. Scenes are immutable; new observations mint new scenes, a
-journal write does not, and the operator chooses when to advance. A resident (Claude Agent SDK,
-jailed to four MCP tools) can pair like the cockpit and write durable evidence.
+## OPEN BUGS, with their exact next steps
 
-**Ember can hold a coin with one key.** `;` binds a durable `record_focus` to exact scene bytes,
-the held rail never scrolls away, and the journal reads acts back verbatim after restart. What she
-saw (`viewport`) is now recorded distinctly from what was drawn (`rendered`).
+1. **Holds 422 on the live board (BLOCKING her chair).** A `;` hold on a real board candidate
+   ($MATADOR, a discovery-row candidate) → "operator command append failed (422)"; the
+   session's pairing store holds ZERO committed acts. The client path works (post reaches
+   core); core refuses. The two possible codes are `invalid_operator_command` (wire validation,
+   service.rs ~1458) and `operator_commit_rejected` (store admission, ~1542) — the detail
+   string decides. Repro was mid-flight when this session ended: pair via the code file
+   (delete `state/keeper/cockpit-state/pairing-code`, core reissues within poll_seconds), GET
+   the newest scene + snapshot, build a canonical `record_focus` hold EXACTLY as
+   apps/glass/src/operator/holds.ts does (label "Hold coin", version "1", context nulls,
+   dwellMilliseconds null) using apps/resident/joshi_evidence.py's canonical serializer
+   (mirror record_annotation_command's field order; separators compact; UTF-8) and
+   joshi_pairing.py's append_command. Read the 422 body. Suspects worth checking against the
+   detail: something about board/discovery candidate ids or the automatic assertions riding
+   along (viewport/pointed choice-set validation against the served view).
+2. **Presentation append 404 in follow mode.** The scope is granted now, so Glass tries and
+   gets route_not_mounted (NotConfigured — follow-mode CoreService lacks a presentation store).
+   Either wire it or make Glass feature-detect; today it renders as a red banner.
+3. **Venue readout NetworkError on held coins** in live sessions — likely the venue-readouts
+   route absent in follow mounts unless --venue-accounts was passed; check and make honest.
+4. **`'` inspect → candles** is wired end to end (attention.ts inspectAssertionIntent → App.tsx
+   toggleSurface → core hot_requests.rs → keeper hot leases; all tested) but blocked by bug 1:
+   no act commits, so no hot file appears. Fix 1 and this likely just works.
 
-## What is measured, and what it says
+## EMBER'S STANDING INSTRUCTIONS (unexecuted or ongoing)
 
-- **The dip is real and candles cannot see it.** Live on our own tape: 45.16% drawdown at event
-  resolution where the one-minute close series shows 1.27%. 77% of coins have <=3 candles in their
-  first hour.
-- **Venue fee tier dominates, not graduation.** A freshly graduated pool measured 249 bps and a
-  0.81 SOL max clip — indistinguishable from a bonding curve — because its market cap selects the
-  first tier row. The lever is which row the cap selects.
-- **State age beats arithmetic.** ~12s chain-to-receipt at finalized; a pool drifted 9-10 bps in
-  30s, so a 60 bps fee floor is two to four minutes of drift.
-- **Post-callout, the edge is in waiting.** 6/6 sampled callouts dipped below the callout price
-  (median 28%); 6/6 clear the hurdle entering at the trough vs 2/6 at the callout price. n=6, and
-  the occurrence-vs-availability confound is unresolved.
-- **Nothing beat doing nothing.** Replaying the retained tape through five declared variants: 0 of 5
-  on any coin cleared its own drift haircut against a net of zero. Also, the parameter grid was
-  finer than the tape's price granularity — five strategies were two behaviours.
-- **Regime persists a few hundred events ahead, not across lifetimes** — and only on the coins worth
-  working (split-half rho 0.51 there, ~0 pooled). The two clocks disagree at chance level, so a tag
-  must name its clock.
-- **Selection is the unmeasured frontier.** Callers show no forward edge, leaderboards are
-  retrospective, and the strongest corpus predictor is an accounting identity. If there is alpha
-  here, current evidence points at Ember's own picking — which is now instrumented and pre-registered.
+- **THE COPY PASS, her words**: "look at all the text. EVERY SENTENCE IS DISCLAIMING 'IS NOT IS
+  NOT'... PLEASE do a pass over all copy and just omit all of that. it's so needless." Strip
+  disclaimer prose from ALL glass user-facing copy. Honesty lives in STRUCTURE (the dash, the
+  chip, provenance one hover away); the full epistemic sentences may live in tooltips/the
+  scene inspector, never on cards, banners, or empty states. Tests pin many copy strings —
+  update them honestly. This is a whole-surface editorial lane, not a tweak.
+- Background tapes: 10-minute captures only, few per day, as the control corpus — her
+  attention-driven tapes (hot loop) are the primary stream. Never again 90 minutes of guessed
+  coins.
+- Publication intention recorded in GOAL.md: readiness marker = an hour a day in the chair, two
+  days running → then the publication-audit lane (linkage inventory, fixture third-party
+  review, license, book-derivation check, release shape). Keep commits publication-clean.
+- The catalog version string has been extended additively twice (documented at ROUTE_CATALOG);
+  bumping it is a migration wanting her call.
 
-## The next things
+## IN-FLIGHT LANES at session end (transcripts harvestable via cv; agents die with the session)
 
-1. **Bring-up glue.** Everything is built; sitting in it still takes four commands across three
-   terminals plus ferrying a pairing code. One `joshi-up` would close it. Ember's stated next goal
-   is to sit inside JOSHI and iterate from within.
-2. **Run the keeper under launchd for real** (`ops/launchd/`), so the catalog advances unattended.
-3. **The selection power budget**: ~110 scored scenes to detect skill, ~891 for a tradeable edge.
-   That is a lot of sitting; design sessions accordingly.
+- **LP desk** (analysis/joshi_analysis/lpdesk, committed through the shaping extensions): was
+  resumed with two tasks not yet reported — (a) floor-free both-sides recount on a fresh 1-2h
+  dense swap tape ending now (her chart-based pushback: the oracle ring averages away edge
+  touches; the dense window was only 103s during the rip), with the bins-per-candle
+  reconciliation; (b) DAMMv2 measured: find the canonical SOL/USDC cp-amm pool, pull its
+  fee/volume/TVL tape (~100 requests), place it on the attention frontier as a measured
+  cadence-None point. Key numbers already landed: her gross 4.5-11%/day real, net −9.5%/day on
+  the 6.3h trending window; κ=0.075 (effective competing liquidity ~13× the static bin read);
+  attention curve non-monotonic (eager worse than never; ~15min best); shaping (CUSUM
+  withhold-adverse) rescues +0.5-0.9%/3.6h; her cadence 130s vs her band's 10-15min oscillation.
+- **Workability census** (Ember's design: ~300 recent mints + ~100 callouts, statistics →
+  autostrat-harvest interaction test, callout entry-window at n~100): mid-collection, its
+  sweeps run in its own background with state under this session's scratchpad. Its package
+  analysis/src/joshi_analysis/workability/ is UNCOMMITTED and in-flight (a failing test of its
+  own was visible: test_workability_tiers.py). Harvest or re-run; the design is in its brief
+  (cv: the census deputy's transcript).
 
-Done since this handoff was written: the viewport definition is corrected for a primarily-visual
-operator (v2: scroll-rectangle visibility and pointer entry join focus-reach; `pointed` is its own
-recorded kind per Ember's ruling; migration 0025 widens the store vocabulary), and the
-blob-agreement subset check for client-observed kinds is in.
+## WHERE THE TAPES LIVE (session scratchpad — tmp, not durable; move what matters)
 
-## House rules that were learned the hard way
+/private/tmp/claude-501/-Users-you-dev-joshi/8f1bedc9-0a94-40bc-90b0-2e3ac40d6f60/scratchpad/
+holds: duck-tape (socket, 1,689-event collapse tape), duck-tape-polled (134 obs), kylie-tape +
+kylie-backfill (18 trades/s firehose; the sub-block study), fleet-tape-1 (8 coins × 10 min
+control slices), keeper-proof, grid panels (duck-grid-*.txt/json), scalplab-v1-run,
+mount-check-catalog. The scalplab/census read these paths. tmp evaporates on reboot: anything
+the lab needs long-term should be copied into a durable home (state/ or a gitignored
+analysis/fixtures corner) by whoever continues.
 
-An absent row is an absent record; an empty result is not absence; a number without its age is a
-lie by omission. Refuse rather than guess, and make the refusal say why. A schema that cannot
-express "I have nothing" will get a fabricated answer — that already happened once, and a
-fifteen-number dossier was invented to satisfy a required cardinality. Gate the narrowest thing that
-could refute you; never a bare `-p` suite.
+## Measured findings this arc (the ones that steer decisions)
 
-Ember is PRIMARILY VISUAL and uses a pointer. She uses a screen reader sometimes; she is NOT
-keyboard-only, and designing as if she were is a mistake this project already made (a repo doc said
-so, an agent believed it, and it shaped real decisions before she corrected it). Keyboard paths must
-work — six of eight single-letter shortcuts collide with NVDA/JAWS quick-nav, which is why the hold
-key is `;` — but visual scanning is her main channel and should be treated as first-class. (The listbox/`aria-activedescendant` restructure has since landed: the feed is one tab stop,
-scroll-invariant, and hunt mode renders through the same frozen architecture.)
+- Latency tiers: kylie-type coins hold ~94% of extractable structure SAME-SLOT (nobody's
+  reflexes matter; only pre-positioned conditionals reach it — spray-with-bounds is the
+  measured pro meta, 13/13 error-rate wallets); duck-type coins have a climbable gradient
+  (0.5s→+3,347% bound vs 12s→+166%). The intra/cross-slot ratio from a 2-minute backfill is a
+  coin-species classifier — "never fight a kylie-type by hand."
+- The Duck grid ensemble: every cell deep red on the collapse tape; chosen cell −280bps
+  in-sample → −7,722bps held out. "A rule fitted to the first regime was fitted to a market
+  that had already stopped existing."
+- Scalplab: INSUFFICIENT_DATA everywhere (correct); Hawkes branching dial works (kylie 0.908
+  near-critical vs duck 0.166, socket tapes only); needs 6+ moving-coin tapes with 500+ labeled
+  events and 25+ positives each. Corpus composition is the binding constraint — tape coins that
+  MOVE.
+- Two-source reconciliation: 1,584 fills matched, zero price disagreements; 308 socket-missing
+  fills inside its own live window — ack is not coverage, measured twice.
+- The keeper day budget 3500 with hard stop; coincident cycle ≤30.
+
+## House rules learned or re-learned this arc
+
+Named files only when staging around live deputies (a `git add analysis` swept an in-flight
+lane once). Verify SendMessage recipient ids against your own dispatch notes (two LP addenda
+went to the perf deputy). `grep -c` exits nonzero on zero matches — never let it gate a chained
+commit. The narrowest test that could refute you is the one to run FIRST (the candidate-order
+regression shipped because unit fixtures were too small to trip the contract; the perf lane's
+real-catalog mount caught it). Deputies pause on API errors/credit outages with work intact on
+disk — harvest, gate yourself, finish their last step; a resumed send continues them. Her
+verbatim words outrank every summary, including this one.
+
+Ember is PRIMARILY VISUAL and uses a pointer; keyboard complete, reader honest. Absence is
+absence; a number without its age is a lie; instruments must be structurally unable to flatter;
+and the copy should say things, not disclaim them — see her instruction above.
