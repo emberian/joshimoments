@@ -48,7 +48,13 @@ const SEC_FETCH_MODE_HEADER: &str = "sec-fetch-mode";
 const SEC_FETCH_SITE_HEADER: &str = "sec-fetch-site";
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_COMPANION_BYTES: usize = 512 * 1024;
-const MAX_GLASS_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+// JOSHI is a local, loopback, single-operator tool reading the operator's OWN catalog — there is
+// no hostile remote client to defend against, so this is not a security bound. It exists only so
+// a runaway derivation cannot hand a browser tab a response so large it freezes parsing it (the
+// one genuinely physical limit), and to catch a dozens-of-GB accident. 256 MiB is far beyond any
+// realistic board (5000 dense candidates ~= 40 MiB) and still chewable by a browser; the
+// byte-aware candidate cap sits under it as the graceful runaway net, not a routine elider.
+pub(crate) const MAX_GLASS_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PRESENTATION_CLAIM_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]

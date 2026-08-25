@@ -105,14 +105,27 @@ pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 ///   act over a metadata-carrying scene (observed live 2026-08-24: her holds answered 422 and
 ///   the session's act ledger stayed empty). The store now resolves an entry through its named
 ///   parent, exact-match, and the refusal names both identities.
-pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "5";
+/// - `"6"`: the parity-density fields joined the candidate wire
+///   (`docs/planning/PARITY_DENSITY_SEAM.md`). The same retained coin records already carried
+///   them; the derivation now copies out `imageUri`, `description`, `replyCount`,
+///   `athMarketCapUsd`, `athAtUnixMs`, `createdAtUnixMs` (true COIN age, distinct from the
+///   evidence-age `metrics.ageSeconds`), `lastTradeAtUnixMs`, `graduated`, `verified`, `nsfw`,
+///   `currentlyLive` and `chainId` (the record's `chain_id` VERBATIM — the provider went
+///   multichain, and a non-Solana coin must be legible as non-Solana rather than render as a
+///   broken Solana coin) as optional provider claims, each with its own field-named evidence
+///   row riding on the coin record's observation. Retained `board_movers` pages now derive the
+///   per-window `flow` block for the mints their own rows name, bound to the movers
+///   observation, with the label inference (undecoded compact wire keys) stated on the
+///   evidence. Field selection changed, so v5 scenes retire through the existing upgrade path.
+pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "6";
 
-/// The most candidates one scene renders. The bounded Glass response contract is 4 MiB and a
-/// candidate wire with its evidence rows runs a few KB (measured 5.4 KB average on the catalog
-/// that broke: 1,191 subjects, 6.4 MB), so 300 leaves the response comfortably inside its bound
-/// with headroom for hot coins' larger candle paths — while being more than any board renders
-/// attentively. Elision is counted and stated, never silent.
-pub const MAX_RENDERED_CANDIDATES: usize = 300;
+/// The most candidates one scene renders. This is a LOCAL single-operator tool showing the
+/// operator her own coins, so the old stingy 300 (a leftover of a 4 MiB response bound) was
+/// self-imposed friction: her board should show her coins, not refuse most of them. 5000 renders
+/// any realistic catalog whole (~40 MiB at 256 MiB budget, and the feed virtualizer only paints
+/// visible rows), and the byte-aware cap under it catches a genuine runaway. Elision, when it
+/// finally binds, is counted and stated, never silent.
+pub const MAX_RENDERED_CANDIDATES: usize = 5000;
 
 /// Exact, store-derived Glass scene plus the identities that justify every rendered value.
 #[derive(Debug)]
@@ -154,6 +167,12 @@ pub struct LiveSurfaceReport {
     pub coin_metadata_rows: u64,
     /// Candidates whose ticker/name/market-cap claims came from those records.
     pub coin_metadata_subjects: u64,
+    /// Retained `board_movers` bodies this cutoff held and parsed.
+    pub movers_observations: u64,
+    /// Mover rows those bodies carried (one board page holds many entries).
+    pub movers_rows: u64,
+    /// Candidates whose per-window `flow` block came from those rows.
+    pub flow_subjects: u64,
     pub chain_slot_low: Option<String>,
     pub chain_slot_high: Option<String>,
     /// Observation identities that named no subject JOSHI can render, with the reason.
@@ -306,6 +325,8 @@ pub fn derive_live_surface_with(
     let mut windows: Vec<CandleWindow> = Vec::new();
     let mut metadata_observations = 0_usize;
     let mut metadata_rows = 0_usize;
+    let mut movers_observations = 0_usize;
+    let mut movers_rows = 0_usize;
     for (acquisition_id, body) in bodies {
         let refuse = |unrendered: &mut Vec<UnrenderedObservation>, reason: String| {
             unrendered.push(UnrenderedObservation {
@@ -331,10 +352,10 @@ pub fn derive_live_surface_with(
                     attempt
                         .http_status
                         .map_or_else(|| "with no status".to_owned(), |value| value.to_string()),
-                    if attempt.route_id == CANDLE_ROUTE {
-                        "a price series"
-                    } else {
-                        "a coin record"
+                    match attempt.route_id.as_str() {
+                        CANDLE_ROUTE => "a price series",
+                        MOVERS_ROUTE => "a movers board",
+                        _ => "a coin record",
                     },
                 ),
             );
@@ -385,6 +406,31 @@ pub fn derive_live_surface_with(
                     Err(reason) => refuse(&mut unrendered, reason),
                 }
             }
+            MOVERS_ROUTE => {
+                let trust = schema_trust(
+                    store,
+                    &attempt.route_id,
+                    &acquisition_id,
+                    durable.through_commit_seq,
+                )?;
+                match parse_movers_board(&body.payload) {
+                    Ok(rows) => {
+                        movers_observations += 1;
+                        if rows.is_empty() {
+                            refuse(
+                                &mut unrendered,
+                                "movers board page holds no entries, so it names no coin; an \
+                                 empty personalised board is no evidence that nothing moved"
+                                    .to_owned(),
+                            );
+                            continue;
+                        }
+                        movers_rows += rows.len();
+                        admit_movers_rows(rows, body, &trust, &mut subjects);
+                    }
+                    Err(reason) => refuse(&mut unrendered, reason),
+                }
+            }
             other => refuse(
                 &mut unrendered,
                 format!(
@@ -398,6 +444,7 @@ pub fn derive_live_surface_with(
     let candles = bind_candle_windows(windows, options, &mut subjects, rendered_at)?;
     unrendered.extend(candles.notes.iter().cloned());
     resolve_metadata(&mut subjects);
+    resolve_flow(&mut subjects);
 
     if subjects.is_empty() {
         if candles.windows_total > 0 {
@@ -415,10 +462,15 @@ pub fn derive_live_surface_with(
 
     let price_series_rendered = subjects.values().any(|draft| !draft.candles.is_empty());
     let metadata_rendered = subjects.values().any(|draft| !draft.metadata.is_empty());
+    let flow_rendered = subjects.values().any(|draft| !draft.flow.is_empty());
     let price_unit_stated = subjects.values().any(|draft| draft.price_unit_stated);
     let metadata_subjects = subjects
         .values()
         .filter(|draft| !draft.metadata.is_empty())
+        .count();
+    let flow_subjects = subjects
+        .values()
+        .filter(|draft| !draft.flow.is_empty())
         .count();
     let scene_id = scene_identity(&durable);
     let mut candidates = candidate_wires(&subjects, rendered_at)?;
@@ -432,17 +484,40 @@ pub fn derive_live_surface_with(
             .cmp(&a.last_observed_at)
             .then_with(|| a.id.cmp(&b.id))
     });
-    let candidates_elided = candidates.len().saturating_sub(MAX_RENDERED_CANDIDATES);
-    let candidates_rendered = candidates.len().min(MAX_RENDERED_CANDIDATES);
+    // The render bound has TWO limbs and whichever binds first wins: at most
+    // MAX_RENDERED_CANDIDATES, AND small enough that the whole view fits the bounded Glass
+    // response contract. The count limb keeps the board to coins an operator would hunt; the
+    // BYTE limb exists because a candidate's size is not fixed — the density fields (image URL,
+    // description, a movers-flow block, one evidence row per claim) made 300 candidates exceed
+    // 4 MiB, and a count-only cap served bytes the snapshot route then refused with a 500.
+    // Selection is newest-first (already sorted above); the byte walk stops before the first
+    // candidate that would breach the budget, so the rendered set is always a recency prefix.
+    let byte_fit = candidate_byte_fit(
+        &candidates,
+        crate::service::MAX_GLASS_RESPONSE_BYTES.saturating_sub(NON_CANDIDATE_VIEW_MARGIN_BYTES),
+    );
+    let render_limit = MAX_RENDERED_CANDIDATES.min(byte_fit);
+    let candidates_elided = candidates.len().saturating_sub(render_limit);
+    let candidates_rendered = candidates.len().min(render_limit);
     if candidates_elided > 0 {
-        candidates.truncate(MAX_RENDERED_CANDIDATES);
+        let bound = if byte_fit < MAX_RENDERED_CANDIDATES {
+            format!(
+                "the bounded {}-byte Glass response contract ({candidates_rendered} of \
+                 {} candidates fit at this cut's density)",
+                crate::service::MAX_GLASS_RESPONSE_BYTES,
+                candidates.len()
+            )
+        } else {
+            format!("{MAX_RENDERED_CANDIDATES} rendered")
+        };
+        candidates.truncate(render_limit);
         unrendered.push(UnrenderedObservation {
             observation_id: format!("candidates:elided:{candidates_elided}"),
             locator: None,
             reason: format!(
                 "{candidates_elided} additional observed subject(s) were elided by recency at \
-                 the bounded response contract ({MAX_RENDERED_CANDIDATES} rendered); they remain \
-                 observed in the catalog, and elision is a render bound, never a denial"
+                 {bound}; they remain observed in the catalog, and elision is a render bound, \
+                 never a denial"
             ),
         });
     }
@@ -455,6 +530,7 @@ pub fn derive_live_surface_with(
         rendered_at,
         price_series_rendered,
         metadata_rendered,
+        flow_rendered,
     );
     let cursors = watermark
         .cursors()
@@ -525,6 +601,9 @@ pub fn derive_live_surface_with(
         coin_metadata_observations: u64::try_from(metadata_observations).unwrap_or(u64::MAX),
         coin_metadata_rows: u64::try_from(metadata_rows).unwrap_or(u64::MAX),
         coin_metadata_subjects: u64::try_from(metadata_subjects).unwrap_or(u64::MAX),
+        movers_observations: u64::try_from(movers_observations).unwrap_or(u64::MAX),
+        movers_rows: u64::try_from(movers_rows).unwrap_or(u64::MAX),
+        flow_subjects: u64::try_from(flow_subjects).unwrap_or(u64::MAX),
         chain_slot_low: slot_low.map(|value| value.to_string()),
         chain_slot_high: slot_high.map(|value| value.to_string()),
         unrendered_observations: unrendered,
@@ -546,6 +625,9 @@ pub fn derive_live_surface_with(
             }
             (true, false) => "provider_asserted_price_path_no_unit_no_fill_no_executability",
             (false, true) => "provider_asserted_coin_metadata_no_price_no_fill",
+            // A movers-only cut still renders provider-asserted per-window volume claims, so
+            // its ceiling must not read "identity only".
+            (false, false) if flow_rendered => "provider_asserted_movers_flow_no_price_no_fill",
             (false, false) => "chain_identity_only_no_price_no_fill",
         },
     };
@@ -571,14 +653,34 @@ struct SubjectDraft {
     /// Every provider coin record naming this mint. `resolve_metadata` turns the newest into the
     /// rendered claim below and keeps every disagreement visible in the evidence.
     metadata: Vec<CoinMetadataClaim>,
+    /// Every retained movers-board row naming this mint. `resolve_flow` renders the newest.
+    movers: Vec<MoversFlowClaim>,
+    /// Rendered per-window flow claims, resolved from `movers`. Empty means not tapped: a dash.
+    flow: Vec<FlowWindowWire>,
     /// Rendered identity and market-cap claims, resolved from `metadata`. All provider claims.
     symbol: Option<String>,
     name: Option<String>,
     market_cap_usd: Option<String>,
+    /// Parity-density provider claims resolved from the same newest coin record
+    /// (`docs/planning/PARITY_DENSITY_SEAM.md`). Absent stays absent, never a zero or "".
+    image_uri: Option<String>,
+    description: Option<String>,
+    reply_count: Option<String>,
+    ath_market_cap_usd: Option<String>,
+    ath_at_unix_ms: Option<String>,
+    created_at_unix_ms: Option<String>,
+    last_trade_at_unix_ms: Option<String>,
+    graduated: Option<bool>,
+    verified: Option<bool>,
+    nsfw: Option<bool>,
+    currently_live: Option<bool>,
+    chain_id: Option<String>,
     /// The same document asserted two USD market caps and they differ.
     market_cap_disagrees: bool,
     /// Sentence for the candidate caption naming where the metadata came from and how old it is.
     metadata_note: Option<String>,
+    /// Sentence for the candidate caption naming where the flow block came from and its labels.
+    flow_note: Option<String>,
     /// Newest bar close, rendered as a SOL price only when the request stated that denomination.
     price_sol: Option<String>,
     /// Every merged window restated the denomination the request asked for.
@@ -615,6 +717,9 @@ const CANDLE_ROUTE: &str = "candles";
 const COIN_EXACT_ROUTE: &str = "coin_exact";
 /// Route identity for the discovery feed (`/coins`, a bare array of coin records).
 const DISCOVERY_ROUTE: &str = "discovery_coins";
+/// Route identity for the advanced-indexer movers board (`/boards/movers`, one envelope whose
+/// `entries` rows carry compact keys and name their own mints).
+const MOVERS_ROUTE: &str = "board_movers";
 
 /// The exact `joshi.pump_api.acquisition.v1` fields this surface reads back.
 struct PumpAttempt {
@@ -784,6 +889,30 @@ struct CoinRecordWire<'a> {
     usd_market_cap: Option<&'a serde_json::value::RawValue>,
     #[serde(borrow)]
     market_cap_usd: Option<&'a serde_json::value::RawValue>,
+    // Parity-density fields the same records already carry (PARITY_DENSITY_SEAM.md). The
+    // numerics are raw literals for the same reason the market caps are: an f64 round-trip
+    // would fabricate digits nobody asserted. The schema review for this route family measured
+    // the `*_timestamp` fields as epoch MILLISECONDS (review:pump-discovery-coins:2026-08-22:v1
+    // records the units hazard: `updated_at` alone is epoch seconds, and it is not read here).
+    image_uri: Option<String>,
+    description: Option<String>,
+    #[serde(borrow)]
+    reply_count: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    ath_market_cap: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    ath_market_cap_timestamp: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    created_timestamp: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    last_trade_timestamp: Option<&'a serde_json::value::RawValue>,
+    complete: Option<bool>,
+    verified: Option<bool>,
+    nsfw: Option<bool>,
+    is_currently_live: Option<bool>,
+    /// The chain this record asserts its mint lives on, e.g. "solana:5eykt4…" — or an EVM
+    /// chain id now that the provider is multichain. Retained verbatim, never normalized.
+    chain_id: Option<String>,
 }
 
 /// One coin record's renderable claims, before the read's clocks and trust are attached.
@@ -797,8 +926,34 @@ struct CoinRecordClaim {
     usd_market_cap: Option<String>,
     /// Exact sibling `market_cap_usd` literal, kept for the disagreement statement.
     market_cap_usd: Option<String>,
+    /// Parity-density claims out of the same record, each already validated for its wire
+    /// grammar (exact decimal, wire-u64, or non-empty text) or absent with a note.
+    density: DensityClaims,
     /// Honesty notes about this row: an empty ticker, a literal the contract cannot carry.
     notes: Vec<String>,
+}
+
+/// The parity-density provider claims one coin record carries, in wire-ready form.
+#[derive(Clone, Debug, Default)]
+struct DensityClaims {
+    image_uri: Option<String>,
+    description: Option<String>,
+    /// Wire-u64 literal of the provider's `reply_count`.
+    reply_count: Option<String>,
+    /// Exact `ath_market_cap` decimal literal. The record states no unit on this field; the
+    /// USD reading is the seam's pinned one and every evidence note names the provider field.
+    ath_market_cap: Option<String>,
+    /// Epoch-milliseconds wire-u64 literals, the unit the schema review measured.
+    ath_market_cap_timestamp: Option<String>,
+    created_timestamp: Option<String>,
+    last_trade_timestamp: Option<String>,
+    complete: Option<bool>,
+    verified: Option<bool>,
+    nsfw: Option<bool>,
+    is_currently_live: Option<bool>,
+    /// Verbatim `chain_id` literal. JOSHI's analysis stack is Solana-only, so this is what
+    /// makes a multichain coin legible AS non-Solana instead of a broken Solana coin.
+    chain_id: Option<String>,
 }
 
 /// One coin record bound to the read that retained it: what the candidate resolution consumes.
@@ -813,6 +968,7 @@ struct CoinMetadataClaim {
     name: Option<String>,
     usd_market_cap: Option<String>,
     market_cap_usd: Option<String>,
+    density: DensityClaims,
     notes: Vec<String>,
     trust_sentence: String,
     trust_promoted: bool,
@@ -867,6 +1023,30 @@ fn record_decimal(
     }
 }
 
+/// Copy one non-negative integer literal out of a record byte-for-byte as a wire-u64 string,
+/// or state why it cannot be carried. Used for counters and for the provider's epoch-millisecond
+/// timestamp family; a fractional or out-of-range literal is refused, never rounded.
+fn record_wire_u64(
+    value: Option<&serde_json::value::RawValue>,
+    field: &str,
+    notes: &mut Vec<String>,
+) -> Option<String> {
+    let literal = value?.get().to_owned();
+    let canonical = !literal.is_empty()
+        && literal.bytes().all(|byte| byte.is_ascii_digit())
+        && !(literal.len() > 1 && literal.starts_with('0'))
+        && literal.parse::<u64>().is_ok();
+    if canonical {
+        Some(literal)
+    } else {
+        notes.push(format!(
+            "the provider wrote `{field}` as {literal}, which is not a canonical non-negative \
+             integer the Glass contract can carry, so it is not rendered as a number"
+        ));
+        None
+    }
+}
+
 /// Parse one retained metadata body into per-row claims, refusing shapes it cannot read exactly.
 fn parse_coin_records(route_id: &str, bytes: &[u8]) -> Result<Vec<CoinRecordClaim>, String> {
     let claim = |record: CoinRecordWire<'_>, ordinal: Option<usize>| {
@@ -876,6 +1056,32 @@ fn parse_coin_records(route_id: &str, bytes: &[u8]) -> Result<Vec<CoinRecordClai
         let name = record_text(record.name, "name", &mut notes);
         let usd_market_cap = record_decimal(record.usd_market_cap, "usd_market_cap", &mut notes);
         let market_cap_usd = record_decimal(record.market_cap_usd, "market_cap_usd", &mut notes);
+        let density = DensityClaims {
+            image_uri: record_text(record.image_uri, "image_uri", &mut notes),
+            description: record_text(record.description, "description", &mut notes),
+            reply_count: record_wire_u64(record.reply_count, "reply_count", &mut notes),
+            ath_market_cap: record_decimal(record.ath_market_cap, "ath_market_cap", &mut notes),
+            ath_market_cap_timestamp: record_wire_u64(
+                record.ath_market_cap_timestamp,
+                "ath_market_cap_timestamp",
+                &mut notes,
+            ),
+            created_timestamp: record_wire_u64(
+                record.created_timestamp,
+                "created_timestamp",
+                &mut notes,
+            ),
+            last_trade_timestamp: record_wire_u64(
+                record.last_trade_timestamp,
+                "last_trade_timestamp",
+                &mut notes,
+            ),
+            complete: record.complete,
+            verified: record.verified,
+            nsfw: record.nsfw,
+            is_currently_live: record.is_currently_live,
+            chain_id: record_text(record.chain_id, "chain_id", &mut notes),
+        };
         mint.map(|mint| CoinRecordClaim {
             row_ordinal: ordinal,
             mint,
@@ -883,6 +1089,7 @@ fn parse_coin_records(route_id: &str, bytes: &[u8]) -> Result<Vec<CoinRecordClai
             name,
             usd_market_cap,
             market_cap_usd,
+            density,
             notes,
         })
         .ok_or(ordinal)
@@ -942,6 +1149,7 @@ fn admit_coin_records(
             name: record.name,
             usd_market_cap: record.usd_market_cap,
             market_cap_usd: record.market_cap_usd,
+            density: record.density,
             notes: record.notes,
             trust_sentence: trust.sentence(),
             trust_promoted: trust.promoted(),
@@ -1003,11 +1211,36 @@ fn resolve_metadata(subjects: &mut BTreeMap<String, SubjectDraft>) {
                 earlier.symbol != winner.symbol
                     || earlier.name != winner.name
                     || earlier.usd_market_cap != winner.usd_market_cap
+                    || earlier.density.image_uri != winner.density.image_uri
+                    || earlier.density.description != winner.density.description
+                    || earlier.density.reply_count != winner.density.reply_count
+                    || earlier.density.ath_market_cap != winner.density.ath_market_cap
+                    || earlier.density.ath_market_cap_timestamp
+                        != winner.density.ath_market_cap_timestamp
+                    || earlier.density.created_timestamp != winner.density.created_timestamp
+                    || earlier.density.last_trade_timestamp != winner.density.last_trade_timestamp
+                    || earlier.density.complete != winner.density.complete
+                    || earlier.density.verified != winner.density.verified
+                    || earlier.density.nsfw != winner.density.nsfw
+                    || earlier.density.is_currently_live != winner.density.is_currently_live
+                    || earlier.density.chain_id != winner.density.chain_id
             })
             .count();
         draft.symbol = winner.symbol.clone();
         draft.name = winner.name.clone();
         draft.market_cap_usd = winner.usd_market_cap.clone();
+        draft.image_uri = winner.density.image_uri.clone();
+        draft.description = winner.density.description.clone();
+        draft.reply_count = winner.density.reply_count.clone();
+        draft.ath_market_cap_usd = winner.density.ath_market_cap.clone();
+        draft.ath_at_unix_ms = winner.density.ath_market_cap_timestamp.clone();
+        draft.created_at_unix_ms = winner.density.created_timestamp.clone();
+        draft.last_trade_at_unix_ms = winner.density.last_trade_timestamp.clone();
+        draft.graduated = winner.density.complete;
+        draft.verified = winner.density.verified;
+        draft.nsfw = winner.density.nsfw;
+        draft.currently_live = winner.density.is_currently_live;
+        draft.chain_id = winner.density.chain_id.clone();
         if draft.metadata.iter().any(|claim| !claim.trust_promoted) {
             draft.schema_unpromoted = true;
         }
@@ -1044,7 +1277,7 @@ fn resolve_metadata(subjects: &mut BTreeMap<String, SubjectDraft>) {
         draft.metadata_note = Some(identity_note);
         // Evidence rows for the rendered fields, one per field, carrying the read's own clock so
         // the age of every number is part of what reaches the screen.
-        let field_rows: [(&str, Option<&String>, String); 3] = [
+        let field_rows: [(&str, Option<&String>, String); 11] = [
             (
                 "symbol",
                 winner.symbol.as_ref(),
@@ -1080,6 +1313,102 @@ fn resolve_metadata(subjects: &mut BTreeMap<String, SubjectDraft>) {
                         .unwrap_or("(absent from the record)"),
                 ),
             ),
+            (
+                "imageUri",
+                winner.density.image_uri.as_ref(),
+                format!(
+                    "Provider-asserted coin art URL from {}, copied verbatim. {} A remote, \
+                     provider-controlled address: rendering it fetches from that third party, \
+                     and JOSHI neither hosts nor validates what it serves.",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "description",
+                winner.density.description.as_ref(),
+                format!(
+                    "Provider-asserted description from {}: the coin's own free text, copied \
+                     verbatim. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "replyCount",
+                winner.density.reply_count.as_ref(),
+                format!(
+                    "The provider's own `reply_count` social counter from {}, copied \
+                     byte-for-byte: a mutable provider counter, not a measurement this project \
+                     made. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "athMarketCapUsd",
+                winner.density.ath_market_cap.as_ref(),
+                format!(
+                    "The provider's `ath_market_cap` literal from {}, copied byte-for-byte. The \
+                     record itself states no unit on this field; the USD-labelled wire field is \
+                     the parity seam's pinned reading of this provider family (its advanced \
+                     indexer names the same quantity athMarketCapUsd), and this note names the \
+                     provider's actual field so the labelling stays visible. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "athAtUnixMs",
+                winner.density.ath_market_cap_timestamp.as_ref(),
+                format!(
+                    "The provider's `ath_market_cap_timestamp` from {}, epoch milliseconds — \
+                     the unit the schema review measured for this route family's timestamp \
+                     fields. A provider claim about when its own all-time-high printed, not a \
+                     clock this project observed. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "createdAtUnixMs",
+                winner.density.created_timestamp.as_ref(),
+                format!(
+                    "The provider's `created_timestamp` from {}, epoch milliseconds: the COIN'S \
+                     own creation instant as the provider asserts it. Distinct from this \
+                     candidate's metrics.ageSeconds, which is EVIDENCE age — how long this \
+                     surface has known of the mint — and which must never be read as coin age; \
+                     true coin age derives from this field. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "lastTradeAtUnixMs",
+                winner.density.last_trade_timestamp.as_ref(),
+                format!(
+                    "The provider's `last_trade_timestamp` from {}, epoch milliseconds. A \
+                     market clock: a quiet coin's newest trade is arbitrarily older than the \
+                     read that carried it, so this is never feed freshness. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
+            (
+                "chainId",
+                winner.density.chain_id.as_ref(),
+                format!(
+                    "The provider's own `chain_id` claim from {}, copied verbatim: the chain \
+                     this record asserts its mint lives on, now that the provider is \
+                     multichain. JOSHI's analysis stack (curve reserves, fee floors, venue \
+                     math, trades) is Solana-only, so a non-Solana value marks this candidate \
+                     as outside that stack rather than a broken Solana coin. No normalization \
+                     or friendly label is applied here; any reading like \"is Solana\" derives \
+                     from this literal. {}",
+                    winner.provenance(),
+                    winner.trust_sentence,
+                ),
+            ),
         ];
         for (field, value, note) in field_rows {
             if value.is_none() {
@@ -1097,6 +1426,365 @@ fn resolve_metadata(subjects: &mut BTreeMap<String, SubjectDraft>) {
                 note,
             });
         }
+        // The provider's boolean flags, each rendered only when the record actually carried it:
+        // `false` is a claim the provider made, absence is not.
+        let flag_rows: [(&str, &str, Option<bool>); 4] = [
+            ("graduated", "complete", winner.density.complete),
+            ("verified", "verified", winner.density.verified),
+            ("nsfw", "nsfw", winner.density.nsfw),
+            (
+                "currentlyLive",
+                "is_currently_live",
+                winner.density.is_currently_live,
+            ),
+        ];
+        for (field, provider_field, value) in flag_rows {
+            let Some(value) = value else {
+                continue;
+            };
+            draft.evidence.push(EvidenceDraft {
+                id: winner.evidence_id(&format!("claim-{field}")),
+                observation_id: Some(winner.observation_id.clone()),
+                source_id: winner.source_id.clone(),
+                field: field.to_owned(),
+                evidence_class: "observed",
+                observed_at: None,
+                ingested_at: winner.ingested_at,
+                known_at: winner.known_at,
+                note: format!(
+                    "The provider's own `{provider_field}` flag from {}, asserted as {value}\
+                     {}. {}",
+                    winner.provenance(),
+                    if field == "graduated" {
+                        " and rendered under `graduated` (the pinned catalog documents \
+                         `complete` as graduation)"
+                    } else {
+                        ""
+                    },
+                    winner.trust_sentence,
+                ),
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pump `board_movers` pages: one envelope (`{board, version, serverTs, entries}`) whose rows use
+// compact keys and name their own mints.
+//
+// Two tiers of meaning, and the tier travels with every value. The mint key `m` is decoded by
+// the provider's own app, so reading it as the mint is the provider's meaning. The volume family
+// (`v5`/`v15`/`v1h`/`v24h`, `vUsd5`/`vUsd15`/`vUsd1h`/`vUsd24h`) and the 5m trade count (`tx5`)
+// are decoded by NOTHING in that app: the pinned catalog records their meanings as inferred from
+// the names and unmeasured, so every number is copied out byte-for-byte under the seam's labels
+// with the inference stated on the evidence — never silently promoted to a measured quantity.
+// The board is a personalised recommendation feed; presence is not rank and is never treated as
+// one. `serverTs` is the provider's stated availability instant for the whole page, epoch
+// milliseconds — the first provider-stated availability clock on any discovery surface.
+// ---------------------------------------------------------------------------------------------
+
+/// The exact compact keys this surface reads out of one movers row.
+#[derive(serde::Deserialize)]
+struct MoversEntryWire<'a> {
+    m: Option<String>,
+    #[serde(borrow)]
+    v5: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    v15: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    v1h: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    v24h: Option<&'a serde_json::value::RawValue>,
+    #[serde(rename = "vUsd5", borrow)]
+    v_usd_5: Option<&'a serde_json::value::RawValue>,
+    #[serde(rename = "vUsd15", borrow)]
+    v_usd_15: Option<&'a serde_json::value::RawValue>,
+    #[serde(rename = "vUsd1h", borrow)]
+    v_usd_1h: Option<&'a serde_json::value::RawValue>,
+    #[serde(rename = "vUsd24h", borrow)]
+    v_usd_24h: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow)]
+    tx5: Option<&'a serde_json::value::RawValue>,
+}
+
+/// The movers board envelope, read for its provider clock and its rows.
+#[derive(serde::Deserialize)]
+struct MoversBoardWire<'a> {
+    #[serde(rename = "serverTs", borrow)]
+    server_ts: Option<&'a serde_json::value::RawValue>,
+    entries: Option<Vec<MoversEntryWire<'a>>>,
+}
+
+/// One provider-asserted flow window, wire-ready: exact literals under the seam's labels.
+#[derive(Clone, Debug)]
+struct MoversWindowClaim {
+    window: &'static str,
+    volume_sol: String,
+    volume_usd: String,
+    /// Only the 5m window carries a per-window trade count on the wire (`tx5`).
+    txns: Option<String>,
+}
+
+/// One flow window's label and its compact volume keys: (window, SOL key, SOL literal,
+/// USD key, USD literal).
+type MoversWindowKeys<'a> = (
+    &'static str,
+    &'static str,
+    Option<&'a serde_json::value::RawValue>,
+    &'static str,
+    Option<&'a serde_json::value::RawValue>,
+);
+
+/// One parsed movers row, before the read's clocks and trust are attached.
+#[derive(Debug)]
+struct MoversRowParsed {
+    row_ordinal: usize,
+    mint: String,
+    server_ts_unix_ms: String,
+    windows: Vec<MoversWindowClaim>,
+    notes: Vec<String>,
+}
+
+/// One movers row bound to the read that retained it: what `resolve_flow` consumes.
+struct MoversFlowClaim {
+    observation_id: String,
+    source_id: String,
+    row_ordinal: usize,
+    ingested_at: UtcTimestamp,
+    known_at: UtcTimestamp,
+    server_ts_unix_ms: String,
+    windows: Vec<MoversWindowClaim>,
+    notes: Vec<String>,
+    trust_sentence: String,
+    trust_promoted: bool,
+}
+
+/// Parse one retained movers body into per-row claims, refusing shapes it cannot read exactly.
+fn parse_movers_board(bytes: &[u8]) -> Result<Vec<MoversRowParsed>, String> {
+    let board = serde_json::from_slice::<MoversBoardWire<'_>>(bytes)
+        .map_err(|error| format!("retained board_movers body is not a movers envelope: {error}"))?;
+    let mut envelope_notes = Vec::new();
+    let Some(server_ts) = record_wire_u64(board.server_ts, "serverTs", &mut envelope_notes) else {
+        return Err(
+            "retained board_movers envelope carries no canonical `serverTs`, so nothing durable \
+             states when the provider produced this board and its per-window flow numbers \
+             cannot carry their provider clock; the page is refused whole"
+                .to_owned(),
+        );
+    };
+    let Some(entries) = board.entries else {
+        return Err(
+            "retained board_movers envelope carries no `entries` array, so it names no coin"
+                .to_owned(),
+        );
+    };
+    let mut rows = Vec::with_capacity(entries.len());
+    let mut mintless = Vec::new();
+    for (ordinal, entry) in entries.into_iter().enumerate() {
+        let Some(mint) = entry.m.filter(|value| !value.is_empty()) else {
+            mintless.push(ordinal);
+            continue;
+        };
+        let mut notes = Vec::new();
+        let specs: [MoversWindowKeys<'_>; 4] = [
+            ("5m", "v5", entry.v5, "vUsd5", entry.v_usd_5),
+            ("15m", "v15", entry.v15, "vUsd15", entry.v_usd_15),
+            ("1h", "v1h", entry.v1h, "vUsd1h", entry.v_usd_1h),
+            ("24h", "v24h", entry.v24h, "vUsd24h", entry.v_usd_24h),
+        ];
+        let mut windows = Vec::new();
+        for (window, sol_key, sol, usd_key, usd) in specs {
+            let volume_sol = record_decimal(sol, sol_key, &mut notes);
+            let volume_usd = record_decimal(usd, usd_key, &mut notes);
+            // Only the 5m window carries a per-window trade count on the wire (`tx5`).
+            let txns = if window == "5m" {
+                record_wire_u64(entry.tx5, "tx5", &mut notes)
+            } else {
+                None
+            };
+            match (volume_sol, volume_usd) {
+                (Some(volume_sol), Some(volume_usd)) => windows.push(MoversWindowClaim {
+                    window,
+                    volume_sol,
+                    volume_usd,
+                    txns,
+                }),
+                // Both keys absent (or both already noted as uncarryable): the window is
+                // omitted, and an omission is never a zero.
+                (None, None) => {}
+                _ => notes.push(format!(
+                    "the `{window}` window carries only one of its two volume literals \
+                     ({sol_key}/{usd_key}), so it is omitted rather than half-rendered"
+                )),
+            }
+        }
+        rows.push(MoversRowParsed {
+            row_ordinal: ordinal,
+            mint,
+            server_ts_unix_ms: server_ts.clone(),
+            windows,
+            notes,
+        });
+    }
+    if !mintless.is_empty() {
+        return Err(format!(
+            "movers row(s) {} carry no `m` mint, so nothing durable says which coins they \
+             describe; the page is refused whole rather than partially trusted",
+            mintless
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    Ok(rows)
+}
+
+/// Fold one retained movers page's rows into the subject drafts, one claim per named mint.
+fn admit_movers_rows(
+    rows: Vec<MoversRowParsed>,
+    body: &DurableSourceObservation,
+    trust: &SchemaTrust,
+    subjects: &mut BTreeMap<String, SubjectDraft>,
+) {
+    for row in rows {
+        let entry = subjects.entry(row.mint.clone()).or_default();
+        entry.evidence.push(EvidenceDraft {
+            id: format!(
+                "{}:row{}:movers-entry",
+                body.observation_id, row.row_ordinal
+            ),
+            observation_id: Some(body.observation_id.to_string()),
+            source_id: body.source_id.to_string(),
+            field: "mint".to_owned(),
+            evidence_class: "observed",
+            observed_at: None,
+            ingested_at: body.received_at,
+            known_at: body.available_at,
+            note: format!(
+                "Named by row {} of the retained board_movers page: the row's own `m` key \
+                 carries this mint, a key the provider's app itself decodes as the mint, so the \
+                 naming is observed in the provider's bytes. The board is a personalised \
+                 recommendation feed; presence is not rank, and two clients can be served \
+                 different boards. {}{}",
+                row.row_ordinal,
+                trust.sentence(),
+                if row.notes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Also on this row: {}.", row.notes.join("; "))
+                },
+            ),
+        });
+        entry.movers.push(MoversFlowClaim {
+            observation_id: body.observation_id.to_string(),
+            source_id: body.source_id.to_string(),
+            row_ordinal: row.row_ordinal,
+            ingested_at: body.received_at,
+            known_at: body.available_at,
+            server_ts_unix_ms: row.server_ts_unix_ms,
+            windows: row.windows,
+            notes: row.notes,
+            trust_sentence: trust.sentence(),
+            trust_promoted: trust.promoted(),
+        });
+    }
+}
+
+/// Resolve each subject's retained movers rows into one rendered flow block, newest first.
+///
+/// The newest read wins the rendered windows; every older read keeps its own naming evidence.
+/// A subject the movers route never named keeps an empty `flow`, which the wire omits entirely:
+/// Glass renders a dash there, never a zero nobody asserted.
+fn resolve_flow(subjects: &mut BTreeMap<String, SubjectDraft>) {
+    for draft in subjects.values_mut() {
+        if draft.movers.is_empty() {
+            continue;
+        }
+        draft.movers.sort_by(|left, right| {
+            left.known_at
+                .as_datetime()
+                .cmp(&right.known_at.as_datetime())
+                .then_with(|| left.observation_id.cmp(&right.observation_id))
+                .then_with(|| left.row_ordinal.cmp(&right.row_ordinal))
+        });
+        let Some(winner) = draft.movers.last() else {
+            continue;
+        };
+        if winner.windows.is_empty() {
+            // The row named the mint but carried no renderable window; the naming evidence
+            // (with its notes) is already on the draft, and no flow is fabricated.
+            continue;
+        }
+        draft.flow = winner
+            .windows
+            .iter()
+            .map(|window| FlowWindowWire {
+                window: window.window.to_owned(),
+                volume_sol: window.volume_sol.clone(),
+                volume_usd: window.volume_usd.clone(),
+                txns: window.txns.clone(),
+                // No movers key is pinned as unique traders (the holder-shaped keys stay
+                // unread until reviewed), so this stays absent rather than borrowed.
+                traders: None,
+                server_ts_unix_ms: winner.server_ts_unix_ms.clone(),
+            })
+            .collect();
+        if !winner.trust_promoted {
+            draft.schema_unpromoted = true;
+        }
+        let earlier = draft.movers.len().saturating_sub(1);
+        draft.flow_note = Some(format!(
+            "Per-window flow numbers are provider claims copied from row {} of the retained \
+             board_movers page, read at {}; the volume/txns labels are inferred from undecoded \
+             compact wire keys and the board is a personalised recommendation feed, so presence \
+             is not rank.",
+            winner.row_ordinal, winner.known_at,
+        ));
+        draft.evidence.push(EvidenceDraft {
+            id: format!(
+                "{}:row{}:claim-flow",
+                winner.observation_id, winner.row_ordinal
+            ),
+            observation_id: Some(winner.observation_id.clone()),
+            source_id: winner.source_id.clone(),
+            field: "flow".to_owned(),
+            evidence_class: "observed",
+            observed_at: None,
+            ingested_at: winner.ingested_at,
+            known_at: winner.known_at,
+            note: format!(
+                "{} per-window flow entries copied byte-for-byte from row {} of the retained \
+                 board_movers page. The NUMBERS are the provider's exact literals; the LABELS \
+                 are inferred: volumeSol/volumeUsd/txns read the compact wire keys \
+                 v5/v15/v1h/v24h, vUsd5/vUsd15/vUsd1h/vUsd24h and tx5, which the provider's \
+                 own app decodes nowhere, so the pinned catalog records their meanings as \
+                 inferred from the names and unmeasured. Only the 5m window carries a \
+                 per-window trade count on the wire, and no key is pinned as unique traders, \
+                 so both stay absent elsewhere rather than borrowed from a cumulative counter. \
+                 serverTsUnixMs {} is the provider's stated availability instant for the whole \
+                 board, epoch milliseconds — a provider clock, not this read's freshness. \
+                 {}{}",
+                winner.windows.len(),
+                winner.row_ordinal,
+                winner.server_ts_unix_ms,
+                winner.trust_sentence,
+                {
+                    let mut trailer = String::new();
+                    if !winner.notes.is_empty() {
+                        let _ = write!(trailer, " Also on this row: {}.", winner.notes.join("; "));
+                    }
+                    if earlier > 0 {
+                        let _ = write!(
+                            trailer,
+                            " {earlier} earlier retained movers read(s) named this mint; the \
+                             newest is rendered and the earlier ones remain in the evidence."
+                        );
+                    }
+                    trailer
+                },
+            ),
+        });
     }
 }
 
@@ -2014,6 +2702,32 @@ fn duration_words(seconds: u64) -> String {
     }
 }
 
+/// Reserved for everything in the view that is NOT the candidate array — the snapshot envelope
+/// prefix, source health with its notes, cursors, projections, chain, and the JSON structure
+/// around the array. A single rich source's health runs a few KiB; 256 KiB is a generous roof,
+/// so the byte budget below never lets the assembled view breach the response contract.
+const NON_CANDIDATE_VIEW_MARGIN_BYTES: usize = 256 * 1024;
+
+/// How many of the (recency-sorted, newest-first) candidates fit under the bounded Glass
+/// response contract. Each candidate's exact serialized size is summed until the next one would
+/// breach the budget; the returned count is that prefix. A per-candidate serialization failure
+/// is impossible here (the wires just serialized to build them), so a candidate that will not
+/// serialize is conservatively treated as unbounded and stops the walk.
+fn candidate_byte_fit<T: serde::Serialize>(candidates: &[T], budget: usize) -> usize {
+    let mut running = 0usize;
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Ok(bytes) = serde_json::to_vec(candidate) else {
+            return index;
+        };
+        // +1 for the array separator this candidate contributes in the assembled view.
+        running = running.saturating_add(bytes.len()).saturating_add(1);
+        if running > budget {
+            return index;
+        }
+    }
+    candidates.len()
+}
+
 #[allow(clippy::too_many_lines)] // Every derived field stays visible next to the row it came from.
 fn candidate_wires(
     subjects: &BTreeMap<String, SubjectDraft>,
@@ -2053,6 +2767,7 @@ fn candidate_wires(
             draft.price_note.as_deref(),
             absence,
             draft.metadata_note.as_deref(),
+            draft.flow_note.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -2084,6 +2799,9 @@ fn candidate_wires(
         }
         if !draft.metadata.is_empty() {
             tags.push("coin_metadata_observed".to_owned());
+        }
+        if !draft.flow.is_empty() {
+            tags.push("movers_flow_observed".to_owned());
         }
         if draft.market_cap_usd.is_some() {
             tags.push("market_cap_from_usd_market_cap".to_owned());
@@ -2130,6 +2848,21 @@ fn candidate_wires(
             // Empty unless a retained candles window was attached above: a bar JOSHI did not see
             // is a market claim it may not make, and neither is a bar it cannot attribute.
             candles: draft.candles.clone(),
+            // Parity-density provider claims; each is skipped from the wire when unobserved so
+            // an absence renders as a dash, never as a zero or an empty string.
+            image_uri: draft.image_uri.clone(),
+            description: draft.description.clone(),
+            reply_count: draft.reply_count.clone(),
+            ath_market_cap_usd: draft.ath_market_cap_usd.clone(),
+            ath_at_unix_ms: draft.ath_at_unix_ms.clone(),
+            created_at_unix_ms: draft.created_at_unix_ms.clone(),
+            last_trade_at_unix_ms: draft.last_trade_at_unix_ms.clone(),
+            graduated: draft.graduated,
+            verified: draft.verified,
+            nsfw: draft.nsfw,
+            currently_live: draft.currently_live,
+            chain_id: draft.chain_id.clone(),
+            flow: draft.flow.clone(),
         });
     }
     Ok(candidates)
@@ -2178,6 +2911,7 @@ fn source_health(
     rendered_at: UtcTimestamp,
     price_series_rendered: bool,
     metadata_rendered: bool,
+    flow_rendered: bool,
 ) -> SourceHealthWire {
     let total = u64::try_from(durable.observations.len()).unwrap_or(u64::MAX);
     let quality_notes = durable
@@ -2200,6 +2934,8 @@ fn source_health(
         .observations
         .first()
         .map_or(0, |observation| observation.commit_seq.get());
+    let market_claims =
+        market_claims_sentence(price_series_rendered, metadata_rendered, flow_rendered);
     SourceHealthWire {
         id: durable.source_id.to_string(),
         label: durable.source_id.to_string(),
@@ -2238,41 +2974,74 @@ fn source_health(
         },
         note: format!(
             "{quality_notes} observation{} recorded an exact adapter quality note. Provider bytes \
-             are retained without an assertion layer beneath them. {} Coverage outside these \
-             commits is unknown rather than empty. The ingest clock above is this source's \
-             freshness; a bar clock inside a candidate is a market clock and is not. Rendered at \
-             {rendered_at}.",
+             are retained without an assertion layer beneath them. {market_claims} Coverage \
+             outside these commits is unknown rather than empty. The ingest clock above is this \
+             source's freshness; a bar clock inside a candidate is a market clock and is not. \
+             Rendered at {rendered_at}.",
             if quality_notes == 1 { "" } else { "s" },
-            match (price_series_rendered, metadata_rendered) {
-                (true, true) => {
-                    "One or more candidates carry an OHLCV path the provider asserted, copied \
-                     out verbatim: those bars are provider claims about price, not fills, not \
-                     quotes, not executability, and the body states no unit for them — where a \
-                     unit is stated, it is the request's own retained denomination. Tickers, \
-                     names and market caps are likewise provider-asserted coin metadata copied \
-                     from retained product reads: claims about a mutable record, not valuations \
-                     this project computed. No size, fill or executability is asserted."
-                }
-                (true, false) => {
-                    "One or more candidates carry an OHLCV path the provider asserted, copied \
-                     out verbatim: those bars are provider claims about price, not fills, not \
-                     quotes, not executability, and the provider states no unit for them. \
-                     Nothing else here is a market claim: no size, market cap or fill is \
-                     asserted."
-                }
-                (false, true) => {
-                    "One or more candidates carry provider-asserted coin metadata (ticker, \
-                     name, market cap) copied from retained product reads: those are the \
-                     provider's claims about a mutable record, not valuations this project \
-                     computed. No price series, size, fill or executability is asserted."
-                }
-                (false, false) => {
-                    "This surface names identities and clocks only: no price, size, market cap \
-                     or fill is claimed."
-                }
-            },
         ),
     }
+}
+
+/// The source-health sentence naming exactly which market claims this cut renders.
+///
+/// It must stay exactly true for every combination actually rendered: an absolute "nothing else
+/// is claimed" next to a rendered flow block would be a lie.
+fn market_claims_sentence(
+    price_series_rendered: bool,
+    metadata_rendered: bool,
+    flow_rendered: bool,
+) -> String {
+    let mut market_claims = match (price_series_rendered, metadata_rendered, flow_rendered) {
+        (true, true, _) => {
+            "One or more candidates carry an OHLCV path the provider asserted, copied \
+             out verbatim: those bars are provider claims about price, not fills, not \
+             quotes, not executability, and the body states no unit for them — where a \
+             unit is stated, it is the request's own retained denomination. Tickers, \
+             names and market caps are likewise provider-asserted coin metadata copied \
+             from retained product reads: claims about a mutable record, not valuations \
+             this project computed. No size, fill or executability is asserted."
+        }
+        (true, false, false) => {
+            "One or more candidates carry an OHLCV path the provider asserted, copied \
+             out verbatim: those bars are provider claims about price, not fills, not \
+             quotes, not executability, and the provider states no unit for them. \
+             Nothing else here is a market claim: no size, market cap or fill is \
+             asserted."
+        }
+        (true, false, true) => {
+            "One or more candidates carry an OHLCV path the provider asserted, copied \
+             out verbatim: those bars are provider claims about price, not fills, not \
+             quotes, not executability, and the provider states no unit for them. No \
+             ticker, name, market cap, size, fill or executability is asserted."
+        }
+        (false, true, _) => {
+            "One or more candidates carry provider-asserted coin metadata (ticker, \
+             name, market cap) copied from retained product reads: those are the \
+             provider's claims about a mutable record, not valuations this project \
+             computed. No price series, size, fill or executability is asserted."
+        }
+        (false, false, true) => {
+            "This surface renders identities, clocks and a movers-board flow block \
+             only: no price series, ticker, market cap, fill or executability is \
+             claimed."
+        }
+        (false, false, false) => {
+            "This surface names identities and clocks only: no price, size, market cap \
+             or fill is claimed."
+        }
+    }
+    .to_owned();
+    if flow_rendered {
+        market_claims.push_str(
+            " One or more candidates carry a movers-board flow block: per-window volume and \
+             trade-count numbers the provider asserted on its personalised recommendation \
+             board, copied byte-for-byte under labels inferred from undecoded wire keys — \
+             provider claims about aggregate trading, not fills, and presence on that board is \
+             not rank.",
+        );
+    }
+    market_claims
 }
 
 /// Deterministic scene identity: the same catalog contents at the same derivation version always
@@ -2490,6 +3259,51 @@ struct CandidateWire {
     episode_id: Option<String>,
     evidence: Vec<EvidenceRefWire>,
     candles: Vec<CandleWire>,
+    // Parity-density claims, mirrored field-for-field (same order, same skip rules) from the
+    // operator contract so the canonical re-serialization check stays byte-exact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_count: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ath_market_cap_usd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ath_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_trade_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graduated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nsfw: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    currently_live: Option<bool>,
+    // `flow` precedes `chainId` so the wire matches the Glass contract's canonical field order
+    // (contract/v1.ts) exactly — the two serializers must agree byte-for-byte or the snapshot
+    // digest Glass recomputes fails closed. chainId is the final candidate key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    flow: Vec<FlowWindowWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chain_id: Option<String>,
+}
+
+/// One movers-board window on the wire, mirroring the operator contract exactly.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FlowWindowWire {
+    window: String,
+    volume_sol: String,
+    volume_usd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    txns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    traders: Option<String>,
+    server_ts_unix_ms: String,
 }
 
 #[derive(Serialize)]
@@ -2539,8 +3353,8 @@ mod tests {
     use super::{
         CandleRow, DecodedObservation, LIVE_SURFACE_DERIVATION_VERSION, LiveSurfaceOptions,
         MAX_LIVE_OBSERVATIONS, change_basis_points, decode_observation, derive_live_surface_with,
-        gap_shape, parse_candle_window, parse_coin_records, scene_identity_under, source_identity,
-        spacing_of,
+        gap_shape, parse_candle_window, parse_coin_records, parse_movers_board,
+        scene_identity_under, source_identity, spacing_of,
     };
     use joshi_domain::{StableString, UtcTimestamp};
     use joshi_pump_adapter::{ProductReadInput, close_receipt, prepare_direct_product_read};
@@ -2572,13 +3386,23 @@ mod tests {
     const DISCOVERY_REVIEW: &str = include_str!(
         "../../../crates/joshi-pump-api/fixtures/schema_review_discovery_coins_v1.json"
     );
+    /// One verbatim `board_movers` fetch outcome retained 2026-08-24: a movers envelope whose
+    /// five entries carry compact keys, name their own mints, and hold the per-window volume
+    /// family plus the 5m trade count. No schema review exists for this route, and that absence
+    /// must travel with the rendered numbers.
+    const MOVERS_OUTCOME: &str =
+        include_str!("../../../crates/joshi-pump-api/fixtures/board_movers_live_outcome_v1.json");
     const COMMITTED_AT: &str = "2026-08-22T01:30:00.000000Z";
+    /// The movers fixture was received 2026-08-24T22:55Z; its commits use this later instant.
+    const MOVERS_COMMITTED_AT: &str = "2026-08-25T00:00:00.000000Z";
     /// The mint the operator actually asked the swap API for. The retained bytes do not say it.
     const SUBJECT: &str = "HgBRWfYxEfvPhtqkaeymCQtHCrKE46qQ43pKe8HCpump";
     /// The mint the retained `coin_exact` record names in its own body.
     const COIN_EXACT_MINT: &str = "14m1ketwD6ikdjxtYnm3jtxVzPD9wXhnu5wYGMTWpump";
     /// The first row of the retained discovery page.
     const DISCOVERY_MINT: &str = "8YL3TBEhoNQmrEBZTD48ZoJAFHz4YiZKDSngLbvSpump";
+    /// The mint the first row of the retained movers page names in its own `m` key.
+    const MOVERS_MINT: &str = "DCop3mFzWn1wJL9J9cTZ2K8xF7YH14q7LaUhsuyQpump";
 
     /// The exact store layout `joshi-pump-product-read` writes into its `--state-dir`, including
     /// its zero inline ceiling: every retained body lands in the content-addressed blob tree, so
@@ -2727,6 +3551,39 @@ mod tests {
             attempt["body"]["blobId"] = serde_json::Value::String(format!("sha256:{hex}"));
         }
         outcome_of(&attempt)
+    }
+
+    /// The verbatim `board_movers` outcome, optionally with its first row re-addressed to
+    /// another mint. Like `coin_exact_outcome`, the patch is a byte-exact text substitution on
+    /// the provider body — never a JSON re-serialization, which would rewrite the provider's
+    /// float literals — with the body's length and digest recomputed so admission still closes.
+    fn movers_outcome(mint_override: Option<&str>) -> Vec<u8> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use sha2::Digest as _;
+        use std::fmt::Write as _;
+        let mut outcome: serde_json::Value =
+            serde_json::from_str(MOVERS_OUTCOME.trim_end()).expect("movers fixture parses");
+        if let Some(mint) = mint_override {
+            let encoded = outcome["attempts"][0]["body"]["bytesBase64"]
+                .as_str()
+                .expect("fixture body")
+                .to_owned();
+            let body = STANDARD.decode(encoded).expect("fixture base64");
+            let text = String::from_utf8(body).expect("fixture body is UTF-8");
+            let patched = text.replace(MOVERS_MINT, mint);
+            let digest = sha2::Sha256::digest(patched.as_bytes());
+            let hex = digest.iter().fold(String::new(), |mut out, byte| {
+                let _ = write!(out, "{byte:02x}");
+                out
+            });
+            outcome["attempts"][0]["body"]["bytesBase64"] =
+                serde_json::Value::String(STANDARD.encode(patched.as_bytes()));
+            outcome["attempts"][0]["body"]["byteLength"] =
+                serde_json::Value::String(patched.len().to_string());
+            outcome["attempts"][0]["body"]["blobId"] =
+                serde_json::Value::String(format!("sha256:{hex}"));
+        }
+        serde_json::to_vec(&outcome).expect("movers outcome serializes")
     }
 
     /// The verbatim candles read with its envelope restating both the request-resolved mint and
@@ -3312,6 +4169,21 @@ mod tests {
         assert_eq!(candidate["symbol"], "Bear");
         assert_eq!(candidate["name"], "BearShit");
         assert_eq!(candidate["metrics"]["marketCapUsd"], "2488.8286363782618");
+        // The same retained row's parity-density claims, copied out under the seam's names.
+        assert_eq!(
+            candidate["description"], "just another pile of bear shit ",
+            "the coin's own thesis line is a provider claim, verbatim"
+        );
+        assert_eq!(
+            candidate["imageUri"],
+            "https://ipfs.io/ipfs/QmRGDEhEMrSxVq2FEKj6vSbKwAGjRH5PBsnmTLZU5nawEW"
+        );
+        assert_eq!(candidate["createdAtUnixMs"], "1787369607000");
+        assert_eq!(candidate["graduated"], false);
+        assert_eq!(
+            candidate["chainId"],
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+        );
         let tags = candidate["tags"].as_array().expect("tags");
         assert!(!tags.iter().any(|tag| tag == "chain_observed"), "{tags:?}");
         let naming = candidate["evidence"]
@@ -3325,6 +4197,382 @@ mod tests {
         assert!(
             naming.contains("row 0 of the retained discovery_coins page"),
             "{naming}"
+        );
+    }
+
+    /// The parity-density seam, on the real retained `coin_exact` bytes: every field the seam
+    /// names is copied out as a labelled provider claim with a field-named observed evidence
+    /// row riding on the record's own durable observation — and every absence stays absent.
+    #[test]
+    fn a_coin_record_renders_the_parity_density_claims_with_their_evidence() {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store =
+            SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
+        store.migrate(committed_at()).expect("migrate");
+        commit_outcome(
+            &mut store,
+            &coin_exact_outcome(None),
+            Some(COIN_EXACT_REVIEW.as_bytes()),
+            "batch:pump-tap:coin-exact",
+            1,
+        );
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let derived =
+            derive_live_surface_with(&store, &source, None, &LiveSurfaceOptions::default())
+                .expect("a coin record renders");
+        let view: serde_json::Value =
+            serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
+        let candidate = &view["payload"]["candidates"][0];
+        assert_eq!(candidate["mint"], COIN_EXACT_MINT);
+        // Provider literals byte-for-byte, under the seam's camelCase names.
+        assert_eq!(
+            candidate["imageUri"],
+            "https://edge.uxento.io/image/616XJ5V6MKaZtWA7EHbzuvVzMXHrcQN9nqTJH2Bvpump"
+        );
+        assert_eq!(candidate["replyCount"], "0");
+        assert_eq!(candidate["athMarketCapUsd"], "5298.168009696835");
+        assert_eq!(candidate["athAtUnixMs"], "1787176112000");
+        assert_eq!(candidate["createdAtUnixMs"], "1787176102000");
+        assert_eq!(candidate["lastTradeAtUnixMs"], "1787176303000");
+        assert_eq!(candidate["graduated"], false);
+        assert_eq!(candidate["verified"], false);
+        assert_eq!(candidate["nsfw"], false);
+        assert_eq!(candidate["currentlyLive"], false);
+        // The provider's chain claim, VERBATIM: no normalization, no friendly label — the
+        // "is Solana" reading is Glass's derivation from this literal, never a wire field.
+        assert_eq!(
+            candidate["chainId"],
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+        );
+        // The record asserts an empty `description`: an absence, so the key is OMITTED — the
+        // wire never carries "" — and the omission is stated on the naming evidence.
+        assert!(
+            candidate.get("description").is_none(),
+            "an empty provider description must be omitted, not rendered"
+        );
+        // No movers read was retained for this mint, so `flow` is omitted entirely: Glass
+        // renders a dash there, and nothing fabricates a zero.
+        assert!(candidate.get("flow").is_none());
+        let evidence = candidate["evidence"].as_array().expect("evidence");
+        let naming_note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "mint")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(naming_note.contains("empty `description`"), "{naming_note}");
+        // One field-named observed row per rendered claim, each naming its durable parent.
+        for field in [
+            "imageUri",
+            "replyCount",
+            "athMarketCapUsd",
+            "athAtUnixMs",
+            "createdAtUnixMs",
+            "lastTradeAtUnixMs",
+            "graduated",
+            "verified",
+            "nsfw",
+            "currentlyLive",
+            "chainId",
+        ] {
+            let row = evidence
+                .iter()
+                .find(|entry| entry["field"] == field)
+                .unwrap_or_else(|| panic!("no evidence row for {field}"));
+            assert_eq!(row["evidenceClass"], "observed", "{field}");
+            assert!(
+                row["observationId"].is_string(),
+                "{field} evidence must name its durable parent observation"
+            );
+            assert_eq!(row["knownAt"], COMMITTED_AT, "{field}");
+        }
+        assert!(
+            !evidence.iter().any(|entry| entry["field"] == "description"),
+            "an absent claim gets no evidence row"
+        );
+        // The two ages stay two ages: metrics.ageSeconds is EVIDENCE age and still rendered;
+        // the coin's own age derives from createdAtUnixMs, and the evidence says so.
+        assert!(candidate["metrics"]["ageSeconds"].is_string());
+        let created_note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "createdAtUnixMs")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(created_note.contains("EVIDENCE age"), "{created_note}");
+        assert!(created_note.contains("creation instant"), "{created_note}");
+        // The ath label inference is stated, naming the provider's actual field.
+        let ath_note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "athMarketCapUsd")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(ath_note.contains("`ath_market_cap`"), "{ath_note}");
+        assert!(ath_note.contains("states no unit"), "{ath_note}");
+        // The chain claim is verbatim, and its note states why the chain matters: the
+        // analysis stack is Solana-only, so non-Solana must be legible as non-Solana.
+        let chain_note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "chainId")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(chain_note.contains("`chain_id`"), "{chain_note}");
+        assert!(chain_note.contains("verbatim"), "{chain_note}");
+        assert!(chain_note.contains("Solana-only"), "{chain_note}");
+    }
+
+    /// The movers seam: a retained `board_movers` page derives the per-window `flow` block for
+    /// exactly the mints its own rows name, with the numbers byte-exact, the label inference
+    /// stated, the unreviewed schema stated, and no window or counter fabricated.
+    #[test]
+    fn a_movers_board_derives_the_flow_block_for_the_mints_its_rows_name() {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store =
+            SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
+        store.migrate(committed_at()).expect("migrate");
+        commit_outcome_at(
+            &mut store,
+            &movers_outcome(None),
+            None,
+            "batch:pump-tap:movers",
+            1,
+            MOVERS_COMMITTED_AT,
+        );
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let derived =
+            derive_live_surface_with(&store, &source, None, &LiveSurfaceOptions::default())
+                .expect("movers rows name their own subjects");
+        let report = &derived.report;
+        assert_eq!(report.movers_observations, 1);
+        assert_eq!(report.movers_rows, 5);
+        assert_eq!(report.flow_subjects, 5);
+        assert_eq!(report.candidate_count, 5);
+        assert!(!report.price_series_rendered);
+        assert_eq!(report.coin_metadata_subjects, 0);
+        assert_eq!(
+            report.ceiling,
+            "provider_asserted_movers_flow_no_price_no_fill"
+        );
+
+        let view: serde_json::Value =
+            serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
+        let candidate = view["payload"]["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .find(|candidate| candidate["mint"] == MOVERS_MINT)
+            .expect("the first movers row renders");
+        // A movers row asserts no ticker or name this derivation reads, so those stay null.
+        assert!(candidate["symbol"].is_null());
+        assert!(candidate["name"].is_null());
+        let flow = candidate["flow"].as_array().expect("flow block");
+        assert_eq!(flow.len(), 4);
+        assert_eq!(flow[0]["window"], "5m");
+        assert_eq!(flow[0]["volumeSol"], "254.30967291500713");
+        assert_eq!(flow[0]["volumeUsd"], "24836.471982781968");
+        assert_eq!(flow[0]["txns"], "533");
+        assert_eq!(flow[0]["serverTsUnixMs"], "1787612131681");
+        // Only the 5m window carries a trade count on the wire, and no key is pinned as unique
+        // traders: both stay ABSENT elsewhere, never zero.
+        assert_eq!(flow[1]["window"], "15m");
+        assert_eq!(flow[1]["volumeSol"], "918.1115234300286");
+        assert!(flow[1].get("txns").is_none());
+        assert!(flow[0].get("traders").is_none());
+        assert_eq!(flow[2]["window"], "1h");
+        assert_eq!(flow[3]["window"], "24h");
+        assert_eq!(flow[3]["volumeSol"], "13102.132074408697");
+        for entry in flow {
+            assert_eq!(entry["serverTsUnixMs"], "1787612131681");
+        }
+        let tags = candidate["tags"].as_array().expect("tags");
+        assert!(
+            tags.iter().any(|tag| tag == "movers_flow_observed"),
+            "{tags:?}"
+        );
+        // No schema review exists for board_movers, and that travels with the numbers.
+        assert!(
+            tags.iter().any(|tag| tag == "schema_unpromoted"),
+            "{tags:?}"
+        );
+        let evidence = candidate["evidence"].as_array().expect("evidence");
+        let flow_row = evidence
+            .iter()
+            .find(|entry| entry["field"] == "flow")
+            .expect("flow evidence row");
+        assert_eq!(flow_row["evidenceClass"], "observed");
+        assert!(flow_row["observationId"].is_string());
+        let flow_note = flow_row["note"].as_str().unwrap_or_default();
+        assert!(flow_note.contains("inferred"), "{flow_note}");
+        assert!(flow_note.contains("vUsd5"), "{flow_note}");
+        assert!(flow_note.contains("epoch milliseconds"), "{flow_note}");
+        let naming_note = evidence
+            .iter()
+            .find(|entry| entry["field"] == "mint")
+            .and_then(|entry| entry["note"].as_str())
+            .unwrap_or_default();
+        assert!(naming_note.contains("board_movers"), "{naming_note}");
+        assert!(naming_note.contains("personalised"), "{naming_note}");
+    }
+
+    /// The act-over-widened-view gate: every density and flow evidence entry must resolve to a
+    /// durable observation with exactly its clocks, or the store refuses acts — the exact bug
+    /// class v5 fixed. One candidate carries coin-record claims AND the movers flow together,
+    /// and a canonical hold over that scene must commit.
+    #[test]
+    fn the_byte_fit_bound_caps_a_recency_prefix_before_the_response_contract_breaks() {
+        // Each item serializes to ~1000 bytes; a 4500-byte budget admits exactly four (four
+        // 1000-byte items + their separators are 4004 bytes, the fifth would reach 5005).
+        let items: Vec<String> = (0..20).map(|_| "x".repeat(998)).collect();
+        assert_eq!(super::candidate_byte_fit(&items, 4_500), 4);
+        // A budget under even one item admits none rather than serving bytes the snapshot
+        // route would then refuse — the exact 500 this bound exists to prevent.
+        assert_eq!(super::candidate_byte_fit(&items, 100), 0);
+        // A budget above the whole set admits all of it, unchanged.
+        assert_eq!(super::candidate_byte_fit(&items, 1_000_000), 20);
+    }
+
+    #[test]
+    fn a_hold_act_commits_over_the_density_and_flow_widened_view() {
+        use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
+        use joshi_store::{OperatorCaptureMetadata, SceneSourceMode};
+
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store =
+            SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
+        store.migrate(committed_at()).expect("migrate");
+        commit_outcome(
+            &mut store,
+            &coin_exact_outcome(None),
+            Some(COIN_EXACT_REVIEW.as_bytes()),
+            "batch:pump-tap:coin-exact",
+            1,
+        );
+        commit_outcome_at(
+            &mut store,
+            &movers_outcome(Some(COIN_EXACT_MINT)),
+            None,
+            "batch:pump-tap:movers",
+            2,
+            MOVERS_COMMITTED_AT,
+        );
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let derived =
+            derive_live_surface_with(&store, &source, None, &LiveSurfaceOptions::default())
+                .expect("both reads derive one scene");
+        assert_eq!(derived.report.flow_subjects, 5);
+        let view_json: serde_json::Value =
+            serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
+        let candidate = view_json["payload"]["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .find(|candidate| candidate["mint"] == COIN_EXACT_MINT)
+            .expect("the shared mint renders");
+        // The widened shape is genuinely on this scene: density claims (chain included) and
+        // the flow block on one candidate, with derived-suffix evidence ids naming parents.
+        assert_eq!(candidate["athMarketCapUsd"], "5298.168009696835");
+        assert_eq!(
+            candidate["chainId"],
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+        );
+        assert_eq!(candidate["flow"].as_array().map(Vec::len), Some(4));
+        assert!(
+            candidate["evidence"]
+                .as_array()
+                .expect("evidence")
+                .iter()
+                .any(|entry| entry["observationId"].is_string()
+                    && entry["observationId"] != entry["id"])
+        );
+
+        let candidate_id = candidate["id"].as_str().expect("candidate id");
+        let rendered = derived.view.rendered_at().as_datetime();
+        let issued = UtcTimestamp::new(rendered + time::Duration::seconds(1)).expect("issued");
+        let committed = UtcTimestamp::new(rendered + time::Duration::seconds(2)).expect("commit");
+        // The exact canonical shape apps/glass/src/operator/holds.ts commits, field for field.
+        let command_bytes = format!(
+            "{{\"contract\":\"joshi.operator.command\",\"schemaVersion\":1,\
+             \"commandId\":\"command-hold-density-flow-1\",\
+             \"idempotencyKey\":\"retry-hold-density-flow-1\",\
+             \"clientSessionId\":\"glass-session-density-flow\",\
+             \"clientCommandSeq\":\"1\",\
+             \"scene\":{{\"sceneId\":\"{}\",\"viewDigest\":\"{}\"}},\
+             \"issuedAt\":\"{issued}\",\
+             \"clientClock\":{{\"clockId\":\"browser-density-flow-clock\",\
+             \"monotonicNs\":\"2000000\"}},\
+             \"commandKind\":\"record_focus\",\
+             \"subject\":{{\"kind\":\"candidate\",\"key\":\"{candidate_id}\"}},\
+             \"payload\":{{\"context\":{{\"uiLabel\":\"Hold coin\",\"uiLabelVersion\":\"1\",\
+             \"confidencePpm\":null,\"urgency\":null,\"whyNow\":null,\"note\":null}},\
+             \"dwellMilliseconds\":null}},\
+             \"authorityClass\":\"evidence_only\",\"effectCeiling\":\"observe_only\"}}",
+            derived.view.scene_id(),
+            derived.view.digest(),
+        );
+        let command = ValidatedOperatorCommandV1::parse_exact(command_bytes.as_bytes())
+            .expect("canonical hold command");
+        let capture = OperatorCaptureMetadata {
+            client_scene_seq: 1,
+            ui_build: StableString::new("joshi-glass-test").expect("build"),
+            source_mode: SceneSourceMode::Replacement,
+            rendered_clock_id: StableString::new("server-density-flow-clock").expect("clock id"),
+            rendered_mono_ns: 1_000_000,
+            screenshot_bytes: None,
+        };
+        let receipt = store
+            .commit_operator_v1(
+                &command,
+                Some(&derived.view),
+                &capture,
+                committed,
+                StableString::new("test-monotonic").expect("clock"),
+                3_000_000,
+                StableString::new("test-build").expect("build"),
+            )
+            .expect("the hold commits: every widened evidence entry resolves to a durable row");
+        assert_eq!(receipt.status(), OperatorCommandStatus::Accepted);
+    }
+
+    #[test]
+    fn movers_pages_are_parsed_exactly_and_refused_when_they_cannot_be() {
+        // A mintless row names nothing and refuses the page whole.
+        let error = parse_movers_board(
+            br#"{"board":"movers","version":0,"serverTs":1000,"entries":[{"n":"ghost"}]}"#,
+        )
+        .expect_err("a mintless movers row names no coin");
+        assert!(error.contains("no `m` mint"), "{error}");
+
+        // Without a canonical serverTs the flow numbers cannot carry their provider clock.
+        let error = parse_movers_board(br#"{"board":"movers","entries":[]}"#)
+            .expect_err("no provider clock, no flow");
+        assert!(error.contains("serverTs"), "{error}");
+        let error = parse_movers_board(br#"{"serverTs":1000.5,"entries":[]}"#)
+            .expect_err("a fractional serverTs is not a canonical epoch-ms integer");
+        assert!(error.contains("serverTs"), "{error}");
+
+        // A window with only one of its two volume literals is omitted and stated, never
+        // half-rendered; the other windows on the row survive.
+        let rows = parse_movers_board(
+            br#"{"serverTs":1000,"entries":[{"m":"MintAAAAAAAAAAAAAAAA","v5":"1e3","vUsd5":2.5,"tx5":3,"v15":1.5,"vUsd15":2.5}]}"#,
+        )
+        .expect("the page parses");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].windows.len(), 1);
+        assert_eq!(rows[0].windows[0].window, "15m");
+        assert_eq!(rows[0].windows[0].volume_sol, "1.5");
+        assert!(rows[0].windows[0].txns.is_none());
+        assert!(
+            rows[0]
+                .notes
+                .iter()
+                .any(|note| note.contains("only one of its two volume literals")),
+            "{:?}",
+            rows[0].notes
+        );
+
+        // An empty board parses to zero rows; the caller states the refusal.
+        assert!(
+            parse_movers_board(br#"{"serverTs":1000,"entries":[]}"#)
+                .expect("empty board parses")
+                .is_empty()
         );
     }
 

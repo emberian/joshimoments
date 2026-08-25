@@ -626,6 +626,61 @@ struct CandidateWire {
     episode_id: Option<String>,
     evidence: Vec<EvidenceRefWire>,
     candles: Vec<CandleWire>,
+    // Parity-density provider claims (docs/planning/PARITY_DENSITY_SEAM.md). Every field below
+    // is optional and SKIPPED when absent so pre-existing canonical view bytes stay exact; an
+    // absence means the retained bytes carried no such claim, and nothing here defaults.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    image_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    description: Option<String>,
+    /// Wire-u64 string: the provider's social reply counter.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    reply_count: Option<String>,
+    /// Exact decimal literal, never a float round-trip.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    ath_market_cap_usd: Option<String>,
+    /// Provider timestamps in this family are epoch MILLISECONDS, carried as wire-u64 strings.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    ath_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    created_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    last_trade_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    graduated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    nsfw: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    currently_live: Option<bool>,
+    /// Per-window movers-board flow claims; empty means the movers route was not retained for
+    /// this mint, and Glass renders a dash rather than a zero nobody asserted. `flow` precedes
+    /// `chainId` to match the Glass contract's canonical field order (`contract/v1.ts`) — the
+    /// acceptor's re-serialization must reproduce the exact input bytes or `parse_exact` refuses.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    flow: Vec<CandidateFlowWindowWire>,
+    /// The provider's `chain_id` claim VERBATIM (e.g. "solana:5eykt4…" or an EVM chain id on a
+    /// multichain coin). Never normalized here; any friendly reading derives from the literal.
+    /// The final candidate key.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    chain_id: Option<String>,
+}
+
+/// One movers-board window's provider-asserted flow numbers, copied byte-for-byte.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CandidateFlowWindowWire {
+    window: String,
+    volume_sol: String,
+    volume_usd: String,
+    /// Absent when the provider states no per-window trade count (only the 5m window carries
+    /// one on the wire); an absence is never a zero.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    txns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    traders: Option<String>,
+    server_ts_unix_ms: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1045,6 +1100,65 @@ fn validate_candidate(candidate: &CandidateWire, sources: &BTreeSet<&str>) -> Re
         ] {
             validate_decimal(value, field)?;
         }
+    }
+    validate_candidate_density(candidate)
+}
+
+/// Validates the optional parity-density claims and the movers `flow` block on one candidate.
+fn validate_candidate_density(candidate: &CandidateWire) -> Result<()> {
+    // Parity-density claims: absent is omitted, never "" — an empty string renders as a value.
+    if let Some(value) = &candidate.image_uri {
+        nonempty(value, "candidate imageUri")?;
+    }
+    if let Some(value) = &candidate.description {
+        nonempty(value, "candidate description")?;
+    }
+    if let Some(value) = &candidate.reply_count {
+        parse_wire_u64(value, "candidate replyCount")?;
+    }
+    optional_decimal(candidate.ath_market_cap_usd.as_ref(), "athMarketCapUsd")?;
+    for (field, value) in [
+        ("candidate athAtUnixMs", candidate.ath_at_unix_ms.as_ref()),
+        (
+            "candidate createdAtUnixMs",
+            candidate.created_at_unix_ms.as_ref(),
+        ),
+        (
+            "candidate lastTradeAtUnixMs",
+            candidate.last_trade_at_unix_ms.as_ref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            parse_wire_u64(value, field)?;
+        }
+    }
+    if let Some(value) = &candidate.chain_id {
+        nonempty(value, "candidate chainId")?;
+    }
+    // Flow windows arrive in the fixed 5m→24h order, each at most once: a duplicated or
+    // shuffled window would let two producers emit two canonical byte streams for one claim.
+    let mut prior_window: Option<usize> = None;
+    for entry in &candidate.flow {
+        let ordinal = ["5m", "15m", "1h", "24h"]
+            .iter()
+            .position(|label| *label == entry.window)
+            .ok_or_else(|| invalid("flow window", format!("unsupported value {}", entry.window)))?;
+        if prior_window.is_some_and(|value| value >= ordinal) {
+            return Err(invalid(
+                "flow windows",
+                "must be unique and ordered 5m, 15m, 1h, 24h",
+            ));
+        }
+        prior_window = Some(ordinal);
+        validate_decimal(&entry.volume_sol, "flow volumeSol")?;
+        validate_decimal(&entry.volume_usd, "flow volumeUsd")?;
+        if let Some(value) = &entry.txns {
+            parse_wire_u64(value, "flow txns")?;
+        }
+        if let Some(value) = &entry.traders {
+            parse_wire_u64(value, "flow traders")?;
+        }
+        parse_wire_u64(&entry.server_ts_unix_ms, "flow serverTsUnixMs")?;
     }
     Ok(())
 }
