@@ -696,3 +696,18 @@ named-wallet research, license confirmation (workspace currently AGPL-3.0-or-lat
 check on the book-derived microstructure corpus, and a release-shape recommendation (as-is vs
 fresh-history export vs code-public/steering-private split). Until then: keep commits and docs
 publication-clean — no new personal detail beyond what the work needs.
+
+## Standing authorization: text-challenge signing (recorded 2026-08-25)
+
+Ember: "we always approve signing that text challenge it's not a big deal..."
+
+Scope: an authentication challenge — a server-issued TEXT string, UTF-8 encoded and passed to
+the wallet's message-sign primitive — may be signed with her key without asking again. This
+covers pump.fun SIWS (`Sign in to pump.fun: {millis}`, already implemented in
+crates/joshi-pump-api/src/auth_session.rs) and the coin-communities wallet handshake
+(challenge -> signMessage -> verify), and any future provider login of the same shape.
+
+The line that does NOT move: nothing transaction-shaped is ever constructed, serialized,
+signed, or submitted. The wallet's message-sign and send-transaction primitives are
+categorically distinct and only the former is authorized. Credentials stay in redacted types,
+0600 files, never logged, never committed. Read-only routes only.
