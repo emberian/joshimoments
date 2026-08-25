@@ -29,6 +29,19 @@ export class RetryablePresentationError extends Error {
   readonly retryable = true;
 }
 
+/**
+ * The core this cockpit is paired to mounts no presentation-witness route at all.
+ *
+ * A structural fact about the deployment, not a failure of this scene: the live-surface core
+ * serves scenes and operator evidence without the witness instrument, and every reveal there
+ * would otherwise scream a red alert forever. Typed so the shell can render it as the stated
+ * absence it is — the witness is not mounted — while a real append failure (a 500, a digest
+ * mismatch, a refused admission) stays loud.
+ */
+export class PresentationUnavailableError extends Error {
+  readonly unavailable = true;
+}
+
 export interface PresentationSink {
   readonly kind: "offline_fixture" | "loopback";
   appendScene(
@@ -269,6 +282,11 @@ export class LoopbackPresentationSink implements PresentationSink {
       }
       if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
         throw new RetryablePresentationError(`presentation append is retryable (${response.status})`);
+      }
+      if (response.status === 404 || response.status === 405) {
+        throw new PresentationUnavailableError(
+          "this core mounts no presentation-witness route, so reveals are not witnessed here",
+        );
       }
       throw new Error(`presentation append failed (${response.status})`);
     }

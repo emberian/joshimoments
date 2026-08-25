@@ -9,6 +9,8 @@
     "dev:paired-inspect": "VITE_JOSHI_ORDINARY_PAIRING=1 vite --host 127.0.0.1",
     "dev:g0-inspect": "VITE_JOSHI_G0_INSPECTOR=1 vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
+    "qa:walk": "node qa/walk.mjs",
+    "qa:selftest": "node qa/selftest.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc --noEmit && vite build"
@@ -34,6 +36,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "axe-core": "4.11.0",
     "jsdom": "30.0.1",
+    "playwright": "1.62.1",
     "typescript": "7.0.2",
     "vite": "8.2.1",
     "vitest": "4.1.10"

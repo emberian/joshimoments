@@ -19,3 +19,6 @@ tmp/
 # Session-specific LP reconstructions carry Ember's full position history; evidence lives
 # beside the code for the session that made it, never in git (publication-clean habit).
 analysis/fixtures/lpdesk/run_*/
+
+# Parity-walk artifacts: screenshots and reports from apps/glass/qa/walk.mjs
+apps/glass/qa/shots/

@@ -20,7 +20,9 @@ const FEED = {
       subjectCount: "1",
       observationCount: "3",
       viewDigest: `sha256:${"a".repeat(64)}`,
+      derivationVersion: "live_surface.v5",
       sceneRetention: "served_not_yet_durable",
+      retiredReason: null,
     },
   ],
   catalog: {
@@ -53,6 +55,38 @@ describe("scene feed client", () => {
   it("parses a well-formed feed and refuses an unknown extra field", () => {
     expect(parseSceneFeedV1(FEED).scenes[0]?.cutoffCommitSeq).toBe("3");
     expect(() => parseSceneFeedV1({ ...FEED, currentSceneId: "nope" })).toThrow();
+  });
+
+  /**
+   * Regression: the core's `SceneFeedEntryWire` grew `derivationVersion` and `retiredReason`
+   * and a third retention state, and this strict schema rejected every live feed — the poll
+   * ran forever and never once succeeded, so the shell could only say "unreachable" and no
+   * advance pill ever appeared. The cockpit sat on its launch scene like a photograph. This
+   * pins the exact wire shape the core serves, including a retired historical row and a null
+   * derivation version on a pre-versioning scene.
+   */
+  it("parses the current core wire: versioned rows, null versions, and retired history", () => {
+    const wire = {
+      ...FEED,
+      scenes: [
+        FEED.scenes[0],
+        {
+          sceneId: "scene-live-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          derivedAt: "2026-08-22T17:00:00.000000Z",
+          cutoffCommitSeq: "2",
+          subjectCount: "1",
+          observationCount: "2",
+          viewDigest: `sha256:${"b".repeat(64)}`,
+          derivationVersion: null,
+          sceneRetention: "retired",
+          retiredReason: "derived by an older derivation whose bytes were not retained",
+        },
+      ],
+    };
+    const parsed = parseSceneFeedV1(wire);
+    expect(parsed.scenes[1]?.sceneRetention).toBe("retired");
+    expect(parsed.scenes[1]?.derivationVersion).toBeNull();
+    expect(parsed.scenes[0]?.derivationVersion).toBe("live_surface.v5");
   });
 
   it("carries the pairing capability and returns the parsed feed", async () => {

@@ -379,6 +379,18 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 /* Where the rendered ticker and name came from, and when: provenance next to the identity. */
 .identity-provenance { margin: 4px 0 0; color: #8da09d; font-size: 10px; }
 .coin-tags { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.coin-header-edge { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
+.coin-actions { display: flex; gap: 8px; }
+.coin-actions kbd { margin-left: 3px; padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-3); font-size: 9px; }
+
+/* The coin page's microstructure panel: one measured slot, the rest honest about absence. */
+.micro-panel { display: grid; gap: 10px; padding-bottom: 13px; }
+.micro-panel .held-venue { margin: 0 13px; }
+.micro-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin: 0 13px; padding: 0; list-style: none; }
+.micro-slot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.micro-slot-name { font-size: 12px; font-weight: 650; color: var(--muted); }
+.chip-warn { margin-left: 6px; border-color: #69572d; background: #2b2412; color: #f3d38f; }
+.hot-tap-note { margin: 6px 13px 0; }
 .tag { border: 1px solid #344143; background: #171e20; }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -970,7 +982,7 @@ th { color: var(--muted); }
 .held-facts dt, .held-venue dt { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
 .held-facts dd, .held-venue dd { margin: 2px 0 0; font-size: 12px; font-weight: 650; }
 .held-venue { padding: 9px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
-.held-venue h4 { margin: 0 0 7px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.held-venue h4, .held-venue h3 { margin: 0 0 7px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .held-venue[data-measured="false"] dd { color: var(--faint); font-weight: 500; font-style: italic; }
 .held-venue p { margin: 8px 0 0; color: var(--faint); font-size: 11px; line-height: 1.45; }
 .held-notes { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -1037,8 +1049,51 @@ th { color: var(--muted); }
   font-size: 10px;
   white-space: nowrap;
 }
+/* A stated absence of an instrument: quiet, factual, hover for the sentence. Never red. */
+.hunt-note {
+  padding: 3px 9px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.replay-note { margin: 5px 0 0; font-size: 11px; color: var(--faint); }
 
 .hunt-layout { grid-template-columns: 1fr; }
+
+/* The hunt's held strip: one row of chips, the board's rows right below it. */
+.held-strip .panel-header { min-height: 44px; padding: 8px 13px; }
+.held-strip .held-empty { padding: 8px 13px 11px; font-size: 11px; }
+.held-chip-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 8px 13px 11px; list-style: none; }
+.held-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mint);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.held-chip[data-carried="false"] { border-left-color: var(--amber); }
+.held-chip[data-retention="rejected"] { border-left-color: var(--red); }
+.held-chip h3 { display: inline-flex; align-items: center; gap: 4px; margin: 0; font-size: 12px; }
+.held-chip-facts { display: inline-flex; gap: 8px; color: var(--muted); font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace; }
+.held-chip-retention { color: var(--faint); font-size: 10px; }
+.held-chip[data-retention="committed"] .held-chip-retention { color: var(--mint); }
+.held-chip[data-retention="rejected"] .held-chip-retention { color: var(--red); }
+.held-chip-open {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: #d4dddb;
+  font-size: 10px;
+  cursor: pointer;
+}
+.held-chip-open:disabled { opacity: 0.55; cursor: not-allowed; }
 .hunt-layout .attention-panel { position: static; }
 
 /* The loud scene-advance affordance: newer scenes exist, and advancing is her act. */
@@ -1123,7 +1178,9 @@ th { color: var(--muted); }
 .board-chip.lifecycle-migrating { color: var(--blue); background: #1c2e3e; }
 .board-chip.lifecycle-graduated { color: var(--mint); background: var(--mint-dim); }
 .chip-absent { color: var(--amber); background: var(--amber-dim); }
-.chip-evidence { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: .06em; }
+/* Not the mono face: SFMono's capital O reads as a zero at chip size, and "0" is exactly the
+   wrong thing for an evidence glyph to look like. */
+.chip-evidence { font-family: Inter, ui-sans-serif, sans-serif; letter-spacing: .06em; }
 [data-density="compact"] .board-row { min-height: 34px; padding-block: 3px; }
 [data-density="compact"] .board-reason { display: none; }
 

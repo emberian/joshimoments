@@ -175,17 +175,34 @@ export function LiveSurfaceShell({
     [paired, session, sessionVersion], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const sceneFeed = useSceneFeed(feedSource, sceneFeedIntervalMs);
-  const newestScene = sceneFeed.feed?.scenes[0] ?? null;
+  /**
+   * The advance decision, on the core's own stated rule (`live_follow.rs`): a client advances
+   * on `cutoffCommitSeq` — the evidence watermark — never on a new scene id, because a
+   * re-derivation of the SAME evidence under a newer derivation version mints a new id without
+   * any new observation. Retired rows are listed history that no route serves any more, so
+   * they are never offered as a target. The one exception to the watermark rule: when the
+   * bound scene itself is retired or no longer listed, the newest servable scene is offered
+   * regardless, because staying bound to bytes the core will no longer re-serve is worse.
+   */
+  const servableScenes = useMemo(
+    () => (sceneFeed.feed?.scenes ?? []).filter((scene) => scene.sceneRetention !== "retired"),
+    [sceneFeed.feed],
+  );
+  const newestScene = servableScenes[0] ?? null;
+  const boundScene = boundSceneId === null
+    ? null
+    : sceneFeed.feed?.scenes.find((scene) => scene.sceneId === boundSceneId) ?? null;
+  const boundServable = boundScene !== null && boundScene.sceneRetention !== "retired";
   const newerScene = newestScene !== null && boundSceneId !== null && newestScene.sceneId !== boundSceneId
+    && (!boundServable || BigInt(newestScene.cutoffCommitSeq) > BigInt(boundScene.cutoffCommitSeq))
     ? newestScene
     : null;
-  // How many listed scenes are strictly newer than the bound one (the feed is newest-first,
-  // so that is the bound scene's index). When the feed no longer lists the bound scene the
-  // count is not knowable and is not claimed: null renders as "newer scenes exist".
-  const boundSceneIndex = boundSceneId === null
-    ? -1
-    : (sceneFeed.feed?.scenes.findIndex((scene) => scene.sceneId === boundSceneId) ?? -1);
-  const newerCount = newerScene === null ? null : boundSceneIndex > 0 ? boundSceneIndex : null;
+  // How many servable scenes carry strictly more evidence than the bound one. When the bound
+  // scene is not servably listed the count is not knowable and is not claimed: null renders
+  // as "newer scenes exist".
+  const newerCount = newerScene === null || !boundServable
+    ? null
+    : servableScenes.filter((scene) => BigInt(scene.cutoffCommitSeq) > BigInt(boundScene.cutoffCommitSeq)).length || null;
 
   const advance = useCallback(() => {
     if (!newerScene) return;

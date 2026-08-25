@@ -2,6 +2,7 @@ import { validate as validateJsonWithoutDuplicateKeys } from "json-dup-key-valid
 
 import type { GlassSnapshotV1, ReplayMode } from "../contract/v1";
 import { parseGlassSnapshotV1 } from "../contract/v1";
+import { loadCandidateSlice, type CandidateSliceAnswer } from "./candidateSlice";
 import type { ExplorationBundleV1, PresentationPolicyV1 } from "../presentation/contract";
 import { defaultPresentationPolicy } from "../presentation/policies";
 import { explorationBundleForServedScene } from "../presentation/servedSceneBundle";
@@ -24,6 +25,13 @@ export interface GlassDataSource {
     bundle: ExplorationBundleV1;
     publication: { cockpitPublicationId: string; cockpitPublicationDigest: string } | null;
   } | null;
+  /**
+   * One candidate sliced verbatim from an immutable scene, when this source's core serves the
+   * slice route (`data/candidateSlice.ts`). Optional and feature-detected: a source without it
+   * (fixtures, older cores) simply leaves the caller on the full snapshot, which stays the
+   * authority either way.
+   */
+  candidateSlice?(sceneId: string, candidateId: string, signal?: AbortSignal): Promise<CandidateSliceAnswer>;
 }
 
 async function readBoundedUtf8(response: Response): Promise<string> {
@@ -125,6 +133,14 @@ export class LoopbackDataSource implements GlassDataSource {
       bundle: explorationBundleForServedScene(snapshot),
       publication: null,
     };
+  }
+
+  async candidateSlice(sceneId: string, candidateId: string, signal?: AbortSignal): Promise<CandidateSliceAnswer> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.pairingSession.paired()) {
+      headers["X-Joshi-Pairing-Token"] = this.pairingSession.authorizationHeader("cockpit_read");
+    }
+    return loadCandidateSlice(this.baseUrl, sceneId, candidateId, headers, signal);
   }
 
   async loadSnapshot(request: SnapshotRequest): Promise<GlassSnapshotV1> {

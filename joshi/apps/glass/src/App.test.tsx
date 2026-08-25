@@ -60,7 +60,9 @@ describe("accessibility-first glass", () => {
     // mutated with every scroll, and five extra board-filter stops. 63 -> 64 was the hunt
     // lens landing: one header button that switches between the hunt board and this
     // evidence workbench (also on the apostrophe key, next to the hold semicolon).
-    expect(countStops()).toBe(64);
+    // 64 -> 66 was the coin page's action pair: Hold (the same one-keystroke act as `;`,
+    // reachable where she is already looking) and Journal (moves focus to the composer).
+    expect(countStops()).toBe(66);
 
     const feed = screen.getByRole("region", { name: /attention feed/i });
     const feedStops = () => [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]

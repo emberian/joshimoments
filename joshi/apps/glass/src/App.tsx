@@ -14,7 +14,7 @@ import { ReplaySwitch, type LensAvailability } from "./components/ReplaySwitch";
 import { ReplayInterviewQueue } from "./components/ReplayInterviewQueue";
 import { SceneInspector } from "./components/SceneInspector";
 import { SourcePanel } from "./components/SourcePanel";
-import type { GlassSnapshotV1, ReplayMode } from "./contract/v1";
+import type { Candidate, GlassSnapshotV1, ReplayMode } from "./contract/v1";
 import { candidateSymbol } from "./format";
 import { configuredDataSource, type GlassDataSource } from "./data/client";
 import { configuredOperatorSink, type OperatorCommandSink } from "./operator/client";
@@ -489,11 +489,69 @@ export function GlassApp({
     () => (venueReadout ? null : configuredVenueReadoutSource()),
     [venueReadout],
   );
-  const heldMints = useMemo(
-    () => [...new Set(Object.values(heldMintsBySubject))].sort(),
-    [heldMintsBySubject],
-  );
-  const measuredVenues = useVenueReadouts(venueSource, heldMints);
+  /**
+   * The coin page asks the venue question for the coin actually on it, not only for held
+   * coins: focus-in is exactly the moment the fee floor and the break-even clip matter. Still
+   * never per feed row — the feed carries hundreds and none of them have been chosen — and
+   * `useVenueReadouts` keeps its ask-once-per-mint discipline, so browsing five coins costs
+   * five reads of retained bytes, not a poll.
+   */
+  const inspectedMint = useMemo(() => {
+    if (surface !== "inspect") return null;
+    return candidates.find((item) => item.id === selectedId)?.mint ?? null;
+  }, [candidates, selectedId, surface]);
+  const venueMints = useMemo(() => {
+    const mints = new Set(Object.values(heldMintsBySubject));
+    if (inspectedMint !== null) mints.add(inspectedMint);
+    return [...mints].sort();
+  }, [heldMintsBySubject, inspectedMint]);
+  const measuredVenues = useVenueReadouts(venueSource, venueMints);
+
+  /**
+   * The coin page's candidate slice: `GET /scenes/{scene}/candidates/{id}`, served verbatim
+   * from the same canonical bytes as the loaded view and verified against its digest. Today
+   * the loaded snapshot already carries every rendered candidate, so a verified slice is
+   * byte-identical and is deliberately DISCARDED (adopting an equal copy would only churn the
+   * chart); the fetch still runs on the coin page because it is the live integrity probe of
+   * the slice path — the QA walk watches it answer — and because a future slimmer snapshot
+   * (candles served per-slice instead of per-scene) lights up the adopt branch with no shell
+   * change. Feature-detected: a core without the route costs nothing and renders nothing.
+   */
+  const [slicedCandidate, setSlicedCandidate] = useState<{ key: string; candidate: Candidate } | null>(null);
+  useEffect(() => {
+    const sliceLoad = resolvedDataSource.candidateSlice?.bind(resolvedDataSource);
+    if (surface !== "inspect" || !snapshot || !sliceLoad) {
+      setSlicedCandidate(null);
+      return;
+    }
+    const inScene = snapshot.view.payload.candidates.find((item) => item.id === selectedId);
+    if (!inScene) {
+      setSlicedCandidate(null);
+      return;
+    }
+    const sceneId = snapshot.view.sceneId;
+    const expectedDigest = snapshot.snapshotDigest;
+    const key = `${sceneId}/${inScene.id}`;
+    const controller = new AbortController();
+    sliceLoad(sceneId, inScene.id, controller.signal)
+      .then((answer) => {
+        if (controller.signal.aborted) return;
+        if (answer.state !== "sliced"
+          || answer.slice.viewDigest !== expectedDigest
+          || answer.slice.candidate.id !== inScene.id
+          || JSON.stringify(answer.slice.candidate) === JSON.stringify(inScene)) {
+          // Unavailable, render-bound, digest-mismatched, or byte-identical: the loaded
+          // snapshot remains the authority and the page keeps its stable candidate identity.
+          setSlicedCandidate(null);
+          return;
+        }
+        setSlicedCandidate({ key, candidate: answer.slice.candidate });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSlicedCandidate(null);
+      });
+    return () => controller.abort();
+  }, [resolvedDataSource, selectedId, snapshot, surface]);
   const venueLookup = useMemo<HeldVenueLookup | undefined>(() => {
     if (venueReadout) return venueReadout;
     if (!venueSource) return undefined;
@@ -512,18 +570,16 @@ export function GlassApp({
 
   const toggleDensity = useCallback(() => setDensity((value) => value === "comfortable" ? "compact" : "comfortable"), []);
   /**
-   * The `'` lens switch. Entering inspect on a selected coin additionally records the automatic
-   * inspect assertion (`operator/attention.ts` states exactly what it claims and why its subject
-   * is the scene, never the candidate), which is what asks the keeper to start tapping the
-   * coin's candles while her attention is on it. Debounced per (scene, coin) the same way the
-   * viewport assertion debounces an unchanged set; leaving the lens records nothing, and a
-   * refused record never costs the lens switch itself.
+   * The automatic focus-in assertion (`operator/attention.ts` states exactly what it claims and
+   * why its subject is the scene, never the candidate): entering the coin page on a coin asks
+   * the keeper to start tapping its candles while her attention is on it. Recorded by BOTH ways
+   * in — the `'` lens switch and the board's click-through — because they are the same focusing
+   * event; debounced per (scene, coin) the same way the viewport assertion debounces an
+   * unchanged set, and a refused record never costs the lens itself.
    */
-  const toggleSurface = useCallback(() => {
-    const next = surface === "hunt" ? "inspect" : "hunt";
-    setSurface(next);
-    if (next !== "inspect" || !snapshot) return;
-    const candidate = candidates.find((item) => item.id === selectedId);
+  const recordInspectAssertion = useCallback((candidateId: string) => {
+    if (!snapshot) return;
+    const candidate = candidates.find((item) => item.id === candidateId);
     if (!candidate) return;
     const sceneId = snapshot.view.sceneId;
     const last = lastAssertedInspect.current;
@@ -535,7 +591,25 @@ export function GlassApp({
       // Her lens must never fail to open because its instrumentation could not be recorded;
       // the sensing side then simply hears nothing about this inspect.
     }
-  }, [candidates, recordCommand, selectedId, snapshot, surface]);
+  }, [candidates, recordCommand, snapshot]);
+  /** The `'` lens switch: hunt ↔ inspect, recording the focus-in assertion on the way in. */
+  const toggleSurface = useCallback(() => {
+    const next = surface === "hunt" ? "inspect" : "hunt";
+    setSurface(next);
+    if (next === "inspect") recordInspectAssertion(selectedId);
+  }, [recordInspectAssertion, selectedId, surface]);
+  /**
+   * The click-through: one click (or Enter) on a hunt-board row opens that coin's page — the
+   * inspect lens, led by the coin itself — the way pump.fun's board opens its coin page. It is
+   * the selection gesture plus the same focus-in assertion the `'` switch records, so the
+   * attention instrument sees a click-through and a lens flip as the same honest events, and
+   * `;` keeps acting on the same coin on both sides of the click.
+   */
+  const openCandidate = useCallback((candidateId: string) => {
+    selectCandidate(candidateId);
+    setSurface("inspect");
+    recordInspectAssertion(candidateId);
+  }, [recordInspectAssertion, selectCandidate]);
   const cycleReplay = useCallback(() => {
     if (!snapshot || pendingMode !== null) return;
     // Cycle over the lenses that exist for this scene. When none besides the current one exist
@@ -751,7 +825,21 @@ export function GlassApp({
             </p>
             {pendingMode && <p className="replay-pending" role="status">Loading a distinct {pendingMode.replaceAll("_", " ")} snapshot; the current view remains unchanged.</p>}
             {loadError && <p className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains on screen.</p>}
-            {presentationWitness.status === "gap" && <p className="replay-error" role="alert">Presentation not witnessed: {presentationWitness.error}. Rich information is visible as an explicit presentation-coverage gap.</p>}
+            {presentationWitness.status === "gap" && (presentationWitness.unavailable
+              ? (
+                /*
+                  A core without the witness route is a stated absence of the instrument, not a
+                  failure of this scene: said once, quietly, with the sentence on hover — never
+                  a red alert that screams forever over an ordinary live session.
+                */
+                <p
+                  className="replay-note"
+                  title={`${presentationWitness.error ?? "This core mounts no presentation-witness route."} What is revealed is unwitnessed by construction on this core; nothing about this scene failed.`}
+                >
+                  Presentation witness: not mounted on this core.
+                </p>
+              )
+              : <p className="replay-error" role="alert">Presentation not witnessed: {presentationWitness.error}. Rich information is visible as an explicit presentation-coverage gap.</p>)}
           </div>
           <ReplaySwitch
             value={mode}
@@ -777,15 +865,24 @@ export function GlassApp({
           </span>
           {pendingMode && <span className="replay-pending" role="status">loading a distinct {pendingMode.replaceAll("_", " ")} snapshot…</span>}
           {loadError && <span className="replay-error" role="alert">Replay load failed: {loadError}. The prior verified view remains.</span>}
-          {presentationWitness.status === "gap" && (
-            <span
-              className="hunt-flag"
-              role="alert"
-              title={`Presentation not witnessed: ${presentationWitness.error ?? "no receipt"}. What is on screen is an explicit presentation-coverage gap, not a witnessed reveal.`}
-            >
-              presentation gap — reveal not witnessed
-            </span>
-          )}
+          {presentationWitness.status === "gap" && (presentationWitness.unavailable
+            ? (
+              <span
+                className="hunt-note"
+                title={`${presentationWitness.error ?? "This core mounts no presentation-witness route."} A stated absence of the witness instrument, not a failure of this scene.`}
+              >
+                witness not mounted
+              </span>
+            )
+            : (
+              <span
+                className="hunt-flag"
+                role="alert"
+                title={`Presentation not witnessed: ${presentationWitness.error ?? "no receipt"}. What is on screen is an explicit presentation-coverage gap, not a witnessed reveal.`}
+              >
+                presentation gap — reveal not witnessed
+              </span>
+            ))}
         </section>
       )}
 
@@ -801,8 +898,20 @@ export function GlassApp({
         */
         <main className="glass-layout hunt-layout">
           {heldRefusalNotice}
-          {heldRail}
-          <AttentionFeed variant="board" candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
+          {/*
+            On the hunt the board is the page, so the held rail compresses to one chip strip:
+            the same journal-derived list, the sentences on hover, the full cards one lens
+            switch away. Opening a held chip is the same click-through a board row gets.
+          */}
+          <HeldCoins
+            variant="strip"
+            entries={operatorJournal.entries}
+            candidates={candidates}
+            retained={heldObservations}
+            onSelect={openCandidate}
+            onAppendNote={appendHoldNote}
+          />
+          <AttentionFeed variant="board" candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onOpen={openCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
             orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
             boardBasis={boardLens.basis}
             advanceNotice={advanceNotice} />
@@ -815,7 +924,22 @@ export function GlassApp({
           orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
           boardBasis={boardLens.basis} />
         <div id="selected-coin" tabIndex={-1}>
-          <CoinWorkbench candidate={selected} episode={episode} socialEvents={snapshot.view.payload.socialEvents} onAnnotate={annotateChart} />
+          <CoinWorkbench
+            candidate={slicedCandidate !== null && slicedCandidate.key === `${snapshot.view.sceneId}/${selected.id}`
+              ? slicedCandidate.candidate
+              : selected}
+            episode={episode}
+            socialEvents={snapshot.view.payload.socialEvents}
+            onAnnotate={annotateChart}
+            onHold={holdSelected}
+            onOpenJournal={openJournal}
+            held={heldMintsBySubject[selected.id] !== undefined}
+            venueAnswer={venueReadout
+              ? venueReadout(selected.id)
+              : venueSource
+                ? measuredVenues[selected.mint] ?? null
+                : null}
+          />
           {explorationBundle && <HypothesisLab key={explorationBundle.bundleId}
             bundle={explorationBundle}
             policies={availablePolicies}

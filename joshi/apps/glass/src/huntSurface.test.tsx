@@ -219,6 +219,53 @@ describe("hunt surface", () => {
     expect(second.payload.scope.subject.key).toBe("ORBIT4JxM7qT2vN8cL5pR1kD9bW3sHzE");
   });
 
+  /**
+   * The click-through: pump.fun's board is one click from any coin's page, and so is this
+   * one. A row click (or Enter on the active row) opens the coin page — the inspect lens led
+   * by the coin — recording the SAME focus-in assertion the `'` switch records, debounced per
+   * (scene, coin) across both entry paths. Space stays selection-only, so the keyboard keeps
+   * a way to mark a row without leaving the board; pointer motion still moves nothing.
+   */
+  it("opens the coin page from a board row with one click, sharing the focus-in assertion", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    const { container } = renderHunt(sink);
+    await boardSettled(container);
+
+    const posted = () => sink.attemptBodies
+      .map((body) => JSON.parse(body) as OperatorCommandV1)
+      .filter((command) => command.commandKind === "request_hot_scope");
+
+    // One click: the page opens on the clicked coin — not on whatever was selected — with the
+    // coin page's own furniture (the acts, the microstructure slots) present.
+    await user.click(await screen.findByRole("option", { name: /\$MOSS/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: /\$MOSS/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hold/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /venue & instruments/i })).toBeInTheDocument();
+    await waitFor(() => expect(posted().length).toBe(1));
+    const inspect = posted()[0]!;
+    if (inspect.commandKind !== "request_hot_scope") throw new Error("expected the inspect assertion");
+    expect(inspect.subject.kind).toBe("scene");
+
+    // Back to the board and straight back in on the same coin: the assertion is debounced
+    // across entry paths, exactly as it is across repeated `'` flips.
+    await user.keyboard("'");
+    await screen.findByRole("region", { name: /hunt board/i });
+    const listbox = screen.getByRole("listbox");
+    listbox.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { level: 1, name: /\$MOSS/ })).toBeInTheDocument();
+    expect(posted().length).toBe(1);
+
+    // Space on the board selects without navigating: the board is still the page.
+    await user.keyboard("'");
+    await screen.findByRole("region", { name: /hunt board/i });
+    screen.getByRole("listbox").focus();
+    await user.keyboard(" ");
+    expect(screen.getByRole("region", { name: /hunt board/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: /\$MOSS/ })).not.toBeInTheDocument();
+  });
+
   it("has no automatically detectable accessibility violations on the hunt surface", async () => {
     const { container } = renderHunt();
     await boardSettled(container);

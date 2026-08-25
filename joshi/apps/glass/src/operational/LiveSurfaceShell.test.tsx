@@ -334,9 +334,14 @@ describe("live surface shell", () => {
 
     const rail = await screen.findByRole("region", { name: /held coins/i });
     expect(within(rail).getByRole("heading", { name: MINT_LABEL })).toBeInTheDocument();
-    expect(await within(rail).findByText(/retained by the catalog at commit 7/i)).toBeInTheDocument();
-    // Nothing was measured about this venue, so nothing about it is claimed.
-    expect(within(rail).getAllByText(/not yet measured/i)).toHaveLength(4);
+    // The hunt strip states the commit at chip scale: the exact sequence, visibly, the moment
+    // the store answers — the end-to-end durability fact a hold exists to make.
+    expect(await within(rail).findByText(/commit 7/i)).toBeInTheDocument();
+    // The strip claims nothing about the venue. The measured venue block lives on the coin
+    // page (and the inspect rail); one lens switch shows it stating its non-claims plainly.
+    await user.keyboard("'");
+    await screen.findByRole("heading", { name: /venue & instruments/i });
+    expect(screen.getAllByText(/not yet measured/i).length).toBeGreaterThanOrEqual(4);
   });
 
   /**
@@ -368,7 +373,9 @@ describe("live surface shell", () => {
       subjectCount: "1",
       observationCount: "3",
       viewDigest,
+      derivationVersion: "live_surface.v5",
       sceneRetention: "served_not_yet_durable",
+      retiredReason: null,
     });
     const feedScenes = [
       feedEntry(SCENE_ID, liveSnapshot.snapshotDigest, "3", "2026-08-22T17:55:00.000000Z"),
@@ -458,7 +465,9 @@ describe("live surface shell", () => {
           subjectCount: "1",
           observationCount: "3",
           viewDigest: liveSnapshot.snapshotDigest,
+          derivationVersion: "live_surface.v5",
           sceneRetention: "served_not_yet_durable",
+          retiredReason: null,
         }],
         catalog: {
           outcome: "advanced",
@@ -486,6 +495,94 @@ describe("live surface shell", () => {
     // screen-reader quick-nav, so the palette entry renders no <kbd> hint.
     expect(within(entry).queryByText(/^[a-z;]$/i)).not.toBeInTheDocument();
     expect(entry.querySelector("kbd")).toBeNull();
+  });
+
+  /**
+   * The advance rule is the core's own: advance on the evidence watermark (`cutoffCommitSeq`),
+   * never on a new scene id — a re-derivation of the same evidence mints a new id with no new
+   * observation, and a client chasing ids chases its own tail. Retired rows are listed history
+   * that no route serves, so they are never an advance target; but a BOUND scene that retires
+   * is the one exception, because staying bound to bytes the core will no longer re-serve is
+   * worse than moving.
+   */
+  it("advances on the evidence watermark, never on a rederived id or a retired row", async () => {
+    const REDERIVED = "scene-live-3d77dabe07ce1b69cc56fb59130c85e6";
+    const entry = (sceneId: string, cutoff: string, retention: string) => ({
+      sceneId,
+      derivedAt: "2026-08-22T18:03:00.000000Z",
+      cutoffCommitSeq: cutoff,
+      subjectCount: "1",
+      observationCount: "3",
+      viewDigest: liveSnapshot.snapshotDigest,
+      derivationVersion: retention === "retired" ? null : "live_surface.v5",
+      sceneRetention: retention,
+      retiredReason: retention === "retired" ? "older derivation; bytes not retained" : null,
+    });
+    // Newest listed row is retired history; the newest SERVABLE row is a re-derivation of the
+    // bound scene's exact evidence (same watermark, different id). Neither is an advance.
+    let feedScenes = [
+      entry("scene-live-4e88ebcf18df2c7add67fc6a241d96f7", "5", "retired"),
+      entry(REDERIVED, "3", "durable"),
+      entry(SCENE_ID, "3", "durable"),
+    ];
+    stubCore([], {
+      sceneFeed: () => ({
+        contract: "joshi.core.scene_feed",
+        schemaVersion: 1,
+        authority: "read_only_no_execution",
+        sourceId: "helius.http.solana.v1",
+        scenes: [...feedScenes],
+        catalog: {
+          outcome: "unchanged",
+          lastContactAt: "2026-08-22T18:03:00.000000Z",
+          detail: null,
+          basisCommitSeq: "5",
+        },
+      }),
+    });
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+        sceneFeedIntervalMs={25}
+      />,
+    );
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
+    // Let at least one poll land, then assert the quiet: no pill, no announcement.
+    await waitFor(() => expect(screen.queryByText(/scene feed unreachable/i)).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /advance/i })).not.toBeInTheDocument();
+
+    // The bound scene retires (an upgraded remount): the newest servable scene is offered even
+    // at the same watermark, and with the bound row unservable no count is claimed.
+    feedScenes = [
+      entry(REDERIVED, "3", "durable"),
+      entry(SCENE_ID, "3", "retired"),
+    ];
+    expect(await screen.findByRole("button", { name: /newer scenes exist — advance/i })).toBeInTheDocument();
+  });
+
+  /**
+   * The live core mounts no presentation-witness route, and that is a structural fact about
+   * the deployment, not a failure of the scene on screen: it renders as a quiet stated
+   * absence with the sentence on hover, never as the red alert class Ember actually saw. A
+   * real append failure over a mounted route keeps the alert.
+   */
+  it("states an unmounted presentation witness quietly, never as a red alert", async () => {
+    stubCore([]);
+    render(
+      <LiveSurfaceShell
+        session={pairedSession()}
+        launchSceneId={SCENE_ID}
+        pendingOperatorQueue={new MemoryPendingOperatorCommandQueue()}
+      />,
+    );
+    expect(await screen.findByRole("option", { name: MINT_LABEL })).toBeInTheDocument();
+    const note = await screen.findByText(/witness not mounted/i);
+    expect(note).not.toHaveAttribute("role", "alert");
+    expect(note).toHaveAttribute("title", expect.stringMatching(/mounts no presentation-witness route/i));
+    expect(screen.queryByText(/presentation gap — reveal not witnessed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /**

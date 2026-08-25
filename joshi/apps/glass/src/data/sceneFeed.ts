@@ -25,7 +25,19 @@ const sceneFeedEntrySchema = z.object({
   subjectCount: wireU64,
   observationCount: wireU64,
   viewDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-  sceneRetention: z.enum(["durable", "served_not_yet_durable"]),
+  // The derivation version that produced this scene's bytes; null when the core's ledger
+  // predates version recording. Mirrored from `SceneFeedEntryWire` in
+  // `apps/core/src/live_follow.rs` — this schema is strict, so a wire field it does not name
+  // fails the WHOLE feed. That exact failure shipped once: the core added
+  // `derivationVersion`/`retiredReason` and every poll of a live feed failed parse, which the
+  // shell could only report as "scene feed unreachable" — the cockpit sat on its launch scene
+  // looking like a photograph while newer scenes accumulated unseen.
+  derivationVersion: z.string().min(1).nullable(),
+  // A retired scene is a listed historical fact whose bytes an older derivation produced and
+  // did not retain: no route serves it any more, so it must never be offered as an advance
+  // target. `retiredReason` is stated only on retired rows.
+  sceneRetention: z.enum(["durable", "served_not_yet_durable", "retired"]),
+  retiredReason: z.string().min(1).nullable(),
 }).strict();
 
 const sceneFeedSchema = z.object({

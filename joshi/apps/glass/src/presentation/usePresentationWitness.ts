@@ -12,7 +12,7 @@ import {
   type PresentationSceneReceiptV1,
   type PresentationSceneV1,
 } from "./contract";
-import type { PresentationSink } from "./client";
+import { PresentationUnavailableError, type PresentationSink } from "./client";
 import { buildPresentationScene } from "./manifest";
 
 export type PresentationEventIntent = PresentationEventV1 extends infer Event
@@ -43,6 +43,12 @@ export function usePresentationWitness(
   const [scene, setScene] = useState<PresentationSceneV1 | null>(null);
   const [receipt, setReceipt] = useState<PresentationSceneReceiptV1 | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * True when the gap exists because the paired core mounts no presentation-witness route at
+   * all — a structural absence of the instrument, to be stated quietly — as opposed to a real
+   * append failure over a mounted route, which stays an alert.
+   */
+  const [unavailable, setUnavailable] = useState(false);
   const [eventReceipts, setEventReceipts] = useState<PresentationEventReceiptV1[]>([]);
   const [eventGap, setEventGap] = useState<string | null>(null);
   const sceneSequence = useRef(0n);
@@ -79,6 +85,7 @@ export function usePresentationWitness(
     setEventReceipts([]);
     setError(null);
     setEventGap(null);
+    setUnavailable(false);
     setStatus("staging");
     sink.appendScene(nextScene, policy, bundle, controller.signal)
       .then((nextReceipt) => {
@@ -89,6 +96,7 @@ export function usePresentationWitness(
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
+          setUnavailable(cause instanceof PresentationUnavailableError);
           setError(cause instanceof Error ? cause.message : "Unknown presentation-scene append failure");
           setStatus("gap");
         }
@@ -184,6 +192,7 @@ export function usePresentationWitness(
     scene,
     receipt,
     error,
+    unavailable,
     eventReceipts,
     eventGap,
     recordEvent,

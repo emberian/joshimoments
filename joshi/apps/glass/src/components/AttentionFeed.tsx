@@ -64,6 +64,7 @@ export const AttentionFeed = memo(function AttentionFeed({
   candidates,
   selectedId,
   onSelect,
+  onOpen,
   onFocusCandidate,
   onScrollViewportChange,
   onPointerCandidate,
@@ -81,6 +82,14 @@ export const AttentionFeed = memo(function AttentionFeed({
   candidates: Candidate[];
   selectedId: string;
   onSelect(id: string): void;
+  /**
+   * The click-through, when the shell offers one: a row click or Enter OPENS this coin (the
+   * hunt board passes the coin-page act here), while Space, J/K, and the arrows still only
+   * move and select. Absent, click and Enter fall back to plain selection — the inspect
+   * column's feed keeps its old meaning, where the workbench is already beside the rows.
+   * Pointer motion never opens anything, exactly as it never selects.
+   */
+  onOpen?(id: string): void;
   /**
    * Keeps "what she is on" and "what a keystroke acts on" the same thing.
    *
@@ -240,7 +249,11 @@ export const AttentionFeed = memo(function AttentionFeed({
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       const active = activeIndex >= 0 ? sorted[activeIndex] : undefined;
-      if (active) onSelect(active.id);
+      if (!active) return;
+      // Enter opens the coin when the shell offers a click-through; Space stays selection
+      // only, so the keyboard keeps a way to mark a row without leaving the board.
+      if (event.key === "Enter" && onOpen) onOpen(active.id);
+      else onSelect(active.id);
       return;
     }
     if (event.key === "Home" || event.key === "End") {
@@ -250,7 +263,7 @@ export const AttentionFeed = memo(function AttentionFeed({
     }
     // J/K and the arrow keys reach the shell's global handler by bubbling; it moves the
     // selection (and therefore the active descendant) and prevents the container scroll.
-  }, [activeIndex, onSelect, sorted]);
+  }, [activeIndex, onOpen, onSelect, sorted]);
 
   const boardRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const moveBoard = useCallback((fromIndex: number, direction: 1 | -1) => {
@@ -346,8 +359,12 @@ export const AttentionFeed = memo(function AttentionFeed({
       )}
 
       <p id="feed-keys-hint" className="sr-only">
-        One tab stop: J and K or the arrow keys move through the candidates, Enter selects the
-        active one, and semicolon holds it.
+        {onOpen
+          ? "One tab stop: J and K or the arrow keys move through the candidates, Enter opens "
+            + "the active coin's page, Space selects it without leaving the board, and "
+            + "semicolon holds it."
+          : "One tab stop: J and K or the arrow keys move through the candidates, Enter selects "
+            + "the active one, and semicolon holds it."}
       </p>
 
       {/*
@@ -420,7 +437,7 @@ export const AttentionFeed = memo(function AttentionFeed({
                     // the guard, so the click clears it: the guard must only ever swallow the
                     // one focus event its own press caused.
                     pointerFocusRef.current = false;
-                    onSelect(candidate.id);
+                    (onOpen ?? onSelect)(candidate.id);
                   }}
                   onPointerDown={markPointerFocus}
                   onMouseDown={markPointerFocus}
