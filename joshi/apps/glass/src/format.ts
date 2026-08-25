@@ -10,6 +10,18 @@ export function compactUsd(value: string | null): string {
 }
 
 /**
+ * A provider-claimed count (trades, traders, replies) compacted for a cell that must scan in
+ * under a second. Rendering only — the wire keeps the exact integer string, and sorting
+ * compares the exact strings, never this face.
+ */
+export function compactCount(value: string): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Number(value));
+}
+
+/**
  * A reconciled accounting figure, or its absence.
  *
  * Deliberately not `sol()`. For money the difference between "zero" and "not reconciled" is the

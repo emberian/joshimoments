@@ -90,6 +90,28 @@ export const candleSchema = z.object({
   volumeTokens: exactDecimal,
 }).strict();
 
+/**
+ * One movers-tap window for a coin: provider-claimed volume, trade count, and (where the
+ * provider stated one) unique-trader count over a named trailing window, with the provider's
+ * own server clock retained verbatim (epoch milliseconds as a wire-u64 string — the
+ * coin-communities ISO-µs family is a different clock family and never crosses into this one).
+ * `txns` and `traders` are optional because the movers document sometimes omits them (the
+ * live derivation omits the key then); an omitted count is an absence, never zero. No
+ * per-window price change exists on this wire: the movers tap does not assert one, and a
+ * %-change column cannot be conjured from volume.
+ */
+export const flowWindowSchema = z.object({
+  window: z.enum(["5m", "15m", "1h", "24h"]),
+  volumeSol: exactDecimal,
+  volumeUsd: exactDecimal,
+  txns: wireU64.optional(),
+  traders: wireU64.optional(),
+  serverTsUnixMs: wireU64,
+}).strict();
+
+/** Epoch milliseconds as the provider asserted them: a claim about a clock, retained verbatim. */
+const providerUnixMs = wireU64;
+
 export const candidateSchema = z.object({
   id: stableIdentity,
   mint: z.string().min(16),
@@ -128,6 +150,55 @@ export const candidateSchema = z.object({
   // Empty is legal and means "no price series was observed for this mint". A single bar is not:
   // one point implies an interval it does not have. Bars are never invented to fill the shape.
   candles: z.array(candleSchema).refine((value) => value.length !== 1, "must be empty or contain at least two samples"),
+  // ── The parity-density seam (docs/planning/PARITY_DENSITY_SEAM.md, 2026-08-25) ──────────
+  // Provider-claimed fields the coin's own retained record carries. Every one is OPTIONAL and
+  // is OMITTED when unobserved — a dash on screen, never a fabricated value — and every one is
+  // a labelled provider claim whose evidence entry (class `observed`, field-named, riding its
+  // coin-record observation) travels in `evidence` like any other field's. CANONICAL POSITION:
+  // these keys append after `candles` in exactly this order; the Rust derivation
+  // (apps/core/src/live_surface.rs) must serialize them in the same position or the digest
+  // recompute fails closed, exactly as it should.
+  /** Coin art URL, provider-controlled. Rendered under the seam's security rules only. */
+  imageUri: z.string().min(1).optional(),
+  /** The coin's own thesis line. Absent is omitted; an empty thesis is not a thesis. */
+  description: z.string().min(1).optional(),
+  replyCount: wireU64.optional(),
+  /** Exact decimal literal; a provider claim about its own recorded high, never an f64. */
+  athMarketCapUsd: exactDecimal.optional(),
+  athAtUnixMs: providerUnixMs.optional(),
+  /**
+   * The provider's own creation clock, for a TRUE coin age (anchored to the scene's
+   * renderedAt when rendered) — distinct from `metrics.ageSeconds`, which is evidence age.
+   */
+  createdAtUnixMs: providerUnixMs.optional(),
+  lastTradeAtUnixMs: providerUnixMs.optional(),
+  graduated: z.boolean().optional(),
+  verified: z.boolean().optional(),
+  nsfw: z.boolean().optional(),
+  currentlyLive: z.boolean().optional(),
+  /**
+   * Movers-tap windows, in served order (the seam states no canonical window order, so the
+   * served order is the canonical bytes). Absent entirely when movers was not tapped for this
+   * mint; when present it is non-empty and no window repeats — two claims about the same
+   * window in one document would be a producer defect, not a renderable fact.
+   */
+  flow: z.array(flowWindowSchema).min(1).superRefine((windows, context) => {
+    const seen = new Set<string>();
+    windows.forEach((entry, index) => {
+      if (seen.has(entry.window)) {
+        context.addIssue({ code: "custom", message: "must not repeat a flow window", path: [index, "window"] });
+      }
+      seen.add(entry.window);
+    });
+  }).optional(),
+  /**
+   * The provider's verbatim `chain_id` (pump.fun went multichain), e.g.
+   * "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" for Solana or an eip155 value for the EVM
+   * coins. CANONICAL POSITION: after `flow`, the seam's last key. Absent means the chain is
+   * UNKNOWN — never assumed Solana — and every Solana-only instrument reading (venue floor,
+   * curve, tape) applies only where this field positively claims Solana.
+   */
+  chainId: z.string().min(1).optional(),
 }).strict();
 
 export const socialEventSchema = z.object({
@@ -289,6 +360,7 @@ export type EvidenceClass = z.infer<typeof evidenceClassSchema>;
 export type EvidenceRef = z.infer<typeof evidenceRefSchema>;
 export type SourceHealth = z.infer<typeof sourceHealthSchema>;
 export type Candle = z.infer<typeof candleSchema>;
+export type FlowWindow = z.infer<typeof flowWindowSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
 export type SocialEvent = z.infer<typeof socialEventSchema>;
 export type Episode = z.infer<typeof episodeSchema>;

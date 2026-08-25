@@ -57,7 +57,7 @@ const sceneFeedSchema = z.object({
 export type SceneFeedEntry = z.infer<typeof sceneFeedEntrySchema>;
 export type SceneFeedV1 = z.infer<typeof sceneFeedSchema>;
 
-export const MAX_SCENE_FEED_BYTES = 256 * 1024;
+export const MAX_SCENE_FEED_BYTES = 64 * 1024 * 1024;
 
 export function parseSceneFeedV1(value: unknown): SceneFeedV1 {
   return sceneFeedSchema.parse(value);

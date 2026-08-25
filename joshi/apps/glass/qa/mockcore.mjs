@@ -91,9 +91,66 @@ const evidence = (id, field, note, cls = "observed") => ({
 const MINT1 = "WALKmint1111111111111111111111111111111111";
 const MINT2 = "WALKmint2222222222222222222222222222222222";
 const MINT3 = "WALKmint3333333333333333333333333333333333";
+// The multichain listing (pump went multichain): an EVM coin whose id is its 0x address —
+// exactly the rows Ember saw leading the real board. The provider claims its chain; the
+// cockpit's venue scope keeps it off the default hunt and the chain chip marks it under
+// "All chains".
+const MINT4 = "0x00eB5459c2c60a2a614C536846F225ED88f10ae8";
+const SOLANA_CHAIN_ID = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+
+// Coin art the mock serves ITSELF (see the /art/ route below): the walk must exercise a real
+// cross-origin <img> fetch under the seam's security attributes without touching any provider.
+const ART1 = `http://127.0.0.1:${port}/art/walk1.svg`;
+const artSvg = (background, glyph) =>
+  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>`
+  + `<rect width='64' height='64' fill='${background}'/>`
+  + `<circle cx='32' cy='32' r='17' fill='${glyph}'/></svg>`;
+
+// The first scene's render clock, the anchor every provider clock below derives from —
+// derived, not hand-copied, so the epoch strings cannot disagree with the ISO clocks.
+const RENDERED1_MS = Date.parse("2026-08-24T18:00:06.000000Z");
+
+// Movers flow for the walk coins. serverTs sits at the scene's own render second.
+const flowAt = (ts) => ([
+  { window: "5m", volumeSol: "2.1000", volumeUsd: "410.00", txns: "18", traders: "11", serverTsUnixMs: ts },
+  { window: "1h", volumeSol: "16.8000", volumeUsd: "3220.00", txns: "150", traders: "64", serverTsUnixMs: ts },
+  // 24h states no trader count: the omitted-traders absence stays walkable.
+  { window: "24h", volumeSol: "120.5000", volumeUsd: "23100.00", txns: "1180", serverTsUnixMs: ts },
+]);
 
 function candidates(mcap1) {
   return [
+    {
+      id: MINT4,
+      mint: MINT4,
+      symbol: null,
+      name: null,
+      board: "new",
+      lifecycle: "unknown",
+      firstKnownAt: "2026-08-24T17:59:50.000000Z",
+      lastObservedAt: null,
+      rank: null,
+      metrics: {
+        priceSol: null,
+        marketCapUsd: "8900.00",
+        change5mBps: null,
+        ageSeconds: null,
+        activity: "unknown",
+        quoteSizeSol: null,
+        executableExitSol: null,
+      },
+      attentionReason: "Mock multichain listing: the provider claims a non-Solana chain.",
+      socialSummary: "No social source was acquired in this cut.",
+      tags: ["multichain"],
+      watched: null,
+      episodeId: null,
+      evidence: [
+        evidence("obs:walk4:01", "mint", "Named by the mock discovery read."),
+        evidence("obs:walk4:02:claim-chainId", "chainId", "The provider's verbatim chain_id for this listing."),
+      ],
+      candles: [],
+      chainId: "eip155:8453",
+    },
     {
       id: MINT1,
       mint: MINT1,
@@ -127,8 +184,27 @@ function candidates(mcap1) {
           "metrics.marketCapUsd",
           `The provider asserts two USD market caps in the same document: usd_market_cap=${mcap1} (rendered) and market_cap_usd=99123.40 (differs); neither is averaged and the rendered field is named.`,
         ),
+        evidence("obs:walk1:05:claim-imageUri", "imageUri", "Provider-asserted art URL; JOSHI does not host the bytes."),
+        evidence("obs:walk1:06:claim-createdAtUnixMs", "createdAtUnixMs", "Provider creation clock copied verbatim from the coin's own record."),
+        evidence("obs:walk1:07:claim-flow", "flow", "Movers-tap window claims retained verbatim."),
+        evidence("obs:walk1:08:claim-chainId", "chainId", "The provider's verbatim chain_id for this listing."),
       ],
       candles,
+      // The parity-density seam, in EXACT contract/v1.ts key order (after candles): the
+      // digest is computed over these literal bytes, so the order is load-bearing here.
+      imageUri: ART1,
+      description: "Mock walk coin one: the full parity-density record, self-served art included.",
+      replyCount: "412",
+      athMarketCapUsd: "90241.10",
+      athAtUnixMs: String(RENDERED1_MS - 3_600_000),
+      createdAtUnixMs: String(RENDERED1_MS - 540_000),
+      lastTradeAtUnixMs: String(RENDERED1_MS - 2_000),
+      graduated: false,
+      verified: true,
+      nsfw: false,
+      currentlyLive: true,
+      flow: flowAt(String(RENDERED1_MS)),
+      chainId: SOLANA_CHAIN_ID,
     },
     {
       id: MINT2,
@@ -157,8 +233,17 @@ function candidates(mcap1) {
       evidence: [
         evidence("obs:walk2:01", "mint", "Named by the mock discovery read."),
         evidence("obs:walk2:02:claim-symbol", "symbol", "Provider claim copied from the mock read."),
+        evidence("obs:walk2:03:claim-flow", "flow", "Movers-tap window claims retained verbatim."),
       ],
       candles: [],
+      // Flow with no price path: the grid card must plot claimed volume, never invent candles.
+      description: "Mock walk coin two: movers flow only, so the card's chart is volume.",
+      createdAtUnixMs: String(RENDERED1_MS - 120_000),
+      flow: [
+        { window: "1h", volumeSol: "5.0000", volumeUsd: "900.00", txns: "40", traders: "12", serverTsUnixMs: String(RENDERED1_MS) },
+        { window: "24h", volumeSol: "21.0000", volumeUsd: "3900.00", txns: "260", serverTsUnixMs: String(RENDERED1_MS) },
+      ],
+      chainId: SOLANA_CHAIN_ID,
     },
     {
       id: MINT3,
@@ -263,7 +348,7 @@ const feedEntry = (sceneId, cutoff, derivedAt, viewDigest) => ({
   sceneId,
   derivedAt,
   cutoffCommitSeq: cutoff,
-  subjectCount: "3",
+  subjectCount: "4",
   observationCount: cutoff,
   viewDigest,
   derivationVersion: "live_surface.v5",
@@ -430,6 +515,17 @@ const server = createServer((request, response) => {
       return answer(200, { ...measuredReadout, stateAge: { ...measuredReadout.stateAge, receivedAtUnixMs: String(Date.now()) } });
     }
     return answer(404, { code: "venue_readout_not_measured", detail: "the mock capture names no venue for this mint" });
+  }
+  // Self-served coin art: a cross-origin image fetch the seam's attributes really exercise.
+  // `crossorigin=anonymous` on the cockpit's <img> makes this a CORS request, so the wildcard
+  // allow-origin (with no credentials, exactly as the seam demands) is what lets it render.
+  if (request.method === "GET" && url.pathname === "/art/walk1.svg") {
+    response.writeHead(200, {
+      "content-type": "image/svg+xml",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+    });
+    return response.end(artSvg("#2e6b4f", "#b9f7d3"));
   }
   // The presentation witness is deliberately unmounted: the walk must see the quiet chip.
   return answer(404, { code: "not_found" });

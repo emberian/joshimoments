@@ -2,9 +2,11 @@ import { lazy, memo, Suspense } from "react";
 import { AlertTriangle, Anchor, CircleDot, Clock3, Eye, Megaphone, NotebookPen, Radio } from "lucide-react";
 
 import type { Candidate, Episode, SocialEvent } from "../contract/v1";
-import { basisPoints, candidateName, candidateSymbol, clock, compactUsd, instantOrAbsent, priceSol, sentenceCase, sol } from "../format";
+import { basisPoints, candidateName, candidateSymbol, clock, compactCount, compactUsd, duration, instantOrAbsent, priceSol, sentenceCase, sol } from "../format";
 import type { ChartAnchor } from "../operator/contract";
 import type { VenueReadoutAnswer } from "../venue/contract";
+import { athProgress, chainReading, FLOW_WINDOWS, flowFor, providerClaimTitle, trueAgeSeconds } from "./candidateFacts";
+import { CoinArt } from "./CoinArt";
 import { marketCapDisagreementNote } from "./provenance";
 import { VenueAndClip } from "./VenueReadoutBlock";
 
@@ -75,6 +77,7 @@ export const CoinWorkbench = memo(function CoinWorkbench({
   onOpenJournal,
   held = false,
   venueAnswer = null,
+  renderedAtUnixMs = null,
 }: {
   candidate: Candidate;
   episode: Episode | undefined;
@@ -84,6 +87,8 @@ export const CoinWorkbench = memo(function CoinWorkbench({
   onHold?(): void;
   /** Moves focus to the journal composer; words land against this scene, in her own words. */
   onOpenJournal?(): void;
+  /** The scene's render clock in epoch ms, the anchor for TRUE coin age. Null: no scene clock. */
+  renderedAtUnixMs?: number | null;
   /** Whether this session already holds this coin, so the button states it instead of re-arming. */
   held?: boolean;
   /**
@@ -95,14 +100,17 @@ export const CoinWorkbench = memo(function CoinWorkbench({
 }) {
   const visibleSocial = socialEvents.filter((event) => event.candidateId === candidate.id);
   const mcapDisagreement = marketCapDisagreementNote(candidate);
+  const claimedAge = trueAgeSeconds(candidate, renderedAtUnixMs);
+  const ath = athProgress(candidate);
+  const flowRows = FLOW_WINDOWS
+    .map((window) => ({ window, entry: flowFor(candidate, window) }))
+    .filter((row): row is { window: typeof row.window; entry: NonNullable<typeof row.entry> } => row.entry !== null);
 
   return (
     <section className="workbench" aria-labelledby="coin-title">
       <header className="coin-header panel">
         <div className="coin-identity">
-          <span className="coin-mark" aria-hidden="true">
-            {(candidate.symbol ?? candidate.mint).slice(0, 2)}
-          </span>
+          <CoinArt candidate={candidate} size="page" />
           <div>
             <p className="eyebrow">Selected observation</p>
             <h1 id="coin-title">
@@ -111,6 +119,14 @@ export const CoinWorkbench = memo(function CoinWorkbench({
             <p className="mint" title={candidate.mint}>{candidate.mint}</p>
             {candidate.symbol !== null && (
               <p className="identity-provenance">Ticker and name: {fieldLineage(candidate, "symbol")}</p>
+            )}
+            {candidate.description !== undefined && (
+              <p
+                className="coin-thesis"
+                title={providerClaimTitle(candidate, "description", "The coin's own thesis line")}
+              >
+                {candidate.description}
+              </p>
             )}
           </div>
         </div>
@@ -134,6 +150,29 @@ export const CoinWorkbench = memo(function CoinWorkbench({
             </div>
           )}
           <div className="coin-tags" aria-label="Coin tags">
+            {/*
+              The chain claim, loudest here: every instrument on this page (venue floor,
+              curve, tape) is Solana-only, so a non-Solana coin must say on its own page
+              that those readings do not apply. Unknown renders nothing: never assumed.
+            */}
+            {(() => {
+              const chain = chainReading(candidate);
+              if (chain.kind === "unknown") return null;
+              return chain.kind === "solana"
+                ? (
+                  <span className="board-chip chip-sol" title={`Provider chain claim: ${chain.chainId}`}>
+                    sol
+                  </span>
+                )
+                : (
+                  <span
+                    className="board-chip chip-chain"
+                    title={`Provider chain claim: ${chain.chainId}\nA ${chain.family} coin — a different venue. Every instrument on this page (venue floor, curve, tape) is Solana-only and does not apply to it.`}
+                  >
+                    {chain.family} — not Solana
+                  </span>
+                );
+            })()}
             <span className={`lifecycle lifecycle-${candidate.lifecycle}`}>
               <Radio aria-hidden="true" size={14} />
               {sentenceCase(candidate.lifecycle)}
@@ -164,6 +203,16 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         <summary>Provenance — what this view claims, verbatim</summary>
         <p data-testid="provenance-attention">{candidate.attentionReason}</p>
         <p data-testid="provenance-social">{candidate.socialSummary}</p>
+        {/* The seam's required disclosure travels with the art itself, not a settings page. */}
+        {candidate.imageUri !== undefined && (
+          <p data-testid="provenance-art">
+            Coin art is provider-asserted at the provider&rsquo;s own URL; JOSHI does not host
+            it. This page&rsquo;s content-security policy admits only same-origin and data:
+            images, so a remote provider URL renders once a core image-proxy route exists and
+            the monogram stands in until then. Any art fetch sends no referrer and no
+            credentials, and a failed or unsupported URL falls back to the monogram.
+          </p>
+        )}
         <ul aria-label="Evidence rows in this view">
           {candidate.evidence.map((item) => (
             <li key={item.id}>
@@ -213,7 +262,111 @@ export const CoinWorkbench = memo(function CoinWorkbench({
               ? "This view carries no quote size for that exit"
               : `at the ${sol(candidate.metrics.quoteSizeSol, 2)} quote size this view carries`}</small>
         </article>
+        {/*
+          The coin's own record, as the parity seam serves it: every card a labelled provider
+          claim, every absence a dash with its sentence — the same rule the four cards above
+          already live by.
+        */}
+        <article className="metric-card">
+          <span>Claimed ATH cap</span>
+          <strong>{candidate.athMarketCapUsd === undefined ? "—" : compactUsd(candidate.athMarketCapUsd)}</strong>
+          {ath !== null && (
+            <span
+              className="ath-bar"
+              aria-hidden="true"
+              data-above={ath.aboveClaimedAth || undefined}
+              title={ath.aboveClaimedAth
+                ? "The rendered market cap exceeds the provider's own recorded high; the bar is pinned full."
+                : `The rendered market cap is ${Math.round(ath.ratio * 100)}% of this claimed high.`}
+            >
+              <span style={{ width: `${Math.round(ath.ratio * 100)}%` }} />
+            </span>
+          )}
+          <small>{candidate.athMarketCapUsd === undefined
+            ? "No all-time-high cap is claimed in this view"
+            : candidate.athAtUnixMs !== undefined
+              ? `provider claim · recorded ${clock(new Date(Number(candidate.athAtUnixMs)).toISOString())}Z`
+              : "provider claim; no ATH clock was stated"}</small>
+        </article>
+        <article className="metric-card">
+          <span>True coin age</span>
+          <strong>{claimedAge === null ? "—" : duration(claimedAge)}</strong>
+          <small>{claimedAge === null
+            ? "No creation time is claimed in this view"
+            : "render clock minus the provider-claimed creation time"}</small>
+        </article>
+        <article className="metric-card">
+          <span>Last trade</span>
+          <strong>{candidate.lastTradeAtUnixMs === undefined
+            ? "—"
+            : `${clock(new Date(Number(candidate.lastTradeAtUnixMs)).toISOString())}Z`}</strong>
+          <small>{candidate.lastTradeAtUnixMs === undefined
+            ? "No last-trade clock is claimed in this view"
+            : "provider claim; market silence, not staleness of this read"}</small>
+        </article>
+        <article className="metric-card">
+          <span>Claimed replies</span>
+          <strong>{candidate.replyCount === undefined ? "—" : compactCount(candidate.replyCount)}</strong>
+          <small>{candidate.replyCount === undefined
+            ? "No reply counter is claimed in this view"
+            : "the provider's own social counter, verbatim"}</small>
+        </article>
       </div>
+
+      {/*
+        The movers-tap flow, window by window: the TXNS / VOL / TRADERS truth behind the
+        board's columns, verbatim per served window. A coin whose wire carries no flow states
+        that once instead of rendering four rows of zeros.
+      */}
+      <section className="panel flow-panel" aria-labelledby="flow-title">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Provider flow</p>
+            <h2 id="flow-title">Claimed volume, trades &amp; traders</h2>
+          </div>
+          <span className="count-badge" title={providerClaimTitle(candidate, "flow", "Movers-tap flow")}>
+            {flowRows.length} window{flowRows.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        {flowRows.length === 0 ? (
+          <p className="flow-absence">
+            The movers tap was not observed for this mint in this view; no per-window volume,
+            trade, or trader claim exists here. Absence, not zero.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <table>
+              <caption className="sr-only">Provider-claimed flow per trailing window</caption>
+              <thead>
+                <tr>
+                  <th scope="col">window</th>
+                  <th scope="col">volume (USD)</th>
+                  <th scope="col">volume (SOL)</th>
+                  <th scope="col">trades</th>
+                  <th scope="col">traders</th>
+                  <th scope="col">provider clock</th>
+                </tr>
+              </thead>
+              <tbody>
+                {flowRows.map(({ window, entry }) => (
+                  <tr key={window}>
+                    <th scope="row">{window}</th>
+                    <td>{compactUsd(entry.volumeUsd)}</td>
+                    <td>{sol(entry.volumeSol, 2)}</td>
+                    <td>{entry.txns === undefined
+                      ? <span className="amount-absent" title="The movers document stated no trade count for this window.">not stated</span>
+                      : compactCount(entry.txns)}</td>
+                    <td>{entry.traders === undefined
+                      ? <span className="amount-absent" title="The movers document stated no trader count for this window.">not stated</span>
+                      : compactCount(entry.traders)}</td>
+                    <td>{clock(new Date(Number(entry.serverTsUnixMs)).toISOString())}Z</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {episode?.state === "watching_flat" && (
         <div className="state-banner state-flat" role="note">

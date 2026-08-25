@@ -52,12 +52,14 @@ describe("hunt surface", () => {
     expect(screen.getByText(new RegExp(`Scene ${mockSnapshots.witnessed.view.sceneId}`))).toBeInTheDocument();
     expect(screen.getByText(/witnessed · rendered/i)).toBeInTheDocument();
 
-    // Rank order, stated to the reader through set positions (which rows jsdom's window
-    // mounts is a virtualizer artifact, but the selected row is always pinned mounted):
-    // radon holds witnessed rank 2 of the 9 served candidates. And a row is a one-line
-    // read: ticker, name, mcap, signed 5m move, age, and a sparkline for a carried path.
+    // The Movers default leads the board with coins that carry data (which rows jsdom's
+    // window mounts is a virtualizer artifact, but the selected row is always pinned
+    // mounted): by claimed 24h volume radon (x3) sits 3rd behind fable (x9) and moss (x6),
+    // and the basis line states the applied default. And a row is a one-line read: ticker,
+    // name, mcap, signed 5m move, age, and a sparkline for a carried path.
     const radonRow = screen.getByRole("option", { name: /\$RADON/ });
-    expect(radonRow).toHaveAttribute("aria-posinset", "2");
+    expect(radonRow).toHaveAttribute("aria-posinset", "3");
+    expect(screen.getByText(/movers: largest claimed 24h volume first/i)).toBeInTheDocument();
     expect(radonRow).toHaveAttribute("aria-setsize", "9");
     expect(within(radonRow).getByText("Radon")).toBeInTheDocument();
     expect(within(radonRow).getByText("$168.4K")).toBeInTheDocument();
@@ -65,14 +67,52 @@ describe("hunt surface", () => {
     expect(within(radonRow).getByText("1h 5m")).toBeInTheDocument();
     expect(radonRow.querySelector(".sparkline")).not.toBeNull();
 
-    // The board panel still costs exactly two tab stops: the tab radiogroup's roving stop
-    // and the listbox — the same frozen architecture as the inspect feed, because it IS the
-    // same listbox.
+    // The board panel costs exactly five tab stops, every multi-control strip collapsed to a
+    // roving tabindex: the table/grid layout toggle, the trending strip, the filter tabs, the
+    // sort-header toolbar, and the listbox — which is still the same single listbox with the
+    // same channels, so density did not buy a tab-stop tax or new attention semantics.
     const board = screen.getByRole("region", { name: /hunt board/i });
     const boardStops = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]
       .filter((stop) => board.contains(stop))
-      .map((stop) => stop.getAttribute("role"));
-    expect(boardStops).toEqual(["radio", "listbox"]);
+      .map((stop) => stop.getAttribute("role") ?? `${stop.tagName.toLowerCase()}:${stop.className.split(" ")[0]}`);
+    expect(boardStops).toEqual([
+      "radio",
+      "button:trending-item",
+      "radio",
+      "radio",
+      "button:board-sort-button",
+      "listbox",
+    ]);
+  });
+
+  /**
+   * The venue scope: pump went multichain, every JOSHI instrument is Solana-only, and Ember
+   * hunts Solana — so a coin POSITIVELY claimed on another chain does not lead the default
+   * board. It is never silently gone (the basis counts it, "All chains" is one click), an
+   * unknown chain is never assumed foreign or Solana, and under "All chains" the foreign
+   * coin wears its loud chain chip so it reads as a different venue, not a broken mint.
+   */
+  it("scopes the hunt to her venue by default, other chains one explicit click away", async () => {
+    const user = userEvent.setup();
+    const { container } = renderHunt();
+    await boardSettled(container);
+
+    expect(screen.queryByRole("option", { name: /\$ZORB/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/solana venue \(1 other-chain hidden\)/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: /^all chains$/i }));
+    const zorbit = await screen.findByRole("option", { name: /\$ZORB/ });
+    const chip = within(zorbit).getByText("eip155");
+    expect(chip.getAttribute("title")).toContain("eip155:8453");
+    expect(chip.getAttribute("title")).toContain("Solana-only");
+    // A Solana claim wears the subtle mark; an unknown chain wears nothing at all.
+    expect(within(screen.getByRole("option", { name: /\$RADON/ })).getByText("sol")).toBeInTheDocument();
+    const orbitfan = screen.getByRole("option", { name: /\$ORBITFAN/ });
+    expect(within(orbitfan).queryByText("sol")).not.toBeInTheDocument();
+    expect(within(orbitfan).queryByText(/eip155/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: /^solana$/i }));
+    await waitFor(() => expect(screen.queryByRole("option", { name: /\$ZORB/ })).not.toBeInTheDocument());
   });
 
   /**
@@ -120,32 +160,72 @@ describe("hunt surface", () => {
     expect(await within(rail).findByRole("heading", { name: /\$RADON/ })).toBeInTheDocument();
   });
 
+  /**
+   * The grid keeps the sacred invariant: it is the SAME listbox, virtualizer, and channels —
+   * only what a row paints changed — so a hover and a hold in grid layout land the exact
+   * same durable records a table hold lands, and the gesture binds the same selected coin.
+   */
+  it("keeps every attention channel and the hold binding identical under the grid layout", async () => {
+    const sink = new OfflineFixtureOperatorSink();
+    const user = userEvent.setup();
+    const { container } = renderHunt(sink);
+    await boardSettled(container);
+
+    await user.click(screen.getByRole("radio", { name: /^grid$/i }));
+    await waitFor(() => expect(container.querySelector(".grid-card")).not.toBeNull());
+    // Same single listbox; the cards are still its options.
+    expect(container.querySelectorAll("[role='listbox']")).toHaveLength(1);
+
+    const board = screen.getByRole("region", { name: /hunt board/i });
+    await user.hover(await within(board).findByRole("option", { name: /\$MOSS/ }));
+    // Pointer still moves nothing: the selection (and therefore the `;` target) stays radon.
+    expect(screen.getByRole("option", { name: /\$RADON/ })).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard(";");
+    await waitFor(() => expect(
+      sink.attemptBodies.map((body) => {
+        const command = JSON.parse(body) as OperatorCommandV1;
+        return command.commandKind === "record_choice_set"
+          ? (command.payload as { context: { uiLabel: string } }).context.uiLabel
+          : command.commandKind;
+      }),
+    ).toEqual(["record_focus", VIEWPORT_ASSERTION_UI_LABEL, POINTED_ASSERTION_UI_LABEL]));
+    const hold = JSON.parse(sink.attemptBodies[0] ?? "{}") as OperatorCommandV1;
+    expect(hold.subject).toEqual({ kind: "candidate", key: "radon" });
+    const pointed = JSON.parse(sink.attemptBodies[2] ?? "{}") as OperatorCommandV1;
+    if (pointed.commandKind !== "record_choice_set") throw new Error("expected a pointed assertion");
+    expect(pointed.payload.choiceSet.subjects.map((subject) => subject.key)).toEqual(["moss"]);
+  });
+
   it("gives the tabs real data semantics and states each tab's basis", async () => {
     const user = userEvent.setup();
     const { container } = renderHunt();
     await boardSettled(container);
 
     // The selected radon row is always pinned mounted, so its stated set position is the
-    // jsdom-stable witness of each tab's ordering: rank 2 under All, 4th-largest |5m| move
-    // under Trending, 7th-youngest age under New.
+    // jsdom-stable witness of each tab's ordering: 3rd mover under All (the default sort,
+    // stated), 4th-largest |5m| move under Trending, 7th-youngest age under New — the sort
+    // tabs keep their own rank because the Movers default never shadows a tab that IS a rank.
     const radonRow = () => screen.getByRole("option", { name: /\$RADON/ });
-    expect(radonRow()).toHaveAttribute("aria-posinset", "2");
-    expect(screen.getByText(/served order: the scene's own ranks first/i)).toBeInTheDocument();
+    expect(radonRow()).toHaveAttribute("aria-posinset", "3");
+    expect(screen.getByText(/movers: largest claimed 24h volume first/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: /^trending$/i }));
     await waitFor(() => expect(radonRow()).toHaveAttribute("aria-posinset", "4"));
-    expect(screen.getByText("Largest 5-minute move first, either direction.")).toBeInTheDocument();
+    // The venue clause prefixes every basis, so the tab sentence is matched inside it.
+    expect(screen.getByText(/largest 5-minute move first, either direction\./i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: /^new$/i }));
     await waitFor(() => expect(radonRow()).toHaveAttribute("aria-posinset", "7"));
-    expect(screen.getByText("Youngest observed age first.")).toBeInTheDocument();
+    expect(screen.getByText(/youngest observed age first\./i)).toBeInTheDocument();
 
     // A category tab: only the coin the scene marks live remains, and it says so.
     await user.click(screen.getByRole("radio", { name: /^live$/i }));
     const mossRow = await screen.findByRole("option", { name: /\$MOSS/ });
     await waitFor(() => expect(mossRow).toHaveAttribute("aria-setsize", "1"));
     expect(mossRow).toHaveAttribute("aria-posinset", "1");
-    expect(screen.getByText(/marks live · served order/i)).toBeInTheDocument();
+    // The category filter clause stays in front of the default's own sentence.
+    expect(screen.getByText(/marks live · movers: largest claimed 24h volume first/i)).toBeInTheDocument();
   });
 
   it("switches lenses cheaply both ways, keeping selection, holds, and the scene", async () => {
@@ -155,23 +235,24 @@ describe("hunt surface", () => {
     await boardSettled(container);
 
     await user.keyboard("j");
-    await waitFor(() => expect(screen.getByRole("option", { name: /\$ORBITFAN/ })).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(screen.getByRole("option", { name: /\$WETPAINT/ })).toHaveAttribute("aria-selected", "true"));
     await user.keyboard(";");
     await screen.findByRole("region", { name: /held coins/i });
 
     // Keyboard to inspect: the full evidence workbench, on the SAME selected coin, with the
-    // hold still held.
+    // hold still held — even though the inspect column keeps served order (the Movers
+    // default is the hunt board's), because selection binds by id, never by position.
     await user.keyboard("'");
-    expect(await screen.findByRole("heading", { name: /orbitfan orbit fan club/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /wetpaint wet paint/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /witnessed replay/i })).toBeInTheDocument();
     const rail = screen.getByRole("region", { name: /held coins/i });
-    expect(within(rail).getByRole("heading", { name: /\$ORBITFAN/ })).toBeInTheDocument();
+    expect(within(rail).getByRole("heading", { name: /\$WETPAINT/ })).toBeInTheDocument();
 
     // Pointer back to hunt: the header button is the same act.
     await user.click(screen.getByRole("button", { name: /switch to the hunt lens/i }));
     await screen.findByRole("region", { name: /hunt board/i });
-    expect(screen.getByRole("option", { name: /\$ORBITFAN/ })).toHaveAttribute("aria-selected", "true");
-    expect(within(screen.getByRole("region", { name: /held coins/i })).getByRole("heading", { name: /\$ORBITFAN/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\$WETPAINT/ })).toHaveAttribute("aria-selected", "true");
+    expect(within(screen.getByRole("region", { name: /held coins/i })).getByRole("heading", { name: /\$WETPAINT/ })).toBeInTheDocument();
   });
 
   /**
@@ -216,7 +297,7 @@ describe("hunt surface", () => {
     await waitFor(() => expect(posted().length).toBe(2));
     const second = posted()[1]!;
     if (second.commandKind !== "request_hot_scope") throw new Error("expected the inspect assertion");
-    expect(second.payload.scope.subject.key).toBe("ORBIT4JxM7qT2vN8cL5pR1kD9bW3sHzE");
+    expect(second.payload.scope.subject.key).toBe("WETPT6NcQ3vM9sL2pT8kR5bD1jHxZaF");
   });
 
   /**

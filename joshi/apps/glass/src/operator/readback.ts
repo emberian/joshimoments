@@ -21,7 +21,7 @@ import {
  * exact retained payload bytes. This module renders nothing; it validates the wire against the
  * same frozen payload schemas the write path used and hands typed records to the surface.
  */
-export const MAX_OPERATOR_READBACK_BYTES = 4 * 1024 * 1024;
+export const MAX_OPERATOR_READBACK_BYTES = 256 * 1024 * 1024;
 
 const readbackCommandSchema = z.object({
   commandId: wireIdentitySchema,

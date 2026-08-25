@@ -45,7 +45,7 @@ export type CandidateSliceAnswer =
   | { state: "unavailable"; reason: string };
 
 /** A slice is one candidate with evidence and a price path; a megabyte is already generous. */
-export const MAX_CANDIDATE_SLICE_BYTES = 1024 * 1024;
+export const MAX_CANDIDATE_SLICE_BYTES = 16 * 1024 * 1024;
 
 export function parseCandidateSliceV1(value: unknown): CandidateSliceV1 {
   return candidateSliceV1Schema.parse(value);

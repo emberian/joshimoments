@@ -108,6 +108,14 @@ page.on("console", (message) => {
     && ABSENCE_PATH_PREFIXES.some((prefix) => { try { return new URL(location).pathname.startsWith(prefix); } catch { return false; } })) {
     return;
   }
+  // Coin art is CSP-gated BY DESIGN until the core image-proxy route lands: the page admits
+  // only same-origin and data: images, so a provider (or mock-core) art URL is refused by
+  // the browser and the monogram fallback renders. The requestfailed handler records the
+  // stated absence once; this echo is the same fact.
+  if (/violates the following Content Security Policy/i.test(message.text())
+    && /Loading the image/i.test(message.text())) {
+    return;
+  }
   violations.push({ kind: "console_error", detail: `${message.text()}${location ? ` (${location})` : ""}` });
 });
 page.on("pageerror", (error) => {
@@ -122,10 +130,26 @@ page.on("response", (response) => {
   if (absence) absences.push({ url: new URL(url).pathname, status, absence });
   else violations.push({ kind: "failed_request", detail: `${status} ${new URL(url).pathname}` });
 });
+const cspArtAbsences = new Set();
 page.on("requestfailed", (request) => {
   const failure = request.failure()?.errorText ?? "";
   // Aborts are the client's own AbortControllers doing their job.
   if (failure.includes("ERR_ABORTED")) return;
+  // A coin-art image the page CSP refused: a stated absence (once per URL), never a walk
+  // failure — the monogram fallback is the designed rendering until the core mounts a
+  // same-origin image-proxy route for provider art.
+  if (request.resourceType() === "image" && /csp/i.test(failure)) {
+    const path = new URL(request.url()).pathname;
+    if (!cspArtAbsences.has(path)) {
+      cspArtAbsences.add(path);
+      absences.push({
+        url: path,
+        status: "csp",
+        absence: "coin art blocked by the page's img-src CSP by design; monogram fallback rendered (needs the core image-proxy route)",
+      });
+    }
+    return;
+  }
   violations.push({ kind: "request_failed", detail: `${failure} ${new URL(request.url()).pathname}` });
 });
 
@@ -156,6 +180,49 @@ try {
   }
   await shot("01-board.png");
   note("board", true, `${rowCount} rows mounted`);
+
+  // ── Station 1b: the image-first grid — the same board, art-led, candles on cards ───────
+  await page.getByRole("radio", { name: /^grid$/i }).click();
+  await page.locator(".grid-card").first().waitFor({ timeout: 15_000 });
+  const cardCount = await page.locator(".grid-card").count();
+  // Give lazy art (or its CSP refusal into the monogram) a beat to settle before the shot.
+  await page.waitForTimeout(800);
+  const artCount = await page.locator(".grid-card .coin-art img").count();
+  const monogramCount = await page.locator(".grid-card .coin-art-monogram").count();
+  const candleCards = await page.locator(".grid-card .candle-glyph").count();
+  await shot("01b-board-grid.png");
+  // Every card must resolve its art box one way or the other; which way is a CSP fact the
+  // absences list already states, not a station failure.
+  note(
+    "grid",
+    cardCount > 0 && artCount + monogramCount >= cardCount,
+    `${cardCount} cards, ${artCount} art images, ${monogramCount} monogram fallbacks, ${candleCards} with candles`,
+  );
+  await page.getByRole("radio", { name: /^table$/i }).click();
+  await page.locator(".board-row").first().waitFor({ timeout: 15_000 });
+
+  // ── Station 1b2: the venue scope — Solana leads by default, other chains one click away ─
+  const venueRows = await page.locator("[data-candidate-id]").count();
+  await page.getByRole("radio", { name: /^all chains$/i }).click();
+  // The multichain rows appear only under "All chains", wearing their loud chain chip.
+  const allRows = await page.locator("[data-candidate-id]").count();
+  const chainChips = await page.locator(".chip-chain").count();
+  await shot("01b2-board-all-chains.png");
+  note(
+    "chain scope",
+    allRows >= venueRows,
+    `${venueRows} rows on the Solana venue, ${allRows} under all chains, ${chainChips} chain chip(s)`,
+  );
+  await page.getByRole("radio", { name: /^solana$/i }).click();
+
+  // ── Station 1c: a column sort is real, stated, and clears back to the tab's order ──────
+  await page.getByRole("button", { name: /^sort by market cap$/i }).click();
+  await page.getByText(/sorted by market cap, largest first/i).waitFor({ timeout: 10_000 });
+  await shot("01c-board-sorted.png");
+  note("sort", true, "market-cap sort applied and stated in the basis line");
+  // Two more clicks walk the cycle back to the tab's own order.
+  await page.getByRole("button", { name: /sort by market cap, currently largest first/i }).click();
+  await page.getByRole("button", { name: /sort by market cap, currently smallest first/i }).click();
 
   // Walk the selection a little the way she would.
   await page.keyboard.press("j");

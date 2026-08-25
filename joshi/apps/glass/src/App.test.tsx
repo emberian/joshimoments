@@ -65,15 +65,17 @@ describe("accessibility-first glass", () => {
     // 66 -> 67 was the coin page's provenance drawer: the derivation's verbatim sentences
     // left every card face for chips and hovers, and the drawer's summary is the one
     // keyboard-reachable expand that keeps the full prose one deliberate act away.
-    expect(countStops()).toBe(67);
+    // 67 -> 68 was the chain scope (pump went multichain): one roving radiogroup that keeps
+    // her hunt on Solana by default with every other chain one explicit switch away.
+    expect(countStops()).toBe(68);
 
     const feed = screen.getByRole("region", { name: /attention feed/i });
     const feedStops = () => [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]
       .filter((stop) => feed.contains(stop))
       .map((stop) => stop.getAttribute("role"));
-    // Exactly two stops in the whole panel: the board radiogroup's roving stop, then the
-    // listbox itself. Six mounted rows contribute zero.
-    expect(feedStops()).toEqual(["radio", "listbox"]);
+    // Exactly three stops in the whole panel: the board radiogroup's roving stop, the chain
+    // scope's roving stop, then the listbox itself. Mounted rows contribute zero.
+    expect(feedStops()).toEqual(["radio", "radio", "listbox"]);
 
     // The active descendant names a real, mounted element — the virtualizer pins the active
     // row into the mounted range, so the reference can never dangle — and J/K move it.
@@ -94,7 +96,7 @@ describe("accessibility-first glass", () => {
     // feed still contributes exactly its two stops. (The shell-wide count is not re-pinned
     // here: a different selected coin honestly renders a different workbench.)
     await waitFor(() => expect(listbox).toHaveFocus());
-    expect(feedStops()).toEqual(["radio", "listbox"]);
+    expect(feedStops()).toEqual(["radio", "radio", "listbox"]);
   });
 
   it("renders the witnessed market, exposure rail, and safety boundary", async () => {

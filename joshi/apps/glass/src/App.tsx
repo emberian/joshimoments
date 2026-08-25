@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Command, Crosshair, Database, Grid2X2, Microscope, Search, ShieldCheck } from "lucide-react";
 
-import { AttentionFeed, type BoardFilter } from "./components/AttentionFeed";
-import { boardView } from "./components/boardSemantics";
+import { AttentionFeed, type BoardFilter, type BoardLayout } from "./components/AttentionFeed";
+import { applyBoardSort, boardView, DEFAULT_BOARD_SORT, type BoardSort } from "./components/boardSemantics";
+import { chainReading, flowFor } from "./components/candidateFacts";
+import { compareDecimal } from "./components/candlePath";
 import { CoinWorkbench } from "./components/CoinWorkbench";
 import { CommandPalette, type ShellCommand } from "./components/CommandPalette";
 import { EpisodeRail } from "./components/EpisodeRail";
@@ -117,6 +119,46 @@ export function GlassApp({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [density, setDensity] = useState<Density>("comfortable");
   const [board, setBoard] = useState<BoardFilter>("all");
+  /**
+   * Table or image-first grid on the hunt board. Grid is the mobile-primary shape (the coin
+   * art IS the card), so a narrow viewport opens into it; both are the same listbox and the
+   * same attention channels, so the toggle is presentation only.
+   */
+  const [boardLayout, setBoardLayout] = useState<BoardLayout>(() =>
+    typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(max-width: 700px)").matches
+      ? "grid"
+      : "table");
+  /**
+   * The table's column sort: one more pure lens over the tab's order (`boardSemantics.ts`).
+   * `undefined` is the untouched landing state and means the Movers-shaped DEFAULT — a real
+   * scene's served order leads with no-ticker all-dash rows, so the default must lead with
+   * coins that carry data — while `null` is her explicit "cleared", which really is the
+   * tab's own order. The default never shadows the New/Trending tabs: those tabs ARE a
+   * rank, and quietly re-ranking them would make the tab label lie.
+   */
+  const [boardSort, setBoardSort] = useState<BoardSort | null | undefined>(undefined);
+  /**
+   * The venue scope, defaulting to her venue: pump went multichain, and the other-chain
+   * listings are noise for Solana crackle work — every JOSHI instrument is Solana-only. The
+   * scope hides only coins the provider POSITIVELY claims on another chain; a coin with no
+   * chainId is unknown, and unknown is never assumed foreign (or Solana), so it stays. The
+   * basis line counts what the scope hid, and "All chains" is one explicit click away.
+   */
+  const [chainScope, setChainScope] = useState<"venue" | "all">("venue");
+  /**
+   * The hunt board's applied sort: her explicit choice when she made one, else the Movers
+   * default (suppressed under the New/Trending tabs, which are already a rank). The inspect
+   * column deliberately does NOT inherit the silent default — the evidence feed keeps the
+   * scene's served order unless she explicitly sorted — but an explicit header sort carries
+   * across the lens flip, so an order she chose never changes behind her back.
+   */
+  const effectiveBoardSort = useMemo<BoardSort | null>(() => {
+    if (boardSort !== undefined) return boardSort;
+    return board === "new" || board === "trending" ? null : DEFAULT_BOARD_SORT;
+  }, [board, boardSort]);
+  const appliedSort = surface === "hunt" ? effectiveBoardSort : boardSort ?? null;
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("radon");
   const [commandsOpen, setCommandsOpen] = useState(false);
@@ -265,16 +307,33 @@ export function GlassApp({
 
   const candidates = snapshot?.view.payload.candidates ?? [];
   const stableOrder = useStableCandidateOrder(candidates, snapshot?.view.sceneId ?? "scene-not-loaded");
+  /** The scene's render clock in epoch ms: the anchor for TRUE coin age (replay-honest). */
+  const renderedAtUnixMs = useMemo(() => {
+    if (!snapshot) return null;
+    const parsed = Date.parse(snapshot.view.asOf.renderedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [snapshot]);
   /**
-   * The current tab's real sort or filter over the frozen display order, with its basis
-   * stated (`boardSemantics.ts`). Pure over one immutable scene's accepted order, so within
-   * a scene no tab's order can move under her; only her own tab switch or an explicit
-   * order acceptance reorders anything.
+   * The current tab's real sort or filter over the frozen display order, then the table's
+   * column sort as one more pure lens over THAT, each with its basis stated
+   * (`boardSemantics.ts`). Pure over one immutable scene's accepted order, so within a
+   * scene no tab's order can move under her; only her own tab switch, header click, or an
+   * explicit order acceptance reorders anything — and none of it changes which coin a
+   * gesture binds, because binding is by id.
    */
-  const boardLens = useMemo(
-    () => boardView(stableOrder.orderedCandidates, board),
-    [board, stableOrder.orderedCandidates],
+  const scopedCandidates = useMemo(
+    () => (chainScope === "all"
+      ? stableOrder.orderedCandidates
+      : stableOrder.orderedCandidates.filter((candidate) => chainReading(candidate).kind !== "other")),
+    [chainScope, stableOrder.orderedCandidates],
   );
+  const hiddenChainCount = stableOrder.orderedCandidates.length - scopedCandidates.length;
+  const boardLens = useMemo(() => {
+    const lens = applyBoardSort(boardView(scopedCandidates, board), board, appliedSort, renderedAtUnixMs);
+    return hiddenChainCount > 0
+      ? { ...lens, basis: `Solana venue (${hiddenChainCount} other-chain hidden) · ${lens.basis}` }
+      : lens;
+  }, [appliedSort, board, hiddenChainCount, renderedAtUnixMs, scopedCandidates]);
   const visibleCandidates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (normalized.length === 0) return boardLens.candidates;
@@ -283,6 +342,21 @@ export function GlassApp({
       return searchable.includes(normalized);
     });
   }, [boardLens, query]);
+  /**
+   * The trending strip: the scene's flow-carrying coins, largest provider-claimed 24h USD
+   * volume first, compared as exact decimals. Over the whole accepted order — not the
+   * current tab — because the strip is a cross-tab glance; a scene with no flow serves no
+   * strip rather than a ranking nobody claimed.
+   */
+  const trendingStrip = useMemo(() => {
+    return scopedCandidates
+      .filter((candidate) => flowFor(candidate, "24h") !== null)
+      .sort((left, right) => compareDecimal(
+        flowFor(right, "24h")?.volumeUsd ?? "0",
+        flowFor(left, "24h")?.volumeUsd ?? "0",
+      ))
+      .slice(0, 8);
+  }, [scopedCandidates]);
 
   useEffect(() => {
     // A new scene is a new choice context: what was seen in the previous scene says nothing
@@ -698,7 +772,7 @@ export function GlassApp({
     { id: "hypothesis-lab", label: "Focus presentation hypothesis lab", detail: "Compare wallet, attention, liquidity, topology, and coupled-field views", shortcut: "H", run: openHypothesisLab },
     // Deliberately no single-letter shortcut: the journal is reached by tab order or from here.
     { id: "journal", label: "Open the journal", detail: "Read what was said over this scene, verbatim, and append an entry", run: openJournal },
-    { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set", run: () => { setQuery(""); setBoard("all"); } },
+    { id: "clear", label: "Clear feed filters", detail: "Return to this snapshot's full served choice set and order", run: () => { setQuery(""); setBoard("all"); setBoardSort(null); } },
   ], [anotherLensAvailable, cycleReplay, focusSearch, holdSelected, newerScene, openHypothesisLab, openInspector, openJournal, recordFocus, surface, toggleDensity, toggleProvenance, toggleSurface]);
 
   const closeCommands = useCallback(() => {
@@ -914,7 +988,12 @@ export function GlassApp({
           <AttentionFeed variant="board" candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onOpen={openCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
             orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
             boardBasis={boardLens.basis}
-            advanceNotice={advanceNotice} />
+            advanceNotice={advanceNotice}
+            layout={boardLayout} onLayoutChange={setBoardLayout}
+            sort={effectiveBoardSort} onSortChange={setBoardSort}
+            renderedAtUnixMs={renderedAtUnixMs}
+            trending={trendingStrip}
+            chainScope={chainScope} onChainScopeChange={setChainScope} />
         </main>
       ) : (
       <main className="glass-layout">
@@ -922,7 +1001,9 @@ export function GlassApp({
         {heldRail}
         <AttentionFeed candidates={visibleCandidates} selectedId={selected.id} onSelect={selectCandidate} onFocusCandidate={attendCandidate} onScrollViewportChange={noteScrollViewport} onPointerCandidate={notePointed} board={board} onBoardChange={setBoard} density={density} focusRequest={focusRequest}
           orderUpdatePending={stableOrder.pending} pendingNewCount={stableOrder.pendingNewCount} onAcceptOrderUpdate={stableOrder.acceptPendingOrder}
-          boardBasis={boardLens.basis} />
+          boardBasis={boardLens.basis}
+          renderedAtUnixMs={renderedAtUnixMs}
+          chainScope={chainScope} onChainScopeChange={setChainScope} />
         <div id="selected-coin" tabIndex={-1}>
           <CoinWorkbench
             candidate={slicedCandidate !== null && slicedCandidate.key === `${snapshot.view.sceneId}/${selected.id}`
@@ -934,6 +1015,7 @@ export function GlassApp({
             onHold={holdSelected}
             onOpenJournal={openJournal}
             held={heldMintsBySubject[selected.id] !== undefined}
+            renderedAtUnixMs={renderedAtUnixMs}
             venueAnswer={venueReadout
               ? venueReadout(selected.id)
               : venueSource

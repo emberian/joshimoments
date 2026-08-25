@@ -9,7 +9,7 @@ import { explorationBundleForServedScene } from "../presentation/servedSceneBund
 import { glassPairingSession, type MemoryOnlyPairingSession } from "../security/pairing";
 import { mockSnapshots } from "./mockSnapshot";
 
-export const MAX_GLASS_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+export const MAX_GLASS_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 
 export type SnapshotRequest = {
   mode: ReplayMode;

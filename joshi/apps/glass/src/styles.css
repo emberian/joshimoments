@@ -310,10 +310,11 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .virtual-row { position: absolute; inset: 0 0 auto; padding: 5px 7px; cursor: pointer; }
 .candidate-card {
   width: 100%;
-  min-height: 76px;
+  height: 100%;
+  overflow: hidden;
   padding: 13px 11px;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 30px 26px minmax(0, 1fr) auto;
   gap: 9px;
   text-align: left;
   border: 1px solid transparent;
@@ -760,7 +761,7 @@ th { color: var(--muted); }
 .load-state { min-height: 100vh; display: grid; place-content: center; text-align: center; color: var(--muted); }
 .load-state strong { color: var(--ink); }
 
-[data-density="compact"] .candidate-card { min-height: 101px; padding-block: 9px; }
+[data-density="compact"] .candidate-card { padding-block: 9px; }
 [data-density="compact"] .candidate-context { display: none; }
 [data-density="compact"] .episode-card { padding-block: 10px; }
 [data-density="compact"] .metric-card { min-height: 82px; }
@@ -806,8 +807,8 @@ th { color: var(--muted); }
   .episode-recording-actions > div { grid-template-columns: 1fr; }
   .capture-dialog, .scene-inspector { top: 8px; max-height: calc(100vh - 16px); }
   .source-list { grid-template-columns: 1fr; }
-  .candidate-card { grid-template-columns: 26px minmax(0, 1fr); }
-  .candidate-edge { grid-column: 2; flex-direction: row; align-items: center; }
+  .candidate-card { grid-template-columns: 26px 26px minmax(0, 1fr); }
+  .candidate-edge { grid-column: 3; flex-direction: row; align-items: center; }
   .lab-policy-row { grid-template-columns: 1fr; }
   .lab-policy-row .lab-safety { grid-column: auto; }
   .lab-view-strip { grid-template-columns: 1fr 1fr; }
@@ -1123,11 +1124,14 @@ th { color: var(--muted); }
 /* The tab's actual sort or filter rule, in words, under the tabs. */
 .board-basis { margin: 0; padding: 0 14px 8px; color: var(--faint); font-size: 11px; }
 
-/* Dense board rows: shared grid template with the aria-hidden column labels above them. */
+/* Dense board rows: shared grid template with the sortable header toolbar above them.
+   Track order: rank · art · coin · path · age · mcap · ath · 5m · 1h vol · 24h vol ·
+   txns · trdrs · replies · badges — the pump-reference column set the seam actually carries. */
 .board-columns, .board-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 72px 58px 78px 74px minmax(150px, auto);
-  gap: 10px;
+  grid-template-columns:
+    30px 26px minmax(0, 1.2fr) 68px 46px 62px 84px 56px 60px 64px 46px 46px 52px minmax(118px, auto);
+  gap: 8px;
   align-items: center;
 }
 .board-columns {
@@ -1138,11 +1142,33 @@ th { color: var(--muted); }
   letter-spacing: .08em;
 }
 .board-col-number { text-align: right; }
+/* One roving tab stop of sort buttons; the active column carries its direction arrow. */
+.board-sort-button {
+  min-height: 26px;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 3px;
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+.board-sort-button:hover { color: var(--ink); background: var(--surface-3); }
+.board-sort-button[data-active] { color: var(--aqua); }
+.board-sort-button svg { flex: 0 0 auto; }
 [data-variant="board"] .feed-scroll { height: calc(100vh - 330px); min-height: 420px; }
 [data-variant="board"] .virtual-row { padding: 1px 7px; }
 .board-row {
   width: 100%;
-  min-height: 42px;
+  height: 100%;
+  overflow: hidden;
   padding: 6px 11px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1165,7 +1191,7 @@ th { color: var(--muted); }
 .sparkline { width: 64px; height: 18px; display: block; }
 .board-number { font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace; text-align: right; white-space: nowrap; color: #c2cecc; }
 .board-absent { color: var(--faint); }
-.board-badges { display: flex; align-items: center; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.board-badges { display: flex; align-items: center; gap: 4px; justify-content: flex-end; flex-wrap: nowrap; overflow: hidden; }
 .board-badges .icon-label { color: var(--amber); display: inline-flex; }
 .board-badges .icon-label svg { width: 13px; }
 .board-chip {
@@ -1184,13 +1210,212 @@ th { color: var(--muted); }
 /* Not the mono face: SFMono's capital O reads as a zero at chip size, and "0" is exactly the
    wrong thing for an evidence glyph to look like. */
 .chip-evidence { font-family: Inter, ui-sans-serif, sans-serif; letter-spacing: .06em; }
-[data-density="compact"] .board-row { min-height: 34px; padding-block: 3px; }
+[data-density="compact"] .board-row { padding-block: 3px; }
 
 /* The session line turns amber and counts down inside the final fifteen minutes. */
 .operational-session-bar span.session-expiry-countdown { color: var(--amber); font-weight: 700; }
 
+/* Column collapse: the densest read that still fits, dropping the widest claims first.
+   Hidden columns stay one sort away nowhere — they are gone with their headers, so the
+   header row and the cells always agree about what is on screen. */
+@media (max-width: 1500px) {
+  .board-columns, .board-row {
+    grid-template-columns:
+      30px 26px minmax(0, 1.2fr) 68px 46px 62px 84px 56px 64px minmax(112px, auto);
+  }
+  [data-col="vol1h"], [data-col="txns24h"], [data-col="traders24h"], [data-col="replies"] { display: none; }
+}
+@media (max-width: 1200px) {
+  .board-columns, .board-row {
+    grid-template-columns: 30px 26px minmax(0, 1.2fr) 68px 46px 62px 56px 64px minmax(104px, auto);
+  }
+  [data-col="ath"] { display: none; }
+}
 @media (max-width: 920px) {
-  .board-columns, .board-row { grid-template-columns: 30px minmax(0, 1fr) 52px 72px 62px; }
-  .board-spark, .board-badges, .board-col-spark, .board-col-badges { display: none; }
+  .board-columns, .board-row { grid-template-columns: 28px 24px minmax(0, 1fr) 46px 62px 56px; }
+  .board-spark, .board-badges, .board-col-spark, .board-col-badges,
+  [data-col="vol24h"] { display: none; }
   [data-variant="board"] .feed-scroll { height: 60vh; min-height: 0; }
 }
+
+/* ── Coin art: the one element allowed to fetch provider art (CoinArt.tsx owns the security
+   attributes; this owns the fixed boxes so a provider-sized image can never reflow a row). */
+.coin-art {
+  position: relative;
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: linear-gradient(145deg, #25493b, #12231c);
+  flex: 0 0 auto;
+}
+.coin-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.coin-art-monogram {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #b9f7d3;
+  font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+.coin-art[data-size="row"] { width: 26px; height: 26px; border-radius: 7px; }
+.coin-art[data-size="strip"] { width: 24px; height: 24px; border-radius: 6px; }
+.coin-art[data-size="page"] {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border-color: #4f7968;
+}
+.coin-art[data-size="page"] .coin-art-monogram { font-size: 13px; }
+.coin-art[data-size="card"] { width: 100%; height: 150px; border: 0; border-radius: 0; }
+[data-density="compact"] .coin-art[data-size="card"] { height: 130px; }
+.coin-art[data-size="card"] .coin-art-monogram { font-size: 26px; }
+/* A provider-claimed nsfw flag blurs the art; the claim chip beside it says why. */
+.coin-art[data-nsfw] img { filter: blur(14px) saturate(.7); }
+
+/* The board layout toggle: table or image-first grid, one roving tab stop. */
+.board-layout-toggle { display: flex; gap: 4px; }
+.layout-button { min-height: 34px; padding: 0 9px; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
+
+/* The trending strip: art + the coin's own thesis, ranked by claimed 24h volume. */
+.trending-strip {
+  display: flex;
+  gap: 7px;
+  margin: 0 12px 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.trending-item {
+  flex: 0 0 auto;
+  max-width: 240px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.trending-item:hover { border-color: #55716a; background: #1d2927; }
+.trending-copy { min-width: 0; display: grid; line-height: 1.25; }
+.trending-copy strong { font: 600 11px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; }
+.trending-thesis {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.trending-volume { color: var(--aqua); font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; }
+
+/* The ATH cell: claimed high above a compact current-over-high bar. */
+.board-ath { display: inline-grid; justify-items: end; gap: 2px; }
+.ath-bar {
+  width: 100%;
+  max-width: 72px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+  display: block;
+}
+.ath-bar > span { display: block; height: 100%; background: var(--aqua); border-radius: inherit; }
+.ath-bar[data-above] > span { background: var(--amber); }
+
+/* The chain claim: a Solana coin is subtly marked, a NON-Solana coin is loud — a different
+   venue, outside every Solana-only instrument — and unknown wears nothing at all. */
+.chip-sol { color: var(--faint); background: #14201d; }
+.chip-chain { color: #e8c9f4; background: #33203c; border: 1px solid #5b3f6d; font-weight: 700; }
+/* The venue scope toggle, beside the tabs. */
+.chain-scope { padding: 0 12px 8px; display: flex; gap: 6px; }
+.chain-scope-button { min-height: 32px; font-size: 11px; }
+
+/* Provider-flag chips: claims, each with its sentence on hover. */
+.chip-live { color: #ffd9d1; background: #3a1f1a; }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); display: inline-block; margin-right: 4px; }
+.chip-verified { color: var(--aqua); background: #14303a; }
+.chip-nsfw { color: var(--red); background: var(--red-dim); }
+
+/* ── The image-first grid: the coin art IS the card. Same listbox, same channels. ── */
+.virtual-card { padding: 5px; }
+.grid-card {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.virtual-row:hover .grid-card { border-color: #55716a; background: #182120; }
+.virtual-row[aria-selected="true"] .grid-card { border-color: #436b5d; box-shadow: inset 3px 0 0 var(--mint); background: #1a2723; }
+.feed-scroll:focus .virtual-row[aria-selected="true"] .grid-card,
+.feed-scroll:focus-visible .virtual-row[aria-selected="true"] .grid-card {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+.grid-card-art { position: relative; display: block; }
+.grid-card-overlay {
+  position: absolute;
+  inset: 6px 6px auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.grid-card-overlay .board-chip { background: rgba(9, 12, 13, 0.78); backdrop-filter: blur(3px); }
+.grid-card-overlay .icon-label { color: var(--amber); background: rgba(9, 12, 13, 0.78); border-radius: 999px; padding: 3px; display: inline-flex; }
+.grid-rank { color: #d5e2df; margin-right: auto; }
+.grid-card-body { min-width: 0; display: grid; gap: 5px; padding: 8px 9px 9px; }
+.grid-card-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.grid-card-title .board-name { flex: 1 1 auto; }
+.grid-card-facts {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  color: #c2cecc;
+  font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+.grid-replies { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); }
+.grid-thesis {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  height: 27px;
+}
+.grid-thesis-absent { color: var(--faint); }
+.grid-card-chips { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow: hidden; }
+.grid-chart { display: flex; align-items: center; min-height: 44px; }
+.grid-chart[data-kind="absent"] { color: var(--faint); }
+.candle-glyph { width: 100%; height: 44px; display: block; }
+.candle-glyph .candle { color: var(--muted); }
+.candle-glyph .value-positive { color: var(--mint); }
+.candle-glyph .value-negative { color: var(--red); }
+/* Claimed volume by window: explicitly not a price path, and shaped unlike one.
+   The slot is a definite-height two-row grid (bar well over label) so the bar's
+   percentage height resolves against a real row instead of collapsing to zero. */
+.flow-glyph { gap: 6px; align-items: flex-end; }
+.flow-slot { flex: 1 1 0; height: 44px; display: grid; grid-template-rows: minmax(0, 1fr) auto; justify-items: center; gap: 2px; }
+.flow-bar { align-self: end; width: 100%; max-width: 26px; background: #3e6a7e; border-radius: 3px 3px 0 0; }
+.flow-slot small { color: var(--faint); font-size: 8px; }
+.flow-absent { align-self: end; color: var(--faint); font-size: 10px; }
+
+/* The coin page's seam additions. */
+.coin-thesis { margin: 6px 0 0; max-width: 52ch; color: #c2cecc; font-size: 12px; line-height: 1.45; }
+.metric-card .ath-bar { max-width: 100%; }
+.flow-panel .table-scroll { border-top: 0; }
+.flow-absence { margin: 0; padding: 12px 15px; color: var(--muted); font-size: 11px; line-height: 1.5; }

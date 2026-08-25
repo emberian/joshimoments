@@ -57,7 +57,40 @@ type CandidateSeed = {
   watched?: boolean;
   episodeId?: string;
   phase: number;
+  /**
+   * The parity-density seam's optional provider-record fields, carried by SOME seeds so the
+   * dense board, grid cards, and trending strip render against fixture data — and absent
+   * from others so every dash stays exercised. Art is a data: URI on purpose: the offline
+   * fixture must fetch nothing from any provider.
+   */
+  seam?: Partial<Pick<Candidate,
+    | "imageUri" | "description" | "replyCount" | "athMarketCapUsd" | "athAtUnixMs"
+    | "createdAtUnixMs" | "lastTradeAtUnixMs" | "graduated" | "verified" | "nsfw"
+    | "currentlyLive" | "flow" | "chainId">>;
 };
+
+/** Tiny self-contained coin art for the fixture: a data: URI fetches nothing from anywhere. */
+function fixtureArt(background: string, glyph: string): string {
+  return "data:image/svg+xml;utf8,"
+    + `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>`
+    + `<rect width='64' height='64' fill='%23${background}'/>`
+    + `<circle cx='32' cy='32' r='17' fill='%23${glyph}'/></svg>`;
+}
+
+/** The provider's verbatim Solana chain id, as the multichain records carry it. */
+const SOLANA_CHAIN_ID = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+
+function fixtureFlow(scale: number): Candidate["flow"] {
+  const at = String(Date.parse("2026-08-16T18:42:10Z"));
+  return [
+    { window: "5m" as const, volumeSol: (2.1 * scale).toFixed(4), volumeUsd: (410 * scale).toFixed(2), txns: String(18 * scale), traders: String(11 * scale), serverTsUnixMs: at },
+    { window: "15m" as const, volumeSol: (5.4 * scale).toFixed(4), volumeUsd: (1030 * scale).toFixed(2), txns: String(47 * scale), traders: String(23 * scale), serverTsUnixMs: at },
+    { window: "1h" as const, volumeSol: (16.8 * scale).toFixed(4), volumeUsd: (3220 * scale).toFixed(2), txns: String(150 * scale), traders: String(64 * scale), serverTsUnixMs: at },
+    // 24h deliberately states no trader count: the movers document sometimes omits it, and
+    // the fixture keeps that absence renderable.
+    { window: "24h" as const, volumeSol: (120.5 * scale).toFixed(4), volumeUsd: (23100 * scale).toFixed(2), txns: String(1180 * scale), serverTsUnixMs: at },
+  ];
+}
 
 const seeds: CandidateSeed[] = [
   {
@@ -68,6 +101,18 @@ const seeds: CandidateSeed[] = [
     reason: "Runner retained after one realized clip; graph remains active.",
     social: "Repeat participants are still replying; no verified catalyst recorded.",
     tags: ["held", "runner", "two-sided"], watched: true, episodeId: "episode-radon", phase: 4,
+    seam: {
+      imageUri: fixtureArt("2e6b4f", "b9f7d3"),
+      description: "A noble gas that refuses to decay quietly.",
+      replyCount: "412",
+      athMarketCapUsd: "241000.00",
+      athAtUnixMs: String(Date.parse("2026-08-16T17:58:00Z")),
+      createdAtUnixMs: String(Date.parse("2026-08-16T17:36:35Z")),
+      lastTradeAtUnixMs: String(Date.parse("2026-08-16T18:42:01Z")),
+      verified: true,
+      flow: fixtureFlow(3),
+      chainId: SOLANA_CHAIN_ID,
+    },
   },
   {
     id: "earthcoin", mint: "EARTH7FxQ2vN9sC5mL1pT8kR4bW6jHdZ", symbol: "EarthCoin", name: "Earth Coin",
@@ -77,6 +122,13 @@ const seeds: CandidateSeed[] = [
     reason: "Exited on the graph; intentionally watching flat for a possible re-entry.",
     social: "Community posting persists while market flow pauses.",
     tags: ["episode live", "re-entry", "watching flat"], watched: true, episodeId: "episode-earth", phase: 1,
+    seam: {
+      description: "The home team's coin.",
+      graduated: true,
+      createdAtUnixMs: String(Date.parse("2026-08-16T16:18:00Z")),
+      athMarketCapUsd: "199500.00",
+      chainId: SOLANA_CHAIN_ID,
+    },
   },
   {
     id: "crashius", mint: "CRASH8MmQ5cV2pN7sD4kL9xF1bT6jHwZ", symbol: "CRASHIUS", name: "Crashius Maximus",
@@ -94,6 +146,18 @@ const seeds: CandidateSeed[] = [
     change5mBps: "741", ageSeconds: "780", activity: "bursting",
     reason: "Fast rank climb with broad two-sided prints.",
     social: "Three independent threads mention the same source event.", tags: ["fast", "multi-thread"], phase: 7,
+    seam: {
+      imageUri: fixtureArt("6b2e5c", "f7d3ec"),
+      description: "Every market is a story; this one admits it.",
+      replyCount: "1288",
+      athMarketCapUsd: "212300.00",
+      athAtUnixMs: String(Date.parse("2026-08-16T18:41:00Z")),
+      createdAtUnixMs: String(Date.parse("2026-08-16T18:29:22Z")),
+      lastTradeAtUnixMs: String(Date.parse("2026-08-16T18:42:12Z")),
+      currentlyLive: true,
+      flow: fixtureFlow(9),
+      chainId: SOLANA_CHAIN_ID,
+    },
   },
   {
     id: "orbitfan", mint: "ORBIT4JxM7qT2vN8cL5pR1kD9bW3sHzE", symbol: "ORBITFAN", name: "Orbit Fan Club",
@@ -111,6 +175,14 @@ const seeds: CandidateSeed[] = [
     change5mBps: "93", ageSeconds: "440", activity: "two_sided",
     reason: "Young coin with repeated shallow dips; not yet classified.",
     social: "Conversation is mostly launch-local and has not diffused.", tags: ["new", "unclassified"], phase: 0,
+    seam: {
+      imageUri: fixtureArt("6b4f2e", "f7e3b9"),
+      description: "Do not touch.",
+      nsfw: true,
+      createdAtUnixMs: String(Date.parse("2026-08-16T18:34:54Z")),
+      flow: fixtureFlow(1),
+      chainId: SOLANA_CHAIN_ID,
+    },
   },
   {
     id: "moss", mint: "MOSSX3Jq8vN1cL5pT7kR4bD9mW2sHzE", symbol: "MOSS", name: "Moss Protocol",
@@ -119,6 +191,14 @@ const seeds: CandidateSeed[] = [
     change5mBps: "506", ageSeconds: "1830", activity: "bursting",
     reason: "Migration boundary and a sudden change in trade cadence.",
     social: "Callouts arrived after chain activity accelerated.", tags: ["hot", "migration"], phase: 8,
+    seam: {
+      description: "Soft infrastructure for hard moves.",
+      replyCount: "97",
+      currentlyLive: true,
+      createdAtUnixMs: String(Date.parse("2026-08-16T18:12:19Z")),
+      flow: fixtureFlow(6),
+      chainId: SOLANA_CHAIN_ID,
+    },
   },
   {
     id: "copper", mint: "COPPR2Fm7qV4nL9cT1pR6kD8bW5sHxA", symbol: "COPPER", name: "Copper Wire",
@@ -136,6 +216,16 @@ const seeds: CandidateSeed[] = [
     reason: "Appeared after the witnessed scene and exists only in the later DTO.",
     social: "Later evidence links two previously separate participant clusters.",
     tags: ["cluster link", "late evidence"], phase: 6,
+  },
+  {
+    id: "zorbit", mint: "0x00eB5459c2c60a2a614C536846F225ED88f10ae8", symbol: "ZORB", name: "Zorbit",
+    board: "new", lifecycle: "unknown", ranks: { witnessed: 10, retrospective: 11 },
+    firstKnownAt: "2026-08-16T18:41:10Z", price: "0.00000001450", marketCap: "52000.00",
+    change5mBps: "77", ageSeconds: "890", activity: "building",
+    reason: "A multichain pump listing: the provider claims a non-Solana chain for it.",
+    social: "No social source was acquired in this cut.",
+    tags: ["multichain"], phase: 2,
+    seam: { chainId: "eip155:8453", description: "An orbit on another chain entirely." },
   },
   {
     id: "lilypad", mint: "LILYP7Jq4vN2cM8pT1kR6bD9wX5sHzA", symbol: "LILY", name: "Lily Pad",
@@ -206,8 +296,23 @@ function candidateFor(seed: CandidateSeed, mode: ReplayMode): Candidate | null {
     evidence(seed.id, "pump-board", "rank", "observed", "Rank served inside this immutable view.", knownAt),
     evidence(seed.id, "chain-tape", "metrics.priceSol", "derived", "Derived observation; not an executable quote.", knownAt),
     evidence(seed.id, "pump-social", "socialSummary", "interpreted", "View-local summary; raw fixture events remain separate.", knownAt, mode === "witnessed" ? "gap" : "available"),
+    // The seam fields carry their claims like any other field: an evidence row per family,
+    // class observed, its note the sentence a hover renders verbatim.
+    ...(seed.seam?.createdAtUnixMs !== undefined
+      ? [evidence(seed.id, "pump-board", "createdAtUnixMs", "observed", "Provider creation clock copied verbatim from the coin's own record.", knownAt)]
+      : []),
+    ...(seed.seam?.imageUri !== undefined
+      ? [evidence(seed.id, "pump-board", "imageUri", "observed", "Provider-asserted art URL; JOSHI does not host the bytes.", knownAt)]
+      : []),
+    ...(seed.seam?.flow !== undefined
+      ? [evidence(seed.id, "pump-board", "flow", "observed", "Movers-tap window claims retained verbatim for this fixture coin.", knownAt)]
+      : []),
+    ...(seed.seam?.chainId !== undefined
+      ? [evidence(seed.id, "pump-board", "chainId", "observed", "The provider's verbatim chain_id for this multichain listing.", knownAt)]
+      : []),
   ], (item) => item.id);
   return {
+    ...seed.seam,
     id: seed.id,
     mint: seed.mint,
     symbol: seed.symbol,
