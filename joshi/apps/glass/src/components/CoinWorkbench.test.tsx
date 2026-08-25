@@ -80,8 +80,8 @@ describe("coin workbench provenance", () => {
     ).toBeInTheDocument();
     // Each metric card carries the claim's lineage and age beside the number itself.
     expect(
-      screen.getByText(/derived · pump\.api\.product\.v1 · known 01:30:00Z · not a quote/i),
-    ).toBeInTheDocument();
+      screen.getAllByText(/derived · pump\.api\.product\.v1 · known 01:30:00Z/i).length,
+    ).toBeGreaterThan(0);
     // Twice: once beside the market cap, once in the identity provenance line above.
     expect(
       screen.getAllByText(/observed · pump\.api\.product\.v1 · known 01:30:00Z$/i),

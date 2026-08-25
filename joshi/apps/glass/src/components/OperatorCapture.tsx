@@ -368,7 +368,7 @@ export function OperatorPanel({
         <button type="button" onClick={() => onCapture({ type: "post_action", episodeId: episode?.id ?? null, relatedCommandId: latestCommandId })}><BookOpenCheck aria-hidden="true" /><span><strong>Quick report</strong><small>Post-action operator report</small></span></button>
         <button type="button" disabled={!episode || sourceCommandIds.length === 0} onClick={() => onCapture({ type: "interview", episodeId: episode?.id ?? null, sourceCommandIds })}><MessageSquareText aria-hidden="true" /><span><strong>Later interview</strong><small>{sourceCommandIds.length > 0 ? "Link reflection to exact episode records" : "Record an episode-linked report first"}</small></span></button>
       </div>
-      {!nominationQualifies && <p id="protocol-nomination-block" className="operator-boundary">Prospective nomination is disabled: ordinary evidence command V2 does not bind the preregistered launch, as-of cut, universe, and deadline. Missing input is not a choice.</p>}
+      {!nominationQualifies && <p id="protocol-nomination-block" className="operator-boundary">Prospective nomination is disabled: ordinary evidence command V2 does not bind the preregistered launch, as-of cut, universe, and deadline.</p>}
       {pendingReadbackError && <p className="replay-error" role="alert">Local pending-command readback gap: {pendingReadbackError}</p>}
 
       <div className="receipt-log" aria-live="polite" aria-label="Operator command receipts">

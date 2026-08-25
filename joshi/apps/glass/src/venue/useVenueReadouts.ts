@@ -66,7 +66,7 @@ export function useVenueReadouts(
               state: "absent",
               absence: `The readout request failed: ${
                 error instanceof Error ? error.message : "unknown failure"
-              }. Nothing here is a claim about the coin.`,
+              }.`,
             },
           }));
         });

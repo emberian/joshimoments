@@ -84,10 +84,8 @@ const PANEL_FRAMES: ReadonlyArray<{
  * this evidence cut produced no row for this view. It is deliberately not a per-panel narrative,
  * since a narrative is where an unearned claim gets in.
  */
-const EMPTY_PANEL_BOUNDARY = "This view is empty for this evidence cut: the served scene bytes "
-  + "produced no signal, relation, or mark for it. An absent row is an absent record, never "
-  + "evidence that the thing did not happen and never a zero. Nothing here is a quote, a "
-  + "recommendation, a causal claim, or a statement about coverage outside this cut.";
+const EMPTY_PANEL_BOUNDARY = "The served scene bytes produced no signal, relation, or mark "
+  + "for this view.";
 
 /**
  * Builds the exact exploration bundle for one served snapshot.

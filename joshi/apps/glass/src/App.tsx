@@ -678,8 +678,7 @@ export function GlassApp({
   // same way it survives a scene advance.
   const heldRefusalNotice = refusedHold && (
     <p className="held-refusal" role="alert">
-      A hold was refused by the local core and is not retained: {refusedHold.error} The coin
-      stays listed below so it is not lost, but nothing has committed it.
+      The local core refused this hold: {refusedHold.error} The coin stays listed below.
     </p>
   );
   const heldRail = (

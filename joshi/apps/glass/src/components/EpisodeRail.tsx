@@ -74,7 +74,7 @@ export function EpisodeRail({
                     <button type="button" onClick={() => onRecordGesture(candidate.id, episode.id, "continue watching while flat")}>Record flat-watch continuation</button>
                     <button type="button" onClick={() => onRecordGesture(candidate.id, episode.id, "re-entry observed outside Joshi")}>Record external re-entry</button>
                   </div>
-                  <small>These are operator claims, not fills or client-side PnL facts.</small>
+                  <small>Recorded as operator claims.</small>
                 </details>
               )}
             </article>

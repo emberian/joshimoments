@@ -21,10 +21,10 @@ import type { JournalEntry } from "../operator/useOperatorJournal";
 
 const SESSION_STATUS_WORDS: Record<JournalEntry["status"], string> = {
   retaining_local: "Retained in this browser only; the store has not answered yet.",
-  submitting: "Submitting to the local core; no durable commit is claimed yet.",
+  submitting: "Submitting to the local core.",
   queued: "Disconnected. The exact act is retained locally for retry.",
   committed: "Committed by the catalog.",
-  rejected: "The core refused this act. It is not retained.",
+  rejected: "The core refused this act.",
 };
 
 function subjectWords(kind: string, key: string, candidates: Candidate[]): string {
@@ -107,14 +107,14 @@ function CatalogAnswer({ readback, onReread }: { readback: DurableJournalReadbac
   return (
     <div className="journal-catalog-state">
       {readback.state === "no_scene" && (
-        <p role="note">No scene is loaded, so there is nothing the catalog could be asked about.</p>
+        <p role="note">No scene is loaded.</p>
       )}
       {readback.state === "reading" && <p role="status">Reading the catalog…</p>}
       {readback.state === "no_catalog" && <p role="note">{readback.absence}</p>}
       {readback.state === "failed" && (
         <p role="alert">
           The catalog could not be read: {readback.reason} Acts from this browser session are still
-          listed below; nothing about the catalog is claimed while the read is failing.
+          listed below.
         </p>
       )}
       {readback.state === "read" && (
@@ -122,7 +122,7 @@ function CatalogAnswer({ readback, onReread }: { readback: DurableJournalReadbac
           Catalog read at {readback.readAt} ·{" "}
           {readback.answer.sceneRetention === "durable"
             ? `${readback.answer.commands.length} durable act${readback.answer.commands.length === 1 ? "" : "s"} bound to this scene.`
-            : "This scene is being served but no act has made it durable yet, so the catalog holds nothing for it — an empty answer, stated, not assumed."}
+            : "This scene is being served but no act has made it durable yet; the catalog holds nothing for it."}
         </p>
       )}
       {(readback.state === "read" || readback.state === "failed") && (
@@ -219,18 +219,15 @@ export function JournalRail({
       <p className="journal-scope">
         Every operator act bound to scene {sceneId}, verbatim and in time order: journal entries,
         holds, notes, dispositions. The core reads back one scene at a time, so acts bound to
-        other scenes are not listed here — a stated limit of this surface, not a claim that they
-        do not exist. Automatic viewport assertions — the record of which rows your reading
-        actually reached, kept for the selection measurement — are retained in the catalog and
-        listed in the scene inspector, not narrated here: they are attention records, not words.
+        other scenes are not listed here. Automatic viewport assertions are retained in the
+        catalog and listed in the scene inspector.
       </p>
 
       <CatalogAnswer readback={readback} onReread={onReread} />
 
       {total === 0 ? (
         <p className="journal-empty">
-          Nothing has been said over this scene yet — no entry, no hold, no note. That is this
-          journal&rsquo;s whole answer for this scene, not a failure to look.
+          Nothing has been said over this scene yet — no entry, no hold, no note.
         </p>
       ) : (
         <ol className="journal-list" aria-label="Acts bound to this scene, oldest first">

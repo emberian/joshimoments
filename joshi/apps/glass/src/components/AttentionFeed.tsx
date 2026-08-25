@@ -389,7 +389,7 @@ export const AttentionFeed = memo(function AttentionFeed({
         {!hasRows ? (
           <div className="empty-state" role="status">
             <strong>No candidates match this view.</strong>
-            <span>Change the board or clear search. This is not a zero-activity claim.</span>
+            <span>Change the board or clear search.</span>
           </div>
         ) : (
           <ul

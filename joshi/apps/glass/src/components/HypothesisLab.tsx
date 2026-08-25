@@ -67,7 +67,7 @@ function PanelTable({ panel, visibleEvidence }: { panel: ExplorationPanel; visib
     <p className="field-question"><strong>Question:</strong> {panel.question}</p>
     <p className="claim-boundary"><ShieldCheck aria-hidden="true" /><span><strong>Claim boundary.</strong> {panel.claimBoundary}</span></p>
     {hidden > 0 && <p className="lab-omission" role="status">{hidden} row{hidden === 1 ? "" : "s"} intentionally hidden by the current evidence toggle; the presentation event records that omission.</p>}
-    {empty && <p className="lab-absence" role="status"><strong>No rows in this evidence cut.</strong> This view carries no signal, relation, or mark for the served scene. That is an absent record, not a zero and not a finding.</p>}
+    {empty && <p className="lab-absence" role="status"><strong>No rows in this evidence cut.</strong></p>}
 
     {signals.length > 0 && <div className="field-table-wrap">
       <table className="field-table">
@@ -331,7 +331,6 @@ export const HypothesisLab = memo(function HypothesisLab({
       <span>Policy {activePolicy.policyId} v{activePolicy.policyVersion}</span>
       <span>Evidence cut {bundle.scene.sceneId}</span>
       <span>{eventReceipts.length} interaction receipt{eventReceipts.length === 1 ? "" : "s"}</span>
-      <span>No scalar pressure · no client-side financial truth</span>
     </footer>
     <UsefulnessDialog open={usefulnessOpen} onOpenChange={setUsefulnessOpen} onRecord={onRecordEvent} />
   </section>;

@@ -67,7 +67,7 @@ export function ReplayInterviewQueue({
           );
         })}
       </ul>
-      <p className="operator-boundary"><MessageSquareText aria-hidden="true" /> An interview is an operator report with explicit outcome visibility and linked source acts, not recovered contemporaneous truth. Client timing/link labels remain unqualified until core derives them from durable commit order and episode/scene closure.</p>
+      <p className="operator-boundary"><MessageSquareText aria-hidden="true" /> An interview is an operator report with explicit outcome visibility and linked source acts. Client timing/link labels remain unqualified until core derives them from durable commit order and episode/scene closure.</p>
     </section>
   );
 }

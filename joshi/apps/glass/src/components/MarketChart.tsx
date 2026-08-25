@@ -232,10 +232,7 @@ export function MarketChart({
         </figcaption>
         <div className="empty-state" role="note">
           <strong>No bars are knowable in this lens.</strong>
-          <span>
-            This is not a claim that nothing traded. It says only that this view carries no price
-            series for this coin.
-          </span>
+          <span>This view carries no price series for this coin.</span>
         </div>
       </figure>
     );
@@ -289,7 +286,7 @@ export function MarketChart({
         </button>
         <small data-testid="chart-mode-note">
           {mode === "time"
-            ? "Horizontal axis is real time. A blank column is an interval in which nothing traded — it is not a flat price."
+            ? "Horizontal axis is real time. A blank column is an interval in which nothing traded."
             : timeTrueIsDrawable
               ? "Horizontal axis is bar sequence. Gaps are NOT to scale; the amber strip below is how long the market was silent before each bar."
               : `Horizontal axis is bar sequence. Real time is withdrawn here: drawing it would need ${groupDigits(path.bars + path.omittedIntervals)} columns, past the ${groupDigits(MAX_CHART_POINTS)} this chart will draw, and a partly drawn silence would understate it. The amber strip below is how long the market was silent before each bar.`}
@@ -305,7 +302,7 @@ export function MarketChart({
         */}
         {path.gaps.length === 0
           ? `Every one of these ${groupDigits(path.bars)} bars is adjacent to the next: the provider omitted no interval inside this window.`
-          : `${groupDigits(tradedIntervals)} of ${groupDigits(path.totalIntervals)} ${spacingWords} intervals traded. The provider omitted ${groupDigits(path.omittedIntervals)} of them (${silentShare}% of the window) across ${groupDigits(path.gaps.length)} silences, the longest ${describeSeconds(Math.max(...path.gaps.map((gap) => gap.silenceSeconds)))}. An omitted interval means no trade, never a flat price.`}
+          : `${groupDigits(tradedIntervals)} of ${groupDigits(path.totalIntervals)} ${spacingWords} intervals traded. The provider omitted ${groupDigits(path.omittedIntervals)} of them (${silentShare}% of the window) across ${groupDigits(path.gaps.length)} silences, the longest ${describeSeconds(Math.max(...path.gaps.map((gap) => gap.silenceSeconds)))}. An omitted interval means no trade.`}
       </p>
 
       <p className="chart-summary" data-testid="chart-clocks">
@@ -317,15 +314,14 @@ export function MarketChart({
         Newest bar {path.newestBarUnix === null ? "—" : `${clock(new Date(path.newestBarUnix * 1000).toISOString())}Z`}
         ; this window became knowable at {path.knownAt === null ? "—" : `${clock(path.knownAt)}Z`}
         {path.trailingSilenceSeconds !== null && spacing !== null && path.trailingSilenceSeconds > spacing
-          ? `, ${describeSeconds(path.trailingSilenceSeconds)} later. That distance is not staleness. A bar clock is a market clock: on a quiet coin the newest bar is arbitrarily old while the read itself is seconds fresh, and part of this distance is the delay between the read and the commit rather than silence at all. Read this source's freshness from its ingest clock, never from the age of a bar.`
+          ? `, ${describeSeconds(path.trailingSilenceSeconds)} later. A bar clock is a market clock: read this source's freshness from its ingest clock, never from the age of a bar.`
           : "."}
       </p>
 
       <p className="chart-summary" data-testid="chart-units">
         Prices are the provider's exact decimal strings, shown verbatim in the table below. It
         labels these fields open/high/low/close/volume and states no unit or currency for any of
-        them, and this view carries none either, so none is named here. They are provider claims
-        about price: not fills, not quotes, not executability.
+        them, so none is named here.
       </p>
 
       <div

@@ -51,10 +51,10 @@ export type HeldVenueLookup = (subjectKey: string) => VenueReadoutAnswer | null;
 function retentionText(retention: HoldRetention): string {
   switch (retention.state) {
     case "retaining_local": return "Retained in this browser only; the store has not answered yet.";
-    case "submitting": return "Submitting to the local core; no durable commit is claimed yet.";
+    case "submitting": return "Submitting to the local core.";
     case "queued": return retention.reason ?? "Disconnected. The exact mark is retained locally for retry.";
     case "committed": return `Retained by the catalog at commit ${retention.commitSeq}.`;
-    case "rejected": return retention.reason ?? "The core refused this mark. It is not retained.";
+    case "rejected": return retention.reason ?? "The core refused this mark.";
   }
 }
 
@@ -325,8 +325,7 @@ export function HeldCoins({
       <p className="held-scope">
         This list covers the current browser session, plus any mark still waiting to reach the
         store. A hold the catalog has already accepted is read back verbatim in the journal panel
-        for its scene, not restored here — so an empty list is never evidence that nothing was
-        held.
+        for its scene, not restored here.
       </p>
 
       {held.length === 0 ? (
@@ -366,16 +365,14 @@ export function HeldCoins({
                   {live === null && observation !== null && (
                     <p className="held-absence" role="note">
                       <CircleOff aria-hidden="true" size={15} /> The feed stopped carrying this
-                      coin. Everything below is the last observation this cockpit actually saw, in
-                      scene {observation.sceneId}. It is not a claim about what the coin is doing
-                      now, and it is not a claim that the coin is gone.
+                      coin. Everything below is the last observation this cockpit saw, in
+                      scene {observation.sceneId}.
                     </p>
                   )}
                   {live === null && observation === null && (
                     <p className="held-absence" role="note">
                       <CircleOff aria-hidden="true" size={15} /> This mark is retained, but no
-                      observation of this coin is retained in this browser session, so there is
-                      nothing to show about it here. The mark itself is not affected.
+                      observation of this coin is retained in this browser session.
                     </p>
                   )}
 

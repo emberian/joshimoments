@@ -52,7 +52,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "attention_arrival",
         title: "Attention arrival",
         question: "Which audiences arrived, through which observed surfaces, and how incomplete is the window?",
-        claimBoundary: "Occurrence and arrival order are descriptive. Provider identity links and audience overlap are not causal impact.",
+        claimBoundary: "Occurrence and arrival order, as observed.",
         evidenceClass: "mixed",
         signals: [
           { signalId: "arrival-observed-accounts", label: "Observed arriving accounts", value: value("18", "accounts"), interval: null, support: "Pump replies and callout fixture inside this scene cut", lineage: provider("attention:event:orbitfan", "Pump-only activity and deletions outside the collected window may be missing.") },
@@ -62,7 +62,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
           { relationId: "arrival-callout-community", from: "CALL OUT OBSERVED", to: "community replies", relation: "followed in observed event order", direction: "directed", value: value("37", "seconds"), alternative: "Both may respond to an unobserved external event.", lineage: provider("attention:event:callout-1", "Event time is bounded by provider receipt time.") },
         ],
         marks: [
-          { markId: "arrival-mark-callout", at: availableAt, label: "CALL OUT OBSERVED", size: null, detail: "Occurrence only; caller skill and future peak are not encoded.", lineage: provider("attention:event:callout-1", "Source may omit edits or deletions.") },
+          { markId: "arrival-mark-callout", at: availableAt, label: "CALL OUT OBSERVED", size: null, detail: "Occurrence only.", lineage: provider("attention:event:callout-1", "Source may omit edits or deletions.") },
         ],
       },
       {
@@ -86,7 +86,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "field_bundle",
         title: "Coupled field bundle",
         question: "Where do flow, attention, topology, liquidity, and lifecycle agree—and where do they refuse to collapse?",
-        claimBoundary: "This is deliberately not a pressure score. Each field keeps its unit, lineage, support, and contradictory alternatives.",
+        claimBoundary: "Each field keeps its unit, lineage, support, and contradictory alternatives.",
         evidenceClass: "mixed",
         signals: [
           { signalId: "field-attention", label: "Attention arrival", value: value("accelerating", null), interval: null, support: "Observed provider event order", lineage: provider("attention:arrival:orbitfan", "Audience coverage is partial.") },
@@ -102,7 +102,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "lifecycle_topology",
         title: "Lifecycle and topology",
         question: "Which market, community, venue, and inferred-cohort transitions coexist at this evidence cut?",
-        claimBoundary: "Lifecycle transitions may overlap and be disputed. A candidate transition is not a forced phase or trading recommendation.",
+        claimBoundary: "Lifecycle transitions may overlap and be disputed.",
         evidenceClass: "mixed",
         signals: [
           { signalId: "lifecycle-market", label: "Market lifecycle", value: value("bonding", null), interval: null, support: "Candidate state in immutable Glass view", lineage: observed("scene:candidate:orbitfan", "Venue state may lag the next chain slot.") },
@@ -118,7 +118,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "liquidity_susceptibility_resilience",
         title: "Liquidity susceptibility and resilience",
         question: "How does response change with marked size, reserve geometry, venue state, and subsequent opposing flow?",
-        claimBoundary: "These descriptive geometry fields are neither executable quotes nor a timeless liquidity score.",
+        claimBoundary: "Descriptive geometry fields, per marked window.",
         evidenceClass: "derived",
         signals: [
           { signalId: "liquidity-recovery", label: "Observed displacement recovery", value: value("43", "percent by 90s"), interval: { lower: "19", upper: "68" }, support: "Six size-matched marks", lineage: inferred("field:resilience:orbitfan", "Recovery may be regime change, arbitrage, or attention exit rather than refill.") },
@@ -132,7 +132,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "marked_order_timing_size",
         title: "Marked order timing and size",
         question: "Where did exact observed swaps land relative to operator, social, and lifecycle marks?",
-        claimBoundary: "These are unverified fixture observations with exact atom strings. Production may call them facts only after canonicality, finality, and coverage admission; they never identify intent, ownership, or Ember's fills.",
+        claimBoundary: "These are unverified fixture observations with exact atom strings. Production may call them facts only after canonicality, finality, and coverage admission.",
         evidenceClass: "observed",
         signals: [],
         relations: [],
@@ -146,7 +146,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "pvp_compression_churn",
         title: "PvP compression and churn",
         question: "Which directed actors or venues exchange flow, and how quickly do relationships reverse or dissipate?",
-        claimBoundary: "Antisymmetric flow remains dyadic and directional. 'Drain', 'vamp', and coordination labels are hypotheses, not identities.",
+        claimBoundary: "Antisymmetric flow remains dyadic and directional. 'Drain', 'vamp', and coordination labels are hypotheses.",
         evidenceClass: "mixed",
         signals: [
           { signalId: "pvp-churn", label: "Actor-edge churn", value: value("5/12", "edges changed in 2m"), interval: null, support: "Observed actor–mint swap edges in hot scope", lineage: derived("pvp:orbitfan:epoch-4", "Uncovered routes can make edges appear to vanish.") },
@@ -161,7 +161,7 @@ export function explorationBundleFor(snapshot: GlassSnapshotV1): ExplorationBund
         viewKind: "wallet_cluster_flow",
         title: "Wallet and cluster flow",
         question: "Which wallet actions does the current evidence cut support, and which competing cluster hypotheses could explain their topology?",
-        claimBoundary: "Admitted wallet addresses and swaps may become protocol facts; this fixture remains unverified. Funding links and cluster membership never establish identity or coordination by themselves.",
+        claimBoundary: "Admitted wallet addresses and swaps may become protocol facts; this fixture remains unverified.",
         evidenceClass: "mixed",
         signals: [
           { signalId: "wallet-gross-in", label: "Observed gross in", value: value("384000000", "lamports"), interval: null, support: "Hot-scope finalized swaps only", lineage: observed("wallet:mint:orbitfan", "Not full-market flow; provider gaps remain explicit.") },

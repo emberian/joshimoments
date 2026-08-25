@@ -61,8 +61,7 @@ describe("asking the local core about held coins", () => {
     await waitFor(() =>
       expect(result.current["mintA"]).toEqual({
         state: "absent",
-        absence:
-          "The readout request failed: core refused the connection. Nothing here is a claim about the coin.",
+        absence: "The readout request failed: core refused the connection.",
       }),
     );
   });

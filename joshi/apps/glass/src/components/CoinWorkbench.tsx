@@ -64,7 +64,7 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         <article className="metric-card">
           <span>Observed price</span>
           <strong>{priceSol(candidate.metrics.priceSol)}</strong>
-          <small>{candidate.metrics.priceSol === null ? "No price was observed in this view" : `${fieldLineage(candidate, "metrics.priceSol")} · not a quote`}</small>
+          <small>{candidate.metrics.priceSol === null ? "No price was observed in this view" : fieldLineage(candidate, "metrics.priceSol")}</small>
         </article>
         <article className="metric-card">
           <span>Market cap</span>
@@ -123,7 +123,6 @@ export const CoinWorkbench = memo(function CoinWorkbench({
         {visibleSocial.length === 0 ? (
           <div className="empty-state">
             <strong>No observed events for this coin.</strong>
-            <span>This is not a claim that conversation was absent.</span>
           </div>
         ) : (
           <ol className="timeline">

@@ -101,7 +101,7 @@ describe("MarketChart", () => {
     expect(screen.getByTestId("chart-silence")).toHaveTextContent("omitted 9 of them (60% of the window)");
     expect(screen.getByTestId("chart-silence")).toHaveTextContent("longest 10s");
     expect(screen.getByTestId("chart-silence")).toHaveTextContent(
-      "An omitted interval means no trade, never a flat price",
+      "An omitted interval means no trade.",
     );
   });
 
@@ -152,7 +152,7 @@ describe("MarketChart", () => {
     const clocks = screen.getByTestId("chart-clocks");
     expect(clocks).toHaveTextContent("Newest bar 22:40:14Z");
     expect(clocks).toHaveTextContent("this window became knowable at 01:30:00Z");
-    expect(clocks).toHaveTextContent("That distance is not staleness");
+    expect(clocks).toHaveTextContent("A bar clock is a market clock");
     expect(clocks).toHaveTextContent("never from the age of a bar");
   });
 
@@ -173,6 +173,6 @@ describe("MarketChart", () => {
     expect(chartCalls.series).toHaveLength(0);
     expect(screen.getByText("No bars are knowable in this lens.")).toBeInTheDocument();
     expect(screen.queryByTestId("chart-canvas")).not.toBeInTheDocument();
-    expect(screen.getByText(/not a claim that nothing traded/)).toBeInTheDocument();
+    expect(screen.getByText(/carries no price series for this coin/)).toBeInTheDocument();
   });
 });

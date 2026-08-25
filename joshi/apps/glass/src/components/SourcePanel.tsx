@@ -53,7 +53,7 @@ export function SourcePanel({
         <RadioTower aria-hidden="true" />
         <span>
           <strong>{freshCount} of {sources.length} source{sources.length === 1 ? "" : "s"} report fresh delivery</strong>
-          {gapCount} explicit coverage gap{gapCount === 1 ? "" : "s"}; silence is not converted to zero.
+          {gapCount} explicit coverage gap{gapCount === 1 ? "" : "s"}.
           {fixtureCount > 0 && <strong className="fixture-warning">{fixtureCount} of these source{fixtureCount === 1 ? " is" : "s are"} fixture-backed: its bytes were authored, not observed.</strong>}
         </span>
       </div>

@@ -483,7 +483,7 @@ describe("accessibility-first glass", () => {
     expect(screen.getByText(/transfer does not prove common control/i)).toBeInTheDocument();
     expect(screen.getAllByText(/^Observed$/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Inferred$/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/no scalar pressure/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no scalar pressure/i)).not.toBeInTheDocument();
     await waitFor(() => expect(sink.sceneAttemptBodies).toHaveLength(1));
   });
 
@@ -950,7 +950,7 @@ describe("holding a coin before it scrolls away", () => {
     const afterReload = screen.getByRole("region", { name: /held coins/i });
     expect(within(afterReload).getByRole("heading", { name: /\$FABLE/ })).toBeInTheDocument();
     expect(within(afterReload).getByText(/the feed stopped carrying this coin/i)).toBeInTheDocument();
-    expect(within(afterReload).getByText(/not a claim about what the coin is doing now/i)).toBeInTheDocument();
+    expect(within(afterReload).getByText(/last observation this cockpit saw/i)).toBeInTheDocument();
     expect(within(afterReload).getByRole("button", { name: /not in this view/i })).toBeDisabled();
   });
 

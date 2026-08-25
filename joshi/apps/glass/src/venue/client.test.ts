@@ -109,7 +109,7 @@ describe("loopback venue readout client", () => {
     expect(answer.state).toBe("absent");
     if (answer.state !== "absent") throw new Error("unreachable");
     expect(answer.absence).toMatch(/not paired/i);
-    expect(answer.absence).toMatch(/nothing here is a claim about the coin/i);
+    expect(answer.absence).toMatch(/no measurement was requested/i);
   });
 
   it("refuses a served readout whose numbers are not exact decimal strings", async () => {

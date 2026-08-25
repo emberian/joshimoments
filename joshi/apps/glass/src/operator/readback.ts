@@ -166,9 +166,8 @@ export class OfflineFixtureOperatorReader implements OperatorCommandReader {
     return Promise.resolve({
       state: "no_catalog",
       absence:
-        "This cockpit is running on the offline fixture, so no durable catalog stands behind it "
-        + "and nothing can be read back. Acts recorded in this browser session are listed below; "
-        + "an absent catalog answer is not evidence that a real catalog holds nothing.",
+        "This cockpit is running on the offline fixture, so no durable catalog stands behind it. "
+        + "Acts recorded in this browser session are listed below.",
     });
   }
 }

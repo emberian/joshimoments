@@ -77,17 +77,16 @@ function absenceFor(status: number, body: string): string {
   }
   if (code === "venue_readouts_not_mounted") {
     return "The local core was started without a venue account capture, so it has measured no "
-      + "coin's fee floor or clip interval. That is a fact about this session, not about this coin.";
+      + "coin's fee floor or clip interval.";
   }
   if (code === "venue_readout_not_measured") {
     return "The capture this core is serving supports no venue readout for this mint. It may name "
       + "no venue for this coin, or the venue it named could not be assembled from the retained bytes.";
   }
   if (status === 401 || status === 403) {
-    return "This session is not paired for cockpit reads, so no measurement was requested. "
-      + "Nothing here is a claim about the coin.";
+    return "This session is not paired for cockpit reads, so no measurement was requested.";
   }
-  return `The local core answered ${status} and stated no readout. Nothing here is a claim about the coin.`;
+  return `The local core answered ${status} and stated no readout.`;
 }
 
 async function readBounded(response: Response): Promise<string> {
