@@ -1092,6 +1092,10 @@ impl SqliteStore {
                 .observed_at()
                 .map(|value| timestamp_us(value, "Glass evidence observedAt"))
                 .transpose()?;
+            // A derived entry names the durable observation it rides on; a plain entry's id is
+            // the observation itself. Either way the referenced row must exist at the cutoff
+            // with exactly the clocks and source the view printed.
+            let durable_id = evidence.durable_observation_id();
             let row: Option<(i64, String, i64, i64, Option<i64>)> = self
                 .connection
                 .query_row(
@@ -1099,7 +1103,7 @@ impl SqliteStore {
                         source_event_lower_us
                  FROM observation WHERE observation_id=?1 AND commit_seq<=?2",
                     params![
-                        evidence.id().as_str(),
+                        durable_id.as_str(),
                         sqlite_u64(view.catalog_commit().get(), "Glass catalog cutoff")?
                     ],
                     |row| {
@@ -1116,7 +1120,14 @@ impl SqliteStore {
             let Some((_commit, source, received, available, observed)) = row else {
                 return Err(StoreError::MissingIdentity {
                     kind: "Glass evidence observation",
-                    identity: evidence.id().to_string(),
+                    identity: if durable_id == evidence.id() {
+                        evidence.id().to_string()
+                    } else {
+                        format!(
+                            "{durable_id} (riding under evidence entry {})",
+                            evidence.id()
+                        )
+                    },
                 });
             };
             if source != evidence.source_id().as_str()

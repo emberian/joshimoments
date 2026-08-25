@@ -1494,10 +1494,10 @@ async fn operator_command(
                 "writer_unavailable",
                 "durable writer lock is unavailable",
             ),
-            Err(_) => problem(
+            Err(error) => problem(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "operator_commit_rejected",
-                "scene-bound operator command was not committed",
+                &format!("scene-bound operator command was not committed: {error}"),
             ),
         };
     }
@@ -1538,11 +1538,11 @@ async fn operator_command(
             StableString::new(env!("CARGO_PKG_VERSION")).expect("valid build"),
         ) {
             Ok(value) => value,
-            Err(_) => {
+            Err(error) => {
                 return problem(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "operator_commit_rejected",
-                    "scene-bound operator command was not committed",
+                    &format!("scene-bound operator command was not committed: {error}"),
                 );
             }
         }

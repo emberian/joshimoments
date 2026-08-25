@@ -137,6 +137,7 @@ pub struct GlassChoiceIndex {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlassEvidenceIndex {
     id: StableString,
+    observation_id: Option<StableString>,
     source_id: SourceId,
     evidence_class: StableString,
     observed_at: Option<UtcTimestamp>,
@@ -149,6 +150,14 @@ impl GlassEvidenceIndex {
     #[must_use]
     pub fn id(&self) -> &StableString {
         &self.id
+    }
+    /// The durable observation this entry rides on. A derived entry (a row of a retained page,
+    /// a metric computed from a retained window, a subject binding restated from an envelope)
+    /// carries its own `id` for display plus the parent observation here; a plain entry's `id`
+    /// IS the observation and carries nothing extra.
+    #[must_use]
+    pub fn durable_observation_id(&self) -> &StableString {
+        self.observation_id.as_ref().unwrap_or(&self.id)
     }
     /// Source that produced the evidence.
     #[must_use]
@@ -443,6 +452,11 @@ fn evidence_indexes(view: &GlassViewWire) -> Result<Vec<GlassEvidenceIndex>> {
     {
         let indexed = GlassEvidenceIndex {
             id: stable_identity(&value.id, "evidence id")?,
+            observation_id: value
+                .observation_id
+                .as_ref()
+                .map(|id| stable_identity(id, "evidence observationId"))
+                .transpose()?,
             source_id: SourceId::new(value.source_id.clone())
                 .map_err(|error| invalid("evidence sourceId", error.to_string()))?,
             evidence_class: stable_identity(&value.evidence_class, "evidenceClass")?,
@@ -536,6 +550,10 @@ struct GlassPayloadWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EvidenceRefWire {
     id: String,
+    /// The durable observation a derived entry rides on. Absent when `id` is itself the
+    /// observation. Skipped when absent so pre-existing canonical view bytes stay exact.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    observation_id: Option<String>,
     source_id: String,
     field: String,
     evidence_class: String,
@@ -1033,6 +1051,15 @@ fn validate_candidate(candidate: &CandidateWire, sources: &BTreeSet<&str>) -> Re
 
 fn validate_evidence(value: &EvidenceRefWire, sources: &BTreeSet<&str>) -> Result<()> {
     stable_identity(&value.id, "evidence id")?;
+    if let Some(observation_id) = &value.observation_id {
+        stable_identity(observation_id, "evidence observationId")?;
+        if observation_id == &value.id {
+            return Err(invalid(
+                "evidence observationId",
+                "restates the entry id; a plain observation entry omits the field",
+            ));
+        }
+    }
     stable_identity(&value.source_id, "evidence sourceId")?;
     if !sources.contains(value.source_id.as_str()) {
         return Err(invalid(

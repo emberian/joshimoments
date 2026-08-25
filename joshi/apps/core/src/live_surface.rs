@@ -98,7 +98,14 @@ pub const MAX_LIVE_OBSERVATIONS: usize = 512;
 ///   now serve newest-observation-first, at most [`MAX_RENDERED_CANDIDATES`], with the elision
 ///   counted in the report and stated in the view's unrendered notes — an elided candidate
 ///   remains observed in the catalog; falling out of render is a bound, never a denial.
-pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "4";
+/// - `"5"`: every derived evidence entry names its durable parent observation in a new
+///   `observationId` wire field, and pins its clocks to that row. Version 4 minted suffixed
+///   evidence ids (`…:rowN:coin-record`, `…:price-close`, `…:request-resolved-subject`) that
+///   existed nowhere in the observation table, so the store's as-known validation refused EVERY
+///   act over a metadata-carrying scene (observed live 2026-08-24: her holds answered 422 and
+///   the session's act ledger stayed empty). The store now resolves an entry through its named
+///   parent, exact-match, and the refusal names both identities.
+pub const LIVE_SURFACE_DERIVATION_VERSION: &str = "5";
 
 /// The most candidates one scene renders. The bounded Glass response contract is 4 MiB and a
 /// candidate wire with its evidence rows runs a few KB (measured 5.4 KB average on the catalog
@@ -265,6 +272,7 @@ pub fn derive_live_surface_with(
                     entry.chain_named = true;
                     entry.evidence.push(EvidenceDraft {
                         id: observation.observation_id.to_string(),
+                        observation_id: None,
                         source_id: observation.source_id.to_string(),
                         field: "mint".to_owned(),
                         evidence_class: "observed",
@@ -583,6 +591,10 @@ struct EvidenceDraft {
     /// Wire identity of this evidence row. Distinct from the observation identity when one set
     /// of bytes supports two different claims: bars that were observed, and a binding attested.
     id: String,
+    /// The durable observation this entry rides on, whenever `id` is not itself an observation
+    /// identity. The store refuses any act over a view whose evidence cannot be resolved to a
+    /// durable row, so every derived/suffixed `id` MUST name its parent here.
+    observation_id: Option<String>,
     source_id: String,
     field: String,
     evidence_class: &'static str,
@@ -937,6 +949,7 @@ fn admit_coin_records(
         let entry = subjects.entry(record.mint.clone()).or_default();
         entry.evidence.push(EvidenceDraft {
             id: claim.evidence_id("coin-record"),
+            observation_id: Some(claim.observation_id.clone()),
             source_id: claim.source_id.clone(),
             field: "mint".to_owned(),
             evidence_class: "observed",
@@ -1074,6 +1087,7 @@ fn resolve_metadata(subjects: &mut BTreeMap<String, SubjectDraft>) {
             }
             draft.evidence.push(EvidenceDraft {
                 id: winner.evidence_id(&format!("claim-{}", field.replace('.', "-"))),
+                observation_id: Some(winner.observation_id.clone()),
                 source_id: winner.source_id.clone(),
                 field: field.to_owned(),
                 evidence_class: "observed",
@@ -1468,6 +1482,7 @@ impl CandleSeries {
         for window in &self.windows {
             entry.evidence.push(EvidenceDraft {
                 id: window.observation_id.clone(),
+                observation_id: None,
                 source_id: window.source_id.clone(),
                 field: "candles".to_owned(),
                 evidence_class: "observed",
@@ -1522,6 +1537,7 @@ impl CandleSeries {
                 entry.price_sol = Some(newest_row.close.clone());
                 entry.evidence.push(EvidenceDraft {
                     id: format!("{newest_origin}:price-close"),
+                    observation_id: origin_window.map(|_| newest_origin.clone()),
                     source_id: origin_window
                         .map(|window| window.source_id.clone())
                         .unwrap_or_default(),
@@ -1529,7 +1545,7 @@ impl CandleSeries {
                     evidence_class: "derived",
                     observed_at: None,
                     ingested_at: origin_window.map_or(rendered_at, |window| window.ingested_at),
-                    known_at,
+                    known_at: origin_window.map_or(known_at, |window| window.known_at),
                     note: format!(
                         "The newest retained bar's close, {} at {}. The request that retained \
                          this window asked for currency={stated} and its envelope restates that; \
@@ -1589,6 +1605,7 @@ impl CandleSeries {
                             entry.change_5m_bps = Some(bps.to_string());
                             entry.evidence.push(EvidenceDraft {
                                 id: format!("{newest_origin}:change-5m"),
+                                observation_id: origin_window.map(|_| newest_origin.clone()),
                                 source_id: origin_window
                                     .map(|window| window.source_id.clone())
                                     .unwrap_or_default(),
@@ -1597,7 +1614,7 @@ impl CandleSeries {
                                 observed_at: None,
                                 ingested_at: origin_window
                                     .map_or(rendered_at, |window| window.ingested_at),
-                                known_at,
+                                known_at: origin_window.map_or(known_at, |window| window.known_at),
                                 note: format!(
                                     "Derived: close {} of the newest bar at {} against close {} \
                                      of the latest bar at least 300s earlier, at {} — {span}s \
@@ -1649,6 +1666,7 @@ impl CandleWindow {
         if self.request_mint.is_some() {
             EvidenceDraft {
                 id: format!("{}:request-resolved-subject", self.observation_id),
+                observation_id: Some(self.observation_id.clone()),
                 source_id: self.source_id.clone(),
                 field: "mint".to_owned(),
                 evidence_class: "derived",
@@ -1667,6 +1685,7 @@ impl CandleWindow {
         } else {
             EvidenceDraft {
                 id: format!("{}:operator-attested-subject", self.observation_id),
+                observation_id: Some(self.observation_id.clone()),
                 source_id: self.source_id.clone(),
                 field: "mint".to_owned(),
                 evidence_class: "attested",
@@ -2140,6 +2159,7 @@ fn slot_phrase(slots: &[u64]) -> String {
 fn evidence_wire(entry: &EvidenceDraft) -> EvidenceRefWire {
     EvidenceRefWire {
         id: entry.id.clone(),
+        observation_id: entry.observation_id.clone(),
         source_id: entry.source_id.clone(),
         field: entry.field.clone(),
         evidence_class: entry.evidence_class.to_owned(),
@@ -2488,6 +2508,10 @@ struct CandidateMetricsWire {
 #[serde(rename_all = "camelCase")]
 struct EvidenceRefWire {
     id: String,
+    /// The durable parent observation of a derived entry; skipped when `id` is the observation,
+    /// mirroring the operator crate's canonical parse exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observation_id: Option<String>,
     source_id: String,
     field: String,
     evidence_class: String,
@@ -3156,6 +3180,98 @@ mod tests {
         assert!(note.contains("`usd_market_cap`"), "{note}");
         assert!(note.contains("2425.309648246627"), "{note}");
         assert!(note.contains("passed no review"), "{note}");
+    }
+
+    /// The regression that kept the operator out of her own chair: version 4 minted derived
+    /// evidence ids (`…:coin-record`, `…:claim-*`) that named no durable observation, so the
+    /// store's as-known validation refused EVERY act over a metadata-carrying scene with
+    /// "missing Glass evidence observation identity". A hold on a live board candidate answered
+    /// 422 and the session's act ledger stayed empty. This walks the exact failing path: derive
+    /// a view whose candidate carries derived evidence, then commit a canonical `record_focus`
+    /// hold over it into the same store.
+    #[test]
+    fn a_hold_act_commits_over_a_view_carrying_derived_evidence() {
+        use joshi_operator::{OperatorCommandStatus, ValidatedOperatorCommandV1};
+        use joshi_store::{OperatorCaptureMetadata, SceneSourceMode};
+
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store =
+            SqliteStore::open(config(root.path()), StoreMode::SingleWriter).expect("open store");
+        store.migrate(committed_at()).expect("migrate");
+        commit_outcome(
+            &mut store,
+            &coin_exact_outcome(None),
+            Some(COIN_EXACT_REVIEW.as_bytes()),
+            "batch:pump-tap:coin-exact",
+            1,
+        );
+        let source = source_identity("pump.api.product.v1").expect("source identity");
+        let derived =
+            derive_live_surface_with(&store, &source, None, &LiveSurfaceOptions::default())
+                .expect("derivation");
+        let view_json: serde_json::Value =
+            serde_json::from_slice(derived.view.canonical_bytes()).expect("canonical view");
+        let evidence = view_json["payload"]["candidates"][0]["evidence"]
+            .as_array()
+            .expect("evidence rows");
+        // The view genuinely carries the failing shape: at least one entry whose id is not the
+        // observation it rides on, now naming its parent explicitly.
+        assert!(
+            evidence.iter().any(|entry| {
+                entry["observationId"].is_string() && entry["observationId"] != entry["id"]
+            }),
+            "no derived evidence entry names its parent observation: {evidence:#?}"
+        );
+
+        let candidate_id = view_json["payload"]["candidates"][0]["id"]
+            .as_str()
+            .expect("candidate id");
+        let rendered = derived.view.rendered_at().as_datetime();
+        let issued = UtcTimestamp::new(rendered + time::Duration::seconds(1)).expect("issued");
+        let committed = UtcTimestamp::new(rendered + time::Duration::seconds(2)).expect("commit");
+        // The exact canonical shape apps/glass/src/operator/holds.ts commits, field for field.
+        let command_bytes = format!(
+            "{{\"contract\":\"joshi.operator.command\",\"schemaVersion\":1,\
+             \"commandId\":\"command-hold-derived-evidence-1\",\
+             \"idempotencyKey\":\"retry-hold-derived-evidence-1\",\
+             \"clientSessionId\":\"glass-session-derived-evidence\",\
+             \"clientCommandSeq\":\"1\",\
+             \"scene\":{{\"sceneId\":\"{}\",\"viewDigest\":\"{}\"}},\
+             \"issuedAt\":\"{issued}\",\
+             \"clientClock\":{{\"clockId\":\"browser-derived-evidence-clock\",\
+             \"monotonicNs\":\"2000000\"}},\
+             \"commandKind\":\"record_focus\",\
+             \"subject\":{{\"kind\":\"candidate\",\"key\":\"{candidate_id}\"}},\
+             \"payload\":{{\"context\":{{\"uiLabel\":\"Hold coin\",\"uiLabelVersion\":\"1\",\
+             \"confidencePpm\":null,\"urgency\":null,\"whyNow\":null,\"note\":null}},\
+             \"dwellMilliseconds\":null}},\
+             \"authorityClass\":\"evidence_only\",\"effectCeiling\":\"observe_only\"}}",
+            derived.view.scene_id(),
+            derived.view.digest(),
+        );
+        let command = ValidatedOperatorCommandV1::parse_exact(command_bytes.as_bytes())
+            .expect("canonical hold command");
+        let capture = OperatorCaptureMetadata {
+            client_scene_seq: 1,
+            ui_build: StableString::new("joshi-glass-test").expect("build"),
+            source_mode: SceneSourceMode::Replacement,
+            rendered_clock_id: StableString::new("server-derived-evidence-clock")
+                .expect("clock id"),
+            rendered_mono_ns: 1_000_000,
+            screenshot_bytes: None,
+        };
+        let receipt = store
+            .commit_operator_v1(
+                &command,
+                Some(&derived.view),
+                &capture,
+                committed,
+                StableString::new("test-monotonic").expect("clock"),
+                3_000_000,
+                StableString::new("test-build").expect("build"),
+            )
+            .expect("the hold commits: every derived evidence entry resolves to a durable row");
+        assert_eq!(receipt.status(), OperatorCommandStatus::Accepted);
     }
 
     #[test]
