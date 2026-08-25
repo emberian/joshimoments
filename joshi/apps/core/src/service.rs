@@ -374,6 +374,10 @@ impl CoreService {
             .route("/api/v1/glass/scenes", get(scene_feed))
             .route("/api/v1/glass/scenes/{scene_id}", get(historical_scene))
             .route(
+                "/api/v1/glass/scenes/{scene_id}/candidates/{candidate_id}",
+                get(candidate_slice),
+            )
+            .route(
                 "/api/v1/glass/venue-readouts/{mint}",
                 get(venue_readout_for_mint),
             )
@@ -1249,61 +1253,9 @@ async fn historical_scene(
 }
 
 fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&str>) -> Response {
-    let Ok(scene_id) = SceneId::new(scene_id) else {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_scene",
-            "scene identity is invalid",
-        );
-    };
-    // A follow mount serves every scene it has derived, durable bytes preferred; nothing else in
-    // this process holds scenes then.
-    let (view_bytes, mode) = if let Some(follow) = &service.inner.follow {
-        match follow.scene_bytes(&scene_id) {
-            Ok(Some(found)) => found,
-            Ok(None) => {
-                return problem(
-                    StatusCode::NOT_FOUND,
-                    "scene_not_found",
-                    "immutable scene was not found",
-                );
-            }
-            Err(_) => {
-                return problem(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "reader_unavailable",
-                    "follow state lock is unavailable",
-                );
-            }
-        }
-    } else {
-        let Ok(store) = service.inner.store.lock() else {
-            return problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "reader_unavailable",
-                "catalog lock is unavailable",
-            );
-        };
-        let stored = store.load_scene(&scene_id).ok();
-        // A scene this process derived from the store is served from memory only until an
-        // operator act makes it durable; afterwards the durable bytes answer, and they are the
-        // same bytes.
-        let mounted = service
-            .inner
-            .live_surface
-            .as_ref()
-            .filter(|view| *view.scene_id() == scene_id);
-        match (&stored, mounted) {
-            (Some(scene), _) => (scene.view_bytes.clone(), mode_name(scene.mode)),
-            (None, Some(view)) => (view.canonical_bytes().to_vec(), glass_mode_name(view)),
-            (None, None) => {
-                return problem(
-                    StatusCode::NOT_FOUND,
-                    "scene_not_found",
-                    "immutable scene was not found",
-                );
-            }
-        }
+    let (view_bytes, mode) = match resolve_scene_bytes(service, scene_id) {
+        Ok(found) => found,
+        Err(response) => return *response,
     };
     if let Some(expected) = expected_mode
         && expected != mode
@@ -1322,6 +1274,161 @@ fn scene_response(service: &CoreService, scene_id: &str, expected_mode: Option<&
         );
     };
     let mut response = Response::new(axum::body::Body::from(snapshot));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// Resolve one immutable scene's exact canonical view bytes and mode, wherever this process
+/// holds them (follow generations, durable store, or the mounted live surface).
+fn resolve_scene_bytes(
+    service: &CoreService,
+    scene_id: &str,
+) -> Result<(Vec<u8>, &'static str), Box<Response>> {
+    let Ok(scene_id) = SceneId::new(scene_id) else {
+        return Err(Box::new(problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_scene",
+            "scene identity is invalid",
+        )));
+    };
+    // A follow mount serves every scene it has derived, durable bytes preferred; nothing else in
+    // this process holds scenes then.
+    if let Some(follow) = &service.inner.follow {
+        return match follow.scene_bytes(&scene_id) {
+            Ok(Some(found)) => Ok(found),
+            Ok(None) => Err(Box::new(problem(
+                StatusCode::NOT_FOUND,
+                "scene_not_found",
+                "immutable scene was not found",
+            ))),
+            Err(_) => Err(Box::new(problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "reader_unavailable",
+                "follow state lock is unavailable",
+            ))),
+        };
+    }
+    let Ok(store) = service.inner.store.lock() else {
+        return Err(Box::new(problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reader_unavailable",
+            "catalog lock is unavailable",
+        )));
+    };
+    let stored = store.load_scene(&scene_id).ok();
+    // A scene this process derived from the store is served from memory only until an
+    // operator act makes it durable; afterwards the durable bytes answer, and they are the
+    // same bytes.
+    let mounted = service
+        .inner
+        .live_surface
+        .as_ref()
+        .filter(|view| *view.scene_id() == scene_id);
+    match (&stored, mounted) {
+        (Some(scene), _) => Ok((scene.view_bytes.clone(), mode_name(scene.mode))),
+        (None, Some(view)) => Ok((view.canonical_bytes().to_vec(), glass_mode_name(view))),
+        (None, None) => Err(Box::new(problem(
+            StatusCode::NOT_FOUND,
+            "scene_not_found",
+            "immutable scene was not found",
+        ))),
+    }
+}
+
+/// Tolerant reader for slicing: only identity, clocks, and the candidate subtrees are read. The
+/// full strict parse already happened when these canonical bytes were made.
+#[derive(Deserialize)]
+struct SliceView<'a> {
+    #[serde(rename = "sceneId")]
+    scene_id: String,
+    #[serde(rename = "asOf", borrow)]
+    as_of: SliceAsOf<'a>,
+    #[serde(borrow)]
+    payload: SlicePayload<'a>,
+}
+#[derive(Deserialize)]
+struct SliceAsOf<'a> {
+    #[serde(rename = "catalogCommit")]
+    catalog_commit: &'a str,
+    #[serde(rename = "renderedAt")]
+    rendered_at: &'a str,
+}
+#[derive(Deserialize)]
+struct SlicePayload<'a> {
+    #[serde(borrow)]
+    candidates: Vec<&'a serde_json::value::RawValue>,
+}
+#[derive(Deserialize)]
+struct CandidateIdentity<'a> {
+    id: &'a str,
+}
+
+/// One candidate of one immutable scene, sliced out verbatim.
+///
+/// A 962-subject board scene is a multi-megabyte read, and both the resident's analyst and the
+/// coin page need exactly one coin from it. The slice carries the candidate's bytes verbatim
+/// (borrowed from the canonical view, never re-serialized), the FULL view's digest so the slice
+/// is always traceable to the exact scene it was cut from, and the rendered-candidate count so
+/// a reader knows the denominator. A slice is a projection for reading; it has no digest of its
+/// own and no act may bind to it — acts bind to the scene.
+async fn candidate_slice(
+    State(service): State<CoreService>,
+    headers: HeaderMap,
+    Path((scene_id, candidate_id)): Path<(String, String)>,
+) -> Response {
+    if let OrdinaryAuthorization::Rejected(response) =
+        authorize_ordinary_if_configured(&service, &headers, PairingScope::CockpitRead)
+    {
+        return response;
+    }
+    let (view_bytes, mode) = match resolve_scene_bytes(&service, &scene_id) {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    let Ok(view) = serde_json::from_slice::<SliceView<'_>>(&view_bytes) else {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "scene_unreadable",
+            "retained scene bytes did not parse as a Glass view",
+        );
+    };
+    let rendered_count = view.payload.candidates.len();
+    let found = view.payload.candidates.iter().enumerate().find(|(_, raw)| {
+        serde_json::from_str::<CandidateIdentity<'_>>(raw.get())
+            .is_ok_and(|identity| identity.id == candidate_id)
+    });
+    let Some((ordinal, raw)) = found else {
+        return problem(
+            StatusCode::NOT_FOUND,
+            "candidate_not_rendered",
+            &format!(
+                "this scene renders {rendered_count} candidate(s) and none carries that id; an \
+                 elided candidate remains observed in the catalog — falling out of render is a \
+                 bound, never a denial"
+            ),
+        );
+    };
+    let digest = Sha256Digest::of_bytes(&view_bytes);
+    let mut body = format!(
+        "{{\"contract\":\"joshi.glass.candidate_slice\",\"schemaVersion\":1,\
+         \"sceneId\":{},\"viewDigest\":\"{digest}\",\"mode\":\"{mode}\",\
+         \"catalogCommit\":\"{}\",\"renderedAt\":\"{}\",\
+         \"renderedCandidateCount\":\"{rendered_count}\",\
+         \"renderedOrdinal\":\"{ordinal}\",\"candidate\":",
+        serde_json::to_string(&view.scene_id).unwrap_or_else(|_| "\"\"".to_owned()),
+        view.as_of.catalog_commit,
+        view.as_of.rendered_at,
+    );
+    body.push_str(raw.get());
+    body.push('}');
+    let mut response = Response::new(axum::body::Body::from(body));
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::CONTENT_TYPE,

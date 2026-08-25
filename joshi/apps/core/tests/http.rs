@@ -247,6 +247,68 @@ async fn immutable_scene_is_returned_in_the_exact_glass_snapshot_envelope() {
 }
 
 #[tokio::test]
+async fn one_candidate_is_sliced_out_verbatim_and_absence_states_the_render_bound() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let state = root.path().join("readiness");
+    run_offline_readiness(&state, WALKING_MATERIAL).expect("walking scene");
+    let config = StoreConfig {
+        catalog_path: state.join("catalog.sqlite"),
+        blob_root: state.join("blobs"),
+        export_root: state.join("exports"),
+        inline_blob_max_bytes: 64 * 1024,
+        busy_timeout: Duration::from_secs(2),
+        catalog_id: stable("joshi-offline-readiness"),
+        max_observations_per_batch: 256,
+        max_raw_bytes_per_batch: 4 * 1024 * 1024,
+    };
+    let service_store = SqliteStore::open(config, StoreMode::SingleWriter).expect("reopen writer");
+    let app = CoreService::new(service_store, None, pairing()).router();
+    let sliced = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/glass/scenes/scene-readiness-1/candidates/radon")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(sliced.status(), StatusCode::OK);
+    let bytes = sliced.into_body().collect().await.expect("body").to_bytes();
+    let slice: serde_json::Value = serde_json::from_slice(&bytes).expect("slice json");
+    assert_eq!(slice["contract"], "joshi.glass.candidate_slice");
+    assert_eq!(slice["sceneId"], "scene-readiness-1");
+    assert_eq!(slice["renderedCandidateCount"], "1");
+    assert_eq!(slice["renderedOrdinal"], "0");
+    // The candidate subtree is the full view's candidate, byte-semantics intact: same digest
+    // basis (the slice names the exact full view it was cut from) and identical JSON value.
+    let view_bytes = include_bytes!("../fixtures/glass_readiness_v1.json");
+    let view_bytes = view_bytes.strip_suffix(b"\n").unwrap_or(view_bytes);
+    let full: serde_json::Value = serde_json::from_slice(view_bytes).expect("view json");
+    assert_eq!(slice["candidate"], full["payload"]["candidates"][0]);
+    assert_eq!(
+        slice["viewDigest"].as_str().expect("digest"),
+        format!("{}", Sha256Digest::of_bytes(view_bytes))
+    );
+
+    let absent = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/glass/scenes/scene-readiness-1/candidates/not-a-coin")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+    let problem = absent.into_body().collect().await.expect("body").to_bytes();
+    let problem: serde_json::Value = serde_json::from_slice(&problem).expect("problem json");
+    assert_eq!(problem["code"], "candidate_not_rendered");
+    let detail = problem["detail"].as_str().expect("detail");
+    assert!(detail.contains("bound, never a denial"), "{detail}");
+}
+
+#[tokio::test]
 async fn operator_http_requires_pairing_and_allowed_origin_before_durable_acceptance() {
     let root = tempfile::tempdir().expect("tempdir");
     let state = root.path().join("operator-http");
