@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Command, Search, X } from "lucide-react";
 
 import type { Candidate } from "../contract/v1";
-import { candidateName, candidateSymbol } from "../format";
+import { basisPoints, candidateName, candidateSymbol, compactUsd } from "../format";
 
 export type ShellCommand = {
   id: string;
@@ -102,9 +102,18 @@ export function CommandPalette({
           </section>
           <section aria-labelledby="coin-command-heading">
             <h3 id="coin-command-heading">Focus a coin</h3>
+            {/* A palette row is for choosing a coin, so it carries the choosing facts — name,
+                cap, move — with the derivation's full attention sentence on hover, never inline. */}
             {matchingCandidates.map((candidate) => (
-              <button type="button" key={candidate.id} onClick={() => { onSelectCandidate(candidate.id); onClose(); }}>
-                <span><strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong><small>{candidateName(candidate.name)} · {candidate.attentionReason}</small></span>
+              <button type="button" key={candidate.id} title={candidate.attentionReason} onClick={() => { onSelectCandidate(candidate.id); onClose(); }}>
+                <span>
+                  <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
+                  <small>
+                    {candidateName(candidate.name)}
+                    {" · "}{candidate.metrics.marketCapUsd === null ? "—" : compactUsd(candidate.metrics.marketCapUsd)}
+                    {" · "}{candidate.metrics.change5mBps === null ? "—" : `${basisPoints(candidate.metrics.change5mBps)} 5m`}
+                  </small>
+                </span>
               </button>
             ))}
           </section>

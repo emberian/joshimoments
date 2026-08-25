@@ -116,13 +116,50 @@ describe("hunt board rows", () => {
     expect(bareRow.querySelector(".sparkline")).toBeNull();
 
     // The epistemics collapse to chips with the honest prose one hover away, not deleted:
-    // the row's title carries the attention reason, the claims glyph's title the provenance.
-    expect(observedRow.querySelector(".board-row")?.getAttribute("title")).toContain("Fast rank climb");
+    // the row's title carries the attention reason AND social sentence VERBATIM (they never
+    // render inline — a live derivation's "reason" is a provenance paragraph), and the claims
+    // glyph's title carries the field-by-field provenance verbatim.
+    expect(observedRow.querySelector(".board-row")?.getAttribute("title"))
+      .toBe("Fast rank climb with broad two-sided prints.\nNo social source was acquired in this cut.");
+    expect(within(observedRow).queryByText(/fast rank climb/i)).not.toBeInTheDocument();
     const evidenceChip = bareRow.querySelector(".chip-evidence");
     expect(evidenceChip?.getAttribute("title")).toContain("mint: observed (available) — Named by retained getTransaction bytes.");
 
     // The tab's actual ordering rule is stated in the panel.
     expect(screen.getByText(/served order: the scene's own ranks first/i)).toBeInTheDocument();
+  });
+
+  it("collapses the provider's market-cap disagreement to a chip whose hover carries the note verbatim", async () => {
+    // The exact live-derivation shape: the paragraph is evidence-note content, never row text.
+    const note = "The provider asserts two USD market caps in the same document: "
+      + "usd_market_cap=9376478.831686128 (rendered) and market_cap_usd=9381195.728794064 "
+      + "(5 basis point(s) apart); neither is averaged and the rendered field is named.";
+    const disagreeing = boardCandidate({
+      id: "disagree",
+      mint: "DISAGREEXXXXXXXXXXXXXXXXXXXXXXXX",
+      symbol: "CATE",
+      tags: ["coin_metadata_observed", "market_cap_fields_disagree"],
+      metrics: { ...observedCoin.metrics, marketCapUsd: "9376478.831686128" },
+      evidence: [{
+        id: "obs:acq:1:body:claim-market-cap",
+        sourceId: "pump.api.product.v1",
+        field: "metrics.marketCapUsd",
+        evidenceClass: "observed",
+        observedAt: null,
+        ingestedAt: "2026-08-19T21:48:40.000000Z",
+        knownAt: "2026-08-19T21:48:41.000000Z",
+        status: "available",
+        note,
+      }],
+    });
+    const { container } = renderBoard({ candidates: [disagreeing], selectedId: disagreeing.id });
+    await waitFor(() => expect(container.querySelectorAll("[data-candidate-id]").length).toBe(1));
+
+    const row = screen.getByRole("option", { name: /\$CATE/ });
+    const chip = within(row).getByText("2 caps differ");
+    expect(chip.getAttribute("title")).toBe(note);
+    // The paragraph itself never reaches the row face.
+    expect(within(row).queryByText(/neither is averaged/i)).not.toBeInTheDocument();
   });
 
   it("renders the loud advance pill only when newer scenes exist, counting them honestly", async () => {
@@ -133,7 +170,11 @@ describe("hunt board rows", () => {
     await waitFor(() => expect(container.querySelectorAll("[data-candidate-id]").length).toBe(2));
 
     const pill = screen.getByRole("button", { name: /3 newer scenes — advance/i });
-    expect(screen.getByText(/advancing is your act; this board never swaps on its own/i)).toBeInTheDocument();
+    // The face states the fact that decides whether this board is still worth scanning; the
+    // never-swaps-on-its-own assurance rides the notice's hover, verbatim, not a face sentence.
+    expect(screen.getByText(/newest derived 18:03 UTC/i)).toBeInTheDocument();
+    expect(document.querySelector(".advance-notice")?.getAttribute("title"))
+      .toContain("Advancing is your act; this board never swaps on its own.");
     const user = userEvent.setup();
     await user.click(pill);
     expect(advance).toHaveBeenCalledTimes(1);

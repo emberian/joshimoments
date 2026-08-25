@@ -62,7 +62,10 @@ describe("accessibility-first glass", () => {
     // evidence workbench (also on the apostrophe key, next to the hold semicolon).
     // 64 -> 66 was the coin page's action pair: Hold (the same one-keystroke act as `;`,
     // reachable where she is already looking) and Journal (moves focus to the composer).
-    expect(countStops()).toBe(66);
+    // 66 -> 67 was the coin page's provenance drawer: the derivation's verbatim sentences
+    // left every card face for chips and hovers, and the drawer's summary is the one
+    // keyboard-reachable expand that keeps the full prose one deliberate act away.
+    expect(countStops()).toBe(67);
 
     const feed = screen.getByRole("region", { name: /attention feed/i });
     const feedStops = () => [...container.querySelectorAll<HTMLElement>(FOCUSABLE)]

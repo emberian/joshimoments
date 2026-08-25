@@ -310,7 +310,7 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .virtual-row { position: absolute; inset: 0 0 auto; padding: 5px 7px; cursor: pointer; }
 .candidate-card {
   width: 100%;
-  min-height: 116px;
+  min-height: 76px;
   padding: 13px 11px;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
@@ -340,7 +340,6 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .candidate-title-row strong { color: #eaf6f1; font: 500 14px ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .candidate-title-row > span { min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .candidate-title-row .icon-label { color: var(--amber); }
-.candidate-reason { color: #d0d9d7; font-size: 12px; line-height: 1.35; }
 .candidate-facts, .candidate-context { display: flex; flex-wrap: wrap; gap: 5px 10px; color: var(--muted); font: 500 10px ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .candidate-context { font-family: inherit; font-size: 11px; }
 .candidate-context span { display: inline-flex; gap: 4px; align-items: center; }
@@ -392,6 +391,16 @@ h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
 .chip-warn { margin-left: 6px; border-color: #69572d; background: #2b2412; color: #f3d38f; }
 .hot-tap-note { margin: 6px 13px 0; }
 .tag { border: 1px solid #344143; background: #171e20; }
+
+/* The coin page's provenance drawer: collapsed to one line, verbatim sentences inside. */
+.coin-provenance { padding: 0; }
+.coin-provenance summary { padding: 10px 16px; cursor: pointer; color: var(--muted); font-size: 12px; }
+.coin-provenance summary:hover { color: var(--ink); }
+.coin-provenance > p { margin: 6px 16px; color: #d0d9d7; font-size: 12px; line-height: 1.45; }
+.coin-provenance ul { margin: 8px 0 0; padding: 8px 16px 13px; border-top: 1px solid var(--line); list-style: none; display: grid; gap: 9px; }
+.coin-provenance li p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.provenance-line { color: #a9b8b5; font-size: 11px; }
+.provenance-line strong { color: var(--ink); font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace; }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .metric-card { min-height: 101px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); display: grid; align-content: center; gap: 4px; }
@@ -456,10 +465,8 @@ th { color: var(--muted); }
 .timeline-meta span { display: inline-flex; align-items: center; gap: 3px; }
 .timeline p { margin: 5px 0; font-size: 12px; line-height: 1.45; }
 .timeline small { color: #7c898a; }
-.coverage-note { margin: 0; padding: 11px 16px 14px; display: flex; gap: 7px; color: var(--muted); font-size: 11px; }
 
 .right-rail { display: grid; gap: 14px; }
-.rail-intro { margin: 0; padding: 12px 15px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.4; }
 .episode-list { display: grid; }
 .episode-card { padding: 14px; border-bottom: 1px solid var(--line); }
 .episode-card:last-child { border-bottom: 0; }
@@ -756,7 +763,6 @@ th { color: var(--muted); }
 [data-density="compact"] .candidate-card { min-height: 101px; padding-block: 9px; }
 [data-density="compact"] .candidate-context { display: none; }
 [data-density="compact"] .episode-card { padding-block: 10px; }
-[data-density="compact"] .rail-intro { display: none; }
 [data-density="compact"] .metric-card { min-height: 82px; }
 
 @media (max-width: 1320px) {
@@ -927,7 +933,6 @@ th { color: var(--muted); }
   font-size: 12px;
 }
 .held-empty { margin: 0; padding: 14px 15px; color: var(--muted); font-size: 12px; }
-.held-scope { margin: 0; padding: 0 15px 4px; color: var(--faint); font-size: 11px; line-height: 1.45; }
 .held-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -998,7 +1003,6 @@ th { color: var(--muted); }
 /* Journal rail: what was said over this scene, verbatim. */
 .journal-panel { display: flex; flex-direction: column; gap: 10px; padding-bottom: 14px; }
 .journal-panel h2 { display: flex; align-items: center; gap: 6px; }
-.journal-scope { margin: 0; padding: 0 15px 4px; color: var(--faint); font-size: 11px; line-height: 1.45; }
 .journal-catalog-state { display: flex; flex-direction: column; gap: 7px; margin: 0 15px; padding: 9px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; }
 .journal-catalog-state p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .journal-catalog-state p[role="alert"] { color: var(--red); }
@@ -1138,7 +1142,7 @@ th { color: var(--muted); }
 [data-variant="board"] .virtual-row { padding: 1px 7px; }
 .board-row {
   width: 100%;
-  min-height: 50px;
+  min-height: 42px;
   padding: 6px 11px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1157,7 +1161,6 @@ th { color: var(--muted); }
 .board-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .board-ticker { color: #eaf6f1; font: 600 13px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; }
 .board-name { min-width: 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.board-reason { min-width: 0; color: #8da09d; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-spark { display: flex; justify-content: flex-start; }
 .sparkline { width: 64px; height: 18px; display: block; }
 .board-number { font: 500 11px ui-monospace, "SFMono-Regular", Menlo, monospace; text-align: right; white-space: nowrap; color: #c2cecc; }
@@ -1182,7 +1185,6 @@ th { color: var(--muted); }
    wrong thing for an evidence glyph to look like. */
 .chip-evidence { font-family: Inter, ui-sans-serif, sans-serif; letter-spacing: .06em; }
 [data-density="compact"] .board-row { min-height: 34px; padding-block: 3px; }
-[data-density="compact"] .board-reason { display: none; }
 
 /* The session line turns amber and counts down inside the final fifteen minutes. */
 .operational-session-bar span.session-expiry-countdown { color: var(--amber); font-weight: 700; }

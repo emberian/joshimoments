@@ -1,10 +1,11 @@
 import { lazy, memo, Suspense } from "react";
-import { AlertTriangle, Anchor, CircleDot, Clock3, Eye, Megaphone, NotebookPen, Radio, WalletCards } from "lucide-react";
+import { AlertTriangle, Anchor, CircleDot, Clock3, Eye, Megaphone, NotebookPen, Radio } from "lucide-react";
 
 import type { Candidate, Episode, SocialEvent } from "../contract/v1";
-import { basisPoints, candidateName, candidateSymbol, clock, compactUsd, priceSol, sentenceCase, sol } from "../format";
+import { basisPoints, candidateName, candidateSymbol, clock, compactUsd, instantOrAbsent, priceSol, sentenceCase, sol } from "../format";
 import type { ChartAnchor } from "../operator/contract";
 import type { VenueReadoutAnswer } from "../venue/contract";
+import { marketCapDisagreementNote } from "./provenance";
 import { VenueAndClip } from "./VenueReadoutBlock";
 
 /**
@@ -23,17 +24,25 @@ function fieldLineage(candidate: Candidate, field: string): string {
 const MarketChart = lazy(() => import("./MarketChart").then((module) => ({ default: module.MarketChart })));
 
 /**
- * The provider asserts two USD market caps side by side in the same document, and they disagree.
- * The derivation renders one, names the other in the evidence note, and tags the candidate. The
- * tag is the machine-readable disagreement signal; the note carries both figures. This chip is
- * the whole affordance: a flag beside the number, both values one hover away, never an average.
+ * Compact faces for the derivation's machine-readable tags. The wire tag is the identity and
+ * stays on the chip's hover; the face gets a label short enough to scan in a chip row. A tag
+ * this map does not know renders sentence-cased rather than being hidden.
  */
-function marketCapDisagreement(candidate: Candidate): string | null {
-  if (!candidate.tags.includes("market_cap_fields_disagree")) return null;
-  const reference = candidate.evidence.find((item) => item.field === "metrics.marketCapUsd");
-  return reference?.note
-    ?? "The provider asserts two USD market caps in this document and they disagree; this view renders usd_market_cap and names the sibling in its evidence.";
-}
+const TAG_FACE: Record<string, string> = {
+  chain_observed: "chain-observed",
+  ticker_unobserved: "no ticker",
+  no_price_observed: "no price",
+  gap_compressed_path: "gapped path",
+  provider_asserted_price: "provider price",
+  unit_request_stated: "unit stated",
+  unit_unstated: "unit unstated",
+  subject_request_resolved: "tap resolved",
+  subject_operator_attested: "operator-attested",
+  coin_metadata_observed: "metadata observed",
+  market_cap_from_usd_market_cap: "cap: usd_market_cap",
+  market_cap_fields_disagree: "2 caps differ",
+  schema_unpromoted: "schema unpromoted",
+};
 
 /**
  * The live microstructure instruments this page will carry, each slot honest about whether a
@@ -85,7 +94,7 @@ export const CoinWorkbench = memo(function CoinWorkbench({
   venueAnswer?: VenueReadoutAnswer | null;
 }) {
   const visibleSocial = socialEvents.filter((event) => event.candidateId === candidate.id);
-  const mcapDisagreement = marketCapDisagreement(candidate);
+  const mcapDisagreement = marketCapDisagreementNote(candidate);
 
   return (
     <section className="workbench" aria-labelledby="coin-title">
@@ -129,15 +138,51 @@ export const CoinWorkbench = memo(function CoinWorkbench({
               <Radio aria-hidden="true" size={14} />
               {sentenceCase(candidate.lifecycle)}
             </span>
-            {candidate.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}
+            {/* Compact faces; the wire tag itself (and, for the cap disagreement, the note
+                naming both figures) stays verbatim on the chip's hover. */}
+            {candidate.tags.map((tag) => (
+              <span
+                key={tag}
+                className="tag"
+                title={tag === "market_cap_fields_disagree" ? (mcapDisagreement ?? tag) : tag}
+              >
+                {TAG_FACE[tag] ?? tag}
+              </span>
+            ))}
           </div>
         </div>
       </header>
 
+      {/*
+        The provenance drawer: every sentence the card faces no longer carry, verbatim and
+        expandable where she is already looking. The derivation-authored attention paragraph
+        and social sentence land here in full, followed by each evidence row's own note with
+        its class, status, source, and knowledge clock. Collapsed by default: the face stays
+        scannable, the words stay one act away, and nothing is deleted.
+      */}
+      <details className="panel coin-provenance" data-testid="coin-provenance">
+        <summary>Provenance — what this view claims, verbatim</summary>
+        <p data-testid="provenance-attention">{candidate.attentionReason}</p>
+        <p data-testid="provenance-social">{candidate.socialSummary}</p>
+        <ul aria-label="Evidence rows in this view">
+          {candidate.evidence.map((item) => (
+            <li key={item.id}>
+              <span className="provenance-line">
+                <strong>{item.field}</strong> · {sentenceCase(item.evidenceClass)} ({item.status}) ·{" "}
+                {item.sourceId} · observed {instantOrAbsent(item.observedAt)} · known {clock(item.knownAt)}Z
+              </span>
+              <p>{item.note}</p>
+            </li>
+          ))}
+        </ul>
+      </details>
+
       <div className="metric-grid" aria-label="Observed market values">
+        {/* An absent figure is a dash with its absence stated in the line below — never the
+            word-shaped value "Not observed" standing where a number would, and never a zero. */}
         <article className="metric-card">
           <span>Observed price</span>
-          <strong>{priceSol(candidate.metrics.priceSol)}</strong>
+          <strong>{candidate.metrics.priceSol === null ? "—" : priceSol(candidate.metrics.priceSol)}</strong>
           <small>{candidate.metrics.priceSol === null ? "No price was observed in this view" : fieldLineage(candidate, "metrics.priceSol")}</small>
         </article>
         <article className="metric-card">
@@ -149,19 +194,19 @@ export const CoinWorkbench = memo(function CoinWorkbench({
               </span>
             )}
           </span>
-          <strong>{compactUsd(candidate.metrics.marketCapUsd)}</strong>
+          <strong>{candidate.metrics.marketCapUsd === null ? "—" : compactUsd(candidate.metrics.marketCapUsd)}</strong>
           <small>{candidate.metrics.marketCapUsd === null ? "No market cap was observed in this view" : fieldLineage(candidate, "metrics.marketCapUsd")}</small>
         </article>
         <article className="metric-card">
           <span>5-minute move</span>
-          <strong>{basisPoints(candidate.metrics.change5mBps)}</strong>
+          <strong>{candidate.metrics.change5mBps === null ? "—" : basisPoints(candidate.metrics.change5mBps)}</strong>
           <small>{candidate.metrics.change5mBps === null
             ? `${sentenceCase(candidate.metrics.activity)} tape`
             : fieldLineage(candidate, "metrics.change5mBps")}</small>
         </article>
         <article className="metric-card quote-card">
           <span>Observed exit value</span>
-          <strong>{sol(candidate.metrics.executableExitSol, 5)}</strong>
+          <strong>{candidate.metrics.executableExitSol === null ? "—" : sol(candidate.metrics.executableExitSol, 5)}</strong>
           <small>{candidate.metrics.executableExitSol === null
             ? "No observed inventory exit"
             : candidate.metrics.quoteSizeSol === null
@@ -200,8 +245,8 @@ export const CoinWorkbench = memo(function CoinWorkbench({
               + "bars can only arrive in a NEWER scene — the advance pill is where they show up. "
               + "This scene's bytes never change."}
           >
-            Focus-in asked the sensing side for this coin&rsquo;s 1-second candles. Bars can only
-            arrive in a newer scene — watch the advance pill; this view stays exactly what it was.
+            Focus-in asked for this coin&rsquo;s 1-second candles; bars arrive only in a newer
+            scene — watch the advance pill.
           </p>
         )}
       </section>
@@ -212,7 +257,13 @@ export const CoinWorkbench = memo(function CoinWorkbench({
             <p className="eyebrow">Callouts &amp; social</p>
             <h2 id="social-title">Events in this lens</h2>
           </div>
-          <span className="count-badge">{visibleSocial.length} events</span>
+          <span
+            className="count-badge"
+            title={"Social evidence is incomplete by construction; coverage gaps stay explicit. "
+              + "Absent here does not mean nobody called it."}
+          >
+            {visibleSocial.length} events
+          </span>
         </div>
         {visibleSocial.length === 0 ? (
           <div className="empty-state">
@@ -222,7 +273,7 @@ export const CoinWorkbench = memo(function CoinWorkbench({
                 + "community route), but no derivation renders them into a served scene yet, and "
                 + "this lens fabricates nothing. Absent here does not mean nobody called it."}
             >
-              Retained callouts are not yet derived into scenes — absence stated, not zero callouts.
+              Retained callouts are not yet derived into scenes.
             </span>
           </div>
         ) : (
@@ -245,7 +296,6 @@ export const CoinWorkbench = memo(function CoinWorkbench({
             ))}
           </ol>
         )}
-        <p className="coverage-note"><WalletCards aria-hidden="true" size={16} /> Social evidence is incomplete by construction; coverage gaps stay explicit.</p>
       </section>
 
       {/*

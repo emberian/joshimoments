@@ -10,10 +10,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, type KeyboardEvent as Re
 // reading; Ember corrected that directly — she is primarily visual — so it is restored.
 // `operator/attention.ts` states exactly what each channel claims and refuses to claim.
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
-import { Activity, Bookmark, FastForward, RefreshCw, Radio, Users } from "lucide-react";
+import { Activity, Bookmark, FastForward, RefreshCw, Radio } from "lucide-react";
 
-import type { Candidate, EvidenceClass, EvidenceRef } from "../contract/v1";
+import type { Candidate } from "../contract/v1";
 import { basisPoints, candidateName, candidateSymbol, compactUsd, duration, sentenceCase, signedTone } from "../format";
+import { candidateHoverText, EVIDENCE_CLASS_GLYPH, evidenceClassesPresent, evidenceTitle, marketCapDisagreementNote } from "./provenance";
 import { SPARKLINE_HEIGHT, SPARKLINE_WIDTH, sparklineSpec } from "./sparkline";
 import type { Density } from "../App";
 
@@ -155,8 +156,8 @@ export const AttentionFeed = memo(function AttentionFeed({
     count: sorted.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => (variant === "board"
-      ? (density === "comfortable" ? 58 : 40)
-      : (density === "comfortable" ? 156 : 126)),
+      ? (density === "comfortable" ? 46 : 38)
+      : (density === "comfortable" ? 118 : 100)),
     overscan: 5,
     initialRect: { width: 440, height: 640 },
     getItemKey: (index) => sorted[index]?.id ?? index,
@@ -296,17 +297,18 @@ export const AttentionFeed = memo(function AttentionFeed({
         worth scanning.
       */}
       {variant === "board" && advanceNotice && (
-        <div className="advance-notice">
+        <div
+          className="advance-notice"
+          title={"Advancing is your act; this board never swaps on its own. "
+            + "Held coins and the journal stay."}
+        >
           <button type="button" className="advance-pill" onClick={advanceNotice.advance}>
             <FastForward aria-hidden="true" />
             {advanceNotice.count === null
               ? "Newer scenes exist — advance"
               : `${advanceNotice.count} newer scene${advanceNotice.count === 1 ? "" : "s"} — advance`}
           </button>
-          <span className="advance-detail">
-            Newest derived {advanceNotice.derivedAt.slice(11, 16)} UTC. Advancing is your act;
-            this board never swaps on its own. Held coins and the journal stay.
-          </span>
+          <span className="advance-detail">Newest derived {advanceNotice.derivedAt.slice(11, 16)} UTC</span>
         </div>
       )}
 
@@ -448,56 +450,9 @@ export const AttentionFeed = memo(function AttentionFeed({
                   onMouseEnter={() => onPointerCandidate?.(candidate.id)}
                 >
                   {variant === "board" ? (
-                    <BoardRow candidate={candidate} rank={rank} density={density} />
+                    <BoardRow candidate={candidate} rank={rank} />
                   ) : (
-                  <div className="candidate-card">
-                    <span
-                      className="candidate-rank"
-                      data-absent={rank === null}
-                      aria-label={rank === null ? "This view states no rank for this candidate" : `Rank ${rank}`}
-                    >
-                      {rank ?? "—"}
-                    </span>
-                    <span className="candidate-main">
-                      <span className="candidate-title-row">
-                        <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
-                        <span>{candidateName(candidate.name)}</span>
-                        {candidate.watched === true && (
-                          <span className="icon-label" title="Watched">
-                            <Bookmark aria-hidden="true" size={15} />
-                            <span className="sr-only">Watched</span>
-                          </span>
-                        )}
-                      </span>
-                      <span className="candidate-reason">{candidate.attentionReason}</span>
-                      <span className="candidate-facts">
-                        <span>{compactUsd(candidate.metrics.marketCapUsd)}</span>
-                        <span className={`value-${signedTone(candidate.metrics.change5mBps)}`}>
-                          {basisPoints(candidate.metrics.change5mBps)} · 5m
-                        </span>
-                        <span>{duration(candidate.metrics.ageSeconds)} old</span>
-                      </span>
-                      {density === "comfortable" && (
-                        <span className="candidate-context">
-                          <span>
-                            <Activity aria-hidden="true" size={15} />
-                            {sentenceCase(candidate.metrics.activity)}
-                          </span>
-                          <span>
-                            <Users aria-hidden="true" size={15} />
-                            {candidate.socialSummary}
-                          </span>
-                        </span>
-                      )}
-                    </span>
-                    <span className="candidate-edge">
-                      <span className={`lifecycle lifecycle-${candidate.lifecycle}`}>
-                        {candidate.lifecycle === "bonding" && <Radio aria-hidden="true" size={14} />}
-                        {sentenceCase(candidate.lifecycle)}
-                      </span>
-                      <span className="source-chip">{candidate.board}</span>
-                    </span>
-                  </div>
+                    <ColumnCard candidate={candidate} rank={rank} density={density} />
                   )}
                 </li>
               );
@@ -523,47 +478,57 @@ function AbsentValue({ what }: { what: string }) {
   );
 }
 
-const EVIDENCE_CLASS_ORDER: EvidenceClass[] = ["observed", "derived", "attested", "interpreted", "unknown"];
-const EVIDENCE_CLASS_GLYPH: Record<EvidenceClass, string> = {
-  observed: "O",
-  derived: "D",
-  attested: "A",
-  interpreted: "I",
-  unknown: "?",
-};
-
-/** Which provenance classes this candidate's evidence carries, for the compact claims glyph. */
-function evidenceClassesPresent(evidence: readonly EvidenceRef[]): EvidenceClass[] {
-  return EVIDENCE_CLASS_ORDER.filter((cls) => evidence.some((ref) => ref.evidenceClass === cls));
-}
-
-/** The full field-by-field provenance, one hover away behind the glyph. */
-function evidenceTitle(evidence: readonly EvidenceRef[]): string {
-  return [
-    "Field provenance in this view:",
-    ...evidence.map((ref) => `${ref.field}: ${ref.evidenceClass} (${ref.status}) — ${ref.note}`),
-  ].join("\n");
+/**
+ * The compact epistemic chips a card face carries instead of sentences: the ticker absence,
+ * the provider's own market-cap disagreement, and the claims glyph. Each chip's hover title
+ * carries the full derivation-authored sentence verbatim; the face carries only the flag.
+ * Shared by both variants so a fact cannot be a chip on one lens and a paragraph on the other.
+ */
+function EpistemicChips({ candidate }: { candidate: Candidate }) {
+  const classes = evidenceClassesPresent(candidate.evidence);
+  const capsNote = marketCapDisagreementNote(candidate);
+  return (
+    <>
+      {candidate.symbol === null && (
+        <span
+          className="board-chip chip-absent"
+          title="No ticker or name was observed for this mint; its leading characters stand in."
+        >
+          no ticker
+        </span>
+      )}
+      {capsNote !== null && (
+        <span className="board-chip chip-warn" title={capsNote}>
+          2 caps differ
+        </span>
+      )}
+      <span className="board-chip chip-evidence" title={evidenceTitle(candidate.evidence)}>
+        <span aria-hidden="true">{classes.map((cls) => EVIDENCE_CLASS_GLYPH[cls]).join("·")}</span>
+        <span className="sr-only">evidence: {classes.join(", ")}</span>
+      </span>
+    </>
+  );
 }
 
 /**
  * One hunt-board row: the pump.fun-shaped glance — ticker (or mint prefix when no ticker
  * was observed), name, price path, age, market cap, and the 5-minute move colored by sign —
  * with the epistemics COLLAPSED to chips instead of paragraphs. Nothing is deleted: the
- * attention reason and social summary ride the row's hover title (and, in comfortable
- * density, one truncated line), the field-by-field provenance rides the claims glyph's
- * title, and the whole evidence workbench stays one lens switch away. Cells that the view
- * does not observe render `AbsentValue`, never a fabricated zero.
+ * attention reason and social summary ride the row's hover title verbatim, the
+ * field-by-field provenance rides the claims glyph's title, and the whole evidence
+ * workbench stays one lens switch away. Cells that the view does not observe render
+ * `AbsentValue`, never a fabricated zero. No sentence renders inline: the derivation's
+ * attention "reason" on a live surface is a provenance paragraph, and a row that must scan
+ * in under a second has no line to spend on it.
  */
-function BoardRow({ candidate, rank, density }: {
+function BoardRow({ candidate, rank }: {
   candidate: Candidate;
   rank: Candidate["rank"];
-  density: Density;
 }) {
   const spark = sparklineSpec(candidate.candles);
   const { ageSeconds, marketCapUsd, change5mBps } = candidate.metrics;
-  const classes = evidenceClassesPresent(candidate.evidence);
   return (
-    <div className="board-row" title={`${candidate.attentionReason}\n${candidate.socialSummary}`}>
+    <div className="board-row" title={candidateHoverText(candidate)}>
       <span
         className="board-rank"
         data-absent={rank === null}
@@ -576,9 +541,6 @@ function BoardRow({ candidate, rank, density }: {
           <strong className="board-ticker">{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
           {candidate.name !== null && <span className="board-name">{candidate.name}</span>}
         </span>
-        {density === "comfortable" && (
-          <span className="board-reason">{candidate.attentionReason}</span>
-        )}
       </span>
       <span className="board-cell board-spark">
         {spark && (
@@ -611,18 +573,76 @@ function BoardRow({ candidate, rank, density }: {
           </span>
         )}
         <span className={`board-chip lifecycle-${candidate.lifecycle}`}>{sentenceCase(candidate.lifecycle)}</span>
-        {candidate.symbol === null && (
-          <span
-            className="board-chip chip-absent"
-            title="No ticker or name was observed for this mint; its leading characters stand in."
-          >
-            no ticker
+        <EpistemicChips candidate={candidate} />
+      </span>
+    </div>
+  );
+}
+
+/**
+ * One evidence-column card, beside the workbench on the inspect lens. Same discipline as the
+ * board row: identity, the observed figures (an `AbsentValue` dash where the view carries
+ * none), and the epistemics as chips — the derivation's attention and social sentences ride
+ * the card's hover title verbatim and never render inline. The full field-by-field prose
+ * stays one affordance away in the workbench's provenance drawer and the source panel.
+ */
+function ColumnCard({ candidate, rank, density }: {
+  candidate: Candidate;
+  rank: Candidate["rank"];
+  density: Density;
+}) {
+  const { ageSeconds, marketCapUsd, change5mBps } = candidate.metrics;
+  return (
+    <div className="candidate-card" title={candidateHoverText(candidate)}>
+      <span
+        className="candidate-rank"
+        data-absent={rank === null}
+        aria-label={rank === null ? "This view states no rank for this candidate" : `Rank ${rank}`}
+      >
+        {rank ?? "—"}
+      </span>
+      <span className="candidate-main">
+        <span className="candidate-title-row">
+          <strong>{candidateSymbol(candidate.symbol, candidate.mint)}</strong>
+          <span>{candidateName(candidate.name)}</span>
+          {candidate.watched === true && (
+            <span className="icon-label" title="Watched">
+              <Bookmark aria-hidden="true" size={15} />
+              <span className="sr-only">Watched</span>
+            </span>
+          )}
+        </span>
+        <span className="candidate-facts">
+          {marketCapUsd === null
+            ? <AbsentValue what="market cap" />
+            : <span>{compactUsd(marketCapUsd)}<span className="sr-only"> market cap</span></span>}
+          {change5mBps === null
+            ? <AbsentValue what="5-minute move" />
+            : (
+              <span className={`value-${signedTone(change5mBps)}`}>
+                {basisPoints(change5mBps)} · 5m
+              </span>
+            )}
+          {ageSeconds === null
+            ? <AbsentValue what="coin age" />
+            : <span>{duration(ageSeconds)} old</span>}
+        </span>
+        {density === "comfortable" && (
+          <span className="candidate-context">
+            <span>
+              <Activity aria-hidden="true" size={15} />
+              {sentenceCase(candidate.metrics.activity)}
+            </span>
           </span>
         )}
-        <span className="board-chip chip-evidence" title={evidenceTitle(candidate.evidence)}>
-          <span aria-hidden="true">{classes.map((cls) => EVIDENCE_CLASS_GLYPH[cls]).join("·")}</span>
-          <span className="sr-only">evidence: {classes.join(", ")}</span>
+      </span>
+      <span className="candidate-edge">
+        <span className={`lifecycle lifecycle-${candidate.lifecycle}`}>
+          {candidate.lifecycle === "bonding" && <Radio aria-hidden="true" size={14} />}
+          {sentenceCase(candidate.lifecycle)}
         </span>
+        <span className="source-chip">{candidate.board}</span>
+        <EpistemicChips candidate={candidate} />
       </span>
     </div>
   );

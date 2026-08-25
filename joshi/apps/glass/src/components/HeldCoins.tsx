@@ -229,21 +229,23 @@ export function HeldCoins({
           <p className="eyebrow">Nothing here scrolls away</p>
           <h2 id="held-title">Held coins</h2>
         </div>
-        <output className="count-badge" aria-live="polite">{held.length} held</output>
+        {/*
+          The reach of this list rides the count badge's hover, exactly as the strip variant
+          already carries it: an empty rail after a reload is NOT "nothing was held" — the
+          catalog still holds every accepted mark, read back per scene in the journal panel —
+          but that scope sentence is reference material, not a paragraph the rail's face pays
+          for on every render.
+        */}
+        <output
+          className="count-badge"
+          aria-live="polite"
+          title={"This list covers the current browser session, plus any mark still waiting "
+            + "to reach the store. A hold the catalog has already accepted is read back "
+            + "verbatim in the journal panel for its scene, not restored here."}
+        >
+          {held.length} held
+        </output>
       </div>
-
-      {/*
-        The reach of this list, said out loud. An empty rail is the exact shape a reader fills in
-        with "nothing was held", and after a reload that reading would be false: the catalog still
-        holds every accepted mark. The journal panel reads those back per scene through the core's
-        operator readback route; this rail itself still lists only this session's marks, and says
-        so rather than borrowing the journal's answer and re-sorting it.
-      */}
-      <p className="held-scope">
-        This list covers the current browser session, plus any mark still waiting to reach the
-        store. A hold the catalog has already accepted is read back verbatim in the journal panel
-        for its scene, not restored here.
-      </p>
 
       {held.length === 0 ? (
         <p className="held-empty">

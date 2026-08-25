@@ -29,9 +29,14 @@ export function EpisodeRail({
           <p className="eyebrow">Persistent memory</p>
           <h2 id="episodes-title">Exposure &amp; episodes</h2>
         </div>
-        <span className="read-only-badge"><Eye aria-hidden="true" size={15} /> Observe</span>
+        {/* The rail's promise rides the badge's hover; the list itself demonstrates it. */}
+        <span
+          className="read-only-badge"
+          title="Exits do not erase the story. Flat watches stay visible beside retained runners."
+        >
+          <Eye aria-hidden="true" size={15} /> Observe
+        </span>
       </div>
-      <p className="rail-intro">Exits do not erase the story. Flat watches stay visible beside retained runners.</p>
       <div className="episode-list">
         {episodes.map((episode) => {
           const candidate = candidates.find((item) => item.id === episode.candidateId);

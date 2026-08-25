@@ -213,15 +213,18 @@ export function JournalRail({
           <p className="eyebrow">What was said, kept</p>
           <h2 id="journal-title"><BookOpen aria-hidden="true" size={16} /> Journal</h2>
         </div>
-        <output className="count-badge" aria-live="polite">{total} act{total === 1 ? "" : "s"}</output>
+        {/* The scope sentences ride the badge's hover; the face keeps the count. */}
+        <output
+          className="count-badge"
+          aria-live="polite"
+          title={`Every operator act bound to scene ${sceneId}, verbatim and in time order: `
+            + "journal entries, holds, notes, dispositions. The core reads back one scene at "
+            + "a time, so acts bound to other scenes are not listed here. Automatic viewport "
+            + "assertions are retained in the catalog and listed in the scene inspector."}
+        >
+          {total} act{total === 1 ? "" : "s"}
+        </output>
       </div>
-
-      <p className="journal-scope">
-        Every operator act bound to scene {sceneId}, verbatim and in time order: journal entries,
-        holds, notes, dispositions. The core reads back one scene at a time, so acts bound to
-        other scenes are not listed here. Automatic viewport assertions are retained in the
-        catalog and listed in the scene inspector.
-      </p>
 
       <CatalogAnswer readback={readback} onReread={onReread} />
 

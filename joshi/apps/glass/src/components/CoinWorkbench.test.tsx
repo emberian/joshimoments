@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Candidate } from "../contract/v1";
@@ -100,8 +100,40 @@ describe("coin workbench provenance", () => {
     expect(screen.queryByText(/ticker and name:/i)).not.toBeInTheDocument();
     expect(screen.getByText(/no price was observed in this view/i)).toBeInTheDocument();
     expect(screen.getByText(/no market cap was observed in this view/i)).toBeInTheDocument();
-    // An underived move renders as its absence, described by the activity the view does carry.
-    expect(screen.getAllByText(/not observed/i).length).toBeGreaterThan(0);
+    // An underived figure is a DASH with its absence stated in the line beneath — never the
+    // word-shaped value "Not observed" standing where a number would, and never a zero.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(4);
     expect(screen.getByText(/unknown tape/i)).toBeInTheDocument();
+    // The derivation's tags render as compact chip faces with the wire tag on hover.
+    expect(screen.getByText("no price")).toHaveAttribute("title", "no_price_observed");
+    expect(screen.getByText("no ticker")).toHaveAttribute("title", "ticker_unobserved");
+  });
+
+  /**
+   * The copy-pass rule (NORTH_STAR commitment #4): the derivation-authored sentences leave
+   * every card face, and every one of them stays reachable VERBATIM — here, in the coin
+   * page's expandable provenance drawer. This is the test that proves the move is a move,
+   * not a deletion.
+   */
+  it("carries every moved sentence verbatim in the provenance drawer, never on the face", () => {
+    render(
+      <CoinWorkbench candidate={observed} episode={undefined} socialEvents={[]} onAnnotate={() => {}} />,
+    );
+    const drawer = screen.getByTestId("coin-provenance");
+    // The drawer face is one summary line; the full sentences are inside it, word for word.
+    expect(within(drawer).getByText("Provenance — what this view claims, verbatim")).toBeInTheDocument();
+    expect(screen.getByTestId("provenance-attention")).toHaveTextContent(
+      "Carries 8 evidence rows. Ticker, name and market cap are provider claims.",
+    );
+    expect(screen.getByTestId("provenance-social")).toHaveTextContent(
+      "No social source was acquired in this cut.",
+    );
+    // Each evidence row's own note, verbatim, with its class, status, source, and clock.
+    expect(within(drawer).getAllByText(
+      "Provider claim copied from the retained read; see the source panel for the sentence.",
+    ).length).toBe(observed.evidence.length);
+    // Outside the drawer, those sentences appear nowhere: the face carries chips and dashes.
+    expect(screen.getAllByText(/carries 8 evidence rows/i)).toHaveLength(1);
+    expect(screen.getAllByText(/no social source was acquired/i)).toHaveLength(1);
   });
 });

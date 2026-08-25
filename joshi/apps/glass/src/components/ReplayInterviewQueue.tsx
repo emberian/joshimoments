@@ -1,4 +1,4 @@
-import { EyeOff, History, MessageSquareText } from "lucide-react";
+import { EyeOff, History } from "lucide-react";
 
 import type { Candidate, Episode, ReplayMode } from "../contract/v1";
 import { candidateSymbol } from "../format";
@@ -25,9 +25,18 @@ export function ReplayInterviewQueue({
           <p className="eyebrow">Fourth persistent context</p>
           <h2 id="replay-queue-title">Replay &amp; interview queue</h2>
         </div>
-        <span className="count-badge">{episodes.length} episode{episodes.length === 1 ? "" : "s"}</span>
+        {/* The rail's ground rules ride the badge's hover instead of two face paragraphs. */}
+        <span
+          className="count-badge"
+          title={"Outcome-hidden reconstruction and outcome-aware reflection are separate "
+            + "records. Neither rewrites the immediate scene. An interview is an operator "
+            + "report with explicit outcome visibility and linked source acts; client "
+            + "timing/link labels remain unqualified until core derives them from durable "
+            + "commit order and episode/scene closure."}
+        >
+          {episodes.length} episode{episodes.length === 1 ? "" : "s"}
+        </span>
       </div>
-      <p className="rail-intro">Outcome-hidden reconstruction and outcome-aware reflection are separate records. Neither rewrites the immediate scene.</p>
       <ul className="replay-queue-list">
         {episodes.length === 0 && <li className="empty-state"><strong>No episode in this publication.</strong><span>No-trade attention can still be marked in the selected scene.</span></li>}
         {episodes.map((episode) => {
@@ -67,7 +76,6 @@ export function ReplayInterviewQueue({
           );
         })}
       </ul>
-      <p className="operator-boundary"><MessageSquareText aria-hidden="true" /> An interview is an operator report with explicit outcome visibility and linked source acts. Client timing/link labels remain unqualified until core derives them from durable commit order and episode/scene closure.</p>
     </section>
   );
 }
