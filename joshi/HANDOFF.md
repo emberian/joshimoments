@@ -20,28 +20,23 @@ perf (51s → 0.7s warm; the backup was 99.96% nanosleep), and the bounded candi
 
 ## OPEN BUGS, with their exact next steps
 
-1. **Holds 422 on the live board (BLOCKING her chair).** A `;` hold on a real board candidate
-   ($MATADOR, a discovery-row candidate) → "operator command append failed (422)"; the
-   session's pairing store holds ZERO committed acts. The client path works (post reaches
-   core); core refuses. The two possible codes are `invalid_operator_command` (wire validation,
-   service.rs ~1458) and `operator_commit_rejected` (store admission, ~1542) — the detail
-   string decides. Repro was mid-flight when this session ended: pair via the code file
-   (delete `state/keeper/cockpit-state/pairing-code`, core reissues within poll_seconds), GET
-   the newest scene + snapshot, build a canonical `record_focus` hold EXACTLY as
-   apps/glass/src/operator/holds.ts does (label "Hold coin", version "1", context nulls,
-   dwellMilliseconds null) using apps/resident/joshi_evidence.py's canonical serializer
-   (mirror record_annotation_command's field order; separators compact; UTF-8) and
-   joshi_pairing.py's append_command. Read the 422 body. Suspects worth checking against the
-   detail: something about board/discovery candidate ids or the automatic assertions riding
-   along (viewport/pointed choice-set validation against the served view).
+1. **FIXED 2026-08-25 (82e4dd5): holds commit again.** The 422 was derivation v4 minting
+   derived evidence ids (`:rowN:coin-record`, `:claim-*`, `:price-close`, `:change-5m`,
+   `:request-resolved-subject`, `:operator-attested-subject`) that named no durable
+   observation, so the store's as-known validation refused every act over a metadata-carrying
+   scene — and the service swallowed the reason. Evidence entries now carry an explicit
+   `observationId` parent (clocks pinned to that row), the store resolves through it
+   exact-match, 422 details speak, derivation is v5 (v4 scenes retire through the upgrade
+   path). Proven end-to-end on a copy of her real catalog: hold → 202, commitSeq 1141.
+   Mutation-verified regression test: `a_hold_act_commits_over_a_view_carrying_derived_evidence`.
 2. **Presentation append 404 in follow mode.** The scope is granted now, so Glass tries and
    gets route_not_mounted (NotConfigured — follow-mode CoreService lacks a presentation store).
    Either wire it or make Glass feature-detect; today it renders as a red banner.
 3. **Venue readout NetworkError on held coins** in live sessions — likely the venue-readouts
    route absent in follow mounts unless --venue-accounts was passed; check and make honest.
-4. **`'` inspect → candles** is wired end to end (attention.ts inspectAssertionIntent → App.tsx
-   toggleSurface → core hot_requests.rs → keeper hot leases; all tested) but blocked by bug 1:
-   no act commits, so no hot file appears. Fix 1 and this likely just works.
+4. **`'` inspect → candles** was wired end to end and blocked only by bug 1; with 1 fixed it
+   should work on the next bounce — verify live: inspect a coin, watch
+   state/keeper/hot-requests.json appear and the keeper lease it.
 
 ## EMBER'S STANDING INSTRUCTIONS (unexecuted or ongoing)
 
