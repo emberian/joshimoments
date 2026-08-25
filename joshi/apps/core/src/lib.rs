@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(
             expected,
-            "sha256:8cbd045cbf22dd4c908ef84ecc14840d71f846b672c0311f65a2a48cdf8d69ab"
+            "sha256:22230aeef104b074bd8ef06c583d3910db31b8ef703fe86ee29b3e74892f1619"
         );
     }
 

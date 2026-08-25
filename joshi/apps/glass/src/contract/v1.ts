@@ -54,6 +54,9 @@ export const evidenceClassSchema = z.enum([
 
 export const evidenceRefSchema = z.object({
   id: stableIdentity,
+  // The durable observation a derived entry rides on (derivation v5+). A plain entry's id IS
+  // the observation, so the field is absent there; the server refuses `observationId === id`.
+  observationId: stableIdentity.optional(),
   sourceId: stableIdentity,
   field: z.string().min(1),
   evidenceClass: evidenceClassSchema,
