@@ -180,6 +180,79 @@ class ReadScene(unittest.TestCase):
         self.assertNotIn('"id": "cand-24"', out)  # dropped body absent
 
 
+CANDIDATE_SLICE = {
+    "contract": "joshi.glass.candidate_slice",
+    "schemaVersion": 1,
+    "sceneId": "scene-live-1234",
+    "viewDigest": "sha256:" + "cd" * 32,
+    "mode": "witnessed",
+    "renderedCandidateCount": "962",
+    "renderedOrdinal": "17",
+    "renderedAt": "2026-08-25T03:03:51.113799Z",
+    "candidate": {"id": "cand-17", "symbol": "DREGG",
+                  "candles": [{"timeUnix": str(1700000000 + i * 60)}
+                              for i in range(30)],
+                  "evidence": [{"observationId": "obs-x"}]},
+}
+
+
+class ReadCandidate(unittest.TestCase):
+    ROUTE = "/api/v1/glass/scenes/scene-live-1234/candidates/cand-17"
+
+    def test_slice_reports_full_view_digest_to_cite(self):
+        session, tools = make_tools()
+        session.routes[self.ROUTE] = (200, json.dumps(CANDIDATE_SLICE).encode())
+        out = tools.read_candidate("scene-live-1234", "cand-17")
+        self.assertIn("sha256:" + "cd" * 32, out)
+        self.assertIn("FULL view's digest", out)
+        self.assertIn("acts bind to the scene, never to a slice", out)
+        self.assertIn('"renderedOrdinal": "17"', out)
+        self.assertIn("DREGG", out)
+        self.assertIn("obs-x", out)  # evidence rides verbatim
+
+    def test_oversized_slice_candles_elided_with_exact_counts(self):
+        big = json.loads(json.dumps(CANDIDATE_SLICE))
+        big["candidate"]["candles"] = [
+            {"timeUnix": str(1700000000 + i), "close": "1", "pad": "x" * 40}
+            for i in range(4000)]
+        session, tools = make_tools()
+        session.routes[self.ROUTE] = (200, json.dumps(big).encode())
+        out = tools.read_candidate("scene-live-1234", "cand-17")
+        self.assertIn('"barsElided": 4000', out)
+        self.assertIn(str(1700000000 + 3999), out)  # last bar retained
+
+    def test_candidate_not_rendered_is_a_statement_not_an_error(self):
+        session, tools = make_tools()
+        session.routes[self.ROUTE] = (
+            404, b'{"code":"candidate_not_rendered",'
+                 b'"detail":"not rendered in this scene"}')
+        out = json.loads(tools.read_candidate("scene-live-1234", "cand-17"))
+        self.assertFalse(out["rendered"])
+        self.assertEqual(out["problem"]["code"], "candidate_not_rendered")
+        self.assertIn("remains observed in the catalog", out["note"])
+
+    def test_missing_route_degrades_to_slice_not_served(self):
+        _, tools = make_tools()  # FakeSession 404s unrouted paths
+        out = json.loads(tools.read_candidate("scene-live-1234", "cand-17"))
+        self.assertFalse(out["sliceServed"])
+        self.assertIn("read_scene is the fallback", out["note"])
+
+    def test_other_failures_are_errors_verbatim(self):
+        session, tools = make_tools()
+        session.routes[self.ROUTE] = (500, b'{"code":"reader_unavailable"}')
+        with self.assertRaises(ToolError) as caught:
+            tools.read_candidate("scene-live-1234", "cand-17")
+        self.assertIn("reader_unavailable", str(caught.exception))
+
+    def test_401_marks_loss_and_refuses_not_degrades(self):
+        session, tools = make_tools()
+        session.routes[self.ROUTE] = (401, b'{"code":"unauthorized"}')
+        with self.assertRaises(ToolError):
+            tools.read_candidate("scene-live-1234", "cand-17")
+        self.assertIsNotNone(tools.session_lost)
+        self.assertIn("401", tools.session_lost)
+
+
 JOURNAL_BODY = {
     "contract": "joshi.core.operator_command_readback",
     "sceneId": "scene-live-1234",

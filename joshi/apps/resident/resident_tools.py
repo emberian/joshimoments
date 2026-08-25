@@ -29,6 +29,7 @@ MAX_SCENE_CANDIDATES = 24
 
 FEED_ROUTE = "/api/v1/glass/scenes"
 SCENE_ROUTE = "/api/v1/glass/scenes/{scene_id}"
+CANDIDATE_ROUTE = "/api/v1/glass/scenes/{scene_id}/candidates/{candidate_id}"
 JOURNAL_ROUTE = "/api/v1/operator/commands?sceneId={scene_id}"
 
 # The feed accumulates every scene the core ever derived (hundreds on a
@@ -97,6 +98,71 @@ class ResidentTools:
             body = json.dumps(view, indent=1)
             header["candidatesElided"] = dropped
             header["candidatesKept"] = kept
+        return json.dumps(header, indent=1) + "\n" + body
+
+    # ------------------------------------------------------------------
+    # read_candidate
+    # ------------------------------------------------------------------
+    def read_candidate(self, scene_id: str, candidate_id: str) -> str:
+        """One candidate sliced verbatim out of an immutable scene.
+
+        The slice is a read projection: its viewDigest is the FULL view's
+        digest, so any journal entry still cites (sceneId, that digest) —
+        acts bind to the scene, never to a slice. A 404 carries a meaning
+        worth reading exactly: `candidate_not_rendered` states the candidate
+        was not rendered in this scene (an elided candidate remains observed
+        in the catalog); any other 404/405 means this core predates the
+        slice route, and read_scene is the fallback.
+        """
+        status, raw = self.session.get(CANDIDATE_ROUTE.format(
+            scene_id=scene_id, candidate_id=candidate_id))
+        self._mark_if_lost(status, raw)
+        if status in (404, 405):
+            try:
+                problem = json.loads(raw)
+            except ValueError:
+                problem = {}
+            if problem.get("code") == "candidate_not_rendered":
+                return json.dumps({
+                    "rendered": False,
+                    "sceneId": scene_id,
+                    "candidateId": candidate_id,
+                    "problem": problem,
+                    "note": ("the core states this candidate was not rendered "
+                             "in this scene — an elided candidate remains "
+                             "observed in the catalog; this is a render-bound "
+                             "statement, not evidence of absence from the "
+                             "market"),
+                }, indent=1)
+            return json.dumps({
+                "sliceServed": False,
+                "note": ("candidate slice route not served: this joshi-core "
+                         "predates it (older core). read_scene is the "
+                         "fallback; its wide-scene elisions state exactly "
+                         "what they drop."),
+            }, indent=1)
+        if status != 200:
+            raise ToolError(_problem_text("candidate slice read refused",
+                                          status, raw))
+        slice_doc = json.loads(raw)
+        header = {
+            "sceneId": slice_doc.get("sceneId", scene_id),
+            "viewDigest": slice_doc.get("viewDigest"),
+            "renderedOrdinal": slice_doc.get("renderedOrdinal"),
+            "renderedCandidateCount": slice_doc.get("renderedCandidateCount"),
+            "renderedAt": slice_doc.get("renderedAt"),
+            "note": ("viewDigest is the FULL view's digest — cite this "
+                     "sceneId and viewDigest in any journal entry; acts bind "
+                     "to the scene, never to a slice"),
+        }
+        candidate = slice_doc.get("candidate") or {}
+        body = json.dumps(candidate, indent=1)
+        if len(body) > MAX_SCENE_TEXT:
+            shell = {"payload": {"candidates": [candidate]}}
+            shell, elisions = _elide_candles(shell)
+            candidate = shell["payload"]["candidates"][0]
+            body = json.dumps(candidate, indent=1)
+            header["elided"] = elisions
         return json.dumps(header, indent=1) + "\n" + body
 
     # ------------------------------------------------------------------
@@ -271,7 +337,8 @@ def _elide_candidates(view: dict) -> tuple[dict, int, dict]:
         "lastDroppedId": (dropped[-1] or {}).get("id"),
         "note": (f"scene too wide for one turn: kept the first "
                  f"{MAX_SCENE_CANDIDATES} candidates in served order, "
-                 f"dropped {len(dropped)} — they exist and are not shown"),
+                 f"dropped {len(dropped)} — they exist and are not shown; "
+                 f"read any one of them in full with read_candidate"),
     }
     payload["candidates"] = candidates[:MAX_SCENE_CANDIDATES]
     return view, MAX_SCENE_CANDIDATES, dropped_summary

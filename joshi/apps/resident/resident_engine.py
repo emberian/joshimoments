@@ -176,6 +176,15 @@ class ResidentEngine:
              "past the first 24 are elided with exact counts stated.",
              {"scene_id": str},
              tools.read_scene),
+            ("read_candidate",
+             "Read ONE candidate sliced verbatim out of an immutable scene "
+             "— the bounded way into a wide board scene. Reports the FULL "
+             "view's digest (cite that in journal entries; acts bind to the "
+             "scene, never a slice). candidate_not_rendered is a render-"
+             "bound statement; an older core answers sliceServed=false and "
+             "read_scene is the fallback.",
+             {"scene_id": str, "candidate_id": str},
+             tools.read_candidate),
             ("read_journal",
              "Read every durable operator command bound to one scene, in "
              "commit order, with the operator's words verbatim — the "
