@@ -111,6 +111,11 @@ pub enum EntryRule {
     /// episode's first observed marginal pool price. The reference is fixed by the first poll —
     /// never re-anchored — and the dip is floored, so a partial dip never triggers.
     MicrodipBps { trigger_bps: u32 },
+    /// Enter at the first poll whose marginal pool price sits at least `trigger_bps` over the
+    /// episode's first observed marginal pool price. The reference is fixed by the first poll —
+    /// never re-anchored — and the rise is floored, so a partial rise never triggers. The
+    /// momentum mirror of the microdip: the two differ only in trigger direction.
+    BreakoutBps { trigger_bps: u32 },
 }
 
 /// When the desk exits, declared in advance. All three are always armed.
@@ -257,9 +262,11 @@ pub struct HoldingValuation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PollEvaluation {
     /// Waiting for the entry rule. `dip_bps` is the observed dip against the reference for a
-    /// microdip rule, and `None` for an immediate rule or on the reference-setting poll itself.
+    /// microdip rule, `rise_bps` the observed rise over it for a breakout rule; both are `None`
+    /// for an immediate rule or on the reference-setting poll itself.
     AwaitingEntry {
         dip_bps: Option<u128>,
+        rise_bps: Option<u128>,
     },
     EntryTriggered,
     Holding {
@@ -525,7 +532,8 @@ impl PaperDeskV1 {
         if rules.exit.stop_loss_net_bps > 10_000 {
             return Err(PaperError::DegenerateRule);
         }
-        if let EntryRule::MicrodipBps { trigger_bps } = rules.entry
+        if let EntryRule::MicrodipBps { trigger_bps } | EntryRule::BreakoutBps { trigger_bps } =
+            rules.entry
             && (trigger_bps == 0 || trigger_bps > 10_000)
         {
             return Err(PaperError::DegenerateRule);
@@ -798,9 +806,10 @@ impl PaperDeskV1 {
             self.phase = Phase::Closed;
             return DeskStep::NeverEntered;
         }
-        let (triggered, dip_bps, trigger) = match self.opening.rules.entry {
+        let (triggered, dip_bps, rise_bps, trigger) = match self.opening.rules.entry {
             EntryRule::Immediate => (
                 true,
+                None,
                 None,
                 TriggerRecord {
                     rule_verbatim: "entry: immediate — enter at the first evaluated poll"
@@ -820,7 +829,10 @@ impl PaperDeskV1 {
                         seq,
                         poll,
                         marginal,
-                        PollEvaluation::AwaitingEntry { dip_bps: None },
+                        PollEvaluation::AwaitingEntry {
+                            dip_bps: None,
+                            rise_bps: None,
+                        },
                     );
                     return DeskStep::AwaitingEntry;
                 };
@@ -829,6 +841,7 @@ impl PaperDeskV1 {
                 (
                     dip_value >= u128::from(trigger_bps),
                     Some(dip_value),
+                    None,
                     TriggerRecord {
                         rule_verbatim: format!(
                             "entry: microdip — enter at the first poll whose marginal pool price \
@@ -845,13 +858,51 @@ impl PaperDeskV1 {
                     },
                 )
             }
+            EntryRule::BreakoutBps { trigger_bps } => {
+                let Some(reference) = reference else {
+                    self.phase = Phase::AwaitingEntry {
+                        reference: Some(marginal),
+                    };
+                    self.push_observed(
+                        seq,
+                        poll,
+                        marginal,
+                        PollEvaluation::AwaitingEntry {
+                            dip_bps: None,
+                            rise_bps: None,
+                        },
+                    );
+                    return DeskStep::AwaitingEntry;
+                };
+                let rise = rise_bps_over_reference(reference, marginal);
+                let rise_value = rise.unwrap_or(0);
+                (
+                    rise_value >= u128::from(trigger_bps),
+                    None,
+                    Some(rise_value),
+                    TriggerRecord {
+                        rule_verbatim: format!(
+                            "entry: breakout — enter at the first poll whose marginal pool price \
+                             sits at least {trigger_bps} bps over the first observed marginal \
+                             pool price; the rise is floored, so a partial rise never triggers"
+                        ),
+                        observed: format!(
+                            "rise of {rise_value} bps at poll {seq}, slot {}, against the \
+                             reference {}/{} set by poll 0",
+                            poll.provenance.context_slot,
+                            reference.numerator_quote_atoms(),
+                            reference.denominator_base_atoms(),
+                        ),
+                    },
+                )
+            }
         };
         if !triggered {
             self.push_observed(
                 seq,
                 poll,
                 marginal,
-                PollEvaluation::AwaitingEntry { dip_bps },
+                PollEvaluation::AwaitingEntry { dip_bps, rise_bps },
             );
             return DeskStep::AwaitingEntry;
         }
@@ -1075,6 +1126,24 @@ fn dip_bps_under_reference(reference: AtomicPrice, current: AtomicPrice) -> Opti
         .ok()
 }
 
+/// `(current - reference) / reference` in floored basis points, when the current mark is over
+/// the reference. `None` when it is not over, or when the exact ratio cannot be taken.
+fn rise_bps_over_reference(reference: AtomicPrice, current: AtomicPrice) -> Option<u128> {
+    let cross_reference = reference
+        .numerator_quote_atoms()
+        .checked_mul(current.denominator_base_atoms())?;
+    let cross_current = current
+        .numerator_quote_atoms()
+        .checked_mul(reference.denominator_base_atoms())?;
+    if cross_current <= cross_reference {
+        return None;
+    }
+    ExactRatio::new(cross_current - cross_reference, cross_reference)
+        .ok()?
+        .bps_floor()
+        .ok()
+}
+
 /// The signed net valuation, floored toward negative infinity so rounding errs against the trade.
 fn net_valuation(
     would_sell_quote_out_atoms: u128,
@@ -1242,6 +1311,19 @@ impl PaperEpisodeV1 {
                          triggerBps under the first observed marginal pool price; the reference \
                          is fixed by the first poll and never re-anchored, and the dip is \
                          floored, so a partial dip never triggers",
+                    ),
+                ),
+            ]),
+            EntryRule::BreakoutBps { trigger_bps } => object(&[
+                ("kind", quoted("breakout")),
+                ("triggerBps", integer(&trigger_bps)),
+                (
+                    "rule",
+                    quoted(
+                        "enter at the first poll whose marginal pool price sits at least \
+                         triggerBps over the first observed marginal pool price; the reference \
+                         is fixed by the first poll and never re-anchored, and the rise is \
+                         floored, so a partial rise never triggers",
                     ),
                 ),
             ]),
@@ -1725,11 +1807,15 @@ fn render_poll(poll: &PollRecord) -> String {
             evaluation,
         } => {
             let evaluated = match evaluation {
-                PollEvaluation::AwaitingEntry { dip_bps } => object(&[
+                PollEvaluation::AwaitingEntry { dip_bps, rise_bps } => object(&[
                     ("kind", quoted("awaiting_entry")),
                     (
                         "dipBps",
                         dip_bps.map_or_else(|| quoted("none observed"), |dip| integer(&dip)),
+                    ),
+                    (
+                        "riseBps",
+                        rise_bps.map_or_else(|| quoted("none observed"), |rise| integer(&rise)),
                     ),
                 ]),
                 PollEvaluation::EntryTriggered => object(&[("kind", quoted("entry_triggered"))]),
@@ -1928,6 +2014,12 @@ mod tests {
             |rules: &mut DeclaredRules| rules.exit.max_hold_ms = 0,
             |rules: &mut DeclaredRules| rules.abandon_after_consecutive_failed_polls = 0,
             |rules: &mut DeclaredRules| rules.entry = EntryRule::MicrodipBps { trigger_bps: 0 },
+            |rules: &mut DeclaredRules| rules.entry = EntryRule::BreakoutBps { trigger_bps: 0 },
+            |rules: &mut DeclaredRules| {
+                rules.entry = EntryRule::BreakoutBps {
+                    trigger_bps: 10_001,
+                };
+            },
         ] {
             let mut declaration = opening(EntryRule::Immediate, DeclaredFixedCosts::none("test"));
             degenerate(&mut declaration.rules);
@@ -2065,6 +2157,90 @@ mod tests {
         assert_eq!(quote.quote_atoms, expected.quote_in_atoms);
         assert_eq!(quote.base_atoms, expected.base_out_atoms);
         assert!(entry.trigger.observed.contains("against the reference"));
+    }
+
+    #[test]
+    fn a_breakout_entry_waits_through_a_partial_rise_and_enters_at_the_triggering_state() {
+        let mut desk = desk(EntryRule::BreakoutBps { trigger_bps: 150 });
+        let reference = deep_pool();
+        // Poll 0 sets the reference and cannot enter.
+        assert_eq!(
+            desk.on_observed_poll(&polled(reference, 100, OPENED_AT_MS + 1_000))
+                .expect("poll"),
+            DeskStep::AwaitingEntry
+        );
+        // A rise of well under 150 bps: others buy, walked through the deployed formula.
+        let shallow = reference
+            .buy_with_quote_in(3_400_000_000)
+            .expect("walk")
+            .next;
+        assert_eq!(
+            desk.on_observed_poll(&polled(shallow, 101, OPENED_AT_MS + 6_000))
+                .expect("poll"),
+            DeskStep::AwaitingEntry
+        );
+        // A rise past 150 bps triggers, and the entry is quoted at THIS state, not the reference.
+        let lifted = reference
+            .buy_with_quote_in(90_000_000_000)
+            .expect("walk")
+            .next;
+        assert_eq!(
+            desk.on_observed_poll(&polled(lifted, 102, OPENED_AT_MS + 11_000))
+                .expect("poll"),
+            DeskStep::Entered
+        );
+        let expected = lifted.buy_with_quote_in(CLIP_ATOMS).expect("quotes");
+        let episode = {
+            let mut desk = desk;
+            desk.abandon("test ends here");
+            desk.finish(OPENED_AT_MS + 12_000).expect("finished")
+        };
+        let entry = &episode.intents[0];
+        assert!(entry.trigger.rule_verbatim.contains("breakout"));
+        assert!(entry.trigger.observed.contains("rise of"));
+        let quote = entry.quote.as_ref().expect("entry quoted");
+        assert_eq!(quote.provenance.context_slot, 102);
+        assert_eq!(quote.quote_atoms, expected.quote_in_atoms);
+        assert_eq!(quote.base_atoms, expected.base_out_atoms);
+        // The waiting poll recorded the partial rise, and never a dip.
+        let PollKind::Observed { evaluation, .. } = &episode.polls[1].kind else {
+            panic!("expected an observed poll");
+        };
+        let PollEvaluation::AwaitingEntry { dip_bps, rise_bps } = evaluation else {
+            panic!("expected an awaiting-entry evaluation");
+        };
+        assert_eq!(*dip_bps, None);
+        let rise = rise_bps.expect("a partial rise was observed");
+        assert!(rise > 0 && rise < 150, "partial rise, under the trigger");
+    }
+
+    #[test]
+    fn a_price_under_the_reference_never_triggers_a_breakout() {
+        let mut desk = desk(EntryRule::BreakoutBps { trigger_bps: 1 });
+        let reference = deep_pool();
+        desk.on_observed_poll(&polled(reference, 100, OPENED_AT_MS + 1_000))
+            .expect("poll");
+        let dipped = reference
+            .sell_base_in(9_000_000_000_000)
+            .expect("walk")
+            .next;
+        assert_eq!(
+            desk.on_observed_poll(&polled(dipped, 101, OPENED_AT_MS + 6_000))
+                .expect("poll"),
+            DeskStep::AwaitingEntry
+        );
+        desk.abandon("test ends here");
+        let episode = desk.finish(OPENED_AT_MS + 7_000).expect("finished");
+        let PollKind::Observed { evaluation, .. } = &episode.polls[1].kind else {
+            panic!("expected an observed poll");
+        };
+        assert_eq!(
+            *evaluation,
+            PollEvaluation::AwaitingEntry {
+                dip_bps: None,
+                rise_bps: Some(0),
+            }
+        );
     }
 
     #[test]

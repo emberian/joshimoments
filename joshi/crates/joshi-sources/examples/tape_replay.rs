@@ -225,6 +225,31 @@ fn variants(stop_bps: u32) -> Vec<DeclaredVariant> {
             take_profit_net_bps: 100,
             stop_loss_net_bps: stop_bps,
         },
+        DeclaredVariant {
+            name: "breakout_25bps_take_profit_100bps".to_owned(),
+            declared_because: "the momentum mirror of the shallow dip, registered in \
+                               state/studies/tournament-v1/REGISTRATION.md before any tape ran \
+                               under that study: enter on a 25 bps rise over the first retained \
+                               frame. The registered hypothesis is that momentum-family entries \
+                               pay, if anywhere, only on trending (cascade) windows."
+                .to_owned(),
+            entry: EntryRule::BreakoutBps { trigger_bps: 25 },
+            take_profit_net_bps: 100,
+            stop_loss_net_bps: stop_bps,
+        },
+        DeclaredVariant {
+            name: "breakout_100bps_take_profit_100bps".to_owned(),
+            declared_because: "the momentum mirror of the deep dip, registered alongside the \
+                               25 bps breakout: enter on a 100 bps rise, well past the venue's \
+                               fee floor and therefore a move rather than a rounding. Paired \
+                               with the shallow breakout on the same exit rules, so the only \
+                               thing that moves between them is how much confirmation the rule \
+                               demands."
+                .to_owned(),
+            entry: EntryRule::BreakoutBps { trigger_bps: 100 },
+            take_profit_net_bps: 100,
+            stop_loss_net_bps: stop_bps,
+        },
     ]
 }
 

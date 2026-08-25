@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         flat_route_quote_atoms: 0,
         unrecovered_rent_quote_atoms: 0,
     };
-    let axes = axes(&arguments, tape, &costs, chop_band_bps)?;
+    let axes = axes(&arguments, tape, &costs, chop_band_bps, &mint)?;
     let mut stated = vec![format!(
         "FEE SCHEDULE. No tape states a fee rate. This run declares lp {} bps, protocol {} bps, \
          creator {} bps on every state. For a polled tape the declaration is falsified by the \
@@ -244,6 +244,7 @@ fn axes(
     tape: &LoadedTape,
     costs: &DeclaredFixedCosts,
     chop_band_bps: u32,
+    mint: &str,
 ) -> Result<GridSweepAxes, Box<dyn Error>> {
     let clips = list_u128_sol(arguments, "--clips-sol")?
         .unwrap_or_else(|| vec![50_000_000, 100_000_000, 250_000_000]);
@@ -313,12 +314,20 @@ fn axes(
         ladder.dedup();
         ladder
     });
-    let band_reason = format!(
-        "1/2, 1, and 2 times the declared chop prior of {chop_band_bps} bps half-band (the \
-         42k-48k USD market-cap chop Ember watched before declaring, ~±667 bps around its \
-         middle). This is PRIOR KNOWLEDGE of this coin's morning, stated as such in the \
-         known-first block, not a fitted number."
-    );
+    let band_reason = if mint == DUCK_MINT {
+        format!(
+            "1/2, 1, and 2 times the declared chop prior of {chop_band_bps} bps half-band (the \
+             42k-48k USD market-cap chop Ember watched before declaring, ~±667 bps around its \
+             middle). This is PRIOR KNOWLEDGE of this coin's morning, stated as such in the \
+             known-first block, not a fitted number."
+        )
+    } else {
+        format!(
+            "1/2, 1, and 2 times a {chop_band_bps} bps half-band carried over from the Duck \
+             study's declared chop prior. NO coin-specific prior exists for this coin: this axis \
+             is an arbitrary default here, stated as such rather than dressed as knowledge."
+        )
+    };
     Ok(GridSweepAxes {
         spacings_bps: spacings,
         spacing_reason,

@@ -1744,6 +1744,11 @@ fn render_rules(rules: &DeclaredRules) -> String {
              {trigger_bps} bps under the first retained frame's, floored so a partial dip never \
              triggers"
         )),
+        EntryRule::BreakoutBps { trigger_bps } => quoted(&format!(
+            "breakout: enter at the first retained frame whose marginal pool price sits at least \
+             {trigger_bps} bps over the first retained frame's, floored so a partial rise never \
+             triggers"
+        )),
     };
     object(&[
         ("entry", entry),
@@ -2329,6 +2334,31 @@ mod tests {
             Comparison::NotComparable { .. }
         ));
         assert!(panel.headline.contains("NO VARIANT BEAT THE BASELINE"));
+    }
+
+    #[test]
+    fn a_breakout_the_tape_never_reaches_never_enters_and_is_not_comparable() {
+        let declared = vec![DeclaredVariant {
+            name: "breakout_9000".to_owned(),
+            declared_because: "a rise this tape never makes".to_owned(),
+            entry: EntryRule::BreakoutBps { trigger_bps: 9_000 },
+            take_profit_net_bps: 100,
+            stop_loss_net_bps: 300,
+        }];
+        let states = evolved_states(60);
+        let panel =
+            ReplayPanelV1::build(&declaration(), &frames_from(&states), &declared).expect("builds");
+        let variant = &panel.variants[0];
+        assert_eq!(variant.net_of_all_in_cost_bps, None);
+        assert!(matches!(
+            variant.versus_baseline,
+            Comparison::NotComparable { .. }
+        ));
+        assert!(
+            variant
+                .declared_because
+                .contains("rise this tape never makes")
+        );
     }
 
     #[test]
