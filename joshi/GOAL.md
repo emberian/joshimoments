@@ -13,6 +13,18 @@ No trading, no economic authority; read-only data access authorized.
    unattended) so the catalog advances while nobody watches.
 
 ## Done log, this session
+- 2026-08-25 NIGHT PROGRAM (her ask: autonomous experiments/data/strategy variations while she
+  sleeps; glass parked until tomorrow). Registered-before-run: selector-live v1
+  (state/studies/selector-live-v1/ — does measured workability pick coins LIVE; paired
+  treatment-vs-random-control cycles, ~25min each, socket tapes to state/tapes/, budget 420).
+  Deputies: tournament-v1 (regime x family conditional panel over the tape library, replay-only,
+  no provider spend) and the availability clock (community ws consumer per the committed session
+  machinery; first arrival-vs-occurrence gap distribution). Census callout counters re-run on
+  the fixed binary. Day's product landings: north star pinned (3a2da3e), resident core
+  (fc16fe3) + first self-edit by joshi-resident (a6863ea) + read_candidate (e57ab1c), candidate
+  slice route (889ca15), parity build (1d71afc) — walk verified through pairing/board/coin page;
+  its one product violation root-caused and fixed (venue readout same-origin, 9805f68). Walk
+  re-verification + release rebuild + her bounce signal: tomorrow morning, before she sits.
 - 2026-08-25 SEAM RECONCILIATION: cv-audited session 8f1bedc9 for work lost at the curation
   seam. Recovered and committed: the LP desk's floor-free recount + measured DAMM v2 (b52bf21 —
   her both-sides pushback vindicated at w=1-2, verdict at w>=3 survives; DAMM v2 measured
