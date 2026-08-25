@@ -100,6 +100,10 @@ def product_read(
     ]
     if review is not None:
         cmd.extend(["--review", str(review)])
+    if route == "community_callouts":
+        # The route's origin requires the shared product key every pump.fun visitor ships;
+        # same file the keeper reads (ops/keeper.toml community_key_file), never rendered.
+        cmd.extend(["--community-key-file", str(Path.home() / ".coin-communities-key")])
     for name, value in (paths or {}).items():
         if name == "mint":
             cmd.extend(["--mint", value])

@@ -69,6 +69,31 @@ struct Cli {
     /// Hard ceiling on HTTP requests this process may make.
     #[arg(long, default_value_t = 2)]
     request_budget: usize,
+    /// File holding the coin-communities SHARED product key (the `x-api-key` every pump.fun
+    /// visitor's app bundle ships). Read bounded, held in memory, never rendered — the same
+    /// discipline as the keeper's `community_key_file`. Required exactly when the catalogued
+    /// route's origin is `api.coin-communities.xyz`.
+    #[arg(long)]
+    community_key_file: Option<PathBuf>,
+}
+
+/// Bound on the coin-communities product-key file; the key itself is ~67 bytes.
+const MAX_COMMUNITY_KEY_BYTES: u64 = 512;
+
+fn read_community_key(path: &std::path::Path) -> Result<String, String> {
+    let metadata =
+        std::fs::metadata(path).map_err(|error| format!("community key file: {error}"))?;
+    if metadata.len() > MAX_COMMUNITY_KEY_BYTES {
+        return Err("community key file exceeds its bound".to_owned());
+    }
+    let bytes = std::fs::read(path).map_err(|error| format!("community key file: {error}"))?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| "community key file is not UTF-8".to_owned())?;
+    let token = text.trim();
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return Err("community key file must hold one non-empty token".to_owned());
+    }
+    Ok(token.to_owned())
 }
 
 #[tokio::main]
@@ -140,6 +165,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
     // Narrow the run to the single route it was asked for, even though the catalog enables more.
     config.enabled_routes = [route].into_iter().collect();
+    if let Some(key_path) = &cli.community_key_file {
+        config.shared_product_keys.insert(
+            "https://api.coin-communities.xyz".to_owned(),
+            read_community_key(key_path)?,
+        );
+    }
     // Settle every argument before anything is opened or reserved: a typo must not consume an
     // acquisition identity, and it must certainly not consume a request.
     let query = parse_queries(&cli.queries)?;
