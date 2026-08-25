@@ -98,6 +98,15 @@ async function readBounded(response: Response): Promise<string> {
 }
 
 export function configuredVenueReadoutSource(): VenueReadoutSource | null {
-  const loopbackUrl = import.meta.env.VITE_JOSHI_CORE_URL as string | undefined;
-  return loopbackUrl ? new LoopbackVenueReadoutSource(loopbackUrl) : null;
+  // Same-origin first, exactly like every other live source (LiveSurfaceShell builds them all
+  // from window.location.origin, so requests ride the dev proxy). This was the standing
+  // venue-readout NetworkError: this factory alone used the absolute core URL, the browser
+  // made it cross-origin, and core serves no CORS headers — by design; loopback same-origin
+  // is the contract. The absolute URL remains only as a fallback for non-browser harnesses.
+  try {
+    return new LoopbackVenueReadoutSource(window.location.origin);
+  } catch {
+    const loopbackUrl = import.meta.env.VITE_JOSHI_CORE_URL as string | undefined;
+    return loopbackUrl ? new LoopbackVenueReadoutSource(loopbackUrl) : null;
+  }
 }
