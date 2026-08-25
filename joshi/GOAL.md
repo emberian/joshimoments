@@ -13,6 +13,21 @@ No trading, no economic authority; read-only data access authorized.
    unattended) so the catalog advances while nobody watches.
 
 ## Done log, this session
+- 2026-08-25 SEAM RECONCILIATION: cv-audited session 8f1bedc9 for work lost at the curation
+  seam. Recovered and committed: the LP desk's floor-free recount + measured DAMM v2 (b52bf21 —
+  her both-sides pushback vindicated at w=1-2, verdict at w>=3 survives; DAMM v2 measured
+  0.150%/day unattended vs her attended-narrow −10%/day) and the workability census package
+  (209182b). Confirmed already committed: copy scrub (0778511), coin-communities auth session
+  (1cc582f — its unrelayed report specs the [community_socket] availability-clock keeper seam).
+  Moved durable before tmp evaporates: 4 tapes -> state/tapes/, census corpus (554M) + grid
+  panels + scalplab run + community receipts -> state/studies/.
+- 2026-08-25 WORKABILITY CENSUS COMPLETE (offline phases run over the durable root;
+  state/studies/workability-census/results.md): PRIMARY confirmed — workability persists,
+  S4->O4 rho=0.592 p=1e-4, top decile 3.4 legs/h vs control 0.0; busy is not workable
+  (S5->O4 rho=-0.26). Callouts-in-A predict window-B workable legs (rho 0.39-0.48,
+  exploratory). Her dip claim at n=69: 67/69 dipped, median 21.2%, floor-clears from trough
+  66/69. Harvest caution: grid family on top-decile S4 coins still lost on held-out windows
+  (median -85 bps vs random control +31.5, n=6+6, oracle-window numbers).
 - 2026-08-23 14:45 VIEWPORT V2 + POINTED (2e9e233): the selection denominator corrected for a
   primarily-visual operator — scroll-rectangle visibility restored, pointer as its own honest
   kind, migration 0025, pre-registered rule unchanged. jsdom's estimate-rect fabrication caught
