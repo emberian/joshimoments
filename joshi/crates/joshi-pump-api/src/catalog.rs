@@ -22,6 +22,7 @@ pub enum RouteId {
     Following,
     CommunityMessages,
     CommunityCallouts,
+    CommunityMe,
     Candles,
     Trades,
     BoardMovers,
@@ -30,7 +31,7 @@ pub enum RouteId {
 }
 
 impl RouteId {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::CoinExact,
         Self::SolPrice,
         Self::BalanceSummary,
@@ -47,6 +48,7 @@ impl RouteId {
         Self::Following,
         Self::CommunityMessages,
         Self::CommunityCallouts,
+        Self::CommunityMe,
         Self::Candles,
         Self::Trades,
         Self::BoardMovers,
@@ -74,6 +76,7 @@ impl fmt::Display for RouteId {
             Self::Following => "following",
             Self::CommunityMessages => "community_messages",
             Self::CommunityCallouts => "community_callouts",
+            Self::CommunityMe => "community_me",
             Self::Candles => "candles",
             Self::Trades => "trades",
             Self::BoardMovers => "board_movers",
@@ -585,6 +588,34 @@ impl RouteSpec {
                 &["cursor"],
                 true,
             ),
+            // The bearer-gated READ the coin-communities wallet-auth session unlocks, and the
+            // narrowest one worth declaring: GET /api/v1/users/me reads ONLY the authenticated
+            // account — Ember's own — naming nobody else, so it proves the session authenticates as
+            // her without harvesting anyone. In the service's own OpenAPI SDK its security is the
+            // DOUBLE HEADER `bearer + x-api-key`: every coin-communities request carries the shared
+            // product key (a keyless read answers 401), and the bearer is what makes it Ember. That
+            // is why this route both requires a session AND declares the shared-product-key header,
+            // and why the client stamps both onto the request. It stays collection-disabled and
+            // AuthenticatedUnverified — a session read exists to prove the handshake, not to be
+            // tapped on a cadence — and is enabled only for a bounded operator verification.
+            //
+            // Naming note that fixes the map (§4.6): the service's OpenAPI names the community path
+            // segment `{token_address}`, not `{mint}`; this catalog keeps its own segments named
+            // `{mint}` for consistency with every other coin route (the resolved value is the same
+            // public mint either way), and `/api/v1/users/me` carries no path segment at all.
+            RouteId::CommunityMe => Self::http(
+                id,
+                "https://api.coin-communities.xyz",
+                "/api/v1/users/me",
+                AccessClass::AuthenticatedUserSession,
+                Stability::AuthenticatedUnverified,
+                PaginationKind::None,
+                "one current authenticated account record",
+                &[],
+                &[],
+                &[],
+                false,
+            ),
             // Measured live 2026-08-22 against a real mainnet mint. The provider itself
             // enumerates the accepted intervals in its 400 body: 1s, 15s, 30s, 1m, 5m, 15m, 30m,
             // 1h, 4h, 6h, 12h, 24h. `limit` is rejected above 1000. Omitting `currency` returns a
@@ -856,6 +887,8 @@ impl RouteSpec {
             | RouteId::CalloutRecent
             | RouteId::UserProfile
             | RouteId::InMemoryCoin
+            // users/me takes no query at all — nothing to restate.
+            | RouteId::CommunityMe
             | RouteId::LiveChat => &[],
         }
     }
@@ -874,10 +907,18 @@ impl RouteSpec {
     /// with `grep -o 'cc_[0-9a-f]\{64\}'` over the shipped chunks) and stamps the envelope's
     /// `session_class` as `shared_product_key` so the retained record states that the key was
     /// sent without stating the key.
+    ///
+    /// The key is not always ALONE, though: `community_me` is a bearer-gated read whose `OpenAPI`
+    /// security is `bearer + x-api-key`. The two mechanisms are independent in the client — the
+    /// shared key is attached because this method names it, the bearer because the route's access
+    /// class requires a session — so a coin-communities session route rides BOTH headers, which is
+    /// the service's own contract for its personalised routes.
     #[must_use]
     pub fn shared_product_key_header(self) -> Option<&'static str> {
         match self.id {
-            RouteId::CommunityMessages | RouteId::CommunityCallouts => Some("x-api-key"),
+            RouteId::CommunityMessages | RouteId::CommunityCallouts | RouteId::CommunityMe => {
+                Some("x-api-key")
+            }
             _ => None,
         }
     }
@@ -986,26 +1027,44 @@ mod tests {
     }
 
     /// The shared-product-key declaration stays exactly as narrow as the one service that needs
-    /// it: only coin-communities routes carry it, never a session route (the key is not a user
-    /// credential and must not blur into one), and never a route on any other origin.
+    /// it, and its relationship to the session machinery is now precise. EVERY coin-communities
+    /// route carries the key (measured 2026-08-24: a keyless read answers 401), and no route on any
+    /// other origin carries it. SOME coin-communities routes ALSO require a bearer session — the
+    /// service's own `OpenAPI` contract puts `bearer + x-api-key` on its personalised routes, so the
+    /// two headers ride together there — and when they do, the key is still declared. The earlier
+    /// invariant that a shared-product-key route must NOT require a session was an artifact of only
+    /// having `/public` routes declared; the double header is the real contract, so what must stay
+    /// true is only that the key belongs to this origin and that a session on it also carries the
+    /// key.
     #[test]
-    fn the_shared_product_key_is_declared_only_for_the_coin_communities_origin() {
+    fn the_shared_product_key_is_declared_for_every_coin_communities_route_and_no_other() {
+        let coin_communities = "https://api.coin-communities.xyz";
         for route in RouteId::ALL {
             let spec = RouteSpec::for_id(route);
+            let on_coin_communities = spec.origin == coin_communities;
             match spec.shared_product_key_header() {
                 Some(header) => {
                     assert_eq!(header, "x-api-key");
-                    assert_eq!(spec.origin, "https://api.coin-communities.xyz");
                     assert!(
-                        !spec.requires_session(),
-                        "{route}: a shared product key is not a session and must not imply one"
+                        on_coin_communities,
+                        "{route}: the shared product key belongs only to the coin-communities origin"
                     );
                 }
-                None => assert_ne!(
-                    spec.origin, "https://api.coin-communities.xyz",
+                None => assert!(
+                    !on_coin_communities,
                     "{route}: every coin-communities route needs the shipped key (measured \
                      2026-08-24: a keyless read answers 401)"
                 ),
+            }
+            // A coin-communities SESSION route is the double-header case: it must still declare the
+            // shared key alongside the bearer.
+            if on_coin_communities && spec.requires_session() {
+                assert_eq!(
+                    spec.shared_product_key_header(),
+                    Some("x-api-key"),
+                    "{route}: a coin-communities session route needs BOTH the bearer and the \
+                     shared product key"
+                );
             }
         }
     }

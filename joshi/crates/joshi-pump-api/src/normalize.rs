@@ -324,7 +324,11 @@ pub(crate) fn records(
         // The envelope's provider-stated `serverTs` stays in the retained exact bytes — rows are
         // what this reader yields and what the row gate certifies.
         RouteId::BoardMovers => nested_array(root, &["entries"]),
-        RouteId::LiveChat => Ok(Vec::new()),
+        // Two routes yield no rows here: the socket-only live chat, and `community_me`, the bearer
+        // read that proves the coin-communities handshake. The latter's body is Ember's OWN
+        // account; the session lane verifies that authentication works, not this document's shape,
+        // and it is never normalized or promoted — so no guessed single-object row is produced.
+        RouteId::CommunityMe | RouteId::LiveChat => Ok(Vec::new()),
         // in_memory_coin measured live 2026-08-24 against two mints: one bare state object.
         RouteId::CoinExact
         | RouteId::SolPrice
@@ -700,7 +704,9 @@ fn allowed_fields(route: RouteId) -> &'static [&'static str] {
             "fillPriceUsd",
             "fillPriceSol",
         ],
-        RouteId::LiveChat => &[],
+        // Neither has a reviewed field policy: the socket-only live chat, and the bearer read whose
+        // body is Ember's own account document, which nothing extracts.
+        RouteId::CommunityMe | RouteId::LiveChat => &[],
     }
 }
 

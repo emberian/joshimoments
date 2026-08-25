@@ -10,6 +10,7 @@ pub mod auth;
 pub mod auth_session;
 pub mod catalog;
 pub mod client;
+pub mod community_session;
 pub mod identity;
 pub mod model;
 pub mod normalize;
@@ -30,6 +31,10 @@ pub use auth::{CredentialFileSession, NoSession, SessionMaterial, SessionProvide
 pub use auth_session::{SiwsError, SiwsSession, SiwsSessionProvider, WalletSigner};
 pub use catalog::{AccessClass, PaginationKind, RouteId, RouteSpec, Stability, TransportKind};
 pub use client::{ClientConfig, PumpApiClient, PumpApiError};
+pub use community_session::{
+    CommunityAuthError, CommunitySession, CommunitySessionProvider, CommunityWalletSigner,
+    community_origin,
+};
 pub use identity::{AcquisitionReservation, IdentityStore};
 pub use model::{
     Acquisition, BodyCapture, CoverageGap, CoverageScope, CoverageWindow, FetchOutcome,

@@ -629,7 +629,9 @@ fn ordered_membership(route: RouteId, root: &RawValue) -> Result<Vec<String>, ()
                 RouteId::Trades => &["signature"],
                 RouteId::Candles => &["timestamp", "time"],
                 RouteId::SolPrice | RouteId::BalanceSummary => &["asOfTimestamp", "updatedAt"],
-                RouteId::LiveChat => return Err(()),
+                // Neither is ever promoted or order-compared: the socket-only live chat, and the
+                // bearer read whose body (Ember's own account) yields no rows.
+                RouteId::LiveChat | RouteId::CommunityMe => return Err(()),
             };
             for key in keys {
                 if let Some(value) = object.get(*key) {

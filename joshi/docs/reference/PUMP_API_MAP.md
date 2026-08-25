@@ -415,8 +415,11 @@ Subjects found in the bundle (`js/09373ik9or5q1.js`, `js/0g8bsduq_nrfc.js`):
 **The per-coin community socket** — this is the callout push channel, and its protocol is fully
 specified in `js/132raph.m~bc2.js`:
 
-- URL: `wss://api.coin-communities.xyz/api/v1/communities/{mint}/ws?ticket={ticket}`
-- Ticket from `POST /api/v1/communities/{mint}/ws/ticket` (bearer + api-key).
+- URL: `wss://api.coin-communities.xyz/api/v1/communities/{token_address}/ws?ticket={ticket}`
+  (the SDK's OpenAPI names the segment `token_address`; the value is the coin mint. An earlier
+  draft here rendered it `{mint}` — corrected 2026-08-24 against the generated client.)
+- Ticket from `POST /api/v1/communities/{token_address}/ws/ticket` (bearer + api-key). The bearer is
+  a coin-communities session (`crate::community_session`), NOT the pump SIWS session.
 - Client → server: `{"eventType":"ping"}`; server → client: `pong`, **`message_update`**,
   **`like_update`**, **`moderation_update`**.
 - The client models loss explicitly: a reconnect fires an `onGap` callback to every subscriber.
@@ -518,11 +521,16 @@ a per-row provider-side staleness stamp of exactly the kind the house rule *"a n
 is a lie by omission"* demands.
 
 **(c) The tightest available bound on callout availability is the community websocket.** A
-`message_update` frame on `wss://api.coin-communities.xyz/api/v1/communities/{mint}/ws` arrives when
-the provider pushes it. Our receive instant on that frame is a genuine availability clock — not the
-occurrence time the REST rows carry, and far tighter than any polling interval. It needs a
-coin-communities bearer session (§4.6), which Ember can obtain with the same wallet, through that
-service's own `POST /api/v1/users/auth/wallet/challenge` → `/verify` flow.
+`message_update` frame on `wss://api.coin-communities.xyz/api/v1/communities/{token_address}/ws`
+arrives when the provider pushes it. Our receive instant on that frame is a genuine availability
+clock — not the occurrence time the REST rows carry, and far tighter than any polling interval. It
+needs a coin-communities bearer session (§4.6), which Ember can obtain with the same wallet, through
+that service's own `POST /api/v1/users/auth/wallet/challenge` → `/verify` flow. GROUNDED LIVE
+2026-08-24 (`crate::community_session`): the challenge is a SIWS-style authentication text,
+`Sign in to CoinCommunities: <uuid-nonce>`, signed through the wallet's message-sign primitive and
+nothing transaction-shaped; verify returns an `accessToken`/`refreshToken` pair (~48 h access
+token, rotated at `POST /api/v1/users/token/refresh`), and the bearer-gated `GET /api/v1/users/me`
+returned 200 under the `bearer + x-api-key` double header.
 
 **So: the occurrence/availability confound that HANDOFF.md lists as unresolved is resolvable, and
 without a phone.** The path is the ticketed community socket, not the push notification.

@@ -105,37 +105,7 @@ impl WalletSigner {
     /// Returns [`SiwsError`] when the file is missing, world/group-readable, or does not decode to
     /// a 64-byte key whose trailing 32 bytes are the seed's public key.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, SiwsError> {
-        let path = path.as_ref();
-        let metadata = fs::metadata(path).map_err(|_| SiwsError::WalletRead(path.to_path_buf()))?;
-        if !metadata.is_file() {
-            return Err(SiwsError::WalletRead(path.to_path_buf()));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(SiwsError::WalletPermissions);
-            }
-        }
-        let text =
-            fs::read_to_string(path).map_err(|_| SiwsError::WalletRead(path.to_path_buf()))?;
-        let decoded = bs58::decode(text.trim())
-            .into_vec()
-            .map_err(|_| SiwsError::WalletShape)?;
-        if decoded.len() != 64 {
-            return Err(SiwsError::WalletShape);
-        }
-        let seed: [u8; 32] = decoded[..32]
-            .try_into()
-            .map_err(|_| SiwsError::WalletShape)?;
-        let signing_key = SigningKey::from_bytes(&seed);
-        // The trailing 32 bytes of a Solana secret key are the public key; require they match the
-        // seed so a malformed or truncated file is rejected rather than signing under a surprise
-        // identity.
-        if signing_key.verifying_key().to_bytes() != decoded[32..] {
-            return Err(SiwsError::WalletShape);
-        }
-        let address = bs58::encode(signing_key.verifying_key().to_bytes()).into_string();
+        let (signing_key, address) = load_solana_signing_key(path.as_ref())?;
         Ok(Self {
             signing_key,
             address,
@@ -155,6 +125,76 @@ impl WalletSigner {
         let signature = self.signing_key.sign(message.as_bytes());
         bs58::encode(signature.to_bytes()).into_string()
     }
+}
+
+/// A wallet-file load failure, mapped by each session module into its own error type.
+///
+/// The 0600/base58/64-byte/trailing-pubkey checks are identical for the pump SIWS wallet and the
+/// coin-communities wallet — the same key file, in fact — so they live in one place
+/// ([`load_solana_signing_key`]) and this small enum carries the outcome back to whichever module
+/// asked, which restates it in its own vocabulary.
+#[derive(Debug)]
+pub(crate) enum WalletKeyError {
+    /// The wallet file was missing, unreadable, or not a regular file.
+    Read(PathBuf),
+    /// The wallet file's permissions allow group or other access.
+    Permissions,
+    /// The wallet file did not decode to a 64-byte base58 Solana secret key.
+    Shape,
+}
+
+impl From<WalletKeyError> for SiwsError {
+    fn from(error: WalletKeyError) -> Self {
+        match error {
+            WalletKeyError::Read(path) => Self::WalletRead(path),
+            WalletKeyError::Permissions => Self::WalletPermissions,
+            WalletKeyError::Shape => Self::WalletShape,
+        }
+    }
+}
+
+/// Load a base58 64-byte Solana secret key (32-byte seed followed by its 32-byte public key) from a
+/// mode-0600 file, returning the ed25519 signing key and its base58 address.
+///
+/// This is the single loader behind both [`WalletSigner`] and the coin-communities signer, so the
+/// permission and shape checks — the guarantees that a group-readable or truncated key is refused
+/// rather than signing under a surprise identity — exist in exactly one auditable place. The
+/// signing key it returns is handed straight into the caller's private field and never rendered.
+///
+/// # Errors
+///
+/// Returns [`WalletKeyError`] when the file is missing, world/group-readable, or does not decode to
+/// a 64-byte key whose trailing 32 bytes are the seed's public key.
+pub(crate) fn load_solana_signing_key(path: &Path) -> Result<(SigningKey, String), WalletKeyError> {
+    let metadata = fs::metadata(path).map_err(|_| WalletKeyError::Read(path.to_path_buf()))?;
+    if !metadata.is_file() {
+        return Err(WalletKeyError::Read(path.to_path_buf()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(WalletKeyError::Permissions);
+        }
+    }
+    let text = fs::read_to_string(path).map_err(|_| WalletKeyError::Read(path.to_path_buf()))?;
+    let decoded = bs58::decode(text.trim())
+        .into_vec()
+        .map_err(|_| WalletKeyError::Shape)?;
+    if decoded.len() != 64 {
+        return Err(WalletKeyError::Shape);
+    }
+    let seed: [u8; 32] = decoded[..32]
+        .try_into()
+        .map_err(|_| WalletKeyError::Shape)?;
+    let signing_key = SigningKey::from_bytes(&seed);
+    // The trailing 32 bytes of a Solana secret key are the public key; require they match the seed
+    // so a malformed or truncated file is rejected rather than signing under a surprise identity.
+    if signing_key.verifying_key().to_bytes() != decoded[32..] {
+        return Err(WalletKeyError::Shape);
+    }
+    let address = bs58::encode(signing_key.verifying_key().to_bytes()).into_string();
+    Ok((signing_key, address))
 }
 
 /// A live pump.fun session token with the instant it expires.
@@ -308,7 +348,10 @@ fn token_from_body(text: &str) -> Option<String> {
 
 /// Read the `exp` claim from a JWT without verifying it. Used only to set a local expiry so a dead
 /// token is refused before it is sent, never as a trust decision.
-fn jwt_expiry(token: &str) -> Option<time::OffsetDateTime> {
+///
+/// Shared with [`crate::community_session`] so both wallet-auth sessions parse token expiry through
+/// one implementation rather than each hand-rolling a second, subtly different one.
+pub(crate) fn jwt_expiry(token: &str) -> Option<time::OffsetDateTime> {
     use base64::Engine as _;
     let payload = token.split('.').nth(1)?;
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD

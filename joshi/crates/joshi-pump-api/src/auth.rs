@@ -75,6 +75,23 @@ impl SessionMaterial {
         }
     }
 
+    /// Build session material carrying only a bearer token, for a provider that obtained an
+    /// `Authorization: Bearer` access token (the coin-communities wallet-auth session) rather than
+    /// a cookie or a full credential file. The client attaches this as the `Authorization` header;
+    /// a route that also declares [`RouteSpec::shared_product_key_header`](crate::catalog::RouteSpec::shared_product_key_header)
+    /// still gets that product key stamped independently, so a coin-communities session route rides
+    /// the bearer and the shared `x-api-key` together.
+    #[must_use]
+    pub fn bearer_only(bearer: &str, session_label: &str) -> Self {
+        Self {
+            bearer: Some(SecretString::from(bearer.to_owned())),
+            cookie: None,
+            csrf_name: None,
+            csrf_value: None,
+            session_label: session_label.to_owned(),
+        }
+    }
+
     #[must_use]
     pub fn class(&self) -> &str {
         &self.session_label
