@@ -241,6 +241,119 @@ gate still governs every settlement label; every number stays reference- and
 price-approximate, fee floor beside it. Base rates are an INPUT to whether a setup is
 real edge — not the product.
 
+## Amendment v1.4 — the FLOW MODEL census (registered 2026-08-27, BEFORE any flow
+feature, conditional rate, model fit, or Hawkes estimate was computed on real data)
+
+Correction this amendment answers (Ember): the prior census's momentum signal was a
+STRAWMAN — trailing-1h price DIRECTION — and its null says nothing about flow. The
+microstructure literature's actual claim is that ORDER FLOW (signed volume, arrival
+intensity, aggressor imbalance, trade-size structure, self-excitation) predicts short-
+horizon moves. The Kraken tick tape (`state/prediction/fine/`, ~342k SOL/USD trades with
+price, size, and taker side) is real flow data the strawman never touched. This amendment
+registers the flow model, its features, its evaluation, and its census BEFORE fitting.
+
+**Author knowledge at registration** (everything computed so far, nothing else):
+coverage counts ONLY — Kraken tape span 1786978574–1787843067 (10.006 days, 342,189
+trades); 3,357 labeled rounds, all `twap60` era; 2,955 joinable (window inside the tape
+span with a 3,600 s feature lead margin): 1,999 5m + 956 15m over 238.9 h; median 156
+contract fills per round. NO feature value, NO conditional rate, NO model number, NO
+Hawkes estimate has been computed on real data. Unit tests run on synthetic data only.
+
+**Population**: labeled backfill rounds (real settlement labels per BACKFILL.md
+reliability order) with `windowStartUnix − 3600 ≥ tape start` and
+`closeTimeUnix ≤ tape end`. Decision instants: the registered remaining-fraction grid
+(REMAINING_FRACTIONS, step 2). The step-0 gate governs as always: the run executes only
+under a PROCEED verdict and uses the gated rule for d(t).
+
+**Causality contract**: every FLOW feature at instant t is a function of tape trades
+with timestamp STRICTLY BEFORE t (unit-tested: truncating the tape at t, exclusive,
+leaves the feature vector bit-identical). The reused state features (d, gap) keep the
+v1 at-or-before-t semantics. Instants where a price-anchored feature is data-absent
+(no trade within the 120 s staleness at an anchor) are EXCLUDED and counted, never
+imputed. Pure count/volume features are total functions (no trades in window = 0 flow).
+
+**Feature set, fixed now** (trailing windows W in seconds; tape = Kraken SOLUSD trades
+with size s_i and taker side g_i ∈ {+1 buy, −1 sell}):
+
+- PRICE/STATE set (the strawman's information, done properly — the ablation control):
+  `rem_frac`, `rem_s`, `is_15m`; `d_bps` (freeze-now margin, gated rule); `gap_bps`
+  (a2 − a1); trailing log-returns `ret_W` = 1e4·ln(p(t⁻)/p(t−W)) for W ∈ {60, 300,
+  900, 3600}; realized vol `vol_fast` (5 s grid over 120 s) and `vol_slow` (30 s grid
+  over 600 s), bps.
+- FLOW set (the new information):
+  - `ofi_W` = (Σ buy size − Σ sell size)/(Σ size) over (t−W, t), W ∈ {30, 60, 120,
+    300, 900}; 0 when no trades (no flow), in [−1, 1].
+  - `sv_60`, `sv_300` = asinh(Σ g_i·s_i) over the window (signed volume, SOL,
+    tail-compressed).
+  - `rate_W` = trade count/W for W ∈ {30, 60, 300} (arrival intensity); `accel` =
+    ln((rate_30 + ε)/(rate_300 + ε)), ε = 1/300 (intensity acceleration).
+  - `aci_60`, `aci_300` = (buys − sells)/count (aggressor count imbalance); 0 on empty.
+  - `mo_frac_300` = fraction of trades flagged market-order (Kraken taker order type).
+  - `big_ratio_300` = ln(1 + max size in (t−300, t) / median size over (t−3600, t));
+    `big_count_300` = count of trades in (t−300, t) with size ≥ 5× that trailing
+    median (large-trade markers; 0 when the trailing median is data-absent/zero).
+  - `hx_10`, `hx_60` = Hawkes-style excitation S_β(t) = Σ_{t_i<t} e^{−β(t−t_i)} at
+    FIXED timescales 1/β ∈ {10 s, 60 s} (split-independent by construction; the
+    fitted-β estimate below is reported, not used as a feature).
+
+**The Hawkes branching ratio** (the reflexivity gauge, superseding the v1 "out of
+scope" note): exponential-kernel Hawkes λ(t) = μ + ηβ·Σ e^{−β(t−t_i)} fitted to the
+TRAIN-span trade arrivals by EM (O(N) recursions), 2 starts (timescale inits 5 s,
+60 s), best log-likelihood kept; η = branching ratio reported with its timescale and
+log-likelihood vs the homogeneous-Poisson fit; per-UTC-day sub-span refits for
+variability. η → 1 reads as critical/reflexive; η is a DESCRIPTIVE finding here.
+
+**Models, fixed before fitting** (target: round settles Up, real label; one sample per
+decision instant; sample weight 1/(instants in its round) so each round counts once):
+
+- M0, model-free conditional rates: P(up | ofi_60 tercile × sign(d) × rem_frac), the
+  tercile edges from TRAIN only, Wilson-95 per cell, thin cells (< 30) flagged.
+- M1, logistic: L2 (λ = 1.0) on TRAIN-standardized features (clip ±8 sd), Newton/IRLS,
+  ≤ 50 iterations.
+- M2, gradient-boosted trees: 32-bin histograms (TRAIN quantile edges), depth 2,
+  learning rate 0.1, ≤ 150 trees, min leaf weight 40, leaf L2 = 1.0, deterministic (no
+  subsampling); tree count chosen by logloss on the last 15% of TRAIN (by time) —
+  never on the holdout; the model kept is the one fitted on the first 85% of TRAIN.
+- Ablations (the flow question itself): each of M1/M2 fitted on (P) price/state only,
+  (F) flow only, (P+F) full. "Flow adds value" requires (P+F) to beat (P) on the
+  holdout, not merely beat a constant.
+
+**Split, fixed now**: temporal, by round `windowStartUnix`, over the joinable
+population, both horizons pooled. Cut at the 70% quantile of round start times; rounds
+straddling the cut are excluded from both sides. Primary = fit on TRAIN, evaluate once
+on the 30% HOLDOUT. Secondary (stability, registered now): 3 walk-forward folds —
+train on the first 40/60/80% of the span, test on the following 20% each. No random
+splits anywhere. Nothing is refitted after seeing holdout numbers.
+
+**Evaluation, fixed now** — the market is the benchmark to beat:
+
+- Market implied probability at instant t: p_mkt = mean of the available members of
+  {last Up fill ≤ 60 s old, 1 − last Down fill ≤ 60 s old} (contract fills at/before t,
+  census staleness); instants with neither are market-absent (counted, excluded from
+  the head-to-head).
+- Head-to-head on IDENTICAL holdout instants where model and market both exist:
+  Brier(model) vs Brier(p_mkt), pooled + per horizon + per remaining fraction;
+  10-bin reliability + ECE for both; Brier vs the TRAIN base-rate constant as floor.
+- **The yes/no bar, fixed now**: the flow claim stands iff, on the pooled holdout
+  head-to-head, Brier(M2 on P+F) < Brier(p_mkt) AND ECE(M2 on P+F) ≤ 0.10 AND
+  Brier(M2 on P+F) < Brier(M2 on P). Anything less is a REAL null (a genuine flow
+  model failed to beat the market out-of-sample) and is reported plainly. State
+  instants within a round are correlated; the pooled numbers say so and the
+  per-fraction table is the decorrelated view.
+
+**The census re-run, fixed now** (the same decision-time pipe, flow signal in the
+socket): on HOLDOUT rounds only, at each decision instant, takeable price of a side =
+its last fill ≤ 60 s old (v1.3 semantics); flag iff p_model(side) − q − 0.070·q(1−q)
+> threshold; position rule = first flagged setup per round, 1 contract, scored by the
+REAL label. Primary threshold 0 (the fee floor itself); thresholds ≥ 0.02 and ≥ 0.05
+are registered sensitivity rows. Signal = M2 on P+F (M1 reported beside). Report:
+setups/hour (holdout span hours printed), edge-net quantiles, realized P&L including
+losers, win rate with Wilson-95, regime split (v1.1 buckets), no-quote and
+feature-absent instants counted. TRAIN-round census numbers may render only as
+`inSampleReference`, never as the result. All v1.3 honesty riders carry: fills are
+realistic transacted prices never guaranteed size, the takeable price is a price
+approximation, the Kraken reference is ~2 bp venue basis, fee floor beside every edge.
+
 ## Out of scope this pass
 
 Contract-price mispricing/calibration vs the market (needs the collector's implied-price
