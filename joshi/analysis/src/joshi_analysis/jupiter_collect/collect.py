@@ -120,7 +120,9 @@ def sample_round(event_id: str) -> tuple[int, dict | None]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=180.0)
-    ap.add_argument("--cadence", type=float, default=20.0, help="seconds between poll cycles")
+    ap.add_argument("--cadence", type=float, default=10.0, help="seconds between poll cycles")
+    ap.add_argument("--flip-cadence", type=float, default=4.0,
+                    help="seconds between polls within 90s of a round close (the flip zone)")
     ap.add_argument("--out", type=Path, default=Path("~/dev/joshi/state/prediction"))
     args = ap.parse_args()
 
@@ -155,6 +157,7 @@ def main() -> None:
             emit({"kind": "gap", "phase": "search", "httpStatus": status})
             time.sleep(args.cadence)
             continue
+        soonest_close: int | None = None
         for r in rounds:
             st, hydrated = sample_round(r["eventId"])
             counts["requests"] += 1
@@ -162,6 +165,13 @@ def main() -> None:
                 counts["gaps"] += 1
                 emit({"kind": "gap", "phase": "hydrate", "eventId": r["eventId"], "httpStatus": st})
                 continue
+            # Track the nearest round-close so the loop can accelerate into the flip zone: the
+            # study found the takeable action lives in the last ~60-90s (|TWAP-boundary|<=2 bps),
+            # where the quote and the running TWAP move fast; base cadence there would miss it.
+            for m in hydrated["markets"]:
+                ct = m.get("closeTime")
+                if isinstance(ct, int) and ct * 1_000_000 > now_wall_us():
+                    soonest_close = ct if soonest_close is None else min(soonest_close, ct)
             # capture the settlement rule once per round (verbatim)
             rp = hydrated.get("rulesPrimary")
             if rp and r["eventId"] not in rules_seen:
@@ -188,7 +198,10 @@ def main() -> None:
             "startedStamp": stamp, "updatedWall": iso(now_wall_us()),
             "counts": counts, "roundsRulesCaptured": len(rules_seen),
         }, indent=1))
-        time.sleep(args.cadence)
+        # Accelerate into the flip zone: within 90s of the nearest close, sample every 4s so the
+        # last-minute divergence (quote vs running TWAP) is captured densely, not at base cadence.
+        secs_to_close = (soonest_close - now_wall_us() / 1_000_000) if soonest_close else 1e9
+        time.sleep(args.flip_cadence if secs_to_close <= 90 else args.cadence)
     print(f"collector done: {json.dumps(counts)} -> {samples_path.name}", flush=True)
 
 
