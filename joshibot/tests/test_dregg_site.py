@@ -296,7 +296,7 @@ def test_deterministic_output(tmp_path, scores_dir, archive_db, wire_dir):
 # -- links -----------------------------------------------------------------------------
 
 HREF = re.compile(r'href="([^"]+)"')
-ALLOWED_ABS = ("https://pump.fun/coin/", "https://t.me/ltshitcoims_bot", "/sign")
+ALLOWED_ABS = ("https://pump.fun/coin/", "https://t.me/ltshitcoims_bot", "/sign", "/portal/")
 
 
 def test_links_are_wellformed_and_expected(tmp_path, scores_dir, archive_db, wire_dir):

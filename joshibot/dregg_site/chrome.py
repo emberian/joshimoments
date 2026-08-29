@@ -136,6 +136,8 @@ NAV = (
     ("record.html", "record"),
     ("research.html", "research"),
     ("wire/", "archive"),
+    # Absolute: the portal is a service on this host, not a page in this build.
+    ("/portal/", "portal"),
     ("/sign", "verify"),
 )
 
