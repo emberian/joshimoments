@@ -204,8 +204,10 @@ class WatchCommands:
             )
         if kind == "crew":
             return (
-                f"Watching crew #{spec} (watch #{sub_id}). If that fingerprint shows up "
-                f"in a new launch's birth slot, I'll DM you. {stop}"
+                f"Watching crew #{spec} (watch #{sub_id}). If a new launch's birth slot "
+                f"matches that crew's fingerprint, I'll DM you — including when the "
+                f"match fits several tracked crews equally (the DM says so when it "
+                f"does). {stop}"
             )
         if kind == "caller":
             return (

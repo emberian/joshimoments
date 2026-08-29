@@ -426,6 +426,8 @@ def crew_day_history(scores_dir: Path, day: str, *, days: int = HEAT_DAYS) -> di
     window = [(end - timedelta(days=d)).strftime("%Y-%m-%d") for d in range(days - 1, -1, -1)]
     counts: dict[int, Counter] = {}
     records: dict[int, dict] = {}
+    ambiguous = 0  # launches whose best match fit 2+ crews equally (counted once,
+    # under the match's deterministic representative id)
     for d in window:
         for row in load_scores(scores_dir, d):
             match = row.get("crew_match")
@@ -433,12 +435,14 @@ def crew_day_history(scores_dir: Path, day: str, *, days: int = HEAT_DAYS) -> di
                 continue
             crew_id = match["crew_id"]
             counts.setdefault(crew_id, Counter())[d] += 1
+            if len({c for c in match.get("tied_crew_ids") or [] if c is not None}) > 1:
+                ambiguous += 1
             best = records.setdefault(crew_id, {"max_jaccard": 0.0})
             best["max_jaccard"] = max(best["max_jaccard"], float(match.get("jaccard") or 0.0))
             for key in ("crew_coins", "crew_rips", "crew_dumps"):
                 if match.get(key) is not None:
                     best[key] = match[key]
-    return {"days": window, "counts": counts, "records": records}
+    return {"days": window, "counts": counts, "records": records, "ambiguous": ambiguous}
 
 
 def crew_board_data(
@@ -490,6 +494,12 @@ def crew_board_data(
         note_bits = []
         if len(active) > MAX_HEAT_CREWS:
             note_bits.append(f"showing top {MAX_HEAT_CREWS} of {len(active)} active crews")
+        if history.get("ambiguous"):
+            n_amb = history["ambiguous"]
+            note_bits.append(
+                f"{n_amb} launch{'es' if n_amb != 1 else ''} this window matched "
+                f"2+ crews equally; each counts once, under one crew id"
+            )
         if d4m_note:
             note_bits.append(d4m_note)
         return {

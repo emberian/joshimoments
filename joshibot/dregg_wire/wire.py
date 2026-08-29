@@ -203,11 +203,16 @@ def compose_telegram(facts: dict, issue: int) -> str:
             shown_crews = screen["crews"][:TELEGRAM_MAX_CREWS]
             for crew in shown_crews:
                 coins = ", ".join(f"${_e(_sym(s))}" for s in crew["symbols"][:3])
+                tied = crew.get("tied_launches") or 0
+                tie_note = (
+                    f" {tied} of those matches fit other tracked crews equally well."
+                    if tied else ""
+                )
                 lines.append(
                     f"#{crew['crew_id']} — {_n(crew['launches_today'], 'launch', 'launches')} today "
                     f"({coins}), birth-slot overlap up to {crew['max_jaccard']:.2f} of 1; "
                     f"that crew's record: {crew['crew_coins']} coins, {crew['crew_rips']} rips, "
-                    f"{crew['crew_dumps']} insider dumps."
+                    f"{crew['crew_dumps']} insider dumps.{tie_note}"
                 )
             cut = len(screen["crews"]) - len(shown_crews)
             if cut:
@@ -381,12 +386,17 @@ def compose_markdown(facts: dict, issue: int, images: dict[str, str] | None = No
         if screen["crews"]:
             for crew in screen["crews"]:
                 coins = ", ".join(f"${_md_text(_sym(s))}" for s in crew["symbols"])
+                tied = crew.get("tied_launches") or 0
+                tie_note = (
+                    f"; {tied} of its matches are Jaccard ties shared with other crews"
+                    if tied else ""
+                )
                 out.append(
                     f"- fingerprint **#{crew['crew_id']}** — "
                     f"{_n(crew['launches_today'], 'launch', 'launches')} today "
                     f"({coins}), max Jaccard {crew['max_jaccard']:.2f}; crew corpus record: "
                     f"{crew['crew_coins']} coins, {crew['crew_rips']} rips, "
-                    f"{crew['crew_dumps']} insider dumps"
+                    f"{crew['crew_dumps']} insider dumps{tie_note}"
                 )
         else:
             out.append(screen.get("crews_note") or "no crew-fingerprint matches today")

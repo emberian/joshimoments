@@ -15,23 +15,24 @@ WHAT IS BEING HELD EQUAL
     rows = SELECT mint, count(*) AS overlap, set_size, crew_id
            FROM crew_set JOIN crew_coins USING (mint)
            WHERE wallet IN (wallets) GROUP BY mint
-           HAVING overlap >= min_overlap
-           ORDER BY overlap DESC LIMIT max_candidates
-    for mint, overlap, set_size, crew_id in rows:
-        j = overlap / (len(wallets) + set_size - overlap)
-        keep the first strict improvement over min_jaccard
+           HAVING overlap >= min_overlap                   -- complete scan, no LIMIT
+    over all rows: j = overlap / (len(wallets) + set_size - overlap)
+    best Jaccard >= min_jaccard wins; ties carried whole (tied_crew_ids), the named
+    crew a deterministic representative
 
-The algebra does ``jaccard(co_occurrence(Q, other=L))`` and then applies the SAME three
-rules to the product. Two details decide whether parity is real or cosmetic:
+The algebra does ``jaccard(co_occurrence(Q, other=L))`` and then applies the SAME rules
+to the product. Two details decide whether parity is real or cosmetic:
 
 1. **The union denominator uses the FULL launch-set size**, including launch wallets that
    appear in no stored crew set. Restricting the query matrix to the ledger's wallet
    universe (which the product must do, to share a contraction axis) would shrink
    ``len(wallets)`` and inflate every Jaccard. The full size is carried separately.
-2. **The ``LIMIT 200 ORDER BY overlap DESC`` truncation is emulated**, because it is part of
-   the shipped instrument's answer. It is also, separately, MEASURED: overlap order is not
-   Jaccard order, so the LIMIT can drop the true best match. That rate is reported whether
-   it is zero or not.
+2. **Truncation is a RETIRED config, kept here as a measurement.** The instrument used to
+   run ``ORDER BY overlap DESC LIMIT 200`` with no tiebreaker; this lane measured that the
+   LIMIT could drop the true best match (overlap order is not Jaccard order) and the
+   crew-id fix (2026-08-29) removed it — ``crew_match`` now scans every candidate. The
+   algebra still emulates the old LIMIT so the cost of any future truncation proposal is a
+   number, not a guess; the ledger side no longer has a truncated arm to compare against.
 """
 
 from __future__ import annotations
@@ -147,11 +148,6 @@ def build_query_matrices(
     return q, launch_size, picked
 
 
-#: Larger than any candidate list this corpus produces, so the SQL LIMIT never bites and the
-#: ledger's answer becomes a pure function of the data. See ``compare`` for why that matters.
-NO_LIMIT = 10_000_000
-
-
 def compare(
     n_query: int = 3000,
     seed: int = 20260829,
@@ -162,17 +158,19 @@ def compare(
 ) -> dict[str, Any]:
     """Run the gate. Returns the parity report; the caller writes the artifact.
 
-    TWO ARMS, because the shipped instrument is not deterministic at its shipped settings.
-    ``crew_match``'s SQL is ``ORDER BY overlap DESC LIMIT 200`` with NO tiebreaker, and the
-    candidate list is dominated by a huge block tied at ``overlap = 2``. Which 200 of those
-    sqlite returns is engine row order, not data. So:
+    Since the crew-id fix (2026-08-29) the shipped ``crew_match`` scans every candidate —
+    no LIMIT, no ORDER BY — so the instrument is a pure function of the data at its
+    shipped settings and there is ONE ledger arm. The report keeps both algebra arms:
 
-    * **arm 1, untruncated** (``max_candidates = NO_LIMIT`` on BOTH sides): the ledger's
-      answer is a pure function of the data, and this is the honest algebra-vs-instrument
-      test. Parity must be exact here.
-    * **arm 2, shipped config** (``max_candidates = 200``): what the product actually runs.
-      Any disagreement here is a property of the truncation, and is reported as such rather
-      than counted against the algebra.
+    * **untruncated algebra vs the ledger**: the honest algebra-vs-instrument test
+      (``arm1_*`` and, now equivalently, ``agreement_*``). Parity must be exact on the
+      numbers, and on ``matched_mint`` wherever the argmax is unique — inside an exact
+      tie block the fixed instrument names a deterministic record-first representative
+      while the algebra reports its own first row, so mint agreement is only owed where
+      no tie exists.
+    * **truncated algebra** (``max_candidates``, default the retired 200): a measurement
+      of what the retired ``ORDER BY overlap DESC LIMIT`` config would still be costing
+      (``truncation_*`` keys), computed algebra-vs-algebra.
     """
 
     from dregg_screen.ledger import Ledger, resolve_current
@@ -205,17 +203,11 @@ def compare(
     unt_agree_num = unt_agree_all = 0
     trunc_changed = trunc_worse = 0
     for i, mint in enumerate(mints):
-        want = ledger.crew_match(
+        # One ledger arm: the fixed instrument has no truncation to configure.
+        want = want_unt = ledger.crew_match(
             sets.get(mint, []),
             min_overlap=min_overlap,
             min_jaccard=min_jaccard,
-            max_candidates=max_candidates,
-        )
-        want_unt = ledger.crew_match(
-            sets.get(mint, []),
-            min_overlap=min_overlap,
-            min_jaccard=min_jaccard,
-            max_candidates=NO_LIMIT,
         )
         got = algebra[i]
         unt = untruncated[i]
@@ -229,17 +221,19 @@ def compare(
             unt_agree_all += int(same and want_unt.matched_mint == unt.matched_mint)
         n_tie_crews = len({crew_of.get(m) for m in unt.tied_mints}) if unt else 0
         crew_ambiguous += int(n_tie_crews > 1)
-        if want is None and got is None:
+        # agreement_*: ledger vs the untruncated algebra — the shipped configuration on
+        # both sides now that the instrument's truncation is gone.
+        if want is None and unt is None:
             both_none += 1
             same_num = same_all = True
-        elif want is None or got is None:
-            only_ledger += int(got is None and want is not None)
-            only_algebra += int(want is None and got is not None)
+        elif want is None or unt is None:
+            only_ledger += int(unt is None and want is not None)
+            only_algebra += int(want is None and unt is not None)
             same_num = same_all = False
         else:
-            same_num = (want.overlap == got.overlap) and (abs(want.jaccard - got.jaccard) < 5e-5)
-            same_all = same_num and (want.matched_mint == got.matched_mint)
-            ties += int(got.n_ties > 1)
+            same_num = (want.overlap == unt.overlap) and (abs(want.jaccard - unt.jaccard) < 5e-5)
+            same_all = same_num and (want.matched_mint == unt.matched_mint)
+            ties += int(unt.n_ties > 1)
         agree_num += int(same_num)
         agree_all += int(same_all)
         if (unt is None) != (got is None):

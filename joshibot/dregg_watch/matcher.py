@@ -92,21 +92,37 @@ def event_from_score(row: dict) -> Event | None:
         w for w in (row.get("deployer"), row.get("creator")) if isinstance(w, str) and w
     )
 
+    # A crew match carries every crew at the tied best score (tied_crew_ids); a watch
+    # on ANY of them fires, because the launch's fingerprint fits each equally well.
+    # Old rows without the field fall back to the single named id.
+    def _ids(match: dict) -> list[str]:
+        tied = [str(c) for c in match.get("tied_crew_ids") or [] if c is not None]
+        return tied or [str(match["crew_id"])]
+
     crew_ids: list[str] = []
     crew_line: str | None = None
     crew = row.get("crew_match")
     if isinstance(crew, dict) and crew.get("crew_id") is not None:
-        crew_ids.append(str(crew["crew_id"]))
-        crew_line = (
-            f"Crew: matched fingerprint #{crew['crew_id']} — "
-            f"{crew.get('overlap')} shared birth-slot wallets, "
-            f"overlap {crew.get('jaccard')} of 1"
-        )
+        crew_ids.extend(_ids(crew))
+        n_tied = len(_ids(crew))
+        if n_tied > 1:
+            crew_line = (
+                f"Crew: matched a fingerprint {n_tied} tracked crews share equally "
+                f"(#{crew['crew_id']} shown as one of them) — "
+                f"{crew.get('overlap')} shared birth-slot wallets, "
+                f"overlap {crew.get('jaccard')} of 1"
+            )
+        else:
+            crew_line = (
+                f"Crew: matched fingerprint #{crew['crew_id']} — "
+                f"{crew.get('overlap')} shared birth-slot wallets, "
+                f"overlap {crew.get('jaccard')} of 1"
+            )
     continuity = features.get("crew_continuity_note")
     if isinstance(continuity, dict) and continuity.get("crew_id") is not None:
-        cid = str(continuity["crew_id"])
-        if cid not in crew_ids:
-            crew_ids.append(cid)
+        for cid in _ids(continuity):
+            if cid not in crew_ids:
+                crew_ids.append(cid)
 
     facts: list[str] = []
     bits: list[str] = []
@@ -368,7 +384,10 @@ def _why(sub: Subscription, event: Event) -> str:
     if sub.kind == "deployer":
         return f"deployer {short(sub.spec)} launched again; you watched them {since}"
     if sub.kind == "crew":
-        return f"crew #{sub.spec}'s fingerprint appeared in this launch; you watched that crew {since}"
+        return (
+            f"a fingerprint matching crew #{sub.spec} appeared in this launch; "
+            f"you watched that crew {since}"
+        )
     if sub.kind == "caller":
         return f"a caller you watch ({short(sub.spec)}) made a new callout; watched {since}"
     return f"CLEAN-verdict launch; you watch all of these ({since})"

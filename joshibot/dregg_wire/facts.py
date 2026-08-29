@@ -140,6 +140,10 @@ def screen_facts(rows: list[dict], day: str) -> dict:
         if len(cleans) >= MAX_NOTABLE_CLEANS:
             break
 
+    # Each launch counts once, under the match's named crew id — since the crew-id fix
+    # that id is a deterministic representative of the tied set, not sqlite row order.
+    # tied_launches counts the launches whose best match fit 2+ crews equally, so the
+    # wire can say when a crew's tally rests on fingerprints other crews share.
     crews: dict[int, dict] = {}
     for row in rows:
         match = row.get("crew_match")
@@ -150,6 +154,7 @@ def screen_facts(rows: list[dict], day: str) -> dict:
             {
                 "crew_id": int(match["crew_id"]),
                 "launches_today": 0,
+                "tied_launches": 0,
                 "symbols": [],
                 "max_jaccard": 0.0,
                 "crew_coins": match.get("crew_coins"),
@@ -158,6 +163,8 @@ def screen_facts(rows: list[dict], day: str) -> dict:
             },
         )
         crew["launches_today"] += 1
+        if len({c for c in match.get("tied_crew_ids") or [] if c is not None}) > 1:
+            crew["tied_launches"] += 1
         crew["symbols"].append(row.get("symbol") or "?")
         crew["max_jaccard"] = max(crew["max_jaccard"], float(match.get("jaccard") or 0.0))
     crew_list = sorted(crews.values(), key=lambda c: (-c["launches_today"], -c["max_jaccard"]))[:MAX_CREWS]
