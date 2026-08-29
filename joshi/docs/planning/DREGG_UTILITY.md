@@ -99,7 +99,7 @@ reviewed before anything is hosted for third parties.
 
 ## v1 decisions locked (2026-08-29, Ember)
 - All three products staged tight; hbox hosts everything; TG-gated + public site.
-- GATE THRESHOLD: N = 3,333,333 $DREGG (≈$1,065 at lock time, px $0.0003194) — token-denominated.
+- GATE THRESHOLD: N = 888,888 $DREGG (Ember, 2026-08-29; ≈$284 at px $0.0003194) — token-denominated.
 - TG bot: @ltshitcoims_bot IS the brand (Ember, explicit) — its token (provisioned at hbox
   ~/.config/dregg/telegram-token) runs ONE bot process serving gate + invites + Ember's
   approvals/alerts. @dreggnet_bot is a DIFFERENT service's bot — never use it for this.
