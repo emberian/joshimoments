@@ -82,8 +82,12 @@ def compose(rows: list[dict], window_min: float) -> str | None:
     return "\n".join(parts)
 
 
-def enqueue(gate_db: Path, text: str, dedup_key: str) -> bool:
-    """INSERT into the gate outbox iff a group is bound. Returns whether enqueued."""
+def enqueue(gate_db: Path, text: str, dedup_key: str, parse_mode: str | None = None) -> bool:
+    """INSERT into the gate outbox iff a group is bound. Returns whether enqueued.
+
+    The gate bot posts payload_json to Telegram verbatim, so an optional parse_mode
+    (dregg_wire sends HTML) rides the payload; this digest stays plain text.
+    """
     connection = sqlite3.connect(gate_db, timeout=10.0)
     try:
         row = connection.execute(
@@ -92,7 +96,9 @@ def enqueue(gate_db: Path, text: str, dedup_key: str) -> bool:
         if row is None:
             return False
         chat_id = int(row[0])
-        payload = {"chat_id": chat_id, "text": text}
+        payload: dict[str, object] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         with connection:
             connection.execute(
                 "INSERT OR IGNORE INTO outbox (dedup_key, method, payload_json, created_at) "

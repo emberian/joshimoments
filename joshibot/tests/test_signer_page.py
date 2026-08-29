@@ -7,7 +7,8 @@ signature with an inline encoder. These tests pin the whole format chain:
 - the ACTUAL JS encoder, extracted from the page and run under node, matches too,
 - a signature over the real challenge format, encoded that way, is accepted by
   dregg_gate.verify.signature_matches — the same call the gateway makes,
-- the page stays self-contained (no network) and unbranded (nothing gate-shaped).
+- the page stays self-contained (no network) and keeps its anti-phishing copy
+  ("plain text, never a transaction") prominent.
 """
 
 from __future__ import annotations
@@ -126,12 +127,15 @@ def test_page_is_self_contained() -> None:
         assert network_api not in source, f"page must not reference {network_api}"
     assert "connect-src 'none'" in source, "CSP must forbid outbound connections"
     urls = set(re.findall(r"https?://[^\s\"'<>)]+", source))
-    allowed = {"https://phantom.com", "https://github.com/emberian/sol-msg-signer"}
+    allowed = {"https://phantom.com"}  # the install link; everything else is inline
     assert urls <= allowed, f"unexpected URLs in page: {urls - allowed}"
 
 
-def test_page_is_unbranded() -> None:
-    lowered = PAGE.read_text(encoding="utf-8").lower()
-    for branded in ("dregg", "wire", "shitcoims", "joshi", "telegram", "holder"):
-        # word-boundary match: "placeholder" is fine, "holder"/"holders" is not
-        assert not re.search(rf"\b{branded}s?\b", lowered), f"page must stay generic; found {branded!r}"
+def test_page_keeps_anti_phishing_copy() -> None:
+    """The load-bearing reassurances: what signing here can and cannot do."""
+
+    source = PAGE.read_text(encoding="utf-8")
+    assert "never a transaction" in source
+    assert "no network requests" in source
+    assert "seed phrase" in source, "must warn that nothing legitimate asks for one"
+    assert "in-app" in source or "built-in browser" in source, "mobile in-wallet-browser note"

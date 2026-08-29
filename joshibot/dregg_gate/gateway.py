@@ -3,8 +3,9 @@
 This is deliberately NOT the scout gateway (which is pinned to one operator).
 Any human may DM the bot; what they can do is decided per message:
 
-- anyone, in a private chat: /start /help /verify /status /invite, or a pasted
-  base58 signature answering their live challenge
+- anyone, in a private chat: /start /help /verify /status /invite /screen, or a
+  pasted base58 signature answering their live challenge (/screen is gated to
+  verified members and rate-limited; its logic lives in dregg_gate.lookup)
 - the operator, in a private chat: additionally /pending, and the inline
   approve/reject buttons the approvals presenter pushes
 - the operator, inside the (future) gated group: /bind records that group's id
@@ -16,12 +17,14 @@ call in the flow is createChatInviteLink, whose response (the link) we need.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
 
 from .config import Config
 from .helius import Helius, HeliusError
+from .lookup import ScreenLookup, start_text
 from .state import Challenge, GateState
 from .telegram import Telegram, TelegramError
 from .verify import build_challenge, new_nonce, parse_pubkey, parse_signature, signature_matches
@@ -30,13 +33,22 @@ log = logging.getLogger(__name__)
 
 CALLBACK_DATA = re.compile(r"gate:(a|r):([0-9]{1,12})\Z")
 
+# Static signer on the brand edge (served off-disk from the anchor box) for
+# wallets with no sign-message screen: signs locally, makes no network calls.
+SIGNER_URL = "https://shitcoims.dregg.studio/sign"
+
 HELP_TEXT = (
     "This bot gates the $DREGG holders group.\n\n"
     "/verify <wallet> — start holder verification for a Solana wallet\n"
     "/status — your current standing\n"
-    "/invite — mint a fresh invite link if you are already verified\n\n"
+    "/invite — mint a fresh invite link if you are already verified\n"
+    "/screen <mint> — the launch screen's verdict on a recent pump.fun launch "
+    "(verified holders)\n\n"
     "Verification: I send a challenge message; sign it with your wallet's "
-    "signMessage (any wallet app) and paste the base58 signature back here. "
+    "signMessage and paste the base58 signature back here. No signing screen "
+    f"in your wallet app? Open {SIGNER_URL} — paste the challenge, sign, and "
+    "paste the signature here; the page runs locally and sends nothing anywhere "
+    "(on a phone, open it inside your wallet's built-in browser). "
     "I never ask you to send funds or share keys — only a signature."
 )
 
@@ -65,10 +77,19 @@ class GateGateway:
         self.telegram = telegram
         self.helius = helius
         self.clock = clock
+        # Getter, not a snapshot: the service swaps self.config on keep-last-good reload.
+        self.lookup = ScreenLookup(lambda: self.config, state, clock=clock)
 
     # -- plumbing ------------------------------------------------------------------
 
-    def dm(self, chat_id: int, text: str, dedup: str, keyboard: dict | None = None) -> None:
+    def dm(
+        self,
+        chat_id: int,
+        text: str,
+        dedup: str,
+        keyboard: dict | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
         payload: dict[str, object] = {
             "chat_id": chat_id,
             "text": text,
@@ -76,19 +97,28 @@ class GateGateway:
         }
         if keyboard is not None:
             payload["reply_markup"] = keyboard
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
         self.state.enqueue(dedup, "sendMessage", payload)
 
     def alert_operator(self, text: str, dedup: str) -> None:
         self.dm(self.config.operator_chat_id, f"⚠️ {text}", dedup)
 
-    async def threshold_raw(self) -> int:
+    def effective_tokens(self, tg_user_id: int | None = None) -> int:
+        """This user's threshold in human units (per-user overrides honored)."""
+
+        return self.config.threshold_overrides.get(
+            str(tg_user_id), self.config.threshold_tokens
+        )
+
+    async def threshold_raw(self, tg_user_id: int | None = None) -> int:
         """Threshold in raw units; decimals verified on-chain once, then pinned."""
 
         decimals = self.state.mint_decimals
         if decimals is None:
             decimals = await self.helius.mint_decimals(self.config.mint)
             self.state.record_mint_decimals(decimals)
-        return self.config.threshold_tokens * 10**decimals
+        return self.effective_tokens(tg_user_id) * 10**decimals
 
     def _fresh_human(self, message: dict) -> bool:
         sender = message.get("from")
@@ -189,8 +219,13 @@ class GateGateway:
         parts = text.split()
         command = parts[0].lower().split("@")[0] if parts else ""
         dedup = f"update:{update_id}"
-        if command in ("/start", "/help"):
+        if command == "/start":
+            self.dm(chat_id, start_text(self.config.threshold_tokens), dedup)
+        elif command == "/help":
             self.dm(chat_id, HELP_TEXT, dedup)
+        elif command == "/screen":
+            reply, mode = self.lookup.reply(uid, parts[1] if len(parts) > 1 else None)
+            self.dm(chat_id, reply, dedup, parse_mode=mode)
         elif command == "/verify":
             self._cmd_verify(uid, chat_id, parts[1] if len(parts) > 1 else None, dedup)
         elif command == "/status":
@@ -206,8 +241,22 @@ class GateGateway:
             await self._handle_signature(uid, chat_id, text, dedup)
 
     def _cmd_verify(self, uid: int, chat_id: int, wallet: str | None, dedup: str) -> None:
-        if wallet is None or parse_pubkey(wallet) is None:
-            self.dm(chat_id, "Usage: /verify <solana wallet address>", dedup)
+        if wallet is None:
+            self.dm(
+                chat_id,
+                "Usage: /verify <wallet> — put your Solana wallet address after the "
+                "command, in the same message.",
+                dedup,
+            )
+            return
+        if parse_pubkey(wallet) is None:
+            self.dm(
+                chat_id,
+                "That doesn't parse as a Solana address — expect 32-44 base58 characters "
+                "(no 0, O, I, or l). Copy it straight from your wallet app's receive "
+                "screen and send /verify <wallet> again.",
+                dedup,
+            )
             return
         claimed = self.state.member_by_wallet(wallet)
         if claimed is not None and claimed.tg_user_id != uid:
@@ -228,25 +277,50 @@ class GateGateway:
         )
         self.dm(
             chat_id,
-            "Sign this exact message with your wallet's signMessage, then paste the "
-            "base58 signature back here:\n\n" + challenge_text,
+            "Sign my next message — exactly as sent, tap it to copy — with your wallet's "
+            "signMessage, then paste the base58 signature back here.\n\n"
+            f"No signing screen in your wallet app? Open {SIGNER_URL} — paste the challenge, "
+            "sign, and paste the signature back here. The page runs locally and sends nothing "
+            "anywhere. On a phone, open it inside your wallet's built-in browser.",
             dedup,
+        )
+        # The challenge rides alone, as a <pre> block: tapping it in any Telegram app
+        # copies the exact text, so nothing extra ever gets signed by accident.
+        self.dm(
+            chat_id,
+            f"<pre>{html.escape(challenge_text)}</pre>",
+            dedup + ":challenge",
+            parse_mode="HTML",
         )
 
     async def _handle_signature(self, uid: int, chat_id: int, text: str, dedup: str) -> None:
+        # Peek BEFORE get_challenge reaps an expired row: wallet-and-None afterwards
+        # means "expired just now", and we owe the user a fresh challenge, not a shrug.
+        stored_wallet = self.state.challenge_wallet_any(uid)
         challenge = self.state.get_challenge(uid, now=self.clock())
         if challenge is None:
-            self.dm(
-                chat_id,
-                "No live challenge (they expire after 10 minutes). Start with /verify <wallet>.",
-                dedup,
-            )
+            if stored_wallet is not None:
+                minutes = self.config.challenge_ttl_seconds // 60
+                self.dm(
+                    chat_id,
+                    f"That challenge expired (they last {minutes} minutes). "
+                    "Here's a fresh one for the same wallet — sign THIS one instead.",
+                    dedup,
+                )
+                self._cmd_verify(uid, chat_id, stored_wallet, dedup + ":renew")
+            else:
+                self.dm(
+                    chat_id,
+                    "No live challenge (they expire after 10 minutes). Start with /verify <wallet>.",
+                    dedup,
+                )
             return
         if parse_signature(text) is None:
             self.dm(
                 chat_id,
-                "That doesn't parse as a base58 signature. Paste only the signature, "
-                "or /verify again for a fresh challenge.",
+                "That doesn't parse as a base58 signature. Paste ONLY the signature your "
+                "wallet's signMessage returned — one unbroken base58 string, no JSON, "
+                "brackets, or extra words. Or /verify again for a fresh challenge.",
                 dedup,
             )
             return
@@ -264,7 +338,7 @@ class GateGateway:
             self.dm(chat_id, "That wallet is already linked to a different Telegram account.", dedup)
             return
         try:
-            needed = await self.threshold_raw()
+            needed = await self.threshold_raw(uid)
             balance = await self.helius.balance_raw(challenge.wallet, self.config.mint)
         except HeliusError as exc:
             log.error("balance check unavailable (%s)", type(exc).__name__)
@@ -281,8 +355,11 @@ class GateGateway:
         if balance < needed:
             self.dm(
                 chat_id,
-                f"Wallet holds {format_tokens(balance, decimals)} $DREGG; the gate needs "
-                f"{self.config.threshold_tokens:,}. Stack up and /verify again.",
+                f"Signature checks out, but the balance is short: that wallet holds "
+                f"{format_tokens(balance, decimals)} $DREGG and the gate needs "
+                f"{format_tokens(needed, decimals)} — {format_tokens(needed - balance, decimals)} "
+                "more to go. Top up (or /verify a wallet that holds it), then /verify "
+                "again for a fresh challenge.",
                 dedup,
             )
             return
@@ -373,7 +450,7 @@ class GateGateway:
         lines = [
             f"Wallet: {member.wallet}",
             f"Standing: {member.status}",
-            f"Last checked balance: {held} $DREGG (threshold {self.config.threshold_tokens:,})",
+            f"Last checked balance: {held} $DREGG (threshold {self.effective_tokens(member.tg_user_id):,})",
         ]
         if member.status == "grace" and member.grace_until is not None:
             hours_left = max(0, int((member.grace_until - self.clock()) / 3600))

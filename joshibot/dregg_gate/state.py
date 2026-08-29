@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .approvals import APPROVALS_DDL
 
-OUTBOX_METHODS = {"sendMessage", "banChatMember", "unbanChatMember"}
+OUTBOX_METHODS = {"sendMessage", "sendPhoto", "banChatMember", "unbanChatMember"}
 
 
 class GateStateError(RuntimeError):
@@ -267,6 +267,16 @@ class GateState:
             self.consume_challenge(tg_user_id)
             return None
         return challenge
+
+    def challenge_wallet_any(self, tg_user_id: int) -> str | None:
+        """Wallet on the stored challenge row, LIVE OR EXPIRED — read before
+        get_challenge reaps it, so the gateway can offer a fresh challenge for the
+        same wallet instead of a dead end. Never grants anything by itself."""
+
+        row = self.connection.execute(
+            "SELECT wallet FROM challenges WHERE tg_user_id = ?", (tg_user_id,)
+        ).fetchone()
+        return row["wallet"] if row else None
 
     def consume_challenge(self, tg_user_id: int) -> None:
         """Single-use: the nonce can never grant (or be replayed) again."""

@@ -18,6 +18,11 @@ dependencies = [
   # A runtime dependency (the archiver is a deployed service, not a study), and a read/
   # write compression codec with no network surface.
   "zstandard>=0.23,<1",
+  # dregg_feed renders chart PNGs for Telegram alerts (Agg backend, no display, no
+  # network surface). Until now matplotlib was present only TRANSITIVELY through the
+  # research group's lifelines — the exact undeclared-dependency trap the websockets
+  # entry above documents — and the feed is a deployed service, so it is declared.
+  "matplotlib>=3.9,<4",
 ]
 
 [dependency-groups]

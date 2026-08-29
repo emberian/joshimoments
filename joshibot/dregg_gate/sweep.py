@@ -122,7 +122,8 @@ class Sweeper:
         plan = self.plan
         assert plan is not None
         try:
-            needed = await self.gateway.threshold_raw()
+            # Pins decimals once; per-member effective thresholds are computed below.
+            await self.gateway.threshold_raw()
         except HeliusError as exc:
             self._skip(plan.day, str(exc))
             return
@@ -141,6 +142,7 @@ class Sweeper:
                 return
             self.state.record_balance(uid, balance, self.clock())
             plan.checked += 1
+            needed = await self.gateway.threshold_raw(uid)
             self._apply(plan, member, balance, needed)
         if plan.pending:
             plan.next_batch_at = now + self._batch_gap(plan.checked + len(plan.pending))
@@ -167,7 +169,7 @@ class Sweeper:
             self.gateway.dm(
                 uid,
                 f"Heads up: your wallet holds {format_tokens(balance, decimals)} $DREGG, below the "
-                f"{self.config.threshold_tokens:,} threshold. You have {self.config.grace_hours}h to "
+                f"{self.gateway.effective_tokens(uid):,} threshold. You have {self.config.grace_hours}h to "
                 "top up before removal from the holders group.",
                 f"sweep:{plan.day}:{uid}:warn",
             )

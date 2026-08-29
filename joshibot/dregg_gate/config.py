@@ -6,6 +6,7 @@ import os
 import stat
 import tomllib
 from dataclasses import dataclass, replace
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +24,15 @@ class Config:
     helius_key_file: Path
     db_path: Path
     heartbeat_path: Path
+    # Where the live screen (dregg_screen.live) writes <utc-day>.jsonl score files.
+    # Laptop default; on hbox: /home/hbox/dregg-data/screen/scores.
+    screen_scores_dir: Path = Path("state/dregg_screen/scores")
     mint: str = DREGG_MINT
     threshold_tokens: int = 888_888
+    # Per-user threshold overrides: tg_user_id (string) -> tokens. For operator
+    # testing and comped seats; honored by BOTH /verify and the daily sweep so an
+    # override seat is never warned or ejected against the standard line.
+    threshold_overrides: dict = dc_field(default_factory=dict)
     operator_chat_id: int = OPERATOR_CHAT_ID
     poll_timeout_seconds: int = 25
     message_max_age_seconds: int = 300
@@ -34,6 +42,7 @@ class Config:
     sweep_hour_utc: int = 14
     sweep_spread_seconds: int = 3600
     sweep_batch_size: int = 10
+    screen_rate_per_minute: int = 10
 
     @property
     def grace_seconds(self) -> int:
@@ -60,9 +69,14 @@ class Config:
             helius_key_file=_path(paths, "helius_key", "~/.helius-key"),
             db_path=_path(paths, "db", "state/dregg_gate/gate.sqlite"),
             heartbeat_path=_path(paths, "heartbeat", "state/dregg_gate/heartbeat.json"),
+            screen_scores_dir=_path(paths, "screen_scores", "state/dregg_screen/scores"),
         )
         for key, value in gate.items():
-            if not hasattr(cfg, key) or key.endswith("_file") or key in ("db_path", "heartbeat_path"):
+            if (
+                not hasattr(cfg, key)
+                or key.endswith("_file")
+                or key in ("db_path", "heartbeat_path", "screen_scores_dir")
+            ):
                 raise GateConfigError(f"unknown gate config key {key!r}")
             current = getattr(cfg, key)
             if isinstance(value, bool) or not isinstance(value, type(current)):
@@ -85,6 +99,11 @@ def _validate(cfg: Config) -> None:
         raise GateConfigError("gate.mint must be a base58 mint address")
     if cfg.threshold_tokens <= 0:
         raise GateConfigError("gate.threshold_tokens must be positive")
+    for uid, tokens in cfg.threshold_overrides.items():
+        if not str(uid).isdigit():
+            raise GateConfigError("gate.threshold_overrides keys must be tg user ids")
+        if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens <= 0:
+            raise GateConfigError("gate.threshold_overrides values must be positive ints")
     if cfg.operator_chat_id <= 0:
         raise GateConfigError("gate.operator_chat_id must be a positive Telegram user id")
     if not 1 <= cfg.poll_timeout_seconds <= 50:
@@ -103,6 +122,8 @@ def _validate(cfg: Config) -> None:
         raise GateConfigError("gate.sweep_spread_seconds must be between 0 and 14400")
     if cfg.sweep_batch_size <= 0:
         raise GateConfigError("gate.sweep_batch_size must be positive")
+    if not 1 <= cfg.screen_rate_per_minute <= 600:
+        raise GateConfigError("gate.screen_rate_per_minute must be between 1 and 600")
 
 
 def read_secret(path: Path, name: str) -> str:

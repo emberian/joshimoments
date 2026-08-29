@@ -7,6 +7,7 @@ programmable stub (flows and failures). Signatures are real ed25519 via solders.
 
 from __future__ import annotations
 
+import html
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -17,7 +18,7 @@ from solders.keypair import Keypair
 
 from dregg_gate.approvals import enqueue_approval, read_decision
 from dregg_gate.config import Config, GateConfigError, read_secret
-from dregg_gate.gateway import GateGateway, format_tokens
+from dregg_gate.gateway import SIGNER_URL, GateGateway, format_tokens
 from dregg_gate.helius import Helius, HeliusError
 from dregg_gate.state import GateState, GateStateError
 from dregg_gate.telegram import Telegram
@@ -109,9 +110,13 @@ def outbox_texts(state: GateState) -> list[str]:
 
 
 def challenge_text_from(state: GateState) -> str:
+    """The challenge rides alone in a <pre> block so tap-to-copy grabs exactly it."""
+
     texts = [t for t in outbox_texts(state) if "dregg wire wants proof" in t]
     assert texts, "no challenge DM enqueued"
-    return texts[-1].split("\n\n", 1)[1]
+    text = texts[-1]
+    assert text.startswith("<pre>") and text.endswith("</pre>"), "challenge must ride alone in <pre>"
+    return html.unescape(text[len("<pre>") : -len("</pre>")])
 
 
 def ok_telegram_handler(invites: list[dict]):
@@ -160,7 +165,37 @@ async def test_full_verify_flow_grants_single_use_hour_invite(tmp_path: Path) ->
     state.close()
 
 
-async def test_expired_challenge_is_rejected_and_deleted(tmp_path: Path) -> None:
+async def test_challenge_rides_alone_and_copy_points_at_signer(tmp_path: Path) -> None:
+    """/verify sends instructions (with the signer page URL) and then the bare
+    challenge as a tap-to-copy <pre> block; /help carries the URL too."""
+
+    keypair = Keypair()
+    wallet = str(keypair.pubkey())
+    cfg = make_config(tmp_path)
+    state = GateState(cfg.db_path)
+    clock = Clock()
+    gateway = GateGateway(cfg, state, None, FakeHelius(), clock=clock)  # type: ignore[arg-type]
+    await gateway.process_update(dm_update(1, 777, f"/verify {wallet}"))
+
+    payloads = [item.payload for item in state.pending() if item.method == "sendMessage"]
+    assert len(payloads) == 2, "instructions and challenge must be separate messages"
+    instructions, challenge_dm = payloads
+
+    assert SIGNER_URL in str(instructions["text"])
+    assert "sends nothing" in str(instructions["text"])
+    assert "parse_mode" not in instructions
+
+    challenge = challenge_text_from(state)
+    assert challenge_dm["text"] == f"<pre>{challenge}</pre>", "nothing but the challenge is copyable"
+    assert challenge_dm["parse_mode"] == "HTML"
+    assert str(keypair.sign_message(challenge.encode()))  # exact text is signable as-is
+
+    await gateway.process_update(dm_update(2, 777, "/help"))
+    assert any(SIGNER_URL in text for text in outbox_texts(state))
+    state.close()
+
+
+async def test_expired_challenge_is_rejected_and_a_fresh_one_is_offered(tmp_path: Path) -> None:
     keypair = Keypair()
     wallet = str(keypair.pubkey())
     cfg = make_config(tmp_path)
@@ -169,13 +204,23 @@ async def test_expired_challenge_is_rejected_and_deleted(tmp_path: Path) -> None
     helius = FakeHelius(balances={wallet: THRESHOLD_RAW})
     gateway = GateGateway(cfg, state, None, helius, clock=clock)  # type: ignore[arg-type]
     await gateway.process_update(dm_update(1, 777, f"/verify {wallet}"))
-    challenge = challenge_text_from(state)
-    signature = str(keypair.sign_message(challenge.encode()))
+    stale = challenge_text_from(state)
+    signature = str(keypair.sign_message(stale.encode()))
     clock.now = NOW + cfg.challenge_ttl_seconds + 1
     await gateway.process_update(dm_update(2, 777, signature, date=int(clock.now) - 5))
+    # the stale signature granted nothing...
     assert state.member(777) is None
-    assert state.get_challenge(777, now=clock.now) is None
-    assert any("No live challenge" in text for text in outbox_texts(state))
+    assert any("challenge expired" in text for text in outbox_texts(state))
+    # ...but a FRESH challenge for the same wallet is already waiting (new nonce,
+    # so the stale signature can never verify against it)
+    fresh = state.get_challenge(777, now=clock.now)
+    assert fresh is not None and fresh.wallet == wallet
+    assert fresh.message != stale
+    # and signing the fresh one completes verification normally
+    await gateway.process_update(
+        dm_update(3, 777, str(keypair.sign_message(fresh.message.encode())), date=int(clock.now) - 5)
+    )
+    assert state.member(777) is not None
     state.close()
 
 
@@ -523,3 +568,25 @@ def test_read_secret_rejects_group_readable_files(tmp_path: Path) -> None:
         read_secret(secret, "Telegram bot token")
     secret.chmod(0o600)
     assert read_secret(secret, "Telegram bot token") == "abc123"
+
+
+def test_threshold_override_honored_at_verify_and_status(tmp_path):
+    """A per-user override admits at its own line; validation refuses garbage."""
+    from dataclasses import replace
+
+    import pytest
+
+    from dregg_gate.config import GateConfigError, _validate
+    from dregg_gate.gateway import GateGateway
+    from dregg_gate.state import GateState
+
+    cfg = replace(make_config(tmp_path), threshold_overrides={"6913902526": 88_888})
+    state = GateState(cfg.db_path)
+    gateway = GateGateway(cfg, state, None, FakeHelius(), clock=lambda: 0.0)  # type: ignore[arg-type]
+    assert gateway.effective_tokens(6913902526) == 88_888
+    assert gateway.effective_tokens(12345) == cfg.threshold_tokens
+    with pytest.raises(GateConfigError):
+        _validate(replace(cfg, threshold_overrides={"notanid": 1}))
+    with pytest.raises(GateConfigError):
+        _validate(replace(cfg, threshold_overrides={"99": 0}))
+    state.close()

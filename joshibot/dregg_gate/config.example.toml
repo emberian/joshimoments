@@ -9,6 +9,9 @@ telegram_token = "~/.shitcoims-tg"
 helius_key = "~/.helius-key"
 db = "state/dregg_gate/gate.sqlite"
 heartbeat = "state/dregg_gate/heartbeat.json"
+# where dregg_screen.live writes <utc-day>.jsonl scores (read-only for the bot);
+# on hbox: /home/hbox/dregg-data/screen/scores
+screen_scores = "state/dregg_screen/scores"
 
 [gate]
 # Locked decisions — listed here for visibility, defaults already match.
@@ -24,3 +27,4 @@ grace_hours = 48
 sweep_hour_utc = 14             # daily re-verify sweep starts after this UTC hour
 sweep_spread_seconds = 3600     # ... and spreads its batches over about this long
 sweep_batch_size = 10
+screen_rate_per_minute = 10     # /screen lookups per verified member per minute

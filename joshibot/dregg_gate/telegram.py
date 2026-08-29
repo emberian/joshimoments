@@ -14,16 +14,21 @@ paired unban or neither does).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import httpx
 
-from .state import GateState
+from .state import GateState, OutboxItem
 
 log = logging.getLogger(__name__)
 
 
 class TelegramError(RuntimeError):
     """Transport-level failure: network, timeout, malformed body."""
+
+
+class PhotoUnreadable(TelegramError):
+    """sendPhoto's bytes are gone from disk: definitive, retrying cannot restore them."""
 
 
 class TelegramRejection(TelegramError):
@@ -116,11 +121,36 @@ class Telegram:
         except Exception as exc:
             log.warning("Telegram callback acknowledgement failed (%s)", type(exc).__name__)
 
+    async def _post_item(self, item: OutboxItem) -> httpx.Response:
+        """One outbox delivery. sendPhoto is multipart — the PNG lives on disk at
+        payload['photo_path'] (the outbox stays a small sqlite row, not a blob store);
+        every other durable method posts its payload as JSON, unchanged."""
+
+        if item.method != "sendPhoto":
+            return await self.http.post(self._base + f"/{item.method}", json=item.payload)
+        payload = dict(item.payload)
+        path = Path(str(payload.pop("photo_path", "")))
+        try:
+            photo = path.read_bytes()
+        except OSError as exc:
+            raise PhotoUnreadable(type(exc).__name__) from None
+        data = {key: str(value) for key, value in payload.items()}
+        files = {"photo": (path.name or "chart.png", photo, "image/png")}
+        return await self.http.post(self._base + "/sendPhoto", data=data, files=files)
+
     async def flush_outbox(self) -> None:
         for item in self.state.pending():
             try:
-                response = await self.http.post(self._base + f"/{item.method}", json=item.payload)
+                response = await self._post_item(item)
                 body = response.json()
+            except PhotoUnreadable as exc:
+                # The bytes are gone; no retry can restore them. Same drop-not-dam
+                # rule as a definitive API rejection, so text alerts behind a lost
+                # chart still deliver.
+                self.state.delivered(item.id)
+                self.dropped.append((item.method, f"photo_unreadable:{exc}"))
+                log.error("Telegram outbox photo unreadable; item dropped")
+                continue
             except Exception as exc:
                 # Transport failure: retry later, keep strict order.
                 self.state.delivery_failed(item.id, type(exc).__name__, item.attempts + 1)
