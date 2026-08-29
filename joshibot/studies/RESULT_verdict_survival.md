@@ -79,6 +79,16 @@ commitment — 13.5% graduate (71× CLEAN) — and it marks the rip capacity —
 
 ## Limitations / what would have falsified
 
+**Third-stratum contamination (added post-recon, see docs/MAYHEM_MODE.md §5)**: a
+non-mayhem cohort seeded at vSol = 4.292 SOL with supply exactly 1e15 (k = 4.605e24,
+constant) sits INSIDE this study's "standard" population and is not separable from the
+token-side ledger. For those coins the S3 materiality bar (peak >= 100 SOL via k_std)
+overstates market cap ~7x, so a slice of the "collapse" events may have crossed a bar
+that was really ~14 SOL. Their share of births is unknown (2.7% of board rows, which
+skew to visible coins); the S1/S2 lifetime endpoints are price-free and unaffected. A
+membership predicate from CreateEvent reserves would bound this; until then S3/S4 carry
+this caveat (as does the screen validation population itself, which shares it).
+
 Three days; 24h cells lose day-3 births to exposure-completeness (n columns say so).
 Verdicts are panel reconstructions of the live gates (no Jaccard crew arm). The
 resurrection rate (17.3%) means "last trade" undershoots true lifetime for a sixth of

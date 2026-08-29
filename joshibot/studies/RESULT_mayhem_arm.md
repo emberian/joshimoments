@@ -1,36 +1,60 @@
 # RESULT: the mayhem arm — the stratum stays UNSCORED, and now we know exactly why
 
-2026-08-29. Instrument: `studies/mayhem_arm.py` (stages census/roles/constants/build/screen/
-graph, cached under `studies/data/mayhem_arm/`). Registered in
-`studies/REGISTRATION_mayhem_arm.md` before any estimand was computed. Window: the fresh
-corpus 2026-08-26..28 via `studies/data/operator_crime_fresh/`; causal history seeded from
-2026-08-05..14. Cost: $0 (no BigQuery — the local stratum is 30,831 coins, six times the
-registered 5,000-coin floor, so no pull was considered and no dry-run was needed).
+2026-08-29, revised same day after `docs/MAYHEM_MODE.md` (478673c) landed mechanism ground
+truth mid-study. Instruments: `studies/mayhem_arm.py` (registered in
+`REGISTRATION_mayhem_arm.md` before any estimand) and `studies/mayhem_real_flows.py`
+(registered in `REGISTRATION_mayhem_real_flows.md` after the mechanism doc, before its own
+estimands). Caches under `studies/data/mayhem_arm/`. Window: fresh corpus 2026-08-26..28;
+causal history seeded from 2026-08-05..14. Cost: $0 BigQuery (stratum n = 30,831 locally,
+6x the registered floor; a fresher-day pull was dry-run-estimated but not bought — see the
+wire report).
 
-**The one-line verdict: the registered ship rule FAILS on three of five conditions — the
-mayhem stratum stays honestly UNSCORED, and the negative is now a measurement, not a
-policy.** The screen's five gates, transplanted with every correction the registration
-demanded (true curve identification, true 2e15 denominator, causal cross-window history),
-are ANTI-selective in this stratum: mayhem-CLEAN admits coins that collapse at 4.45% against
-a 2.67% stratum base rate. The features the standard arm rides do not exist here (bundling:
-0.53% vs 44.17% standard — 83× rarer; crew fingerprints: same-deployer Jaccard 0.0011 ≈
-curveball null 0.0010, p = 0.43) or point backwards (dirty-history deployers are SAFER,
-risk ratio 0.47× [0.31, 0.74]). No threshold re-tuning fixes a stratum whose risk mechanism
-is a different actor — see §3.
+**Verdict, both registrations: NO mayhem screen arm ships — not as a recalibration of the
+validated gates (original M6: three of five conditions FAIL) and not as a real-flows
+re-instrumentation (amendment: the only separating feature covers 0.53% of the stratum and
+every conjunction is anti-selective). The stratum stays honestly UNSCORED, and the negative
+is a measurement.** This agrees with and extends the mechanism recon's recommendation
+(MAYHEM_MODE.md §7): prices here are administered by pump's fee-exempt agent (virtual SOL
+re-marked ~500x per agent trade; k/k_std measured 0.0023-4.87 by the recon), so the
+screen's price-path machinery has nothing to stand on, and the surviving real-flow features
+point the wrong way or almost never fire.
 
-**And the different actor is pump.fun itself.** The stratum's defining mechanism, measured:
-every mayhem create mints 2e15 raw; exactly 1e15 goes onto a BONE-STANDARD bonding curve
-(k = 3.219e25 confirmed three independent ways) and exactly 1e15 goes to ONE GLOBAL VAULT —
-`BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s`, the same account on all 30,831 coins — which
-begins transferring tokens into the curve a median of **2 seconds** after birth (p10 1 s,
-p90 11 s) and, for the median coin, feeds out its **entire** 1e15 in-window (mean 70.8%).
-96.0% of its 1.2M outflow rows are exact-amount same-transaction transfers into the curve
-account; 4.0% go elsewhere. The birth-slot sniper-crew economy that the screen fingerprints
-simply does not operate where the protocol is the whale.
+## 0. Corrections against the first version of this document
 
----
+The first draft (same day, pre-recon) claimed "H1 confirmed: standard curve" from three
+checks. Two of those checks verified TOKEN-side structure only and one was circular:
 
-## 1. Census (M1)
+- RETRACTED: "k = 3.219e25 confirmed three independent ways." What the checks proved:
+  the curve is standard-SEEDED at birth (32/32 vendor frames exact; seed arithmetic
+  30,831/30,831) and its TOKEN bookkeeping is standard (graduation holdback exactly
+  2.069e14). The "median graduated peak = 410.9 SOL" line was arithmetic on the token
+  balance under an ASSUMED k — it verifies the holdback, not the price. The recon measured
+  k rewritten inside agent trades; no constant k exists during the 24h window.
+- DEMOTED: every mcap/price-based number in §3-4 below (collapse, rip, peak>=100 SOL,
+  the M5 gate precisions on those outcomes) is computed on a PSEUDO-price (standard-k
+  projection of the token balance). On this stratum that is neither the marked price nor
+  real money. They are retained, labeled, because the registration promised them and they
+  document WHY the transplant fails; never quote them as market facts.
+- CORRECTED: "the vault feeds out its entire 1e15 on the median coin" conflated agent
+  sales with the t+24h BURN. By amount: gross vault outflow 3.61e19 raw, of which 40.9%
+  sold into the curve, **52.8% burned** (20,777 coins burned in-window, exactly one burn
+  row each — the t+24h burn arriving for day-1/2 births), 6.3% other.
+
+## 1. The mechanism (one paragraph, aligned with MAYHEM_MODE.md — the authority)
+
+Mayhem is per-coin opt-in: 2e15 raw minted; 1e15 funds a standard-seeded bonding curve;
+1e15 sits in a per-coin Token-2022 vault whose on-curve identity is ONE constant sol-vault
+PDA across all 30,831 coins — `BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s` — from which
+pump's AI agent trades fee-free for exactly 86,400 s, re-marking virtual SOL ~500x its real
+size per trade; unsold and repurchased vault tokens burn at t+24h. Corpus-side facts this
+study adds: the agent's first outflow lands a median of **2 seconds** after birth (p10 1 s,
+p90 11 s); gross agent outflow decomposes 40.9% sold-into-curve / 52.8% burn / 6.3% other;
+the derived bonding-curve PDA appears among the birth legs on 100.00% of mayhem creates and
+the seed is exactly 1e15 - dev_buy on 100.00%. The vendor emits the sol-vault PDA as
+`bondingCurveKey` on ~1/3 of mayhem frames (10/32 here; independently found by the recon)
+— derive the PDA locally, never trust that field on this stratum.
+
+## 2. Census (M1)
 
 | day | standard (1e15) | mayhem (2e15) | mayhem share |
 |---|---:|---:|---:|
@@ -39,117 +63,112 @@ simply does not operate where the protocol is the whale.
 | 2026-08-28 | 28,021 | 8,071 | 22.36% |
 | **pooled** | **104,380** | **30,831** | **22.80%** |
 
-The live telemetry's "28–44% of the stream" is an hour-of-day figure; the corpus-wide share
-is 22.8%. Residual nonstandard first-tx nets are dominated by minted_raw = 0 (n = 81,744:
-pre-window coins whose first observed transaction is a trade — expected, not mayhem) plus
-174 one-legged 1e18/9-decimal impostors; full table in `census.json`.
+Live telemetry's 28-44% is an hour-of-day figure; the corpus-wide share is 22.8%. The
+residual census (`census.json`) is dominated by minted_raw = 0 (81,744 pre-window coins
+whose first observed tx is a trade) plus 174 one-legged 1e18/9-decimal impostors. NOTE
+(recon §5): a THIRD stratum exists — non-mayhem coins seeded at vSol 4.292 SOL with supply
+exactly 1e15 — which is INSIDE the "standard" count above and cannot be separated from the
+token-side ledger. Its share of births is unknown (2.7% of board rows); it needs its own
+membership predicate from CreateEvent reserves before any of the standard arm's per-coin
+price arithmetic can be called exact on that slice.
 
-## 2. Roles and constants (M2, M3) — H1 confirmed, with one registered rule superseded
+## 3. Roles (M2) — clean, with one registered rule superseded
 
-- The derived bonding-curve PDA (seeds `["bonding-curve", mint]`) appears among the birth
-  legs of **30,831/30,831 (100.00%)** mayhem creates — curve identification is exact and
-  deterministic. **Deviation, disclosed**: the REGISTERED touch-rule heuristic agreed with
-  the PDA on only 92.51% — BELOW its own 95% bar. The PDA derivation (stronger than the
-  registered firehose-key validation, which covers 0 corpus days) replaced it as primary;
-  had we shipped on the touch rule alone we'd have mis-assigned ~7.5% of curves. The
-  corpus's rank-1-leg `curve_owner` is wrong for essentially every mayhem coin with a dev
-  buy, as predicted — nothing built on `birth.parquet` roles may be reused for this stratum.
-- Exact-1e15 reserve leg: 30,831/30,831. `curve_seed = 1e15 − dev_buy`: 30,831/30,831.
-  n_birth_legs = 3 on 30,828 (2 on the 3 zero-dev-buy coins).
-- Constants, three independent confirmations of the standard curve: (a) 32/32 vendor mayhem
-  create frames satisfy `vTok + initialBuy = 1.073e9` and `vSol − sol = 30.0` exactly;
-  (b) graduated mayhem coins' median peak mcap on the circulating basis is **410.9 SOL**
-  (the standard-curve calibration constant is ~411); (c) median last-live curve balance is
-  **exactly 2.069e14** (the standard migration holdback). Registered check M3(a) (boards
-  snapshot join) was unavailable — the boards tape ends 2026-08-23 — and is disclosed as
-  such; (b) and (c) are stronger than the snapshot join would have been.
-- So pricing uses k = 3.219e25, offset = 7.3e13; `mcap_circ = price × 1e15` (primary),
-  `mcap_total = price × 2e15` (secondary). The screen's cheap-feature trap is confirmed
-  quantitatively: a live `dev_buy_share` computed against 1e15 overstates the true share 2×.
-- **The vault is one address across all mayhem coins** — and it is the address the vendor
-  emits as `bondingCurveKey` on a fraction of mayhem frames (10/32 today; the other 22 carry
-  the real per-mint PDA). A hydrator that trusted the vendor key would read the wrong
-  account on those frames; ours derives the PDA, so no change needed — but it is now a
-  documented vendor failure mode.
+- Derived PDA among birth legs: 30,831/30,831 (100.00%). Exact-1e15 vault leg:
+  30,831/30,831. Seed = 1e15 - dev_buy: 30,831/30,831. n_birth_legs = 3 on 30,828
+  (2 on the 3 zero-dev-buy coins).
+- DISCLOSED DEVIATION: the registered touch-rule heuristic agreed with the PDA on only
+  92.51% — below its own 95% bar; the deterministic PDA derivation superseded it (the
+  recon's Trap 1 — vendor-key junk — never bit because no vendor gating was used).
+- The corpus `birth.parquet` rank-1/rank-2 roles are wrong for essentially every mayhem
+  coin with a dev buy (the vault out-ranks the curve); nothing built on those roles may be
+  reused for this stratum. All sniper/insider/crew features below EXCLUDE the vault/agent
+  identity — which is exactly the exclusion MAYHEM_MODE.md §5 requires (unexcluded, the
+  agent reads as one giant fake crew across the whole stratum).
 
-## 3. Outcomes (M4) — the stratum against the standard arm, same window
+## 4. The original M4/M5/M6 — the transplant fails (pseudo-price outcomes, labeled)
 
-| quantity | standard (n=104,380) | mayhem (n=30,831) | ratio |
-|---|---:|---:|---:|
-| graduated | 2.46% | 4.13% | 1.7× |
-| insider dump (80% disposal) | 75.79% | 94.38% | 1.25× |
-| RIP (all four conditions) | 0.507% | 1.304% | 2.6× |
-| collapse (≥90% from ≥100 SOL peak) | 0.781% | 2.673% | **3.4×** |
-| peak ≥ 100 SOL | 8.12% | 9.44% (circ) | 1.2× |
-| bundled at birth (n_snipers ≥ 2) | 44.17% | **0.53%** | 1/83× |
+Pseudo-price outcome rates (standard-k projection; ARTIFACTS of administered pricing,
+retained per registration): "collapse" 2.673%, "rip" 1.304%, "peak>=100 SOL" 9.44% —
+against standard-arm same-window 0.781% / 0.507% / 8.12%. Real token-side rates: insider
+dump 94.38% (vs 75.79% standard; the label saturates and is uninformative here),
+graduation-by-balance 4.13% (vs 2.46%; on this stratum the balance predicate is a proxy —
+the recon notes agent sells can push the curve above its seed and graduation implies no
+fixed real-SOL depth).
 
-Day-08-26-only (max exposure): grad 5.23%, rip 0.935%, collapse 1.981% — same shape, so the
-pooled numbers are not a censoring artifact. Mayhem coins both graduate more AND collapse
-3.4× more: the vault feed manufactures action in both tails.
+Gate behavior against the pseudo-outcomes (n = 30,828 deployer-identified): the five-gate
+CLEAN conjunction admits 1,888 (6.12%) with "collapse" precision 95.55% [94.52%, 96.39%] —
+BELOW the 97.33% base — anti-selective; dirty-history risk ratio 0.47x [0.31, 0.74]
+(inverted: 92.3% of mayhem deployers carry a prior dump; the dangerous ones are the
+first-timers); bundledness rip ratio 2.38x [0.62, 4.64] on only 162 bundled coins
+(bundling is 83x rarer than standard: 0.53% vs 44.17% — a feature-side fact, valid);
+crew fingerprints ABSENT (agent excluded: 22 distinct ex-deployer birth-slot wallets
+across 8,782 coins / 400 multi-launch deployers; same-deployer Jaccard 0.0011 vs curveball
+0.0010, p = 0.425 — feature-side, valid).
 
-## 4. Do the separations reproduce? (M5) — no
+Registered M6 ship rule: (i) identification PASS (100%); (ii) admitted n PASS (1,888);
+(iii) precision FAIL (94.52% lower bound vs required 99.5%); (iv) bundle CI FAIL;
+(v) crew FAIL. **No recalibrated arm ships.** Post-recon this is overdetermined: (iii)'s
+outcome was an artifact to begin with, and (iv)/(v) fail on feature absence, which no
+outcome redefinition can rescue.
 
-On the deployer-identified population (n = 30,828), outcome = collapse (base 2.67%):
+## 5. The amendment — real-flow outcomes, and the build/no-build answer
 
-- **mayhem-CLEAN (all five gates)**: admits 1,888 (6.12%), clean precision **95.55%**
-  [Wilson 95%: 94.52%, 96.39%] — the admitted set collapses at 4.45%, ABOVE base. On is_rip:
-  97.35% [96.53%, 97.99%] vs base 1.30% — again above base among admitted. Anti-selective.
-- **bundledness**: rip risk ratio 2.38× but 95% deployer-clustered CI [0.62, 4.64] — only
-  162 bundled coins exist; the feature is too rare here to carry anything.
-- **deployer history, inverted**: dirty-history (prior rips/dumps) collapse risk ratio
-  0.58× [0.45, 0.76]; rip 0.47× [0.31, 0.74]. 92.3% of mayhem coins have a deployer with a
-  prior dump on record — this is a repeat-operator factory stratum, and it is the
-  FIRST-TIMERS who are dangerous (the standard arm's "no record = 1.71× risk" finding, but
-  now strong enough to invert the gate outright).
-- **crew fingerprints do not exist**: 400 busiest multi-launch deployers, 8,782 coins,
-  95,760 same-deployer pairs — and 22 distinct ex-deployer birth-slot wallets in the entire
-  arm. Mean Jaccard 0.0011 vs day-matched 0.0000 vs curveball null 0.0010 (p = 0.425,
-  effect 1.1×). Against the standard arm's 0.26 vs 0.0026, the crew phenomenon is absent,
-  not attenuated.
-- The DUMP label saturates (94.38% base) and is uninformative within-stratum.
+Registered post-recon (`REGISTRATION_mayhem_real_flows.md`), agent excluded everywhere,
+outcomes on real token flows only:
 
-## 5. The registered ship rule (M6)
+- E1 HUMAN CROWD (distinct human buyers in first 24h): median **4** wallets; p75 = 10,
+  p90 = 20; only 6.8% of mayhem coins ever attract >=25 humans, 1.2% >=50. The typical
+  mayhem coin's entire human audience is four wallets.
+- E2 LIFE AFTER THE BURN: **7.39%** [7.03%, 7.78%] of exposure-complete coins
+  (n = 18,472) see ANY human activity after t+24h. The recon's "score at t+24h" design is
+  well-posed but addresses under 8% of the stratum.
+- E3 REAL RIP (insider dump + crowd >= 25): 6.12% pooled (1,886 events; sensitivity:
+  23.58% at crowd>=10, 1.11% at >=50 — the dump is near-universal, so this outcome is
+  mostly a crowd-size dial).
+- E4 separation, deployer-clustered 95% CIs: human bundledness **2.03x [1.18, 2.98]**
+  (the ONE qualifying separator — on 162 coins, 0.53% of the stratum); dev-buy >= 2%
+  of 2e15: 0.37x [0.14, 0.84] (protective — big dev buys correlate with NOT ripping
+  here); real dirty history: 0.49x [0.41, 0.58] (protective again).
+- E5 CLEAN-analog conjunction: admits 6.1%, real-rip precision 88.15% [86.61%, 89.53%]
+  vs 93.88% base — **anti-selective**, because its dominant gates are the inverted ones.
 
-| condition | required | measured | verdict |
-|---|---|---|---|
-| (i) curve identification | ≥ 95% | 100% (PDA; registered heuristic 92.5%, superseded) | PASS |
-| (ii) admitted n | ≥ 1,000 | 1,888 | PASS |
-| (iii) collapse clean precision, Wilson LB | ≥ 99.5% | 94.52% | **FAIL** |
-| (iv) bundled risk-ratio CI excludes 1 | yes | [0.62, 4.64] | **FAIL** |
-| (v) crew Jaccard ≥ 10× control, p ≤ 0.01 | yes | 1.1×, p = 0.425 | **FAIL** |
-
-**No mayhem-calibrated arm ships. The stratum stays UNSCORED**, and per the registration
-this is stated as the deliverable, not softened: the screen's validated features measure a
-crew-and-deployer economy, and mayhem launches are priced by a protocol vault instead. A
-re-tuned threshold set would be a new unvalidated screen wearing this one's name.
+**The pinned ship rule technically FIRES** — (a) via >=300 events, (b) via bundledness at
+exactly the 2.0x floor — **and the recommendation is still NO-BUILD**, stated with the
+discrepancy visible rather than tuned away: the rule as pinned was too loose (a single
+covariate at minimum strength on 0.53% coverage satisfies it). What a build would actually
+ship: one rare positive covariate and a set of gates that admit MORE rips than base. There
+is no admit-class in this stratum safer than the stratum itself under any registered
+conjunction, both outcome definitions agree on that, and predicting the crowd-size dial
+that remains is attention-prediction — territory the season's law already closed. A future
+arm would need a NEW feature family (e.g. agent-behavior/mayhem-state telemetry), not
+these features re-thresholded.
 
 ## 6. What ships anyway (honest, and better than silence)
 
-The UNSCORED verdict line currently says only `policy:mayhem_flag_nonstandard_curve`. It can
-now carry the measured stratum context — clearly labeled as stratum base rates, never as a
-coin score:
+The UNSCORED tg_line currently says `policy:mayhem_flag_nonstandard_curve`. It can now
+carry measured stratum context — labeled as stratum facts, never a coin score:
 
-> "MAYHEM launch — unscored by design (validated screen does not transfer: its gates are
-> anti-selective here). Stratum facts 08-26..28, n=30,831: 2× supply, half on a standard
-> curve, half in pump.fun's global vault which starts selling into the curve ~2 s after
-> birth and fully drains on the median coin. Collapse rate 2.67% (3.4× standard), insider
-> dump 94%, graduation 4.13% (1.7× standard). Bundle/crew signals do not exist in this
-> stratum."
+> "MAYHEM launch — unscored by design: pricing in the first 24h is administered by pump's
+> fee-exempt agent (re-marks ~500x real size; see MAYHEM_MODE.md), so the validated screen
+> does not transfer (its gates measured anti-selective here). Stratum facts 08-26..28,
+> n=30,831: half of supply trades from pump's vault starting ~2 s after birth and burns at
+> 24h; insider dump rate 94%; median human audience 4 wallets; 7% of coins see any human
+> trade after the burn; birth bundles and crew fingerprints are absent in this stratum."
 
-Also for the wire/site (KNOW-YOUR-ENEMY): the BwWK vault explainer, the 2-second feed-out
-clock, and the vendor `bondingCurveKey` failure mode. Implementation notes for
-`dregg_screen`: keep `hydrate_mayhem = False` (hydration can only confirm UNSCORED — now
-proven, not presumed); the `base_rates` blob may carry a `mayhem_stratum` block quoting §3.
+Plus, for the wire/site (KNOW-YOUR-ENEMY): the vault mechanics above, the vendor
+`bondingCurveKey` junk mode, and the 22.8%-of-births census. Implementation notes:
+keep `hydrate_mayhem = False`; never compute `dev_buy_share` against 1e15 on a mayhem
+frame (2x overstatement); a `mayhem_stratum` block in `base_rates` may quote §5's E1/E2
+and the dump rate (real-flow numbers only — none of §4's pseudo-price rates).
 
-## 7. What would have changed the verdict / limitations
+## 7. Limitations
 
-- Three days of exposure; collapse is decided in the first hour (prior result) so (iii)
-  is exposure-robust (day-1-only CLEAN reads 96.94% [95.52%, 97.92%] — same failure), but
-  graduation and any slow-burn outcome are right-censored.
-- History features saturate (dump base 94%) — a longer window could differentiate degrees
-  of dirtiness, but it cannot rescue (iv) or (v), which fail on feature absence.
-- The 4.0% of vault outflow that does NOT enter the curve is uncharacterized (who receives
-  it, and is it informative?) — the one open thread this study leaves, and it is exit-side.
-- Vault semantics (per-buy top-up vs scheduled sale; where the SOL side settles) are not
-  determinable from token legs alone — native SOL is invisible to this corpus. The measured
-  facts (§0 mechanism paragraph) do not depend on the interpretation.
+Three days of exposure; E2/E3 inherit the window (day-3 births drop from E2 by design).
+Real SOL flows are invisible to this corpus (native SOL is not in token balances), so
+"real materiality" here is crowd-count, not SOL — the recon's real_quote_reserves path is
+the right instrument if anyone revisits, and would need TradeEvent-level data. The third
+stratum (4.292-SOL seed) contaminates the STANDARD population at an unknown birth share
+and is flagged in RESULT_verdict_survival.md and above. The burn accounting counts
+supply-reducing transactions; if pump ever burns via a different mechanism the 52.8% split
+shifts.

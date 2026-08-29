@@ -94,6 +94,11 @@ decay was selection.
 
 ## Limitations / falsifiers
 
+P1's collapse outcome inherits the standard arm's k_std pricing; the third stratum flagged
+post-recon (docs/MAYHEM_MODE.md §5: 4.292-SOL-seed non-mayhem coins inside the 1e15
+population, unknown birth share) overstates a slice of those market caps ~7x. P2/P3/P4 are
+price-free and unaffected.
+
 One gap length (11 dark days) — the retention curve beyond ~3 weeks is unmeasured; the
 registered falsifiers (treatment < 2× control; P2 lift ≈ 1; recidivist share < 1%) all
 failed to occur by wide margins. The B window post-dates the regime shift, so persistence
