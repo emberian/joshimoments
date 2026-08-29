@@ -21,6 +21,7 @@ import logging
 import re
 import time
 
+from dregg_dossier.lookup import DossierLookup
 from dregg_record.lookup import CallerLookup
 from dregg_watch.commands import WatchCommands
 
@@ -46,6 +47,10 @@ HELP_TEXT = (
     "/invite — mint a fresh invite link if you are already verified\n"
     "/screen <mint> — the launch screen's verdict on a recent pump.fun launch "
     "(verified holders)\n"
+    "/wallet <address> — a trader's behavioral dossier: guild, realization policy, "
+    "executable realized PnL, win rate (batch layer, corpus-dated).\n"
+    "/coin <mint> — who is IN a coin: guild mix, preset bots, known crews, and large "
+    "holders piecewise distributing (an exit tell, ranked not proven).\n"
     "/caller <wallet or @name> — a caller's measured record: their archived calls "
     "and how each actually went (verified holders)\n"
     "/watch — personal alerts: a coin, a deployer wallet, a crew, a caller, or every "
@@ -90,6 +95,7 @@ class GateGateway:
         self.lookup = ScreenLookup(lambda: self.config, state, clock=clock)
         self.caller_lookup = CallerLookup(lambda: self.config, state, clock=clock)
         self.watch = WatchCommands(lambda: self.config, state, clock=clock)
+        self.dossier = DossierLookup(lambda: self.config, state, clock=clock)
 
     # -- plumbing ------------------------------------------------------------------
 
@@ -239,6 +245,12 @@ class GateGateway:
             self.dm(chat_id, reply, dedup, parse_mode=mode)
         elif command == "/caller":
             reply, mode = self.caller_lookup.reply(uid, parts[1] if len(parts) > 1 else None)
+            self.dm(chat_id, reply, dedup, parse_mode=mode)
+        elif command == "/wallet":
+            reply, mode = self.dossier.reply_wallet(uid, parts[1] if len(parts) > 1 else None)
+            self.dm(chat_id, reply, dedup, parse_mode=mode)
+        elif command == "/coin":
+            reply, mode = self.dossier.reply_coin(uid, parts[1] if len(parts) > 1 else None)
             self.dm(chat_id, reply, dedup, parse_mode=mode)
         elif command in ("/watch", "/unwatch"):
             self.dm(chat_id, self.watch.reply(uid, command, parts[1:]), dedup)
