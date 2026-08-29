@@ -190,6 +190,11 @@ def _plain_reason(reason: str) -> str | None:
     if reason.startswith("dev_buy_share="):
         return "the dev's own buy is over the 2% line"
     if reason.startswith("crew_fingerprint:"):
+        if ":tied=" in reason:
+            return (
+                "its birth-slot buyers match a fingerprint that several tracked "
+                "crews share equally"
+            )
         return "its birth-slot buyers match a known crew's fingerprint"
     if reason.startswith("deployer_record:"):
         return "this deployer's earlier launches include rips or insider dumps"
@@ -205,6 +210,13 @@ def _plain_reason(reason: str) -> str | None:
         return "the birth slot couldn't be read in time"
     if reason == "cheap_gates_passed":
         return "every check that could still run passed"
+    if reason == "quote_curve_screen_not_measured":
+        return (
+            "its bonding curve is priced in USDC, not SOL — a launch type the screen's "
+            "hit rate has never been measured on, so no clean stamp is given"
+        )
+    if reason == "five_gates_passed":
+        return "every birth-time check passed"
     if reason == "birth_slot_partial":
         return "only part of the birth slot could be read, and a partial read can hide a bundle"
     if reason.startswith("policy:") or reason.startswith("budget:"):
@@ -223,6 +235,13 @@ def _plain_population_note(note: str) -> str:
         return "it launched in pump's mayhem mode"
     if note.startswith("no_dev_buy"):
         return "it launched with no dev buy at all"
+    if note.startswith("quote_curve:"):
+        return "its bonding curve is priced in USDC, not SOL"
+    if note.startswith("vendor_seed:quote_curve_suspected"):
+        return (
+            "the launch event hints its curve may be priced in USDC, not SOL "
+            "(unverified — the birth slot wasn't read)"
+        )
     return _PLAIN_POPULATION_NOTE.get(note, note.split(":", 1)[0].replace("_", " "))
 
 
@@ -284,12 +303,30 @@ def render_card(row: dict[str, Any]) -> str:
 
     crew = row.get("crew_match")
     if isinstance(crew, dict):
-        lines.append(
-            f"Crew: matched fingerprint #{crew.get('crew_id')} — "
-            f"{crew.get('overlap')} shared birth-slot wallets, overlap {crew.get('jaccard')} "
-            f"of 1 (that crew's {crew.get('crew_coins')} tracked coins carry "
-            f"{crew.get('crew_rips')} rips / {crew.get('crew_dumps')} insider dumps)"
-        )
+        tied = [int(c) for c in crew.get("tied_crew_ids") or [] if c is not None]
+        if len(tied) > 1:
+            # The best match fits several crews' fingerprints equally well — the data
+            # does not identify one crew, so the card names the set, not a winner.
+            shown = ", ".join(f"#{c}" for c in tied[:3])
+            more = f" and {len(tied) - 3} more" if len(tied) > 3 else ""
+            n_dirty = crew.get("n_tied_dirty")
+            record = (
+                f"; {n_dirty} of the {len(tied)} have rips or dumps on record"
+                if isinstance(n_dirty, int) else ""
+            )
+            lines.append(
+                f"Crew: matched a fingerprint that {len(tied)} tracked crews share "
+                f"equally ({shown}{more}) — the data can't single one out. "
+                f"{crew.get('overlap')} shared birth-slot wallets, overlap "
+                f"{crew.get('jaccard')} of 1{record}."
+            )
+        else:
+            lines.append(
+                f"Crew: matched fingerprint #{crew.get('crew_id')} — "
+                f"{crew.get('overlap')} shared birth-slot wallets, overlap {crew.get('jaccard')} "
+                f"of 1 (that crew's {crew.get('crew_coins')} tracked coins carry "
+                f"{crew.get('crew_rips')} rips / {crew.get('crew_dumps')} insider dumps)"
+            )
     elif hydrated:
         lines.append("Crew: no fingerprint match")
 

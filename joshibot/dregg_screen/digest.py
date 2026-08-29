@@ -37,7 +37,8 @@ VERDICT_GLOSS = {
                    "crew record; most just die fast"),
     "BUNDLED": "multiple wallets bought in the very slot the coin was born — fat tails both ways",
     "NOT_CLEAN": "dev's own buy over the 2% line",
-    "UNSCORED": "no verdict — unreadable birth slot, or a mayhem launch (unscored on purpose)",
+    "UNSCORED": ("no verdict — unreadable birth slot, a mayhem launch, or a curve the "
+                 "screen's accuracy was never measured on (unscored on purpose)"),
 }
 
 

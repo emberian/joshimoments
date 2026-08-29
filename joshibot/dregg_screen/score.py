@@ -12,8 +12,12 @@ gates the other names do not describe. Every non-CLEAN verdict carries its reaso
 
 Precedence (most identifying signal wins):
   UNSCORED    — nonstandard curve, hydration failure, or budget policy; reason attached.
-  KNOWN_CREW  — a named fingerprint: dirty-crew Jaccard match, a deployer with recorded
-                rips/dumps, or a recidivist birth-slot sniper. The trigger is named.
+  KNOWN_CREW  — a named fingerprint: a Jaccard match whose tie set contains a crew with
+                recorded rips/dumps, a deployer with recorded rips/dumps, or a
+                recidivist birth-slot sniper. The trigger is named. When the best
+                Jaccard fits several crews equally (44.7% of matches, measured), the
+                line SAYS so and shows a deterministic representative — the data does
+                not identify one crew, and the copy never pretends it does.
   BUNDLED     — >= 2 birth-slot buyers (the on-chain bundle shape; needs no Jito id)
                 with no known-crew link.
   NOT_CLEAN   — fails remaining gates (dev buy >= 2% of supply).
@@ -143,6 +147,17 @@ def score_launch(
         # the only cheap witness. Hydration, when it runs, decides authoritatively via
         # minted_raw and replaces this note with a hard nonstandard_curve verdict.
         population_notes.append("vendor_flag:is_mayhem_mode:curve_unverified")
+    if hydrated and birth.quote_curve:
+        # The third stratum (RESULT_third_stratum.md): a USDC-quoted curve, token-side
+        # identical to a standard birth (1e15 at 6 decimals) but priced in dollars, at
+        # 0.96%->1.39% of births across the two corpus windows. Its birth-slot feature
+        # facts are valid; the screen's measured precision is not its precision, so it
+        # never mints a CLEAN (registered ship rule, REGISTRATION_third_stratum.md T4).
+        population_notes.append("quote_curve:usdc:outside_validated_population")
+    elif not hydrated and cheap.quote_seed_suspected:
+        # Vendor-float suspicion only (no quote-curve frame has been retained to
+        # verify the vendor's rendering); hydration decides via detect_curve_seed.
+        population_notes.append("vendor_seed:quote_curve_suspected:unverified")
     if not cheap.mint.endswith("pump"):
         population_notes.append("mint_without_pump_suffix")
     if dev_buy_raw == 0:
@@ -172,7 +187,13 @@ def score_launch(
             n_birth_legs=birth.n_birth_legs,
             birth_partial=birth.partial,
             snipers=list(birth.snipers),
+            quote_curve=birth.quote_curve,
         )
+        if birth.quote_curve:
+            features["curve_quote_mint"] = birth.curve_quote_mint
+            features["curve_seed_source"] = birth.curve_seed_source
+            if birth.curve_seed_vsol is not None:
+                features["curve_seed_vsol"] = birth.curve_seed_vsol
         sniper_prior_max = ledger.sniper_prior_max(birth.snipers)
         features["sniper_prior_max"] = sniper_prior_max
         crew = ledger.crew_match(
@@ -190,11 +211,20 @@ def score_launch(
             base_rates or {},
         )
 
-    # KNOWN_CREW: the three history arms, most specific first. A crew match against a
-    # crew with no recorded rips/dumps stays a NOTE (crew continuity is not a record).
-    if crew is not None and crew.dirty:
+    # KNOWN_CREW: the three history arms, most specific first. A crew match whose whole
+    # TIE SET has no recorded rips/dumps stays a NOTE (crew continuity is not a record).
+    # The tie set matters: the best Jaccard often fits several crews equally
+    # (RESULT_d4m_crew_graph.md §2.5), and an equally-matching dirty crew is equally
+    # supported by the data whichever representative id is shown.
+    crew_dirty = crew is not None and (crew.dirty or crew.n_tied_dirty > 0)
+    if crew is not None and crew_dirty:
+        tie = (
+            f":tied={crew.n_tied_crews}:dirty_in_tie={crew.n_tied_dirty}"
+            if crew.ambiguous
+            else ""
+        )
         reasons.append(
-            f"crew_fingerprint:#{crew.crew_id}:jaccard={crew.jaccard}:overlap={crew.overlap}"
+            f"crew_fingerprint:#{crew.crew_id}:jaccard={crew.jaccard}:overlap={crew.overlap}{tie}"
         )
     if history.rips > 0 or history.dumps > 0:
         reasons.append(
@@ -203,10 +233,10 @@ def score_launch(
     if sniper_prior_max > 0:
         reasons.append(f"recidivist_sniper:prior_coins={sniper_prior_max}")
     if reasons:
-        if crew is not None and not crew.dirty:
+        if crew is not None and not crew_dirty:
             features["crew_continuity_note"] = asdict(crew)
         return _finish(cheap, VERDICT_KNOWN_CREW, reasons, deployer, hydrated, in_pop,
-                       population_notes, features, crew if crew and crew.dirty else None,
+                       population_notes, features, crew if crew_dirty else None,
                        history, base_rates or {})
     if crew is not None:  # clean-crew continuity, worth carrying but not a verdict
         features["crew_continuity_note"] = asdict(crew)
@@ -232,6 +262,16 @@ def score_launch(
         # A capped same-slot scan can undercount snipers; a CLEAN needs the full slot.
         return _finish(cheap, VERDICT_UNSCORED, ["birth_slot_partial"], deployer, hydrated,
                        in_pop, population_notes, features, None, history, base_rates or {})
+
+    if birth.quote_curve:
+        # All five gates pass, but CLEAN is the name of a measured precision claim and
+        # no precision has been measured on the quote-curve launch type — so this is
+        # UNSCORED with its gates stated, never CLEAN wearing numbers from another
+        # population (REGISTRATION_third_stratum.md T4, pinned before measurement).
+        return _finish(cheap, VERDICT_UNSCORED,
+                       ["quote_curve_screen_not_measured", "five_gates_passed"],
+                       deployer, hydrated, in_pop, population_notes, features, None,
+                       history, base_rates or {})
 
     return _finish(cheap, VERDICT_CLEAN, ["all_gates_passed"], deployer, hydrated, in_pop,
                    population_notes, features, None, history, base_rates or {})
@@ -288,11 +328,24 @@ def tg_line(score: Score) -> str:
         bits = []
         if score.crew:
             c = score.crew
-            bits.append(
-                f"matched crew fingerprint #{c.crew_id} (Jaccard {c.jaccard}, {c.overlap} shared "
-                f"birth-slot wallets; that crew's {c.crew_coins} corpus coins carry "
-                f"{c.crew_rips} rips / {c.crew_dumps} insider dumps)"
-            )
+            tied = list(c.tied_crew_ids) or [c.crew_id]
+            if len(tied) > 1:
+                shown = ", ".join(f"#{i}" for i in tied[:4])
+                more = f" and {len(tied) - 4} more" if len(tied) > 4 else ""
+                bits.append(
+                    f"matched a crew fingerprint that {len(tied)} tracked crews share equally "
+                    f"({shown}{more}) — the data does not single one out "
+                    f"(Jaccard {c.jaccard}, {c.overlap} shared birth-slot wallets; "
+                    f"{c.n_tied_dirty} of the {len(tied)} have recorded rips or insider dumps; "
+                    f"#{c.crew_id} shown as one of them: {c.crew_coins} corpus coins, "
+                    f"{c.crew_rips} rips / {c.crew_dumps} insider dumps)"
+                )
+            else:
+                bits.append(
+                    f"matched crew fingerprint #{c.crew_id} (Jaccard {c.jaccard}, {c.overlap} shared "
+                    f"birth-slot wallets; that crew's {c.crew_coins} corpus coins carry "
+                    f"{c.crew_rips} rips / {c.crew_dumps} insider dumps)"
+                )
         h = score.history
         if h.rips or h.dumps:
             bits.append(

@@ -83,11 +83,14 @@ JARGON = (
     "cheap_gates_passed",
     "birth_slot_partial",
     "all_gates_passed",
+    "quote_curve",
+    "five_gates_passed",
     # raw population-note codes
     "vendor_flag",
     "mint_without_pump_suffix",
     "no_dev_buy:",
     "in_validated_population",
+    "vendor_seed:",
     # method vocabulary that belongs in the markdown artifacts, not the channel
     "validated population",
     "operating point",
@@ -206,6 +209,44 @@ def nasty_screen_rows() -> list[dict]:
             verdict="BUNDLED",
             reasons=["bundled_at_birth:n_snipers=4"],
             features={"dev_buy_share": 0.001, "dev_buy_source": "chain_exact", "n_snipers": 4},
+        ),
+        # the third stratum (RESULT_third_stratum.md): USDC-quoted curve, five gates
+        # pass, never CLEAN — plus the unhydrated vendor-float suspicion variant
+        score_row(
+            "M1nt888888888888888888888888888888888888pump",
+            verdict="UNSCORED",
+            reasons=["quote_curve_screen_not_measured", "five_gates_passed"],
+            in_validated_population=False,
+            population_notes=["quote_curve:usdc:outside_validated_population"],
+            features={
+                "dev_buy_share": 0.004, "dev_buy_source": "chain_exact", "n_snipers": 1,
+                "quote_curve": True,
+                "curve_quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "curve_seed_source": "create_event", "curve_seed_vsol": 4_292_000_000,
+            },
+        ),
+        score_row(
+            "M1nt999999999999999999999999999999999999pump",
+            verdict="UNSCORED",
+            reasons=["budget:daily_helius_ceiling", "cheap_gates_passed"],
+            hydrated=False,
+            in_validated_population=False,
+            population_notes=["vendor_seed:quote_curve_suspected:unverified"],
+        ),
+        # a TIED crew match (44.7% of matches before the crew-id fix): the copy must
+        # state the tie in plain words — never a raw ":tied=" code, never a single-crew
+        # claim the data doesn't support
+        score_row(
+            "M1ntTiedCrews111111111111111111111111111pump",
+            verdict="KNOWN_CREW",
+            symbol="TIE",
+            reasons=["crew_fingerprint:#77:jaccard=0.5:overlap=2:tied=3:dirty_in_tie=1"],
+            crew_match={
+                "crew_id": 77, "jaccard": 0.5, "overlap": 2,
+                "crew_coins": 9, "crew_rips": 3, "crew_dumps": 2, "dirty": True,
+                "tied_crew_ids": [7, 77, 911], "n_tied_dirty": 1,
+            },
+            deployer_history={"launches": 6, "rips": 2, "dumps": 1, "grads": 0},
         ),
     ]
 
@@ -332,7 +373,8 @@ WIRE_FACTS = {
             "deployer_history": {"launches": 2, "rips": 0, "dumps": 0},
             "in_validated_population": False,
         }],
-        "crews": [{"crew_id": 7, "launches_today": 2, "symbols": ["AAA", "BBB"],
+        "crews": [{"crew_id": 7, "launches_today": 2, "tied_launches": 1,
+                   "symbols": ["AAA", "BBB"],
                    "max_jaccard": 0.44, "crew_coins": 12, "crew_rips": 2, "crew_dumps": 5}],
         "crews_note": None,
     },
@@ -365,6 +407,10 @@ def all_telegram_surfaces() -> list[tuple[str, str]]:
                        created_at=NOW - 86400)
     screen_event = matcher.event_from_score(nasty_screen_rows()[1])
     assert screen_event is not None
+    crew_sub = Subscription(id=4, tg_user_id=7, kind="crew", spec="911", mode="event",
+                            created_at=NOW - 86400)
+    tied_event = matcher.event_from_score(nasty_screen_rows()[-1])
+    assert tied_event is not None and "911" in tied_event.crew_ids
     surfaces = [
         ("start", start_text(888_888)),
         ("help", HELP_TEXT),
@@ -385,6 +431,7 @@ def all_telegram_surfaces() -> list[tuple[str, str]]:
         ("wire", compose_telegram(WIRE_FACTS, 3)),
         ("watch usage", WATCH_USAGE),
         ("watch dm", matcher.render_dm(sub, screen_event)),
+        ("watch dm tied crew", matcher.render_dm(crew_sub, tied_event)),
         ("watch digest", matcher.render_digest([(3, screen_event.compact)] * 4,
                                                window_min=30, max_lines=3)),
     ]
@@ -598,13 +645,13 @@ def test_digest_reads_like_a_desk_note():
     # not a buy call, KNOWN-CREW is the common case, mayhem is unscored on purpose
     assert ("CLEAN 2 — passed every gate — no known operators at the table; "
             "not a buy signal") in text
-    assert ("KNOWN-CREW 1 — the common case — birth-slot wallets or deployer match "
+    assert ("KNOWN-CREW 2 — the common case — birth-slot wallets or deployer match "
             "a tracked crew record; most just die fast") in text
     assert ("BUNDLED 1 — multiple wallets bought in the very slot the coin was born "
             "— fat tails both ways") in text
     assert "NOT-CLEAN 1 — dev's own buy over the 2% line" in text
-    assert ("UNSCORED 3 — no verdict — unreadable birth slot, or a mayhem launch "
-            "(unscored on purpose)") in text
+    assert ("UNSCORED 5 — no verdict — unreadable birth slot, a mayhem launch, or a "
+            "curve the screen's accuracy was never measured on (unscored on purpose)") in text
     # 5. colliding tickers stay tellable apart
     assert "$TEST·M1nt" in text
     # 6. the window's pass rate is measured against the stamped long-run rate

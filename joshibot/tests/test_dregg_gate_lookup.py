@@ -436,3 +436,53 @@ async def test_invalid_signature_copy_says_what_to_fix(tmp_path: Path) -> None:
     # the challenge survives the fumble: pasting correctly afterwards still works
     assert state.get_challenge(777, now=NOW) is not None
     state.close()
+
+
+def test_screen_card_states_a_crew_tie_instead_of_naming_one() -> None:
+    """When the best match fits several crews equally (44.7% of matches before the
+    crew-id fix), the card names the SET and says the data can't single one out —
+    never one crew id presented as if the data identified it."""
+
+    from dregg_gate.lookup import render_card
+
+    row = score_row(
+        str(Keypair().pubkey()),
+        verdict="KNOWN_CREW",
+        reasons=["crew_fingerprint:#7:jaccard=0.5:overlap=2:tied=3:dirty_in_tie=1"],
+        crew_match={
+            "crew_id": 7, "deployer": "d", "matched_mint": "m", "jaccard": 0.5,
+            "overlap": 2, "launch_set_size": 3, "matched_set_size": 3,
+            "crew_coins": 9, "crew_rips": 3, "crew_dumps": 2, "dirty": True,
+            "tied_crew_ids": [7, 77, 911], "n_tied_dirty": 1,
+        },
+    )
+    card = render_card(row)
+    assert "3 tracked crews share equally (#7, #77, #911)" in card
+    assert "can't single one out" in card
+    assert "2 shared birth-slot wallets, overlap 0.5 of 1" in card  # numbers intact
+    assert "1 of the 3 have rips or dumps on record" in card
+    assert "matched fingerprint #" not in card  # the single-crew claim is gone
+    assert "several tracked crews share equally" in card  # the why-this-verdict clause
+    assert "crew_fingerprint:" not in card and "tied=" not in card  # no raw codes
+
+
+def test_screen_card_single_crew_copy_is_unchanged() -> None:
+    """The unambiguous 55.3% keep their exact line — the fix must not blur a match
+    the data does identify."""
+
+    from dregg_gate.lookup import render_card
+
+    row = score_row(
+        str(Keypair().pubkey()),
+        verdict="KNOWN_CREW",
+        reasons=["crew_fingerprint:#81422:jaccard=0.31:overlap=4"],
+        crew_match={
+            "crew_id": 81422, "deployer": "d", "matched_mint": "m", "jaccard": 0.31,
+            "overlap": 4, "launch_set_size": 5, "matched_set_size": 6,
+            "crew_coins": 9, "crew_rips": 3, "crew_dumps": 2, "dirty": True,
+            "tied_crew_ids": [81422], "n_tied_dirty": 1,
+        },
+    )
+    card = render_card(row)
+    assert "matched fingerprint #81422 — 4 shared birth-slot wallets, overlap 0.31 of 1" in card
+    assert "share equally" not in card

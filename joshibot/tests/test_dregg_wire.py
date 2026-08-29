@@ -66,7 +66,7 @@ def _score_row(**over) -> dict:
     return row
 
 
-def _crew(crew_id: int, jaccard: float) -> dict:
+def _crew(crew_id: int, jaccard: float, tied: list[int] | None = None) -> dict:
     return {
         "crew_id": crew_id,
         "jaccard": jaccard,
@@ -74,6 +74,8 @@ def _crew(crew_id: int, jaccard: float) -> dict:
         "crew_coins": 4,
         "crew_rips": 1,
         "crew_dumps": 3,
+        "tied_crew_ids": tied if tied is not None else [crew_id],
+        "n_tied_dirty": 1,
     }
 
 
@@ -93,7 +95,7 @@ FIXTURE_ROWS = [
     ),
     _score_row(
         verdict="KNOWN_CREW", symbol="CRW2", mint="C2" + "c" * 38 + "pump",
-        crew_match=_crew(7, 0.8),
+        crew_match=_crew(7, 0.8, tied=[7, 9]),  # a Jaccard tie shared with crew 9
     ),
     _score_row(
         verdict="NOT_CLEAN", symbol="RUG", mint="R" * 40 + "pump",
@@ -190,6 +192,7 @@ def test_screen_facts_math(scores_dir, archive_db):
     assert crew["crew_id"] == 7 and crew["launches_today"] == 2
     assert crew["max_jaccard"] == pytest.approx(1.0)
     assert crew["crew_dumps"] == 3
+    assert crew["tied_launches"] == 1  # CRW2's match tied across crews 7 and 9
 
 
 def test_callout_facts_windows_and_top_claim(archive_db):
@@ -300,6 +303,18 @@ def test_telegram_carries_verdict_survival_and_crew_memory(scores_dir, archive_d
     # crew memory, on the crew section
     assert "matched their own crew 48.5% vs 0.59% for strangers" in text
     assert "the danger is the UNSEEN: no-record coins collapsed 1.03% vs 0.57%" in text
+
+
+def test_wire_states_crew_ties_on_both_editions(scores_dir, archive_db):
+    """A crew whose tally includes Jaccard-tied matches says so on the channel and in
+    the markdown edition — the count is honest about fingerprints other crews share
+    equally (the crew-id fix)."""
+
+    facts = _facts(scores_dir, archive_db)
+    text = compose_telegram(facts, 0)
+    assert "1 of those matches fit other tracked crews equally well." in text
+    md = compose_markdown(facts, 0)
+    assert "1 of its matches are Jaccard ties shared with other crews" in md
 
 
 def test_telegram_stays_under_cap_when_facts_max_out(scores_dir, archive_db):

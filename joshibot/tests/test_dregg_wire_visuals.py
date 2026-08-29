@@ -182,19 +182,24 @@ def test_callout_facts_measured_join(tmp_path):
 # -- the crew board + the d4m seam -----------------------------------------------------
 
 
-def write_scores(scores_dir: Path, day: str, crews: list[tuple[int, int]]) -> None:
-    """crews = [(crew_id, launches)] for one day's ledger."""
+def write_scores(scores_dir: Path, day: str, crews: list[tuple[int, int]],
+                 tied: dict[int, list[int]] | None = None) -> None:
+    """crews = [(crew_id, launches)] for one day's ledger; ``tied[crew_id]`` gives the
+    match's tied_crew_ids when its best Jaccard is shared across crews."""
 
     rows = []
     for crew_id, launches in crews:
         for i in range(launches):
+            match = {"crew_id": crew_id, "jaccard": 0.9, "crew_coins": 4,
+                     "crew_rips": 1, "crew_dumps": 2}
+            if tied and crew_id in tied:
+                match["tied_crew_ids"] = tied[crew_id]
             rows.append(
                 {
                     "mint": f"{crew_id}x{i}",
                     "verdict": "KNOWN_CREW",
                     "t_scored": f"{day}T0{i % 9}:00:00+00:00",
-                    "crew_match": {"crew_id": crew_id, "jaccard": 0.9, "crew_coins": 4,
-                                   "crew_rips": 1, "crew_dumps": 2},
+                    "crew_match": match,
                 }
             )
     scores_dir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +216,25 @@ def test_crew_day_history_counts_across_the_window(tmp_path):
     assert history["counts"][7][DAY] == 2
     assert history["counts"][9][DAY] == 1
     assert history["records"][7]["crew_dumps"] == 2
+
+
+def test_heatmap_states_tie_ambiguity_in_its_note(tmp_path):
+    """Launches whose best match tied across crews still count once, under the match's
+    deterministic representative id — and the board's note SAYS how many were shared,
+    so a heatmap row never reads as if the data singled its crew out (crew-id fix)."""
+
+    scores = tmp_path / "scores"
+    write_scores(scores, DAY, [(7, 2), (9, 1)], tied={9: [9, 12, 31]})
+    history = crew_day_history(scores, DAY)
+    assert history["ambiguous"] == 1
+    board = crew_board_data(make_facts(), scores, None)
+    assert board["mode"] == "heatmap"
+    assert "1 launch this window matched 2+ crews equally" in (board["note"] or "")
+    assert "counts once, under one crew id" in board["note"]
+    caption = crew_caption(board)
+    assert "matched 2+ crews equally" in caption
+    png = render_crew_board(board)
+    assert png[:8] == PNG_MAGIC and png == render_crew_board(board)
 
 
 def test_d4m_artifact_drives_the_graph_and_caps_are_stated(tmp_path):

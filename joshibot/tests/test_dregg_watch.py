@@ -58,6 +58,7 @@ def score_row(
     creator: str = WALLET_B,
     deployer: str | None = None,
     crew_id: int | None = None,
+    tied_crew_ids: list[int] | None = None,
     continuity_crew_id: int | None = None,
     symbol: str = "FOO",
     t_scored: str = "2026-08-29T12:00:00+00:00",
@@ -79,7 +80,9 @@ def score_row(
         "features": features,
         "crew_match": (
             {"crew_id": crew_id, "jaccard": 0.42, "overlap": 3, "crew_coins": 9,
-             "crew_rips": 2, "crew_dumps": 1, "dirty": True}
+             "crew_rips": 2, "crew_dumps": 1, "dirty": True,
+             **({"tied_crew_ids": tied_crew_ids, "n_tied_dirty": 1}
+                if tied_crew_ids is not None else {})}
             if crew_id is not None
             else None
         ),
@@ -358,6 +361,39 @@ def test_crew_matches_fingerprint_and_continuity(tmp_path: Path) -> None:
     rows = outbox_rows(tmp_path)
     assert len(rows) == 2
     assert all("crew #81422" in payload["text"] for _, payload in rows)
+    gate.close()
+    service.state.close()
+
+
+def test_crew_watch_matches_on_the_whole_tie_set(tmp_path: Path) -> None:
+    """A crew subscription fires on ANY crew in the match's tied set — the launch's
+    fingerprint fits each equally well, so a watch keyed on a non-representative tied
+    id must not go silent — and the DM says the match is shared, never that the data
+    picked one crew."""
+
+    gate = make_gate(tmp_path)
+    state = WatchState(tmp_path / "watch.sqlite")
+    state.add(HOLDER, "crew", "911", "event", NOW - 60)  # tied, NOT the representative
+    state.close()
+    clock = Clock()
+    service = bootstrap_service(tmp_path, clock)
+
+    append_scores(
+        tmp_path,
+        score_row(mint=MINT_1, verdict="KNOWN_CREW", crew_id=7,
+                  tied_crew_ids=[7, 77, 911], t_scored="2026-08-29T12:00:01+00:00"),
+        score_row(mint=MINT_2, verdict="KNOWN_CREW", crew_id=7,
+                  tied_crew_ids=[7, 77], t_scored="2026-08-29T12:00:02+00:00"),  # not 911
+    )
+    clock.now += 10
+    service.cycle()
+
+    rows = outbox_rows(tmp_path)
+    assert len(rows) == 1  # the [7, 77] tie must not fire a #911 watch
+    text = rows[0][1]["text"]
+    assert "crew #911" in text
+    assert "matched a fingerprint 3 tracked crews share equally" in text
+    assert "#7 shown as one of them" in text
     gate.close()
     service.state.close()
 

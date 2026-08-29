@@ -44,6 +44,21 @@ from typing import Any, Mapping, Sequence
 PUMP_SUPPLY_RAW = 1_000_000_000_000_000  # 1e9 tokens at 6 decimals
 PUMP_DECIMALS = 6
 
+# -- curve-seed constants (studies/third_stratum.py, chain-verified 2026-08-29) --------
+#
+# Pump runs a QUOTE-MINT variant of the standard curve: CreateEvent.quote_mint = USDC,
+# virtual_quote_reserves = 4_292_000_000 raw USDC ($4,292 = 30 SOL x $143.07 -- the
+# dollar-denominated clone of the standard seed), with that same integer mirrored into
+# virtual_sol_reserves. Supply is exactly 1e15 at 6 decimals, so the BORN predicate
+# cannot see it; the witnesses are the CreateEvent reserves (authoritative, decoded from
+# the create's own logs) and the curve's USDC vault leg in the create transaction
+# (corpus-side equivalent; 20/20 chain-concordant, RESULT_third_stratum.md T1).
+# Measured birth share: 0.96% (2026-08-05..14) -> 1.39% (2026-08-26..28).
+
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+SEED_STANDARD_LAMPORTS = 30_000_000_000
+SEED_QUOTE_USDC_RAW = 4_292_000_000
+
 # The five gates of the validated CLEAN screen (cmd_screen), with the study's names.
 GATE_MAX_SNIPERS = 1  # "no bundle at birth (n_snipers <= 1)"
 GATE_MAX_DEV_BUY_SHARE = 0.02  # "dev buy under 2% of supply"
@@ -125,6 +140,13 @@ class BirthFeatures:
     snipers: tuple[str, ...]  # the sniper set itself (deployer INCLUDED, as the corpus does)
     partial: bool = False  # true when the same-slot tx list was capped — n_snipers is a floor
     notes: tuple[str, ...] = field(default=())
+    # Curve-seed identification (third stratum). quote_curve means the bonding curve is
+    # priced in a quote token (USDC), NOT SOL — outside the population every validated
+    # precision number was measured on, while staying token-side identical to it.
+    quote_curve: bool = False
+    curve_quote_mint: str | None = None  # the quote token's mint when quote_curve
+    curve_seed_source: str = "birth_legs"  # "create_event" (authoritative) | "birth_legs"
+    curve_seed_vsol: int | None = None  # CreateEvent.virtual_sol_reserves when decoded
 
     @property
     def dev_buy_share(self) -> float:
@@ -137,6 +159,62 @@ class BirthFeatures:
         would be positive on an empty hypothesis. Crew matching inherits that rule."""
 
         return tuple(s for s in self.snipers if s != self.deployer)
+
+
+def detect_curve_seed(
+    mint: str,
+    create_tx: Mapping[str, Any],
+    curve_owner: str | None,
+) -> tuple[bool, str | None, str, int | None]:
+    """Identify the curve's seed denomination from the create transaction alone.
+
+    Returns ``(quote_curve, quote_mint, source, seed_vsol)``.
+
+    Two witnesses, strongest first (both validated in studies/third_stratum.py —
+    RESULT_third_stratum.md T1: 20/20 chain concordance, 100% corpus coverage):
+
+    1. The pump ``CreateEvent`` decoded from the create's OWN ``logMessages`` with
+       invoke-stack attribution — a ``Program data:`` line is only trusted when the
+       runtime's invoke/success bracketing says pump was executing (any program can
+       emit any eight discriminator bytes). Carries ``quote_mint`` and the exact seed.
+    2. The curve's quote-token vault leg: a quote-curve create initializes a USDC
+       token account OWNED BY THE CURVE in the same transaction. This is the corpus
+       predicate, and it needs only the token balances already fetched.
+
+    When logs are absent (some RPC shapes, and every parity-test row reconstructed
+    from the corpus) witness 2 decides; a create with neither witness is standard —
+    the same default the validated corpus population was built on.
+    """
+
+    logs = (create_tx.get("meta") or {}).get("logMessages")
+    if logs:
+        try:
+            from shitcoims_intelligence.pump import AdvisoryPumpEvent, decode_pump_event
+            from shitcoims_intelligence.pump_layouts import PUMP_PROGRAM_ID
+            from shitcoims_tape.recorder import attribute_program_data
+
+            for entry in attribute_program_data(list(logs)).entries:
+                if entry.program_id != PUMP_PROGRAM_ID:
+                    continue
+                got = decode_pump_event(program_id=PUMP_PROGRAM_ID, data=entry.payload)
+                if (
+                    isinstance(got, AdvisoryPumpEvent)
+                    and got.event_name == "CreateEvent"
+                    and str(got.fields["mint"]) == mint
+                ):
+                    quote = str(got.fields["quote_mint"])
+                    vsol = int(got.fields["virtual_sol_reserves"])  # type: ignore[arg-type]
+                    is_quote = vsol != SEED_STANDARD_LAMPORTS
+                    return (is_quote, quote if is_quote else None, "create_event", vsol)
+        except Exception:  # decode is advisory; the leg witness still decides
+            pass
+
+    if curve_owner:
+        meta = create_tx.get("meta") or {}
+        for b in meta.get("postTokenBalances") or []:
+            if b.get("mint") == USDC_MINT and b.get("owner") == curve_owner:
+                return (True, USDC_MINT, "birth_legs", None)
+    return (False, None, "birth_legs", None)
 
 
 def extract_birth_features(
@@ -175,6 +253,10 @@ def extract_birth_features(
             by_owner[leg.owner] = by_owner.get(leg.owner, 0) + leg.delta_raw
     snipers = tuple(sorted(o for o, d in by_owner.items() if d > 0 and o != curve_owner))
 
+    quote_curve, quote_mint, seed_source, seed_vsol = detect_curve_seed(
+        mint, create_tx, curve_owner
+    )
+
     return BirthFeatures(
         mint=mint,
         born_standard=born,
@@ -188,6 +270,10 @@ def extract_birth_features(
         snipers=snipers,
         partial=partial,
         notes=tuple(notes),
+        quote_curve=quote_curve,
+        curve_quote_mint=quote_mint,
+        curve_seed_source=seed_source,
+        curve_seed_vsol=seed_vsol,
     )
 
 
@@ -215,10 +301,20 @@ class CheapFeatures:
     is_mayhem_mode: bool
     pool: str | None
     signature: str | None
+    # vendor-float seed estimate: vSolInBondingCurve minus solAmount. Reads exactly 30.0 on
+    # every retained standard AND mayhem frame; expected ≈4.292 on a quote-curve frame,
+    # but no such frame has been retained yet, so this is a suspicion-only witness —
+    # hydration's create-event/leg check decides (detect_curve_seed).
+    v_sol_seed_est: float | None = None
 
     @property
     def dev_buy_share_est(self) -> float:
         return self.dev_buy_raw_est / PUMP_SUPPLY_RAW
+
+    @property
+    def quote_seed_suspected(self) -> bool:
+        est = self.v_sol_seed_est
+        return est is not None and abs(est - SEED_QUOTE_USDC_RAW / 1e9) < 1e-3
 
 
 def cheap_features_from_event(payload: Mapping[str, Any]) -> CheapFeatures:
@@ -227,6 +323,10 @@ def cheap_features_from_event(payload: Mapping[str, Any]) -> CheapFeatures:
         dev_buy_raw_est = round(float(raw_buy) * 10**PUMP_DECIMALS)
     except (TypeError, ValueError):
         dev_buy_raw_est = 0
+    try:
+        v_sol_seed_est = float(payload["vSolInBondingCurve"]) - float(payload.get("solAmount") or 0)
+    except (KeyError, TypeError, ValueError):
+        v_sol_seed_est = None
     return CheapFeatures(
         mint=str(payload.get("mint", "")),
         creator=payload.get("traderPublicKey"),
@@ -237,4 +337,5 @@ def cheap_features_from_event(payload: Mapping[str, Any]) -> CheapFeatures:
         is_mayhem_mode=bool(payload.get("is_mayhem_mode", False)),
         pool=payload.get("pool"),
         signature=payload.get("signature"),
+        v_sol_seed_est=v_sol_seed_est,
     )

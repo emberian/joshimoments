@@ -32,9 +32,12 @@ PER-COIN ex-deployer sniper sets for every multi-launch deployer's coins, and th
 match computes launch-set-vs-stored-coin-set Jaccard — the same statistic at the same
 unit, not a diluted set-vs-union approximation. A match names the fingerprint (crew id
 = the deployer's ledger id), the best-matching prior coin, the Jaccard, and the crew's
-recorded rip/dump counts. A match against a crew with NO recorded rips or dumps is
-reported as continuity, never escalated to a KNOWN-CREW verdict — reuse of a clean
-crew is not a crime record.
+recorded rip/dump counts — and, because the best Jaccard frequently TIES across coins
+of different crews (44.7% of matches, RESULT_d4m_crew_graph.md §2.5), it also carries
+``tied_crew_ids``: every crew the data supports equally, with the named id a
+deterministic representative of that set, never sqlite row order. A match whose entire
+tie set has NO recorded rips or dumps is reported as continuity, never escalated to a
+KNOWN-CREW verdict — reuse of a clean crew is not a crime record.
 
 BUILD / REFRESH
 ---------------
@@ -266,6 +269,24 @@ class DeployerHistory:
 
 @dataclass(frozen=True, slots=True)
 class CrewMatch:
+    """One launch's best crew-fingerprint match.
+
+    THE TIE, measured before it was fixed (RESULT_d4m_crew_graph.md §2.5): in 44.7% of
+    simulated matches (824/1,844, 95% CI 42.4-47.0%) the best Jaccard is achieved by
+    stored coins belonging to TWO OR MORE different crews, and the shipped matcher used
+    to print whichever crew sqlite's row order surfaced first. The Jaccard and overlap
+    were always solid; the single crew id next to them frequently was not.
+
+    So a match now carries the WHOLE tie: ``tied_crew_ids`` is every crew whose stored
+    fingerprint achieves the best Jaccard, and ``crew_id`` is a deterministic
+    REPRESENTATIVE of that set (see ``crew_match`` for the selection rule), never an
+    engine-order accident. When ``len(tied_crew_ids) > 1`` the data does not identify a
+    single crew, and every surface that prints the id must say so. ``n_tied_dirty``
+    counts tied crews with recorded rips/dumps — the honest input to any escalation,
+    since an equally-matching dirty crew is equally supported by the data whichever
+    representative is shown.
+    """
+
     crew_id: int
     deployer: str
     matched_mint: str
@@ -277,6 +298,20 @@ class CrewMatch:
     crew_rips: int
     crew_dumps: int
     dirty: bool
+    #: every crew at the best Jaccard, ascending; always includes ``crew_id``.
+    tied_crew_ids: tuple[int, ...] = ()
+    #: how many of ``tied_crew_ids`` have recorded rips or dumps.
+    n_tied_dirty: int = 0
+
+    @property
+    def n_tied_crews(self) -> int:
+        return len(self.tied_crew_ids) or 1
+
+    @property
+    def ambiguous(self) -> bool:
+        """True when the data ties: the fingerprint fits 2+ crews equally well."""
+
+        return self.n_tied_crews > 1
 
 
 class Ledger:
@@ -335,7 +370,6 @@ class Ledger:
         *,
         min_overlap: int = 2,
         min_jaccard: float = 0.10,
-        max_candidates: int = 200,
     ) -> CrewMatch | None:
         """Best pairwise Jaccard between the launch's ex-deployer sniper set and any
         stored per-coin crew set. Pairwise coin-vs-coin is the unit cmd_graph validated
@@ -343,6 +377,34 @@ class Ledger:
         single shared wallet a crew — one recidivist wallet is what ``sniper_prior_max``
         already reports, and inflating it into a fingerprint would manufacture matches
         out of ambient bot traffic.
+
+        NO CANDIDATE LIMIT — the scan is complete. The retired ``ORDER BY overlap DESC
+        LIMIT 200`` could drop the true best match, because overlap order is not Jaccard
+        order (measured, RESULT_d4m_crew_graph.md §2.3: 332/3,000 launches exceeded 200
+        candidates, 3 got a strictly worse answer). And the limit never bought speed:
+        sqlite does the GROUP BY either way, the LIMIT only truncated after a sort.
+        Measured on the real 141MB ledger (2026-08-29): typical launch sets p50 ~11.5ms
+        untruncated vs ~12.3ms with the old LIMIT; a pathological 12-hot-wallet set with
+        15,507 candidates, ~233ms vs ~222ms. The complete scan costs nothing that
+        matters and removes the only path by which a better match could be lost.
+
+        ``min_jaccard`` is a guard the current corpus never exercises — INERT AT ITS
+        SHIPPED VALUE, measured (RESULT_d4m_crew_graph.md §2.4): of 1,844 simulated
+        matches reaching a candidate at ``overlap >= 2``, ZERO were rejected by the 0.10
+        floor; median matched Jaccard 0.50, p90 1.00. Launch and stored sets are small,
+        so an overlap of 2 already implies J >= ~0.2. The floor only binds if a stored
+        set grows to ~10x the launch set (union > 20 at overlap 2), which this corpus
+        has not produced. It is kept as a documented backstop for corpora with much
+        larger stored sets, not as a working filter; ``min_overlap`` is the gate.
+
+        RETURNED NUMBERS are exactly the retired matcher's deterministic pair — the
+        best Jaccard, and the largest overlap among the stored coins achieving it (the
+        old first-strict-improvement scan in overlap-descending order reported precisely
+        that row's overlap/set-size). What changed is the ATTRIBUTION: ``tied_crew_ids``
+        carries every crew at the best Jaccard, and the named ``crew_id`` is a
+        deterministic representative — chosen among the best-Jaccard, largest-overlap
+        rows by worst recorded conduct first (dirty, then rips+dumps, then most stored
+        coins), then lowest crew id, then lexicographic mint — never engine row order.
         """
 
         wallets = sorted(set(launch_set))
@@ -353,35 +415,64 @@ class Ledger:
             f"""SELECT s.mint, count(*) AS overlap, c.set_size, c.crew_id
                 FROM crew_set s JOIN crew_coins c USING (mint)
                 WHERE s.wallet IN ({marks})
-                GROUP BY s.mint HAVING overlap >= ?
-                ORDER BY overlap DESC LIMIT ?""",
-            (*wallets, min_overlap, max_candidates),
+                GROUP BY s.mint HAVING overlap >= ?""",
+            (*wallets, min_overlap),
         ).fetchall()
-        best: tuple[float, str, int, int, int] | None = None
-        for mint, overlap, set_size, crew_id in rows:
+
+        def _j(overlap: int, set_size: int) -> float:
             union = len(wallets) + set_size - overlap
-            j = overlap / union if union else 0.0
-            if j >= min_jaccard and (best is None or j > best[0]):
-                best = (j, mint, int(overlap), int(set_size), int(crew_id))
-        if best is None:
+            return overlap / union if union else 0.0
+
+        best_j: float | None = None
+        for _mint, overlap, set_size, _crew_id in rows:
+            j = _j(overlap, set_size)
+            if j >= min_jaccard and (best_j is None or j > best_j):
+                best_j = j
+        if best_j is None:
             return None
-        j, mint, overlap, set_size, crew_id = best
-        deployer, n_coins, rips, dumps, dirty = self._con.execute(
-            "SELECT deployer, n_coins, rips, dumps, dirty FROM crews WHERE crew_id = ?",
-            (crew_id,),
-        ).fetchone()
+        tied = [
+            (mint, int(overlap), int(set_size), int(crew_id))
+            for mint, overlap, set_size, crew_id in rows
+            if _j(overlap, set_size) == best_j
+        ]
+        tied_crew_ids = sorted({crew_id for _, _, _, crew_id in tied})
+        records: dict[int, tuple[str, int, int, int, bool]] = {}
+        for lo in range(0, len(tied_crew_ids), 500):  # chunked: wide ties stay under
+            chunk = tied_crew_ids[lo : lo + 500]      # sqlite's bound-variable cap
+            in_marks = ",".join("?" for _ in chunk)
+            for crew_id, deployer, n_coins, rips, dumps, dirty in self._con.execute(
+                f"""SELECT crew_id, deployer, n_coins, rips, dumps, dirty
+                    FROM crews WHERE crew_id IN ({in_marks})""",
+                chunk,
+            ):
+                records[int(crew_id)] = (deployer, int(n_coins), int(rips), int(dumps), bool(dirty))
+        n_tied_dirty = sum(1 for _dep, _n, _r, _d, dirty in records.values() if dirty)
+
+        # The reported overlap/set-size: the retired matcher's deterministic choice.
+        max_overlap = max(overlap for _, overlap, _, _ in tied)
+        top = [t for t in tied if t[1] == max_overlap]
+
+        def _representative(t: tuple[str, int, int, int]) -> tuple:
+            mint, _overlap, _set_size, crew_id = t
+            _dep, n_coins, rips, dumps, dirty = records[crew_id]
+            return (not dirty, -(rips + dumps), -n_coins, crew_id, mint)
+
+        mint, overlap, set_size, crew_id = min(top, key=_representative)
+        deployer, n_coins, rips, dumps, dirty = records[crew_id]
         return CrewMatch(
             crew_id=crew_id,
             deployer=deployer,
             matched_mint=mint,
-            jaccard=round(j, 4),
+            jaccard=round(best_j, 4),
             overlap=overlap,
             launch_set_size=len(wallets),
             matched_set_size=set_size,
-            crew_coins=int(n_coins),
-            crew_rips=int(rips),
-            crew_dumps=int(dumps),
-            dirty=bool(dirty),
+            crew_coins=n_coins,
+            crew_rips=rips,
+            crew_dumps=dumps,
+            dirty=dirty,
+            tied_crew_ids=tuple(tied_crew_ids),
+            n_tied_dirty=n_tied_dirty,
         )
 
 

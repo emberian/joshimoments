@@ -219,6 +219,189 @@ def test_verdict_known_crew_by_recidivist_sniper(mini_ledger: Ledger):
     assert any(r.startswith("recidivist_sniper") for r in s.reasons)
 
 
+# -- the crew-id fix: ties held whole, deterministic attribution, complete scan --------
+#
+# Measured before the fix (RESULT_d4m_crew_graph.md §2): the best Jaccard tied across
+# 2+ crews in 44.7% of matches and the printed crew id was sqlite row order; LIMIT 200
+# could drop the true best match; min_jaccard=0.10 never rejected anything. The fix
+# carries the tie whole, names a deterministic representative, and scans every
+# candidate. The Jaccard/overlap NUMBERS are pinned unchanged by these tests.
+
+TIE_W = ["TieWalletA1111111111111111111111111111111",
+         "TieWalletB1111111111111111111111111111111",
+         "TieWalletC1111111111111111111111111111111"]
+STRAY = "StrayWallet1111111111111111111111111111111"
+
+
+def _tie_ledger(tmp_path: Path, *, reverse: bool = False, dirty_crew: bool = True,
+                name: str = "tie.sqlite") -> Ledger:
+    """Three crews whose stored fingerprints tie EXACTLY on a {W1, W2, stray} launch:
+    each stored set shares {W1, W2} plus one private wallet (overlap 2, equal sizes,
+    equal Jaccard). Crew 2 is the only one with recorded rips/dumps (when
+    ``dirty_crew``). ``reverse`` flips every insert order — the axis the retired
+    matcher's answer varied along."""
+
+    path = tmp_path / name
+    con = sqlite3.connect(path)
+    con.executescript(ledger_mod._SCHEMA)
+    crews = [
+        (1, "TieDeployerA111111111111111111111111111111", 4, 0, 0, 0),
+        (2, "TieDeployerB111111111111111111111111111111", 3, 2, 3, 1)
+        if dirty_crew else (2, "TieDeployerB111111111111111111111111111111", 3, 0, 0, 0),
+        (3, "TieDeployerC111111111111111111111111111111", 9, 0, 0, 0),
+    ]
+    coins = [("TieCoinA1pump", 1, 3), ("TieCoinB1pump", 2, 3), ("TieCoinC1pump", 3, 3)]
+    sets = [(m, w) for m, _, _ in coins for w in (TIE_W[0], TIE_W[1], f"Private{m}")]
+    if reverse:
+        crews, coins, sets = crews[::-1], coins[::-1], sets[::-1]
+    con.executemany("INSERT INTO crews VALUES (?,?,?,?,?,?)", crews)
+    con.executemany("INSERT INTO crew_coins VALUES (?,?,?)", coins)
+    con.executemany("INSERT INTO crew_set VALUES (?,?)", sets)
+    con.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    con.commit()
+    con.close()
+    return Ledger(path)
+
+
+def test_crew_tie_is_carried_whole_and_attribution_is_deterministic(tmp_path: Path):
+    """The tie case: same CrewMatch regardless of sqlite insert/row order, all tied
+    crews named, the representative the dirty one — and the measured numbers exactly
+    the hand-computed values the retired matcher reported (overlap 2, union 3+3-2=4,
+    Jaccard 0.5)."""
+
+    results = []
+    for reverse in (False, True):
+        led = _tie_ledger(tmp_path, reverse=reverse, name=f"tie{int(reverse)}.sqlite")
+        m = led.crew_match([TIE_W[0], TIE_W[1], STRAY])
+        led.close()
+        assert m is not None
+        # the numbers: unchanged from the retired matcher, hand-checked
+        assert m.jaccard == 0.5 and m.overlap == 2
+        assert m.launch_set_size == 3 and m.matched_set_size == 3
+        # the tie is the answer: every equally-supported crew, honestly counted
+        assert m.tied_crew_ids == (1, 2, 3) and m.n_tied_crews == 3 and m.ambiguous
+        assert m.n_tied_dirty == 1
+        # deterministic representative: the crew with the recorded conduct, not row order
+        assert m.crew_id == 2 and m.matched_mint == "TieCoinB1pump" and m.dirty
+        results.append(m)
+    assert results[0] == results[1]  # byte-equal across insert orders
+
+
+def test_unambiguous_match_keeps_numbers_and_stays_unambiguous(mini_ledger: Ledger):
+    """One stored crew, no tie: the fixture numbers are byte-unchanged and the match
+    says so (tie set of exactly one)."""
+
+    m = mini_ledger.crew_match([*CREW_W[:2], STRAY])
+    assert m is not None
+    assert m.jaccard == round(2 / (3 + 3 - 2), 4) and m.overlap == 2  # 0.5, unchanged
+    assert m.tied_crew_ids == (1,) and m.n_tied_crews == 1 and not m.ambiguous
+    assert m.n_tied_dirty == 1 and m.crew_id == 1
+
+
+def test_tied_jaccard_reports_the_retired_matchers_overlap(tmp_path: Path):
+    """Equal best Jaccard at DIFFERENT overlaps: the reported pair must stay the
+    retired matcher's deterministic one — the largest overlap among best-Jaccard rows
+    (its overlap-descending scan reported exactly that row), so no shipped statistic
+    moves. Launch of 4: {W1,W2,W3,P1,P2} gives 3/6 = 0.5; {W1,W2} gives 2/4 = 0.5."""
+
+    path = tmp_path / "ovl.sqlite"
+    con = sqlite3.connect(path)
+    con.executescript(ledger_mod._SCHEMA)
+    con.executemany("INSERT INTO crews VALUES (?,?,?,?,?,?)", [
+        (1, "OvlDeployerA111111111111111111111111111111", 2, 0, 0, 0),
+        (3, "OvlDeployerC111111111111111111111111111111", 2, 0, 0, 0),
+    ])
+    con.executemany("INSERT INTO crew_coins VALUES (?,?,?)",
+                    [("SmallCoin1pump", 1, 2), ("BigCoin1pump", 3, 5)])
+    con.executemany("INSERT INTO crew_set VALUES (?,?)",
+                    [("SmallCoin1pump", TIE_W[0]), ("SmallCoin1pump", TIE_W[1])]
+                    + [("BigCoin1pump", w) for w in (*TIE_W, "PrivD11", "PrivE11")])
+    con.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    con.commit()
+    con.close()
+    led = Ledger(path)
+    m = led.crew_match([*TIE_W, STRAY])
+    led.close()
+    assert m is not None
+    assert m.jaccard == 0.5 and m.overlap == 3 and m.matched_set_size == 5
+    assert m.matched_mint == "BigCoin1pump" and m.crew_id == 3
+    assert m.tied_crew_ids == (1, 3)  # the smaller-overlap equal-Jaccard crew still counts
+
+
+def test_no_candidate_limit_can_lose_the_best_match(tmp_path: Path):
+    """The retired ORDER BY overlap DESC LIMIT 200 could drop the Jaccard winner
+    behind a block of 300 equal-overlap fillers (measured: 332/3,000 launches over
+    the limit, 3 strictly worse answers). The scan is now complete — the winner is
+    found regardless of insert position — and crew_match no longer has a truncation
+    knob to mis-set."""
+
+    import inspect
+
+    h1, h2, q = ("HotWalletA111111111111111111111111111111",
+                 "HotWalletB111111111111111111111111111111",
+                 "QuietWallet11111111111111111111111111111")
+    path = tmp_path / "trunc.sqlite"
+    con = sqlite3.connect(path)
+    con.executescript(ledger_mod._SCHEMA)
+    con.executemany("INSERT INTO crews VALUES (?,?,?,?,?,?)", [
+        (1, "FillerDeployer1111111111111111111111111111", 300, 0, 0, 0),
+        (2, "WinnerDeployer1111111111111111111111111111", 2, 1, 0, 1),
+    ])
+    # 300 filler coins tied at overlap 2, Jaccard 2/12; the true winner (2/3) LAST
+    for i in range(300):
+        mint = f"Filler{i}pump"
+        con.execute("INSERT INTO crew_coins VALUES (?,?,?)", (mint, 1, 11))
+        con.executemany("INSERT INTO crew_set VALUES (?,?)",
+                        [(mint, h1), (mint, h2)] + [(mint, f"Priv{i}x{k}") for k in range(9)])
+    con.execute("INSERT INTO crew_coins VALUES ('Winner1pump', 2, 2)")
+    con.executemany("INSERT INTO crew_set VALUES (?,?)", [("Winner1pump", q), ("Winner1pump", h1)])
+    con.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    con.commit()
+    con.close()
+    led = Ledger(path)
+    m = led.crew_match([h1, h2, q])
+    led.close()
+    assert m is not None
+    assert m.jaccard == round(2 / 3, 4) and m.crew_id == 2 and m.matched_mint == "Winner1pump"
+    assert not m.ambiguous
+    # the structural pin: no limit parameter exists to reintroduce the loss
+    assert "max_candidates" not in inspect.signature(Ledger.crew_match).parameters
+
+
+def test_tied_dirty_crew_escalates_and_the_line_says_shared(tmp_path: Path):
+    """A tie containing a dirty crew is KNOWN_CREW whichever representative is shown,
+    and the postable line states the tie instead of naming one crew as if the data
+    identified it."""
+
+    led = _tie_ledger(tmp_path)
+    snipes = [_tx(pre=[], post=[_tb(2, w, 1_000_000_000)]) for w in TIE_W[:2]]
+    b = extract_birth_features(MINT, _create_tx(), snipes)
+    s = score_launch(cheap_features_from_event(_cheap()), b, led)
+    led.close()
+    assert s.verdict == VERDICT_KNOWN_CREW
+    assert s.crew is not None and s.crew.tied_crew_ids == (1, 2, 3)
+    assert any(":tied=3:dirty_in_tie=1" in r for r in s.reasons)
+    line = s.row()["tg_line"]
+    assert "3 tracked crews share equally" in line and "does not single one out" in line
+    assert "#1, #2, #3" in line and "#2 shown as one of them" in line
+    assert "matched crew fingerprint #" not in line  # the single-crew claim is gone
+
+
+def test_all_clean_tie_stays_continuity_not_a_verdict(tmp_path: Path):
+    """A tie whose EVERY crew is clean is continuity, exactly as a clean single match
+    is — and the note carries the whole tie set for the watch surfaces."""
+
+    led = _tie_ledger(tmp_path, dirty_crew=False)
+    snipes = [_tx(pre=[], post=[_tb(2, w, 1_000_000_000)]) for w in TIE_W[:2]]
+    b = extract_birth_features(MINT, _create_tx(), snipes)
+    s = score_launch(cheap_features_from_event(_cheap()), b, led)
+    led.close()
+    assert s.verdict == VERDICT_BUNDLED  # 3 birth-slot buyers; the crews add no record
+    assert s.crew is None
+    note = s.features["crew_continuity_note"]
+    assert tuple(note["tied_crew_ids"]) == (1, 2, 3) and note["n_tied_dirty"] == 0
+
+
 def test_verdict_not_clean_dev_buy(mini_ledger: Ledger):
     b = extract_birth_features(MINT, _create_tx(dev_buy=50_000_000_000_000))  # 5%
     s = score_launch(cheap_features_from_event(_cheap(initial_buy=50_000_000.0)), b, mini_ledger)
@@ -260,6 +443,144 @@ def test_partial_birth_slot_cannot_mint_clean(mini_ledger: Ledger):
     b = extract_birth_features(MINT, _create_tx(), partial=True)
     s = score_launch(cheap_features_from_event(_cheap()), b, mini_ledger)
     assert s.verdict == VERDICT_UNSCORED and "birth_slot_partial" in s.reasons
+
+
+# -- the third stratum: the USDC-quoted curve (RESULT_third_stratum.md) -----------------
+
+USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+
+def _quote_create_tx(dev_buy: int = 10_000_000_000_000) -> dict:
+    """A stratum-3 create: token side identical to standard, plus the curve's USDC
+    vault leg the create transaction initializes (the corpus-validated witness)."""
+
+    tx = _create_tx(dev_buy)
+    tx["meta"]["postTokenBalances"].append(_tb(3, CURVE, 204_161_531, mint=USDC))
+    return tx
+
+
+def _create_event_logs(mint: str, vsol: int, quote: str) -> list[str]:
+    """Real encoded CreateEvent bytes inside a well-formed pump invoke bracket."""
+
+    import base64
+    import struct
+
+    from solders.pubkey import Pubkey
+
+    from shitcoims_intelligence.pump_layouts import PUMP_EVENT_LAYOUTS, PUMP_PROGRAM_ID
+
+    layout = next(la for la in PUMP_EVENT_LAYOUTS if la.event_name == "CreateEvent")
+    values = {
+        "name": "N", "symbol": "S", "uri": "u",
+        "mint": mint, "bonding_curve": CURVE_PK, "user": DEV_PK, "creator": DEV_PK,
+        "timestamp": 1_756_300_000, "virtual_token_reserves": 1_073_000_000_000_000,
+        "virtual_sol_reserves": vsol, "real_token_reserves": 793_100_000_000_000,
+        "token_total_supply": 1_000_000_000_000_000, "token_program": TOKEN_PK,
+        "is_mayhem_mode": False, "is_cashback_enabled": False,
+        "quote_mint": quote, "virtual_quote_reserves": vsol,
+    }
+    raw = bytearray(layout.discriminator)
+    for name, spec in layout.fields:
+        v = values[name]
+        if spec == "string":
+            encoded = str(v).encode()
+            raw += struct.pack("<I", len(encoded)) + encoded
+        elif spec == "pubkey":
+            raw += bytes(Pubkey.from_string(str(v)))
+        elif spec in ("u64", "i64"):
+            raw += struct.pack("<q" if spec == "i64" else "<Q", int(v))
+        elif spec == "bool":
+            raw += b"\x01" if v else b"\x00"
+        else:  # pragma: no cover - layout drift would fail the decode assert anyway
+            raise AssertionError(f"unhandled spec {spec}")
+    return [
+        f"Program {PUMP_PROGRAM_ID} invoke [1]",
+        "Program data: " + base64.b64encode(bytes(raw)).decode("ascii"),
+        f"Program {PUMP_PROGRAM_ID} success",
+    ]
+
+
+# Valid base58 pubkeys the encoder can round-trip (the fixture MINT above is not one).
+def _pk(seed: int) -> str:
+    from solders.pubkey import Pubkey
+
+    return str(Pubkey.from_bytes(bytes((seed,)) * 32))
+
+
+CURVE_PK, DEV_PK, TOKEN_PK = _pk(2), _pk(3), _pk(4)
+
+
+def test_quote_curve_detected_from_birth_legs():
+    b = extract_birth_features(MINT, _quote_create_tx())
+    assert b.born_standard  # token side is indistinguishable from standard
+    assert b.quote_curve and b.curve_quote_mint == USDC
+    assert b.curve_seed_source == "birth_legs" and b.curve_seed_vsol is None
+    # a USDC leg NOT owned by the curve (someone paying fees in USDC) is not a witness
+    tx = _create_tx()
+    tx["meta"]["postTokenBalances"].append(_tb(3, SNIPER, 999, mint=USDC))
+    assert not extract_birth_features(MINT, tx).quote_curve
+
+
+def test_quote_curve_detected_from_create_event_logs():
+    from dregg_screen.features import detect_curve_seed
+
+    mint_pk = _pk(7)
+    tx = _tx([], [_tb(1, CURVE, 1_000_000_000_000_000)])
+    tx["meta"]["logMessages"] = _create_event_logs(mint_pk, 4_292_000_000, USDC)
+    got = detect_curve_seed(mint_pk, tx, CURVE)
+    assert got == (True, USDC, "create_event", 4_292_000_000)
+    # the standard seed through the same channel stays standard
+    wsol = "So11111111111111111111111111111111111111112"
+    tx["meta"]["logMessages"] = _create_event_logs(mint_pk, 30_000_000_000, wsol)
+    assert detect_curve_seed(mint_pk, tx, CURVE) == (False, None, "create_event", 30_000_000_000)
+
+
+def test_quote_curve_never_mints_clean(mini_ledger: Ledger):
+    """The registered ship rule (REGISTRATION_third_stratum.md T4): all five gates
+    pass, but CLEAN names a measured precision claim and none was measured on this
+    stratum — UNSCORED with the gates stated, outside the validated population."""
+
+    b = extract_birth_features(MINT, _quote_create_tx())
+    s = score_launch(cheap_features_from_event(_cheap()), b, mini_ledger,
+                     base_rates=_rates(mini_ledger))
+    assert s.verdict == VERDICT_UNSCORED
+    assert s.reasons == ("quote_curve_screen_not_measured", "five_gates_passed")
+    assert not s.in_validated_population
+    assert "quote_curve:usdc:outside_validated_population" in s.population_notes
+    assert s.features["quote_curve"] is True
+    assert s.features["curve_quote_mint"] == USDC
+    line = s.row()["tg_line"]
+    assert "UNSCORED" in line and "CLEAN" not in line
+    # the B1 precision sentence never rides a quote-curve line
+    assert "Screen precision" not in line
+
+
+def test_quote_curve_keeps_feature_fact_verdicts(mini_ledger: Ledger):
+    """Birth-slot facts are valid on the stratum — a bundled quote-curve launch is
+    BUNDLED, not shrugged into UNSCORED."""
+
+    others = "Wal%s1111111111111111111111111111111111111"
+    snipes = [_tx(pre=[], post=[_tb(2, others % i, 1_000_000_000)]) for i in range(3)]
+    b = extract_birth_features(MINT, _quote_create_tx(), snipes)
+    s = score_launch(cheap_features_from_event(_cheap()), b, mini_ledger)
+    assert s.verdict == VERDICT_BUNDLED and not s.in_validated_population
+
+
+def test_quote_seed_suspicion_is_note_only_until_hydration(mini_ledger: Ledger):
+    payload = _cheap()
+    payload["vSolInBondingCurve"] = 4.792
+    payload["solAmount"] = 0.5
+    c = cheap_features_from_event(payload)
+    assert c.v_sol_seed_est == pytest.approx(4.292) and c.quote_seed_suspected
+    s = score_launch(c, None, mini_ledger, unscored_reason="budget:daily_helius_ceiling")
+    assert "vendor_seed:quote_curve_suspected:unverified" in s.population_notes
+    assert not s.in_validated_population
+    # a standard frame carries no suspicion (and hydration clears it either way)
+    payload["vSolInBondingCurve"] = 30.493827158
+    assert not cheap_features_from_event(payload).quote_seed_suspected
+    b = extract_birth_features(MINT, _create_tx())
+    s2 = score_launch(cheap_features_from_event(payload), b, mini_ledger)
+    assert s2.verdict == VERDICT_CLEAN and s2.in_validated_population
 
 
 # -- budget and hydrator ---------------------------------------------------------------
