@@ -78,6 +78,10 @@ select = ["E", "F", "I", "B", "SIM", "RUF"]
 # per-line noqas). The site pages are made of such numbers, so the decision is made
 # once here instead of a noqa per figure.
 "dregg_site/pages.py" = ["RUF001"]
+# Same decision, same reason, for the portal's gated pages: they render the same measured
+# numbers behind the gate that dregg_site renders in front of it, so `2.4x` and `2.4×` must
+# not become a difference between the public page and the paid one.
+"dregg_portal/gated.py" = ["RUF001"]
 
 # Typing is currently DOCUMENTATION, not a checked invariant: the tree is annotated
 # throughout and every domain type is a frozen slotted dataclass, but nothing verified it.
