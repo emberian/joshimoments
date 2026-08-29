@@ -53,6 +53,9 @@ from dregg_wire.visuals import build_panels
 from dregg_wire.wire import lede, render, write_artifact
 
 STATE_FILE = "wire_state.json"
+#: Keep our own summary under the approvals outbox's silent 3500-char clip, with room
+#: for the trim marker — a clipped summary must always SAY it is clipped.
+SUMMARY_MAX = 3400
 
 
 def load_state(state_dir: Path) -> dict:
@@ -116,7 +119,18 @@ def compose(args: argparse.Namespace) -> dict:
         shape += "\npanels: " + " · ".join(p["title"] for p in panel_rows)
     else:
         shape = f"posts as text only — {panel_note or 'no panels rendered'}"
-    summary = f"WIRE #{issue} — {day} · {shape}\n\n{telegram_text}"
+    header = f"WIRE #{issue} — {day} · {shape}"
+    summary = f"{header}\n\n{telegram_text}"
+    if len(summary) > SUMMARY_MAX:
+        # The approvals outbox clips summaries at 3500 SILENTLY (mid-word); trim
+        # ourselves, say so, and say what still posts — the payload text is always
+        # the exact message, and the operator is told where the DM stops short.
+        marker = (
+            f"\n\n[DM cap — trimmed here; posts in full "
+            f"({len(telegram_text)} chars) exactly as approved]"
+        )
+        keep = SUMMARY_MAX - len(header) - len(marker) - 2
+        summary = f"{header}\n\n{telegram_text[:keep]}{marker}"
     payload: dict = {"day": day, "text": telegram_text, "panels": panel_rows}
     if panel_rows:
         payload["preview_photo_path"] = panel_rows[0]["path"]  # the hero rides the approval DM

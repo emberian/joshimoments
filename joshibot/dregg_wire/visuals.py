@@ -23,6 +23,16 @@ that says WHY it is empty, never a blank chart.
 Captions are composed here too — plain text, no parse_mode, bare URLs only (the
 gate's hard production rule) — and respect Telegram's 1024-char photo-caption cap
 by construction.
+
+LANGUAGE AND FIT (the copy-pass rules, applied to pixels): a PNG can't be hovered
+for a gloss, so images carry LESS jargon than text, not more. Verdicts draw as the
+short human labels below (an unknown future verdict de-codes generically — enum
+glue never reaches a pixel), "validated population"/"operating point" render as
+"standard launches"/"long-run rate" — the same true claims in the digest's words
+(dregg_screen.digest, dregg_gate.lookup). And every variable-length string is drawn
+through ``_fit``, which measures the rendered extent and ellipsizes to its column,
+so no input can push text off the canvas; ``figure_texts`` hands every drawn string
+to the copy-invariant tests.
 """
 
 from __future__ import annotations
@@ -62,13 +72,43 @@ CAPTION_MAX = 1024  # Telegram's photo-caption cap
 VERDICT_COLORS = {
     "CLEAN": PRICE_UP,
     "KNOWN_CREW": AMBER,
+    "BUNDLED": AMBER,
     "NOT_CLEAN": PRICE_DOWN,
     "UNSCORED": PRICE_FLAT,
 }
-VERDICT_ORDER = ["CLEAN", "KNOWN_CREW", "NOT_CLEAN", "UNSCORED"]
+VERDICT_ORDER = ["CLEAN", "KNOWN_CREW", "BUNDLED", "NOT_CLEAN", "UNSCORED"]
+
+#: Image-width versions of ``dregg_screen.digest.VERDICT_GLOSS`` — same meaning,
+#: legend-sized. A PNG offers no hover gloss, so the enum name itself never draws.
+VERDICT_LABELS = {
+    "CLEAN": "clean",
+    "KNOWN_CREW": "known crew",
+    "BUNDLED": "bundled at birth",
+    "NOT_CLEAN": "dev buy over the line",
+    "UNSCORED": "couldn't read",
+}
+
+
+def verdict_label(verdict: str) -> str:
+    """Human label; an unknown future enum de-codes generically (the copy-pass rule:
+    machine syntax must never surface, even from codes that don't exist yet)."""
+
+    return VERDICT_LABELS.get(verdict, verdict.replace("_", " ").replace(":", " ").lower())
+
 
 MAX_GRAPH_NODES = 10
 MAX_GRAPH_LABELS = 5
+
+
+def _crew_tag(crew_id: object) -> str:
+    """The on-canvas crew tag. Real ledger ids are a few digits; a pathological id is
+    visibly elided (never silently truncated into a DIFFERENT id) so the tag can't
+    overflow its column — the full id stays in the caption and the wire text."""
+
+    tag = f"#{crew_id}"
+    return tag if len(tag) <= 10 else tag[:9] + "…"
+
+
 MAX_HEAT_CREWS = 8
 HEAT_DAYS = 7
 MAX_DUMBBELLS = 6
@@ -108,25 +148,56 @@ def _bare(ax) -> None:
     ax.tick_params(colors=INK_MUTED, labelsize=7.5, length=0)
 
 
+def _fit(fig: Figure, x: float, y: float, text: str, *, right: float = 0.985,
+         left: float = 0.015, **kw):
+    """``fig.text`` with a MEASURED clamp: the rendered extent must stay inside
+    [left, right] of the canvas, and a string that doesn't fit is ellipsized until
+    it does. Every variable-length figure-level string draws through this — an input
+    can shape a label, never push it off the canvas."""
+
+    artist = fig.text(x, y, text, **kw)
+    renderer = fig.canvas.get_renderer()
+    width = fig.get_figwidth() * fig.dpi
+    content = str(text)
+    while content:
+        box = artist.get_window_extent(renderer)
+        if box.x0 >= left * width and box.x1 <= right * width:
+            break
+        content = content[:-1].rstrip()
+        artist.set_text(content + "…")
+    return artist
+
+
+def figure_texts(fig: Figure) -> list[str]:
+    """Every string drawn on a figure — labels, annotations, tick labels — so the
+    copy-invariant tests can hold panel language to the same bar as channel text."""
+
+    texts = [t.get_text() for t in fig.texts]
+    for ax in fig.axes:
+        texts += [t.get_text() for t in ax.texts]
+        texts += [t.get_text() for t in (*ax.get_xticklabels(), *ax.get_yticklabels())]
+    return [t for t in texts if t]
+
+
 def _header(fig: Figure, title: str, right: str) -> None:
     fig.text(0.03, 0.945, title, color=INK, fontsize=13, fontweight="bold", va="center")
     fig.text(0.97, 0.945, right, color=INK_MUTED, fontsize=9, ha="right", va="center")
 
 
 def _footer(fig: Figure, text: str) -> None:
-    fig.text(0.5, 0.022, text, color=INK_MUTED, fontsize=7, ha="center")
+    _fit(fig, 0.5, 0.022, text, color=INK_MUTED, fontsize=7, ha="center")
 
 
-def _empty_panel(title: str, day: str, reason: str, source: str) -> bytes:
+def _empty_figure(title: str, day: str, reason: str, source: str) -> Figure:
     """The honest empty state: the panel exists, says why it is empty, and looks like
     the product — never a blank chart, never invented zeros."""
 
     fig = _fig()
     _header(fig, title, day)
     fig.text(0.5, 0.56, "nothing to draw", color=INK_MUTED, fontsize=15, ha="center")
-    fig.text(0.5, 0.44, reason, color=INK, fontsize=9.5, ha="center", wrap=True)
+    _fit(fig, 0.5, 0.44, reason, color=INK, fontsize=9.5, ha="center")
     _footer(fig, f"{source} · {FOOT}")
-    return _finish(fig)
+    return fig
 
 
 def _tight(value: object, limit: int = 24) -> str:
@@ -153,11 +224,11 @@ def _mult(x: float) -> str:
 # -- panel a: the day at a glance ------------------------------------------------------
 
 
-def render_day_glance(facts: dict) -> bytes:
+def _glance_figure(facts: dict) -> Figure:
     day = facts.get("day", "?")
     screen = facts.get("screen") or {}
     if screen.get("absent"):
-        return _empty_panel(
+        return _empty_figure(
             "DREGG WIRE — the day at a glance", day, str(screen["absent"]),
             str(screen.get("source", "dregg_screen")),
         )
@@ -190,15 +261,41 @@ def render_day_glance(facts: dict) -> bytes:
         ax.text(0.5, 0.5, "no rows carried a placeable hour", transform=ax.transAxes,
                 color=INK_MUTED, fontsize=8.5, ha="center", va="center")
 
-    # Legend row: verdict counts in text, color redundant by design.
+    # Legend row: human verdict labels with counts (color redundant by design), laid
+    # out by MEASURED extent — entries that would run past the row are cut and the
+    # cut is stated (right-aligned marker; kept entries yield room as needed), never
+    # drawn off-canvas.
+    renderer = fig.canvas.get_renderer()
+    width_px = fig.get_figwidth() * fig.dpi
+    kept: list[tuple] = []  # (swatch, entry, end_px)
     x = 0.055
-    for verdict in order:
-        label = f"{verdict} {verdicts[verdict]}"
-        fig.text(x, 0.815, "■ ", color=VERDICT_COLORS.get(verdict, VOLUME), fontsize=8, va="center")
-        fig.text(x + 0.016, 0.815, label, color=INK, fontsize=8, va="center")
-        x += 0.021 + 0.0115 * len(label)
+    cut_index: int | None = None
+    for index, verdict in enumerate(order):
+        label = f"{verdict_label(verdict)} {verdicts[verdict]}"
+        swatch = fig.text(x, 0.815, "■", color=VERDICT_COLORS.get(verdict, VOLUME),
+                          fontsize=8, va="center")
+        entry = fig.text(x + 0.016, 0.815, label, color=INK, fontsize=8, va="center")
+        end_px = entry.get_window_extent(renderer).x1
+        if end_px > 0.955 * width_px:
+            swatch.remove()
+            entry.remove()
+            cut_index = index
+            break
+        kept.append((swatch, entry, end_px))
+        x = end_px / width_px + 0.018
+    if cut_index is not None:
+        n_more = len(order) - cut_index
+        marker = fig.text(0.985, 0.815, f"+{n_more} more (see caption)",
+                          color=INK_MUTED, fontsize=8, ha="right", va="center")
+        marker_x0 = marker.get_window_extent(renderer).x0
+        while kept and kept[-1][2] > marker_x0 - 10:
+            swatch, entry, _end = kept.pop()
+            swatch.remove()
+            entry.remove()
+            n_more += 1
+        marker.set_text(f"+{n_more} more (see caption)")
 
-    # Right column: the numbers that make the day.
+    # Right column: the numbers that make the day, in the digest's vocabulary.
     fig.text(0.66, 0.755, f"{screen.get('launches_scored', 0)}", color=INK,
              fontsize=26, fontweight="bold", va="center")
     fig.text(0.66, 0.675, "launches scored", color=INK_MUTED, fontsize=8.5, va="center")
@@ -207,26 +304,32 @@ def render_day_glance(facts: dict) -> bytes:
     op = validated.get("operating_point") or {}
     _bullet(
         fig, y=0.50, rate=validated.get("clean_rate"), ref=op.get("admit_rate"),
-        color=PRICE_UP, ref_label="operating point",
+        color=PRICE_UP, ref_label="long-run",
         title=(
-            f"CLEAN admits (validated pop.): {validated.get('clean', 0)}"
+            f"clean rate on standard launches: {validated.get('clean', 0)}"
             f" of {validated.get('count', 0)}"
             if validated.get("count")
-            else "validated population: none of today's launches"
+            else "no standard-type launches today"
         ),
     )
+    _fit(fig, 0.66, 0.415, "the launch type where accuracy was measured",
+         color=INK_MUTED, fontsize=6.5, va="center")
     mayhem = screen.get("mayhem") or {}
     _bullet(
-        fig, y=0.27, rate=mayhem.get("share"), ref=None, color=AMBER, ref_label="",
-        title=f"mayhem-mode creates: {mayhem.get('count', 0)} of {screen.get('launches_scored', 0)}",
+        fig, y=0.25, rate=mayhem.get("share"), ref=None, color=AMBER, ref_label="",
+        title=f"mayhem-mode launches: {mayhem.get('count', 0)} of {screen.get('launches_scored', 0)}",
     )
-    fig.text(0.66, 0.195, "outside the validated population — labeled, not blended",
-             color=INK_MUTED, fontsize=6.5, va="center")
+    _fit(fig, 0.66, 0.175, "outside that measured slice — labeled, not blended",
+         color=INK_MUTED, fontsize=6.5, va="center")
 
     note = f" · {unplaced} rows without a placeable hour" if unplaced else ""
     _footer(fig, f"source: {screen.get('source', 'dregg_screen')}{note} · "
                  f"scores rank risk; they do not establish intent")
-    return _finish(fig)
+    return fig
+
+
+def render_day_glance(facts: dict) -> bytes:
+    return _finish(_glance_figure(facts))
 
 
 def _bullet(fig: Figure, *, y: float, rate: float | None, ref: float | None,
@@ -234,14 +337,14 @@ def _bullet(fig: Figure, *, y: float, rate: float | None, ref: float | None,
     """A thin bullet bar with an optional reference tick — rate vs its yardstick.
     A None rate states itself instead of pretending to be zero."""
 
-    fig.text(0.66, y + 0.085, title, color=INK, fontsize=8.5, va="center")
+    _fit(fig, 0.66, y + 0.085, title, color=INK, fontsize=8.5, va="center")
     ax = fig.add_axes((0.66, y - 0.01, 0.30, 0.055))
     _bare(ax)
     ax.set_xticks([])
     ax.set_yticks([])
     if rate is None:
         ax.set_xlim(0, 1)
-        ax.text(0.0, 0.5, "no rate today (empty denominator)", color=INK_MUTED,
+        ax.text(0.0, 0.5, "nothing to rate today", color=INK_MUTED,
                 fontsize=7.5, va="center")
         return
     span = max(rate, ref or 0.0, 0.02) * 1.30
@@ -254,9 +357,11 @@ def _bullet(fig: Figure, *, y: float, rate: float | None, ref: float | None,
             ha="right" if label_inside else "left")
     if ref is not None:
         ax.plot([ref, ref], [-0.15, 1.15], color=INK, linewidth=1.2)
-        # The yardstick label hangs BELOW the bar so it never collides with the title.
+        # The yardstick label hangs BELOW the bar so it never collides with the
+        # title; anchored toward the bar's interior so it cannot leave the canvas.
+        ha = "left" if ref <= 0.5 * span else "right"
         ax.text(ref, -0.45, f"{ref_label} {_pct(ref)}", color=INK_MUTED, fontsize=7,
-                ha="center", va="top")
+                ha=ha, va="top")
 
 
 # -- panel b: the crew board -----------------------------------------------------------
@@ -405,16 +510,20 @@ def crew_board_data(
     }
 
 
-def render_crew_board(board: dict) -> bytes:
+def _crew_board_figure(board: dict) -> Figure:
     day = str(board.get("day", "?"))
     if board["mode"] == "empty":
-        return _empty_panel("THE CREW BOARD", day, board["reason"], board["source"])
+        return _empty_figure("THE CREW BOARD", day, board["reason"], board["source"])
     if board["mode"] == "graph":
-        return _render_crew_graph(board, day)
-    return _render_crew_heatmap(board, day)
+        return _crew_graph_figure(board, day)
+    return _crew_heatmap_figure(board, day)
 
 
-def _render_crew_graph(board: dict, day: str) -> bytes:
+def render_crew_board(board: dict) -> bytes:
+    return _finish(_crew_board_figure(board))
+
+
+def _crew_graph_figure(board: dict, day: str) -> Figure:
     nodes: list[dict] = board["nodes"]
     edges: list[dict] = board["edges"]
     fig = _fig()
@@ -423,6 +532,8 @@ def _render_crew_graph(board: dict, day: str) -> bytes:
     ax = fig.add_axes((0.02, 0.10, 0.56, 0.74))
     ax.set_facecolor(SURFACE)
     ax.set_aspect("equal")
+    ax.set_xticks([])  # no ticks at all: axis("off") hides them but leaves phantom
+    ax.set_yticks([])  # tick artists that the text-extent guard would still measure
     ax.axis("off")
     n = len(nodes)
     # Deterministic circular layout: rank order (already sorted) walks clockwise
@@ -446,7 +557,7 @@ def _render_crew_graph(board: dict, day: str) -> bytes:
                    color=PRICE_DOWN if dirty else PRICE_FLAT, edgecolors=SURFACE,
                    linewidths=1.2, zorder=3)
         lx, ly = x * 1.30, y * 1.30
-        ax.text(lx, ly, f"#{node['crew_id']}", color=INK, fontsize=8, ha="center",
+        ax.text(lx, ly, _crew_tag(node["crew_id"]), color=INK, fontsize=8, ha="center",
                 va="center", zorder=4)
     ax.set_xlim(-1.55, 1.55)
     ax.set_ylim(-1.55, 1.55)
@@ -459,9 +570,9 @@ def _render_crew_graph(board: dict, day: str) -> bytes:
             f"{node.get('crew_coins', '?')} coins / {node.get('crew_rips', '?')} rips"
             f" / {node.get('crew_dumps', '?')} dumps"
         )
-        fig.text(0.62, y, f"#{node['crew_id']} — "
-                 f"{int(node.get('launches_today') or 0)} today · {record}",
-                 color=INK, fontsize=8.5)
+        _fit(fig, 0.62, y, f"#{node['crew_id']} — "
+             f"{int(node.get('launches_today') or 0)} today · {record}",
+             color=INK, fontsize=8.5)
         y -= 0.062
     fig.text(0.62, y - 0.01, "node size = launches today\nedge weight = shared birth-slot wallets\n"
              "red node = crew with insider dumps on record", color=INK_MUTED, fontsize=7.5,
@@ -469,10 +580,10 @@ def _render_crew_graph(board: dict, day: str) -> bytes:
 
     note = f" · {board['note']}" if board.get("note") else ""
     _footer(fig, f"source: {board['source']}{note} · {FOOT}")
-    return _finish(fig)
+    return fig
 
 
-def _render_crew_heatmap(board: dict, day: str) -> bytes:
+def _crew_heatmap_figure(board: dict, day: str) -> Figure:
     rows: list[dict] = board["rows"]
     days: list[str] = board["days"]
     fig = _fig()
@@ -482,7 +593,7 @@ def _render_crew_heatmap(board: dict, day: str) -> bytes:
     # Cell height caps out so a one-crew day draws a strip, not a monolith.
     ax_top = 0.80
     ax_height = min(0.64, 0.15 * len(rows))
-    ax = fig.add_axes((0.10, ax_top - ax_height, 0.52, ax_height))
+    ax = fig.add_axes((0.115, ax_top - ax_height, 0.505, ax_height))
     _bare(ax)
     grid_vals = [row["counts"] for row in rows]
     vmax = max((max(counts) for counts in grid_vals), default=1) or 1
@@ -494,33 +605,34 @@ def _render_crew_heatmap(board: dict, day: str) -> bytes:
     ax.set_xticks(range(len(days)))
     ax.set_xticklabels(["today" if d == day else d[5:] for d in days], fontsize=7.5)
     ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([f"#{row['crew_id']}" for row in rows], fontsize=8)
+    ax.set_yticklabels([_crew_tag(row["crew_id"]) for row in rows], fontsize=8)
 
-    # Right column: each crew's corpus record — the reason it is on a board at all.
-    fig.text(0.66, 0.825, "crew corpus record", color=INK_MUTED, fontsize=8.5)
+    # Right column: each crew's tracked record — the reason it is on a board at all.
+    fig.text(0.66, 0.825, "crew record on file", color=INK_MUTED, fontsize=8.5)
     for i, row in enumerate(rows):
         record = row.get("record", {})
         text = (
             f"{record.get('crew_coins', '?')} coins · {record.get('crew_rips', '?')} rips · "
-            f"{record.get('crew_dumps', '?')} insider dumps · J {record.get('max_jaccard', 0.0):.2f}"
+            f"{record.get('crew_dumps', '?')} insider dumps · "
+            f"match {record.get('max_jaccard', 0.0):.2f}"
         )
         # Align each record line with its heatmap row (imshow rows run top-down).
         y = ax_top - ax_height * (i + 0.5) / len(rows)
-        fig.text(0.66, y, text, color=INK, fontsize=8, va="center")
+        _fit(fig, 0.65, y, text, color=INK, fontsize=7.5, va="center")
     note = f" · {board['note']}" if board.get("note") else ""
     _footer(fig, f"cells = crew-fingerprint launches per UTC day · source: {board['source']}"
                  f"{note} · {FOOT}")
-    return _finish(fig)
+    return fig
 
 
 # -- panel c: the callout desk ---------------------------------------------------------
 
 
-def render_callout_desk(facts: dict) -> bytes:
+def _desk_figure(facts: dict) -> Figure:
     day = facts.get("day", "?")
     callouts = facts.get("callouts") or {}
     if callouts.get("absent"):
-        return _empty_panel(
+        return _empty_figure(
             "THE CALLOUT DESK", day, str(callouts["absent"]),
             str(callouts.get("source", "dregg_archive")),
         )
@@ -528,7 +640,7 @@ def render_callout_desk(facts: dict) -> bytes:
     measured: list[dict] = (callouts.get("measured") or [])[:MAX_DUMBBELLS]
     anti = callouts.get("anti_signal") or {}
     if not callouts.get("archived_today") and claim is None and not measured:
-        return _empty_panel(
+        return _empty_figure(
             "THE CALLOUT DESK", day,
             f"no callouts first-archived today (board lifetime: "
             f"{callouts.get('board_total', 0)} callouts, {callouts.get('board_callers', 0)} callers)",
@@ -546,7 +658,7 @@ def render_callout_desk(facts: dict) -> bytes:
         f"{callouts.get('distinct_mints_today', 0)} coins · "
         f"removals caught: {removals.get('today', 0)} today / {removals.get('total', 0)} all-time"
     )
-    fig.text(0.03, 0.855, strip, color=INK, fontsize=9)
+    _fit(fig, 0.03, 0.855, strip, color=INK, fontsize=9)
 
     ax = fig.add_axes((0.06, 0.20, 0.90, 0.56))
     _bare(ax)
@@ -616,7 +728,11 @@ def render_callout_desk(facts: dict) -> bytes:
     src = str(anti.get("short_source") or "season baseline study")
     _footer(fig, f"log multiple axis · hollow = provider claim, filled = our measured peak · "
                  f"dashed = season baseline ({src}) · {FOOT}")
-    return _finish(fig)
+    return fig
+
+
+def render_callout_desk(facts: dict) -> bytes:
+    return _finish(_desk_figure(facts))
 
 
 # -- captions + assembly ---------------------------------------------------------------
@@ -629,18 +745,26 @@ def hero_caption(facts: dict, issue: int, lede: str) -> str:
     if screen.get("absent"):
         lines.append(str(screen["absent"]))
     else:
-        mix = " · ".join(f"{k} {v}" for k, v in (screen.get("verdicts") or {}).items())
+        mix = " · ".join(
+            f"{verdict_label(k)} {v}" for k, v in (screen.get("verdicts") or {}).items()
+        )
         lines.append(f"{screen.get('launches_scored', 0)} launches scored — {mix}"[:300])
         validated = screen.get("validated") or {}
         op = validated.get("operating_point") or {}
         if validated.get("count"):
-            vs = f" vs {_pct(op['admit_rate'])} operating point" if op.get("admit_rate") is not None else ""
+            vs = (
+                f" vs the long-run {_pct(op['admit_rate'])}"
+                if op.get("admit_rate") is not None else ""
+            )
             lines.append(
-                f"CLEAN admits (validated): {validated.get('clean', 0)} of "
+                f"Clean rate on standard launches: {validated.get('clean', 0)} of "
                 f"{validated.get('count', 0)} ({_pct(validated.get('clean_rate'))}){vs}"
             )
         mayhem = screen.get("mayhem") or {}
-        lines.append(f"Mayhem-mode creates: {mayhem.get('count', 0)} ({_pct(mayhem.get('share'))})")
+        lines.append(
+            f"Mayhem-mode launches: {mayhem.get('count', 0)} ({_pct(mayhem.get('share'))}) "
+            "— labeled, not blended"
+        )
     lines.append("Full wire follows. Scores rank risk; they do not establish intent.")
     return _cap("\n".join(lines))
 

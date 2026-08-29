@@ -14,11 +14,16 @@ from pathlib import Path
 from dregg_wire import visuals
 from dregg_wire.facts import callout_facts, screen_facts
 from dregg_wire.visuals import (
+    _crew_board_figure,
+    _desk_figure,
+    _empty_figure,
+    _glance_figure,
     build_panels,
     crew_board_data,
     crew_caption,
     crew_day_history,
     desk_caption,
+    figure_texts,
     hero_caption,
     load_d4m_crew_graph,
     render_callout_desk,
@@ -252,6 +257,112 @@ def test_crew_board_empty_is_honest(tmp_path):
     assert "no crew-fingerprint matches" in board["reason"]
     png = render_crew_board(board)
     assert png[:8] == PNG_MAGIC and png == render_crew_board(board)
+
+
+# -- language + fit: images meet the copy-pass bar -------------------------------------
+
+
+def test_panels_speak_plain_language_not_enum_names():
+    """A PNG can't be hovered for a gloss: verdicts draw as human labels, and the
+    method vocabulary ("validated population", "operating point", "Jaccard") never
+    reaches a pixel. Unknown future verdicts de-code generically."""
+
+    texts = figure_texts(_glance_figure(make_facts()))
+    joined = "\n".join(texts)
+    assert "clean 3" in texts and "known crew 2" in texts
+    assert "dev buy over the line 1" in texts and "couldn't read 1" in texts
+    assert "clean rate on standard launches: 2 of 4" in texts
+    assert "long-run 8.5%" in joined
+    for jargon in ("KNOWN_CREW", "NOT_CLEAN", "UNSCORED", "validated pop",
+                   "validated population", "operating point"):
+        assert jargon not in joined, f"jargon {jargon!r} drawn on the glance panel"
+    assert visuals.verdict_label("SOME_FUTURE_ENUM:X") == "some future enum x"
+    hero = hero_caption(make_facts(), 0, "a lede")
+    assert "known crew 2" in hero and "KNOWN_CREW" not in hero
+    assert "long-run 8.5%" in hero and "operating point" not in hero
+
+
+def bloated_facts() -> dict:
+    """Deliberately hostile lengths and magnitudes for the canvas-bounds test."""
+
+    facts = make_facts()
+    facts["screen"]["verdicts"] = {
+        f"EXTREMELY_LONG_MACHINE_VERDICT_NAME_{i:02d}": 10**9 for i in range(6)
+    }
+    facts["screen"]["hourly"] = {"06": dict.fromkeys(facts["screen"]["verdicts"], 1)}
+    facts["screen"]["launches_scored"] = 6 * 10**9
+    facts["screen"]["validated"] = {
+        "count": 3_888_888_888, "clean": 777_777_777, "clean_rate": 0.2,
+        "operating_point": {"admit_rate": 0.085},
+    }
+    facts["screen"]["mayhem"] = {"count": 5_999_999_999, "share": 0.97, "definition": "d"}
+    facts["screen"]["source"] = "a very long source stamp " * 12
+    facts["callouts"]["archived_today"] = 10**15
+    facts["callouts"]["distinct_callers_today"] = 10**15
+    facts["callouts"]["removals"] = {"today": 10**12, "total": 10**15, "note": None}
+    facts["callouts"]["top_provider_claim"]["multiple"] = 9.9e18
+    facts["callouts"]["top_provider_claim"]["username"] = "averylongusername" * 20
+    facts["callouts"]["measured"] = [
+        {"callout_id": "c1", "mint": "M" * 44, "username": "w" * 300,
+         "claimed_multiple": 9.9e18, "ret_1h": -0.999, "ret_24h": None, "ret_7d": None,
+         "max_close_multiple": 1e-6, "final": False},
+    ]
+    return facts
+
+
+def _assert_texts_on_canvas(fig) -> None:
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width = fig.get_figwidth() * fig.dpi
+    height = fig.get_figheight() * fig.dpi
+    artists = list(fig.texts) + [t for ax in fig.axes for t in ax.texts]
+    artists += [t for ax in fig.axes for t in (*ax.get_xticklabels(), *ax.get_yticklabels())]
+    for artist in artists:
+        if not artist.get_text():
+            continue
+        box = artist.get_window_extent(renderer)
+        assert (box.x0 >= -2 and box.x1 <= width + 2
+                and box.y0 >= -2 and box.y1 <= height + 2), (
+            f"text off-canvas: {artist.get_text()[:60]!r} "
+            f"x0={box.x0:.0f} x1={box.x1:.0f} canvas={width:.0f}"
+        )
+
+
+def test_no_drawn_text_leaves_the_canvas(tmp_path):
+    """Any string that can vary in length is measured to its column: even absurd
+    labels and magnitudes may be ellipsized, never drawn off the canvas."""
+
+    scores = tmp_path / "scores"
+    write_scores(scores, DAY, [(10**9, 3), (7, 2)])
+    heat_board = crew_board_data(make_facts(), scores, None)
+    graph_board = {
+        "mode": "graph", "day": DAY, "source": "dregg_d4m crew_graph.json",
+        "note": "showing top 2 of 900000000 crews " + "and then some " * 10,
+        "nodes": [
+            {"crew_id": 10**9, "launches_today": 4, "crew_coins": 10**9,
+             "crew_rips": 10**9, "crew_dumps": 10**9},
+            {"crew_id": 2, "launches_today": 1, "crew_coins": 1, "crew_rips": 0,
+             "crew_dumps": 0},
+        ],
+        "edges": [{"a": 10**9, "b": 2, "weight": 5.0}],
+    }
+    figures = [
+        _glance_figure(bloated_facts()),
+        _glance_figure(make_facts()),
+        _desk_figure(bloated_facts()),
+        _desk_figure(make_facts()),
+        _crew_board_figure(heat_board),
+        _crew_board_figure(graph_board),
+        _empty_figure("THE CREW BOARD", DAY, "an extremely long stated reason " * 20,
+                      "an extremely long source stamp " * 20),
+    ]
+    for fig in figures:
+        _assert_texts_on_canvas(fig)
+
+
+def test_legend_overflow_is_cut_and_stated_not_drawn_off_canvas():
+    texts = figure_texts(_glance_figure(bloated_facts()))
+    assert any("more (see caption)" in t for t in texts)
 
 
 # -- captions + assembly ---------------------------------------------------------------

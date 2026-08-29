@@ -350,7 +350,15 @@ def test_compose_then_approve_then_deliver(scores_dir, archive_db, gate_db, tmp_
     db.close()
     assert (row[0], row[1]) == ("wire", "daily")
     payload = json.loads(row[3])
-    assert payload["text"] in row[2]
+    # The operator reads what will post: the summary carries the text verbatim when
+    # it fits the approvals DM, and otherwise trims ITSELF with an explicit marker
+    # (never the outbox's silent 3500-char mid-word chop).
+    if payload["text"] in row[2]:
+        assert "[DM cap" not in row[2]
+    else:
+        assert "[DM cap — trimmed here; posts in full" in row[2]
+        assert payload["text"][:800] in row[2]
+        assert len(row[2]) <= 3500  # under the outbox clip: our marker survives
     assert "3 panels + the full text" in row[2]
     assert "the crew board" in row[2]
     assert "DREGG WIRE #0" in row[2]
