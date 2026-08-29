@@ -295,15 +295,31 @@ def test_panels_speak_plain_language_not_enum_names():
     joined = "\n".join(texts)
     assert "clean 3" in texts and "known crew 2" in texts
     assert "dev buy over the line 1" in texts and "couldn't read 1" in texts
-    assert "clean rate on standard launches: 2 of 4" in texts
-    assert "long-run 8.5%" in joined
+    # 4 standard launches sits under the rate floor: the counts draw, no percentage
+    # or rate bar does — a bar over n=4 is integer noise shaped like a measurement
+    assert "clean on standard launches: 2 of 4" in texts
+    assert "too few launches to draw a rate" in joined
+    assert "long-run" not in joined
+    # past the floor the rate draws with its long-run yardstick
+    big = make_facts()
+    big["screen"]["launches_scored"] = 40
+    big["screen"]["validated"] = {
+        "count": 24, "clean": 2, "clean_rate": 2 / 24,
+        "operating_point": {"admit_rate": 0.085},
+    }
+    big_joined = "\n".join(figure_texts(_glance_figure(big)))
+    assert "clean on standard launches: 2 of 24" in big_joined
+    assert "long-run 8.5%" in big_joined
     for jargon in ("KNOWN_CREW", "NOT_CLEAN", "UNSCORED", "validated pop",
                    "validated population", "operating point"):
         assert jargon not in joined, f"jargon {jargon!r} drawn on the glance panel"
+        assert jargon not in big_joined, f"jargon {jargon!r} drawn on the glance panel"
     assert visuals.verdict_label("SOME_FUTURE_ENUM:X") == "some future enum x"
     hero = hero_caption(make_facts(), 0, "a lede")
     assert "known crew 2" in hero and "KNOWN_CREW" not in hero
     assert "long-run 8.5%" in hero and "operating point" not in hero
+    # under the floor the caption keeps counts and yardstick, never a day-percentage
+    assert "Clean on standard launches: 2 of 4 vs the long-run 8.5%" in hero
 
 
 def bloated_facts() -> dict:

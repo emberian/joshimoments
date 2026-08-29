@@ -55,9 +55,11 @@ KNOWN_CREW_CONTEXT = (
 
 # -- the mayhem stratum (RESULT_mayhem_arm.md section 6 + docs/MAYHEM_MODE.md) ---------
 # Group facts about ALL mayhem launches, never a score for one coin — every renderer
-# must keep MAYHEM_STRATUM_FACTS labeled as such. REAL-FLOW numbers only: the study's
-# revision demoted every price-path rate on this stratum (collapse/rip/peak) as
-# artifacts of administered pricing, so none of those may be quoted as market facts.
+# that shows these numbers must keep them labeled as group facts (the full paragraph
+# ships only in the archive edition; cards carry MAYHEM_CARD_GROUP_FACTS below).
+# REAL-FLOW numbers only: the study's revision demoted every price-path rate on this
+# stratum (collapse/rip/peak) as artifacts of administered pricing, so none of those
+# may be quoted as market facts.
 
 MAYHEM_MECHANISM = (
     "Mayhem launches mint double supply: half goes on a normal curve, half into a "
@@ -94,48 +96,37 @@ UNSEEN_RISK = (
 )
 
 # -- compact renderings for space-capped surfaces --------------------------------------
+#
+# THE RELEVANCE RULE (Gricean, 2026-08-29): a recurring broadcast surface carries a
+# gloss ONLY where the misreading it prevents can actually happen on that surface —
+# beside a listed CLEAN, on a card that names an actor. The full measured sentences
+# live in exactly two standing places (the wire's markdown/archive edition and the
+# /screen card, which answers a question about one coin); recurring surfaces point,
+# they do not restate. The old hourly/daily restatements (DIGEST_SURVIVAL_NOTE,
+# WIRE_VERDICT_FOOTER_LINES, CREW_WIRE_COMPACT) were deleted, not moved: repeating a
+# true sentence every hour teaches readers to skip it.
 
 #: One line for the momentum feed's photo caption (1024-char cap; keep this under 63
-#: chars so six worst-case coin lines plus header and standing line still fit).
+#: chars so six worst-case coin lines plus header and standing line still fit). Also
+#: rides the wire's Telegram edition beside its notable-CLEANs list — the one spot in
+#: that message where CLEAN could be read as a pick.
 CLEAN_FEED_GLOSS = "CLEAN = no known operators at birth, not a price call."
 
-#: The hourly digest's standing survival note — the same numbers as the card sentences,
-#: compressed to three lines for a surface that posts every hour.
-DIGEST_SURVIVAL_NOTE = (
-    "What the verdicts mean for survival (2026-08-26..28):\n"
-    "CLEAN is not a buy signal — no known operators (n=8,773: median last trade "
-    "5.7 min, collapse by 24h 0.03%, graduation 0.19%; the usual outcome is a quiet "
-    "fade). BUNDLED marks committed operators, fat tails both ways (n=965: collapse "
-    "3.89%, 130x CLEAN; graduation 13.49%, 71x CLEAN). KNOWN-CREW is the common case "
-    "— 85.7% of launches — and mostly just dies fast (median 184 s)."
+#: The mayhem group base rates a /screen card owes its reader, compressed to the two
+#: numbers that change a decision. The full stratum paragraph (MAYHEM_STRATUM_FACTS)
+#: stays in the wire's archive edition and the research page; the card carries the
+#: mechanism (about THIS coin's quoted price) plus this line, labeled as group facts.
+MAYHEM_CARD_GROUP_FACTS = (
+    "As a group (all 30,831 mayhem launches of 2026-08-26..28 — never a score for "
+    "this coin): insider dump 94%, and the typical coin's whole human audience is "
+    "4 wallets."
 )
 
-#: The daily wire's standing "what the verdicts mean" section (Telegram edition) —
-#: one line per verdict, every number with its window and n, compressed hard because
-#: the wire must stay inside Telegram's 4096-char message on its busiest day.
-WIRE_VERDICT_FOOTER_LINES = (
-    "📖 WHAT THE VERDICTS MEAN (all numbers measured 2026-08-26..28)",
-    "CLEAN = safety, not a buy signal (n=8,773): median last trade 5.7 min after "
-    "birth, collapse by 24h 0.03%, graduation 0.19% — the usual outcome is a quiet "
-    "fade.",
-    "BUNDLED = committed operators, fat tails both ways (n=965): median last trade "
-    "10.3 min, collapse 3.89% (130x CLEAN), graduation 13.49% (71x CLEAN).",
-    "KNOWN-CREW = the common case, not a rare alarm (85.7% of 91,505 launches): it "
-    "names the actor; most just die fast (median 184 s).",
-    "MAYHEM = unscored on purpose — pump's own vault trades into the coin's curve "
-    "and re-marks the price for its first 24h (all 30,831 launches: insider dump "
-    "94%, median human audience 4 wallets — group facts, never a coin score).",
-)
-
-#: One-line crew-memory fact block for the wire's Telegram crew section (the markdown
-#: artifact carries the full CREW_PERSISTENCE + UNSEEN_RISK sentences).
-CREW_WIRE_COMPACT = (
-    "Crew memory holds across the 11-day gap (record 2026-08-05..14, launches "
-    "26..28): returning deployers matched their own crew 48.5% vs 0.59% for "
-    "strangers; fingerprints keep 93% of their strength over two weeks. 40.4% of "
-    "births were returning deployers — the danger is the UNSEEN: no-record coins "
-    "collapsed 1.03% vs 0.57% for known-dirty."
-)
+#: A day-window percentage needs at least this many launches behind it before any
+#: surface may print it; below the floor the counts stand alone. At the screen's
+#: 8.5% long-run admit rate, 20 launches is where a day-rate stops being integer
+#: noise dressed as a measurement.
+RATE_FLOOR_N = 20
 
 
 def is_mayhem_row(row: dict) -> bool:
@@ -161,11 +152,14 @@ def verdict_context(row: dict) -> list[str]:
 
     Mayhem rows get the stratum mechanism INSTEAD of a cohort sentence: the cohort
     numbers were measured on standard-born launches and do not transfer, whatever
-    verdict the live screen managed to assign from history alone.
+    verdict the live screen managed to assign from history alone. The card gets the
+    compact group-facts line, not the full stratum paragraph — the two numbers that
+    change a decision, labeled as group rates; the rest lives in the archive edition
+    and the research page.
     """
 
     if is_mayhem_row(row):
-        return [MAYHEM_MECHANISM, MAYHEM_STRATUM_FACTS]
+        return [MAYHEM_MECHANISM, MAYHEM_CARD_GROUP_FACTS]
     verdict = str(row.get("verdict") or "")
     if verdict == "CLEAN":
         return [CLEAN_SURVIVAL, CLEAN_NOT_A_BUY_SIGNAL]

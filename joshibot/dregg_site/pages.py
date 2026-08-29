@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from dregg_screen.survival import RATE_FLOOR_N
 from dregg_site import chrome, mdlite
 from dregg_site.chrome import absent, esc, src, stamp, tile, verdict_bar
 from dregg_wire import wire as wf
@@ -210,6 +211,11 @@ def _index_counters(facts: dict, rec: dict) -> str:
 
 
 def _index_strip(facts: dict) -> str:
+    """Day-fact chips only. Instrument status ("armed"), internal counters (outcome
+    rows), and a bare provider claim with no measurement beside it all spend the
+    reader's attention to deliver nothing — they were cut, not relabeled; the record
+    page carries the removal ledger and the claims-vs-measured tables."""
+
     screen, callouts = facts["screen"], facts["callouts"]
     chips: list[str] = []
     if not screen.get("absent"):
@@ -217,29 +223,28 @@ def _index_strip(facts: dict) -> str:
         op = validated.get("operating_point") or {}
         if validated["count"]:
             vs = f" vs {wf._pct(op['admit_rate'])} expected" if op.get("admit_rate") is not None else ""
-            chips.append(
-                f"validated pop. <b>{validated['count']}</b> launches · CLEAN "
-                f"<b>{wf._pct(validated['clean_rate'])}</b>{vs}"
+            day_rate = (
+                f"<b>{wf._pct(validated['clean_rate'])}</b>"
+                if validated["count"] >= RATE_FLOOR_N
+                else f"<b>{validated['clean']}</b>"
             )
+            chips.append(
+                f"validated pop. <b>{validated['count']}</b> launches · CLEAN {day_rate}{vs}"
+            )
+        mayhem_share = (
+            esc(wf._pct(mayhem["share"]))
+            if screen["launches_scored"] >= RATE_FLOOR_N
+            else f"{mayhem['count']} of {screen['launches_scored']}"
+        )
         chips.append(
-            f"mayhem-mode creates <b>{esc(wf._pct(mayhem['share']))}</b> — outside the validated pop."
+            f"mayhem-mode creates <b>{mayhem_share}</b> — outside the validated pop."
         )
         if screen["crews"]:
             chips.append(f"crew fingerprints matched <b>{len(screen['crews'])}</b>")
     if not callouts.get("absent"):
-        top = callouts.get("top_provider_claim")
-        if top:
-            chips.append(
-                f"boldest provider claim <b>{top['multiple']:.1f}×</b> — their number, not ours"
-            )
         removals = callouts["removals"]
-        chips.append(
-            f"removals caught <b>{removals['total']}</b> all-time"
-            if removals["total"]
-            else "removal ledger <b>armed</b>"
-        )
-        outcomes = callouts["outcomes"]
-        chips.append(f"outcome rows in flight <b>{outcomes['rows']}</b>")
+        if removals["total"]:
+            chips.append(f"removals caught <b>{removals['total']}</b> all-time")
     if not chips:
         return ""
     body = "".join(f'<span class="chip">{c}</span>' for c in chips)
@@ -310,21 +315,10 @@ message-signing screen. Drop below the line, the gate lets you go.</p>
 
 
 def page_index(facts: dict, rec: dict, data_through: str | None, latest_wire: str | None) -> str:
+    # No receipts counter section here: daily fetch/byte/manifest tallies are the desk
+    # demonstrating its own rigor, not information a visitor can act on. The mechanism
+    # is stated once in "why trust it"; the daily numbers live in the archive edition.
     day = facts["day"]
-    archive = facts["archive"]
-    receipts = ""
-    if not archive.get("absent"):
-        anchored = archive["manifests_anchored"]
-        anchor_bit = (
-            f"{anchored} daily manifests anchored"
-            if anchored
-            else esc(archive["manifest_note"] or "manifest anchoring pending")
-        )
-        receipts = (
-            f"<section><h2>receipts</h2><p>{archive['fetches_today']:,} fetches archived today "
-            f"({archive['zst_bytes_today']:,} bytes zstd), every body sha256'd; {anchor_bit}.</p>"
-            f"{src(archive['source'])}</section>"
-        )
     body = f"""
 <h1>the shitcoims wire</h1>
 <p class="tag">measured intelligence on the pump.fun PvP battlefield</p>
@@ -335,7 +329,6 @@ and a window on every number.</p>
 {_index_counters(facts, rec)}
 {_index_strip(facts)}
 {_pitch(latest_wire)}
-{receipts}
 {_cta()}
 {footer()}
 """
@@ -569,7 +562,7 @@ def page_record(rec: dict, facts: dict, data_through: str | None) -> str:
         board_section = (
             f'<div class="tiles">{"".join(tiles)}</div>'
             f'<p class="mono" style="font-size:0.8rem;color:#93a1ad">callout span {esc(span)} · '
-            f"outcome rows {outcomes['rows']} ({outcomes['priced_1h']} priced @1h, "
+            f"{outcomes['rows']} calls under measurement ({outcomes['priced_1h']} priced at 1h, "
             f"{outcomes['final']} final)</p>"
             + removal_line
             + src(rec["source"])

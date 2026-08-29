@@ -17,8 +17,11 @@ the feed cannot drift apart):
 
 Every renderer is a pure function of plain dicts (the wire's facts dict and the
 crew-board dict): no clocks, no network, PNG metadata pinned — same inputs, same
-bytes. NOTHING here invents data: an empty section renders an honest empty panel
-that says WHY it is empty, never a blank chart.
+bytes. NOTHING here invents data: a renderer handed an empty section still draws an
+honest stated-empty figure rather than a blank chart — but ``build_panels`` does not
+POST such a panel. Posting an image whose content is "nothing to draw" spends the
+reader's attention to deliver nothing; the wire's text already states every absence,
+so an empty section simply ships no panel.
 
 Captions are composed here too — plain text, no parse_mode, bare URLs only (the
 gate's hard production rule) — and respect Telegram's 1024-char photo-caption cap
@@ -62,6 +65,7 @@ from dregg_feed.charts import (
     VOLUME,
     VOLUME_NOW,
 )
+from dregg_screen import survival
 from dregg_wire.wire import _pct, _ret_pct
 
 SOFTWARE = "dregg_wire.visuals v1"  # pinned: bytes stay deterministic
@@ -302,29 +306,44 @@ def _glance_figure(facts: dict) -> Figure:
 
     validated = screen.get("validated") or {}
     op = validated.get("operating_point") or {}
+    # A rate bar is a drawn percentage: under the floor the counts in the title say
+    # everything and no rate is drawn (a bar on n=4 is integer noise shaped like data).
+    count = int(validated.get("count") or 0)
     _bullet(
-        fig, y=0.50, rate=validated.get("clean_rate"), ref=op.get("admit_rate"),
+        fig, y=0.50,
+        rate=validated.get("clean_rate") if count >= survival.RATE_FLOOR_N else None,
+        ref=op.get("admit_rate"),
         color=PRICE_UP, ref_label="long-run",
         title=(
-            f"clean rate on standard launches: {validated.get('clean', 0)}"
-            f" of {validated.get('count', 0)}"
-            if validated.get("count")
+            f"clean on standard launches: {validated.get('clean', 0)}"
+            f" of {count}"
+            if count
             else "no standard-type launches today"
+        ),
+        empty_note=(
+            "too few launches to draw a rate" if 0 < count < survival.RATE_FLOOR_N
+            else "nothing to rate today"
         ),
     )
     _fit(fig, 0.66, 0.415, "the launch type where accuracy was measured",
          color=INK_MUTED, fontsize=6.5, va="center")
     mayhem = screen.get("mayhem") or {}
+    scored = int(screen.get("launches_scored") or 0)
     _bullet(
-        fig, y=0.25, rate=mayhem.get("share"), ref=None, color=AMBER, ref_label="",
-        title=f"mayhem-mode launches: {mayhem.get('count', 0)} of {screen.get('launches_scored', 0)}",
+        fig, y=0.25,
+        rate=mayhem.get("share") if scored >= survival.RATE_FLOOR_N else None,
+        ref=None, color=AMBER, ref_label="",
+        title=f"mayhem-mode launches: {mayhem.get('count', 0)} of {scored}",
+        empty_note=(
+            "too few launches to draw a rate" if 0 < scored < survival.RATE_FLOOR_N
+            else "nothing to rate today"
+        ),
     )
     _fit(fig, 0.66, 0.175, "outside that measured slice — labeled, not blended",
          color=INK_MUTED, fontsize=6.5, va="center")
 
     note = f" · {unplaced} rows without a placeable hour" if unplaced else ""
-    _footer(fig, f"source: {screen.get('source', 'dregg_screen')}{note} · "
-                 f"scores rank risk; they do not establish intent")
+    _footer(fig, f"source: {screen.get('source', 'dregg_screen')}{note} · {FOOT}")
     return fig
 
 
@@ -333,9 +352,10 @@ def render_day_glance(facts: dict) -> bytes:
 
 
 def _bullet(fig: Figure, *, y: float, rate: float | None, ref: float | None,
-            color: str, ref_label: str, title: str) -> None:
+            color: str, ref_label: str, title: str,
+            empty_note: str = "nothing to rate today") -> None:
     """A thin bullet bar with an optional reference tick — rate vs its yardstick.
-    A None rate states itself instead of pretending to be zero."""
+    A None rate states itself (``empty_note``) instead of pretending to be zero."""
 
     _fit(fig, 0.66, y + 0.085, title, color=INK, fontsize=8.5, va="center")
     ax = fig.add_axes((0.66, y - 0.01, 0.30, 0.055))
@@ -344,8 +364,7 @@ def _bullet(fig: Figure, *, y: float, rate: float | None, ref: float | None,
     ax.set_yticks([])
     if rate is None:
         ax.set_xlim(0, 1)
-        ax.text(0.0, 0.5, "nothing to rate today", color=INK_MUTED,
-                fontsize=7.5, va="center")
+        ax.text(0.0, 0.5, empty_note, color=INK_MUTED, fontsize=7.5, va="center")
         return
     span = max(rate, ref or 0.0, 0.02) * 1.30
     ax.set_xlim(0, span)
@@ -660,14 +679,19 @@ def _desk_figure(facts: dict) -> Figure:
     fig = _fig()
     _header(fig, "THE CALLOUT DESK — claimed vs measured", f"UTC day {day}")
 
-    # Top strip: the day's desk numbers, plain.
+    # Top strip: the day's desk numbers, plain. A removal ledger that has caught
+    # nothing draws nothing — an armed instrument is not a day fact.
     removals = callouts.get("removals") or {}
     strip = (
         f"{callouts.get('archived_today', 0)} callouts archived today · "
         f"{callouts.get('distinct_callers_today', 0)} callers · "
-        f"{callouts.get('distinct_mints_today', 0)} coins · "
-        f"removals caught: {removals.get('today', 0)} today / {removals.get('total', 0)} all-time"
+        f"{callouts.get('distinct_mints_today', 0)} coins"
     )
+    if removals.get("total"):
+        strip += (
+            f" · removals caught: {removals.get('today', 0)} today"
+            f" / {removals['total']} all-time"
+        )
     _fit(fig, 0.03, 0.855, strip, color=INK, fontsize=9)
 
     ax = fig.add_axes((0.06, 0.20, 0.90, 0.56))
@@ -766,16 +790,25 @@ def hero_caption(facts: dict, issue: int, lede: str) -> str:
                 f" vs the long-run {_pct(op['admit_rate'])}"
                 if op.get("admit_rate") is not None else ""
             )
+            day_rate = (
+                f" ({_pct(validated.get('clean_rate'))})"
+                if int(validated.get("count") or 0) >= survival.RATE_FLOOR_N
+                else ""
+            )
             lines.append(
-                f"Clean rate on standard launches: {validated.get('clean', 0)} of "
-                f"{validated.get('count', 0)} ({_pct(validated.get('clean_rate'))}){vs}"
+                f"Clean on standard launches: {validated.get('clean', 0)} of "
+                f"{validated.get('count', 0)}{day_rate}{vs}"
             )
         mayhem = screen.get("mayhem") or {}
+        scored = int(screen.get("launches_scored") or 0)
+        mayhem_share = (
+            f" ({_pct(mayhem.get('share'))})" if scored >= survival.RATE_FLOOR_N else ""
+        )
         lines.append(
-            f"Mayhem-mode launches: {mayhem.get('count', 0)} ({_pct(mayhem.get('share'))}) "
+            f"Mayhem-mode launches: {mayhem.get('count', 0)}{mayhem_share} "
             "— labeled, not blended"
         )
-    lines.append("Full wire follows. Scores rank risk; they do not establish intent.")
+    lines.append("Full wire follows.")
     return _cap("\n".join(lines))
 
 
@@ -831,8 +864,23 @@ def desk_caption(facts: dict) -> str:
         )
     outcomes = callouts.get("outcomes") or {}
     if outcomes.get("note"):
-        lines.append(f"Outcomes: {outcomes.get('rows', 0)} rows computing — {outcomes['note']}.")
+        lines.append(
+            f"Outcomes: {outcomes.get('rows', 0)} calls being measured — {outcomes['note']}."
+        )
     return _cap("\n".join(lines))
+
+
+def _desk_has_data(facts: dict) -> bool:
+    """Whether the callout desk has anything measured or claimed to draw."""
+
+    callouts = facts.get("callouts") or {}
+    if callouts.get("absent"):
+        return False
+    return bool(
+        callouts.get("archived_today")
+        or callouts.get("top_provider_claim")
+        or callouts.get("measured")
+    )
 
 
 def build_panels(
@@ -841,12 +889,26 @@ def build_panels(
 ) -> list[Panel]:
     """The wire's panel set, in posting order. Deterministic given (facts, ledgers on
     disk, d4m artifact). Raises only on a genuine render failure — the caller decides
-    whether to degrade to a text-only wire."""
+    whether to degrade to a text-only wire.
 
+    A section with nothing to draw ships NO panel: the wire's text states every
+    absence, and a posted photo that only says "nothing to draw" asserts, by being
+    posted, that it was worth opening. Renderers still draw the stated-empty figure
+    when called directly; it just never rides the outbox."""
+
+    panels: list[Panel] = []
+    if not (facts.get("screen") or {}).get("absent"):
+        panels.append(
+            Panel("glance", "the day at a glance", render_day_glance(facts),
+                  hero_caption(facts, issue, lede))
+        )
     board = crew_board_data(facts, scores_dir, d4m_dir)
-    return [
-        Panel("glance", "the day at a glance", render_day_glance(facts),
-              hero_caption(facts, issue, lede)),
-        Panel("crews", "the crew board", render_crew_board(board), crew_caption(board)),
-        Panel("desk", "the callout desk", render_callout_desk(facts), desk_caption(facts)),
-    ]
+    if board["mode"] != "empty":
+        panels.append(
+            Panel("crews", "the crew board", render_crew_board(board), crew_caption(board))
+        )
+    if _desk_has_data(facts):
+        panels.append(
+            Panel("desk", "the callout desk", render_callout_desk(facts), desk_caption(facts))
+        )
+    return panels

@@ -288,21 +288,26 @@ def test_telegram_links_and_escaping(scores_dir, archive_db):
     assert "run 2026-08-15" in text
 
 
-def test_telegram_carries_verdict_survival_and_crew_memory(scores_dir, archive_db):
-    """The standing verdict footer (survival study ship list) and the crew-memory
-    facts (persistence study ship list) ride every wire, windows attached."""
+def test_telegram_glosses_where_it_bites_and_archives_the_rest(scores_dir, archive_db):
+    """The relevance rule: the channel edition glosses CLEAN exactly where a listed
+    CLEAN could read as a pick, and does NOT restate the standing study recaps every
+    day — those live in the archive edition (test_markdown_carries_the_full_verdict_
+    section) and on the /screen card. A daily repetition of the same study sentences
+    is wallpaper; a label does not make a restatement informative."""
 
     text = compose_telegram(_facts(scores_dir, archive_db), 0)
-    assert "WHAT THE VERDICTS MEAN (all numbers measured 2026-08-26..28)" in text
-    assert "CLEAN = safety, not a buy signal (n=8,773)" in text
-    assert "the usual outcome is a quiet fade" in text
-    assert "collapse 3.89% (130x CLEAN), graduation 13.49% (71x CLEAN)" in text
-    assert "KNOWN-CREW = the common case, not a rare alarm (85.7% of 91,505 launches)" in text
-    assert "MAYHEM = unscored on purpose" in text
-    assert "never a coin score" in text  # stratum facts stay labeled as group facts
-    # crew memory, on the crew section
-    assert "matched their own crew 48.5% vs 0.59% for strangers" in text
-    assert "the danger is the UNSEEN: no-record coins collapsed 1.03% vs 0.57%" in text
+    # the gloss rides directly under the notable-CLEANs list
+    lines = text.splitlines()
+    gloss_at = lines.index("CLEAN = no known operators at birth, not a price call.")
+    assert lines[gloss_at - 1].startswith(("•", "…and"))  # attached to the cleans block
+    # the standing recaps are gone from the channel
+    assert "WHAT THE VERDICTS MEAN" not in text
+    assert "n=8,773" not in text and "n=965" not in text
+    assert "matched their own crew 48.5%" not in text
+    # …and the intent disclaimer appears exactly once, at the end
+    assert text.count("Scores rank risk") == 1
+    md = compose_markdown(_facts(scores_dir, archive_db), 0)
+    assert "matched their own recorded crew 48.5%" in md  # the archive edition keeps it
 
 
 def test_wire_states_crew_ties_on_both_editions(scores_dir, archive_db):

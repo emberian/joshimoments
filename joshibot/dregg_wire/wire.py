@@ -2,15 +2,19 @@
 
 Two renderings from one facts dict:
 
-* ``compose_telegram`` — the channel text, ~30-50 tight lines, PLAIN TEXT with no
+* ``compose_telegram`` — the channel text, ~25-40 tight lines, PLAIN TEXT with no
   parse_mode (the house rule): bare pump.fun URLs auto-link, and provider-derived
   strings (symbol, name, thesis, username, mint) render literal-inert because there
   is no markup to inject into. The channel copy trades the method vocabulary for
   plain words (the measured slice, not "validated population") without dropping a
-  number, a window, or a source.
+  number, a window, or a source. It carries DAY FACTS ONLY: standing study recaps,
+  instrument-status lines ("removal ledger armed"), internal counters (outcome rows,
+  fetch/manifest tallies) and day-percentages under ``survival.RATE_FLOOR_N`` are
+  cut here and live in the archive edition — including a datum asserts it is worth
+  the reader's attention, and a label saying otherwise does not cancel that.
 * ``compose_markdown`` — the fuller artifact saved to ``state/dregg_wire/<day>.md``,
   normal markdown links, full mint addresses, methodology footer; it keeps the
-  method vocabulary because it IS the methodology record.
+  method vocabulary and the standing sections because it IS the methodology record.
 
 Both are deterministic: same facts, same bytes.
 """
@@ -98,10 +102,6 @@ def _sol(x: float) -> str:
     return f"{x:+,.1f} SOL".replace("-", "−")  # noqa: RUF001 — typographic minus, house style
 
 
-def _kb(n: int) -> str:
-    return f"{n / 1024:.1f} KB"
-
-
 def _lrd(history: dict) -> str:
     return f"{history.get('launches', 0)}/{history.get('rips', 0)}/{history.get('dumps', 0)}"
 
@@ -128,8 +128,14 @@ def lede(facts: dict) -> str:
     mayhem = screen["mayhem"]
     validated = screen["validated"]
     if mayhem["share"] >= 0.20:
+        scored = screen["launches_scored"]
+        share = (
+            f"{_pct(mayhem['share'])} of today's launches"
+            if scored >= survival.RATE_FLOOR_N
+            else f"{mayhem['count']} of today's {scored} launches"
+        )
         return (
-            f"{_pct(mayhem['share'])} of today's launches used pump's mayhem mode — territory "
+            f"{share} used pump's mayhem mode — territory "
             "the screen's accuracy was never measured on. Those get labeled, not guessed at."
         )
     if validated["count"]:
@@ -167,10 +173,17 @@ def compose_telegram(facts: dict, issue: int) -> str:
                     f" — the long-run pass rate is {_pct(op['admit_rate'])} "
                     f"(measured {_e(span)})"
                 )
+            # The day-percentage needs a real denominator; under the floor the
+            # counts stand alone against the long-run yardstick.
+            day_rate = (
+                f" ({_pct(validated['clean_rate'])})"
+                if validated["count"] >= survival.RATE_FLOOR_N
+                else ""
+            )
             lines.append(
                 f"Standard launches, where the screen's accuracy was measured: "
                 f"{validated['count']} of {screen['launches_scored']}. CLEAN passes there: "
-                f"{validated['clean']} ({_pct(validated['clean_rate'])}){vs}."
+                f"{validated['clean']}{day_rate}{vs}."
             )
         else:
             lines.append(
@@ -178,9 +191,14 @@ def compose_telegram(facts: dict, issue: int) -> str:
                 "accuracy was measured on."
             )
         mayhem = screen["mayhem"]
+        mayhem_share = (
+            f" ({_pct(mayhem['share'])})"
+            if screen["launches_scored"] >= survival.RATE_FLOOR_N
+            else ""
+        )
         lines.append(
-            f"Mayhem-mode launches: {mayhem['count']} of {screen['launches_scored']} "
-            f"({_pct(mayhem['share'])}) — outside that measured slice; they get labeled, "
+            f"Mayhem-mode launches: {mayhem['count']} of {screen['launches_scored']}"
+            f"{mayhem_share} — outside that measured slice; they get labeled, "
             "never mixed into the stats."
         )
         if screen["notable_cleans"]:
@@ -197,6 +215,8 @@ def compose_telegram(facts: dict, issue: int) -> str:
             cut = len(screen["notable_cleans"]) - len(shown_cleans)
             if cut:
                 lines.append(f"…and {cut} more in the archive edition.")
+            # The one spot in this message where CLEAN could read as a pick.
+            lines.append(_e(survival.CLEAN_FEED_GLOSS))
         lines.append("")
         lines.append("🕸 CREW WATCH")
         if screen["crews"]:
@@ -219,9 +239,9 @@ def compose_telegram(facts: dict, issue: int) -> str:
                 lines.append(f"…and {cut} more fingerprints in the archive edition.")
         else:
             lines.append(_e(screen.get("crews_note") or "no crew-fingerprint matches today."))
-        # The crew ledger's memory, measured (RESULT_crew_persistence.md ship list):
-        # match rates cross-gap, and the inverted sign on who is actually dangerous.
-        lines.append(_e(survival.CREW_WIRE_COMPACT))
+        # The crew-persistence study (why the ledger's memory can be trusted) is a
+        # standing fact, not a day fact — it lives in the archive edition and on the
+        # research page, not restated on every daily wire.
     lines.append("")
 
     callouts = facts["callouts"]
@@ -256,42 +276,23 @@ def compose_telegram(facts: dict, issue: int) -> str:
         )
         outcomes = callouts["outcomes"]
         if outcomes["note"]:
+            # An informative absence: it explains why no measured return stands
+            # beside the claims above. Once measurements exist they speak for
+            # themselves (the desk panel and the record); the raw row counts are
+            # plumbing and stay in the archive edition.
             lines.append(
                 f"Real outcomes: {outcomes['rows']} calls being measured — {_e(outcomes['note'])}."
             )
-        else:
-            lines.append(
-                f"Real outcomes: {outcomes['priced_1h']} calls priced at 1h, {outcomes['final']} "
-                f"final (of {outcomes['rows']} tracked)."
-            )
         removals = callouts["removals"]
-        if removals["note"]:
-            lines.append(f"Removal ledger: {_e(removals['note'])}.")
-        else:
+        if removals["total"]:
             lines.append(f"Removal ledger: {removals['today']} caught today, {removals['total']} all-time.")
+        # A removal ledger that has caught nothing is an armed instrument, not news —
+        # the channel says nothing; the record page and the archive edition state it.
         lines.extend(_caller_color_lines_html(facts))
     lines.append("")
-
-    archive = facts["archive"]
-    lines.append("🧾 RECEIPTS")
-    if archive.get("absent"):
-        lines.append(_e(archive["absent"]))
-    else:
-        anchor = (
-            f"{archive['manifests_anchored']} daily manifests anchored"
-            if archive["manifests_anchored"]
-            else _e(archive["manifest_note"])
-        )
-        lines.append(
-            f"{archive['fetches_today']} provider responses archived today "
-            f"({_kb(archive['zst_bytes_today'])} compressed), every one fingerprinted "
-            f"(sha256); {anchor}."
-        )
-    lines.append("")
-    # The standing verdict-survival footer: safety and longevity order in OPPOSITE
-    # directions, and nobody gets to read CLEAN as "will go up".
-    lines.extend(_e(line) for line in survival.WIRE_VERDICT_FOOTER_LINES)
-    lines.append("")
+    # Receipts (fetch counts, bytes, manifest anchoring) are the desk proving its own
+    # rigor — the mechanism is stated once on the site's "why trust it" and the daily
+    # numbers live in the archive edition, not the channel.
     lines.append("Dig into anything above: DM me /screen <mint>, /coin <mint>, or /caller <name>.")
     lines.append(f"{_e(DISCLAIMER)} — the DREGG desk")
 

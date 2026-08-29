@@ -277,6 +277,7 @@ def page_record(rec: dict, board: dict, *, base: str, day: str, data_through: st
                     f'<td class="num">{esc(dead.get("n_dead", 0))}/{esc(dead.get("n_final", 0))}</td>'
                     f"<td>{claim_cell}</td></tr>"
                 )
+            rows_note = board.get("rows_note")
             board_body = (
                 '<div class="tablewrap"><table><thead><tr><th>#</th><th>caller</th>'
                 "<th>calls</th><th>measured</th><th>median 24h</th><th>up at 24h</th>"
@@ -284,7 +285,7 @@ def page_record(rec: dict, board: dict, *, base: str, day: str, data_through: st
                 + "".join(body_rows)
                 + "</tbody></table></div>"
                 + src(str(board.get("source", "callout archive")))
-                + f'<p class="win">{esc(board.get("rows_note", ""))}</p>'
+                + (f'<p class="win">{esc(rows_note)}</p>' if rows_note else "")
             )
 
     board_meta = (
@@ -310,12 +311,23 @@ def page_record(rec: dict, board: dict, *, base: str, day: str, data_through: st
             "<th>claimed</th><th>measured close</th><th>24h</th></tr></thead><tbody>"
             + gap_rows
             + "</tbody></table></div>"
-            + f'<p class="win">{esc(board.get("gaps_note", ""))}</p>'
         )
     else:
         gap_body = absent(str(board.get("gaps_note") or "No claim-versus-measured gaps in this window."))
 
+    # The record page is the removal ledger's home, so a zero here is an answer (the
+    # ledger is the feature) — one sentence, not a count of nothing plus a caption.
     removals = rec.get("removals") or {}
+    if removals.get("verdicts"):
+        removal_body = (
+            f'<p>{esc(removals.get("removed", 0))} of {esc(removals.get("verdicts", 0))} '
+            "archived callouts are no longer published where they were posted.</p>"
+        )
+    else:
+        removal_body = (
+            f'<p>{esc(removals.get("note") or "nothing has vanished from the provider board yet")}.'
+            "</p>"
+        )
     body = (
         _head(
             "the caller record",
@@ -324,10 +336,7 @@ def page_record(rec: dict, board: dict, *, base: str, day: str, data_through: st
         )
         + f"<section><h2>Leaderboard</h2>{board_body}{board_meta}</section>"
         + f"<section><h2>Claimed versus measured</h2>{gap_body}</section>"
-        + "<section><h2>Removals</h2>"
-        + f'<p>{esc(removals.get("removed", 0))} of {esc(removals.get("verdicts", 0))} archived callouts '
-        f"are no longer published where they were posted.</p>"
-        + f'<p class="win">{esc(removals.get("note", ""))}</p></section>'
+        + f"<section><h2>Removals</h2>{removal_body}</section>"
         + _footer()
     )
     return shell(title=f"record · {day} · portal", here="record", body=body, base=base)

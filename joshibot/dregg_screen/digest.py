@@ -24,7 +24,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dregg_screen.survival import DIGEST_SURVIVAL_NOTE
+from dregg_screen.survival import RATE_FLOOR_N
 
 MAX_CLEAN_LINES = 10
 
@@ -119,16 +119,20 @@ def _clean_line(row: dict, label: str) -> str:
 
 def _rate_line(rows: list[dict]) -> str:
     """The number that makes the hour meaningful: this window's CLEAN rate on
-    standard launches, against the screen's stamped long-run operating point."""
+    standard launches, against the screen's stamped long-run operating point.
+
+    The percentage prints only past RATE_FLOOR_N standard launches — below that a
+    day-rate is integer noise wearing a percent sign, and the counts say everything.
+    The long-run yardstick stays either way; it is what makes the counts readable."""
 
     pop = [r for r in rows if r.get("in_validated_population")]
     if not pop:
         return ("None of these launches were the standard type the screen's "
                 "accuracy was measured on.")
     pop_clean = sum(1 for r in pop if r.get("verdict") == "CLEAN")
-    rate = f"{100 * pop_clean / len(pop):.0f}%"
-    head = (f"Pass rate: {pop_clean} of {len(pop)} standard-type launches "
-            f"came out CLEAN ({rate})")
+    head = f"Pass rate: {pop_clean} of {len(pop)} standard-type launches came out CLEAN"
+    if len(pop) >= RATE_FLOOR_N:
+        head += f" ({100 * pop_clean / len(pop):.0f}%)"
     for row in reversed(rows):
         rip = (row.get("base_rates") or {}).get("is_rip") or {}
         if rip.get("admit_rate") is not None:
@@ -169,9 +173,7 @@ def compose(rows: list[dict], window_min: float) -> str | None:
                 "(newest shown). /watch clean DMs you every one."
             )
     parts.append("")
-    parts.append(DIGEST_SURVIVAL_NOTE)
-    parts.append("\nDM me /screen <mint> for any launch's full card.")
-    parts.append("Scores rank risk; they do not establish intent.")
+    parts.append("DM me /screen <mint> for any launch's full card.")
     return "\n".join(parts)
 
 

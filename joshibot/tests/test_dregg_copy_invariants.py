@@ -19,6 +19,8 @@ exercise the real renderers, not copies of their output.
 
 from __future__ import annotations
 
+import copy
+
 from dregg_dossier import cards
 from dregg_dossier.lookup import (
     COIN_USAGE_TEXT,
@@ -593,8 +595,11 @@ def test_screen_card_carries_the_measured_survival_context():
     # the HELD pair comparison must not ship: the context never mentions CLEAN
     assert "CLEAN" not in survival.KNOWN_CREW_CONTEXT
 
-    # mayhem rows — any verdict — get the vault mechanism and the group-facts label
-    # INSTEAD of standard-cohort numbers
+    # mayhem rows — any verdict — get the vault mechanism and the COMPACT group-facts
+    # line INSTEAD of standard-cohort numbers. The full stratum paragraph is a group
+    # measurement, not a fact about this coin: it lives in the archive edition and on
+    # the research page, and the card carries only the two decision-relevant base
+    # rates, labeled as group rates (the relevance rule: a card is about one coin).
     for mayhem_row in (
         score_row(
             "M1nt444444444444444444444444444444444444pump",
@@ -611,9 +616,10 @@ def test_screen_card_carries_the_measured_survival_context():
     ):
         card = render_card(mayhem_row)
         assert survival.MAYHEM_MECHANISM in card
-        assert survival.MAYHEM_STRATUM_FACTS in card
+        assert survival.MAYHEM_CARD_GROUP_FACTS in card
+        assert survival.MAYHEM_STRATUM_FACTS not in card  # the full paragraph stays off the card
         assert "administered, not discovered" in card
-        assert "never a score for this coin" in card  # stratum facts stay labeled
+        assert "never a score for this coin" in card  # group facts stay labeled
         assert survival.CLEAN_SURVIVAL not in card
         assert survival.KNOWN_CREW_CONTEXT not in card
         # the dev-buy share was computed against the standard supply; on a 2e15
@@ -656,15 +662,14 @@ def test_digest_reads_like_a_desk_note():
     assert "$TEST·M1nt" in text
     # 6. the window's pass rate is measured against the stamped long-run rate
     assert "vs the screen's long-run 8.5% (measured 2026-08-26..28)" in text
-    # 7. the standing survival note rides every digest, numbers with window and n
-    assert "What the verdicts mean for survival (2026-08-26..28):" in text
-    assert "CLEAN is not a buy signal" in text
-    assert "n=8,773: median last trade 5.7 min" in text
-    assert "n=965: collapse 3.89%, 130x CLEAN; graduation 13.49%, 71x CLEAN" in text
-    assert "KNOWN-CREW is the common case — 85.7% of launches" in text
-    # 8. affordances: the full card and the honesty line
-    assert "DM me /screen <mint> for any launch's full card." in text
-    assert text.endswith("Scores rank risk; they do not establish intent.")
+    # 7. the relevance rule: the survival glosses ride the verdict-count lines above
+    #    (where the misreading would happen) and are NOT restated as a standing note —
+    #    an hourly repetition of the same study recap is wallpaper, not honesty. The
+    #    full measured sentences live on the /screen card and the archive edition.
+    assert "What the verdicts mean for survival" not in text
+    assert text.count("not a buy signal") == 1  # the CLEAN count line, nowhere else
+    # 8. affordance last: the digest ends by handing the reader the full card
+    assert text.endswith("DM me /screen <mint> for any launch's full card.")
 
 
 def test_digest_overflow_states_the_cut_and_points_at_watch_clean():
@@ -692,3 +697,119 @@ def test_screen_lookup_docstring_matches_reality():
 
     assert "PLAIN TEXT" in (gate_lookup.__doc__ or "")
     assert "HTML" not in (gate_lookup.__doc__ or "")
+
+
+# -- the relevance rule ------------------------------------------------------------------
+#
+# Gricean pragmatics (2026-08-29): the ACT OF INCLUDING a datum asserts it is worth the
+# reader's attention, and a caption saying "this is not news" does not cancel that — it
+# spends attention twice and teaches the reader that our surfaces contain filler. So: a
+# surface may not print a value it simultaneously frames as non-informative; standing
+# instrument-status lines and internal plumbing counters stay off the channel (the record
+# page and the markdown archive edition carry them); a percentage needs a denominator; a
+# panel with nothing to draw is not posted; and a true boilerplate sentence appears where
+# the misreading it prevents can actually happen — not on every message.
+
+
+def test_plumbing_and_armed_instruments_stay_off_the_channel():
+    text = compose_telegram(WIRE_FACTS, 3)
+    # rigor-demonstration tallies and internal counters never reach the channel
+    for token in ("RECEIPTS", "fetches", "manifests", "sha256", "outcome rows"):
+        assert token not in text, f"plumbing token {token!r} on the Telegram wire"
+    # once measurements exist they speak for themselves; the row counts are plumbing
+    assert "Real outcomes" not in text
+    # a removal ledger with catches states the count (a day fact)…
+    assert "Removal ledger: 1 caught today, 2 all-time." in text
+    # …and one that has caught nothing says NOTHING — never a standing "armed" line
+    quiet = copy.deepcopy(WIRE_FACTS)
+    quiet["callouts"]["removals"] = {
+        "today": 0, "total": 0,
+        "note": "armed; nothing has vanished from the provider's board yet",
+    }
+    quiet_text = compose_telegram(quiet, 3)
+    assert "Removal ledger" not in quiet_text and "armed" not in quiet_text
+    # the informative absence DOES print: it explains why no measured return stands
+    # beside the claims shown above it
+    pending = copy.deepcopy(WIRE_FACTS)
+    pending["callouts"]["outcomes"] = {
+        "rows": 7, "final": 0, "priced_1h": 0,
+        "note": "real post-call returns mature at T+25h and finalize at T+7d; "
+                "the archive's first cohorts are still in flight",
+    }
+    assert "Real outcomes: 7 calls being measured" in compose_telegram(pending, 3)
+
+
+def test_day_percentages_need_a_denominator():
+    """Under survival.RATE_FLOOR_N standard launches, counts print and day-percentages
+    do not — a percent sign on n=3 is spurious precision wearing a measurement's
+    clothes. The long-run yardstick (measured on 91k launches) prints either way."""
+
+    from dregg_screen.survival import RATE_FLOOR_N
+
+    few = [score_row(f"M1nt{n:03d}5555555555555555555555555555555pump") for n in range(3)]
+    text = compose_digest(few, 60.0)
+    assert text is not None
+    assert "Pass rate: 3 of 3 standard-type launches came out CLEAN vs" in text
+    assert "(100%)" not in text
+    many = [score_row(f"M1nt{n:03d}5555555555555555555555555555555pump")
+            for n in range(RATE_FLOOR_N)]
+    text = compose_digest(many, 60.0)
+    assert text is not None
+    assert f"Pass rate: {RATE_FLOOR_N} of {RATE_FLOOR_N} standard-type launches came " \
+           "out CLEAN (100%)" in text
+    # the wire's channel edition holds the same floor (WIRE_FACTS has 4 standard launches)
+    wire_text = compose_telegram(WIRE_FACTS, 3)
+    assert "CLEAN passes there: 2 —" in wire_text and "(50.0%)" not in wire_text
+    assert "(28.6%)" not in wire_text  # mayhem share on 7 launches: counts only
+    big = copy.deepcopy(WIRE_FACTS)
+    big["screen"]["validated"].update({"count": 24, "clean": 12, "clean_rate": 0.5})
+    assert "CLEAN passes there: 12 (50.0%)" in compose_telegram(big, 3)
+
+
+def test_empty_sections_ship_no_panel():
+    """A posted photo asserts, by being posted, that it was worth opening. A section
+    with nothing to draw ships no panel — the wire's TEXT states every absence."""
+
+    absent_facts = {
+        "day": "2026-08-17",
+        "screen": {"source": "s", "absent": "no launches scored"},
+        "callouts": {"source": "s", "absent": "archive not present"},
+        "archive": {"source": "s", "absent": "not present"},
+        "caller_color": {"absent": "not present", "note": "n"},
+    }
+    assert wire_visuals.build_panels(absent_facts, 1, "a lede",
+                                     scores_dir=None, d4m_dir=None) == []
+    # with live screen + desk data but no crew activity, the crews panel alone is dropped
+    panels = wire_visuals.build_panels(WIRE_FACTS, 1, "a lede",
+                                       scores_dir=None, d4m_dir=None)
+    assert [p.name for p in panels] == ["glance", "desk"]
+
+
+def test_boilerplate_lands_where_it_bites_and_nowhere_twice():
+    """The intent disclaimer must stand where a verdict could be read as a conviction
+    (the standalone, forwardable card; the wire that names crews and callers) and must
+    not wallpaper every recurring message — repetition is how a true sentence stops
+    being read. One full wire posting (panels + captions + text) carries it once."""
+
+    figures = [
+        wire_visuals._glance_figure(WIRE_FACTS),
+        wire_visuals._desk_figure(WIRE_FACTS),
+        wire_visuals._crew_board_figure(GRAPH_BOARD),
+    ]
+    drawn = "\n".join(t for fig in figures for t in wire_visuals.figure_texts(fig))
+    posting = "\n".join([
+        wire_visuals.hero_caption(WIRE_FACTS, 3, "a lede"),
+        wire_visuals.crew_caption(GRAPH_BOARD),
+        wire_visuals.desk_caption(WIRE_FACTS),
+        compose_telegram(WIRE_FACTS, 3),
+        drawn,
+    ])
+    assert posting.lower().count("rank risk") == 1
+    # the /screen card is a standalone answer about one coin: exactly once
+    card = render_card(score_row())
+    assert card.count("Scores rank risk; they do not establish intent.") == 1
+    # the hourly digest carries the caveat where it bites (the CLEAN count line's
+    # gloss) and does not restate the disclaimer as a standing footer
+    digest = compose_digest(nasty_screen_rows(), 60.0)
+    assert digest is not None
+    assert "not a buy signal" in digest and "rank risk" not in digest
