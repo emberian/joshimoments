@@ -96,3 +96,11 @@ the %pump filter; screens RANK, they don't convict (the dossier/record language 
 this); the do-not-build list stands (no entry signals, no callout-following, no copytrading
 products — we sell the refutations instead); read-only posture everywhere; keys/venue ToS
 reviewed before anything is hosted for third parties.
+
+## v1 decisions locked (2026-08-29, Ember)
+- All three products staged tight; hbox hosts everything; TG-gated + public site.
+- GATE THRESHOLD: N = 3,333,333 $DREGG (≈$1,065 at lock time, px $0.0003194) — token-denominated.
+- TG bot: reuse @ltshitcoims_bot's existing token (~/.shitcoims-tg) — ONE bot process serves
+  gate + invites + Ember's approvals/alerts. New handle only if branding warrants later.
+- Helius: Ember's existing ~/.helius-key goes to hbox (her machine); no separate product key.
+- Cloudflare: account exists; only a wrangler token needed at site time.
