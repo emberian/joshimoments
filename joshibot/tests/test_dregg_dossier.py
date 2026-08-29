@@ -300,8 +300,8 @@ def test_coin_card_flagged_vs_benign_heads(dossier: store.Dossier):
     hot = cards.coin_card(M_HOT, dossier.coin(M_HOT), dossier.meta, NOW)
     assert "EXIT SIGNAL" in hot
     assert "4 wallets; 3 profiled" in hot
-    assert "1 BREAKEVEN_PRESET" in hot
-    assert "timing q=0.03" in hot
+    assert "1 break-even-preset" in hot
+    assert "timing score 0.03 of 1" in hot
     assert "does not prove chart management" in hot  # rule 3, welded on
     assert "crew #7" in hot and "2 rips / 5 insider dumps" in hot
     assert "not a fingerprint match" in hot
@@ -326,8 +326,9 @@ def test_clean_crew_launch_reads_as_continuity_not_crime():
 
 def test_coin_miss_is_honest_about_scope(dossier: store.Dossier):
     text = cards.coin_miss(M_MISSING, dossier.meta, NOW)
-    assert "outside the 2026-08-05..2026-08-14 corpus" in text
+    assert "outside the 2026-08-05..2026-08-14 data window" in text
     assert "not a clean bill" in text
+    assert "/screen" in text  # the miss still hands the reader a live next step
 
 
 # -- lookup: gating and rate limiting -------------------------------------------------
@@ -392,7 +393,7 @@ def test_verified_member_gets_cards_and_honest_misses(tmp_path: Path, fixture_in
     lookup, state, clock = make_lookup(tmp_path, fixture_index)
     state.record_verification(9, addr(), 10**12, clock())
     assert "below the activity threshold" in lookup.reply_wallet(9, W_UNKNOWN)[0]
-    assert "outside the 2026-08-05..2026-08-14 corpus" in lookup.reply_coin(9, M_MISSING)[0]
+    assert "outside the 2026-08-05..2026-08-14 data window" in lookup.reply_coin(9, M_MISSING)[0]
     text, mode = lookup.reply_coin(9, M_HOT)
     assert mode is None and "EXIT SIGNAL" in text and "<" not in text
 

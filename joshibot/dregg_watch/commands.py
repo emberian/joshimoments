@@ -54,7 +54,8 @@ BAD_CREW_TEXT = (
 
 BAD_CALLER_TEXT = (
     "Give me the caller's wallet address, or their name as the archive shows it "
-    "(letters, digits, underscores; @ optional)."
+    "(letters, digits, underscores; @ optional), and try /watch caller again — "
+    "/caller <name> shows how the archive spells them."
 )
 
 

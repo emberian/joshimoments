@@ -241,7 +241,10 @@ def _color_line(color: dict, wallet: str) -> str | None:
         bits.append(f"win {win:.0%} over {entry.get('n_coins_closed')} closed")
     if entry.get("rp_mode"):
         bits.append(str(entry["rp_mode"]))
-    return f"   wallet layer as of {color.get('as_of')} (STALE): " + " · ".join(bits)
+    return (
+        f"   their own trading (wallet snapshot of {color.get('as_of')} — stale): "
+        + " · ".join(bits)
+    )
 
 
 def _board_line(row: dict) -> str:
@@ -280,7 +283,7 @@ def render_text(board: dict) -> str:
     lines = [
         header,
         f"Ranked by median MEASURED 24h return of each caller's archived calls, min "
-        f"{board['min_n']} measured — our candle closes (method {board['method_version']}), "
+        f"{board['min_n']} measured — priced from our own archived candles, "
         "never the provider's multiples, never follower counts.",
     ]
     cov = board["coverage"]
@@ -335,6 +338,7 @@ def render_text(board: dict) -> str:
     else:
         lines.append(board["gaps_note"])
 
+    lines += ["", "Any caller's full record: DM me /caller <wallet or @name>."]
     lines += ["", REMOVAL_LINE, STANDING_LINE]
     text = "\n".join(lines)
     # Sized by construction (clamped handles, capped rows); the assert is the belt.

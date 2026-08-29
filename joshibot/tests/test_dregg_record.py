@@ -358,7 +358,7 @@ def test_caller_card_absence_paths(archive_db):
     assert "Measured: no measured outcomes yet" in card
     assert "no multiple" in card
     assert "Removals: none on record." in card
-    assert "Wallet layer:" in card and "not present" in card
+    assert "Their own trading (wallet snapshot):" in card and "not present" in card
 
 
 def test_wallet_layer_join_stamps_staleness(archive_db, tmp_path):
@@ -374,7 +374,7 @@ def test_wallet_layer_join_stamps_staleness(archive_db, tmp_path):
     assert layer["stale"] is True and layer["as_of"] == "2026-08-14"
     assert layer["rp_mode"] == "LOSS_CUTTER"
     card = render_card(record, [])
-    assert "Wallet layer (as of 2026-08-14, STALE)" in card
+    assert "Their own trading (wallet snapshot of 2026-08-14 — stale, not live)" in card
     assert "realized -12.5 SOL" in card and "win rate 41% over 17 closed" in card
 
 

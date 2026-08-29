@@ -100,7 +100,10 @@ def as_of_line(meta: dict[str, Any], now: float) -> str:
         days = max(0, int((now - end) / 86400))
         end_text = datetime.fromtimestamp(end, UTC).strftime("%Y-%m-%d %H:%M UTC")
         stale = f"; data ends {end_text}, {days} days old"
-    return f"As of the {span[0]}..{span[1]} corpus{stale}. A batch layer, not a live feed."
+    return (
+        f"Built from trades of {span[0]}..{span[1]}{stale}. "
+        "A periodic snapshot, not a live feed."
+    )
 
 
 def crowd_line(meta: dict[str, Any]) -> str:
@@ -128,8 +131,12 @@ def _guild_line(row: dict[str, Any], meta: dict[str, Any]) -> str:
             f" (guild of {stats.get('n', 0):,}: median wallet {fmt_sol(stats.get('median_net_sol'))}, "
             f"{100 * stats.get('breakeven_preset_rate', 0):.0f}% run break-even presets)"
         )
-    basis = "cluster-mapped" if row.get("guild_cluster") else "solo-classified"
-    return f"Guild: {guild} — {blurb}{extra} [{basis}]"
+    basis = (
+        "classified with its co-trading cluster"
+        if row.get("guild_cluster")
+        else "classified on its own record"
+    )
+    return f"Guild: {guild} — {blurb}{extra} ({basis})"
 
 
 def wallet_card(row: dict[str, Any], meta: dict[str, Any], now: float) -> str:
@@ -175,7 +182,11 @@ def wallet_card(row: dict[str, Any], meta: dict[str, Any], now: float) -> str:
     context = crowd_line(meta)
     if context:
         lines.extend(["", context])
-    lines.extend(["", as_of_line(meta, now)])
+    lines.append("")
+    lines.append(
+        f"Next: /watch deployer {owner} DMs you if this wallet ever launches a coin."
+    )
+    lines.append(as_of_line(meta, now))
     return "\n".join(lines)
 
 
@@ -186,12 +197,13 @@ def wallet_miss(owner: str, meta: dict[str, Any], now: float) -> str:
             f"No dossier for {short(owner)}.",
             "",
             (
-                f"That wallet is below the activity threshold (under 3 priced legs) in the "
-                f"{span[0]}..{span[1]} corpus — an absence of data, not a zero score and not "
-                "a clean bill. It may be new, dormant that week, or trading outside the "
-                "pump.fun cohort this layer covers."
+                f"That wallet is below the activity threshold (fewer than 3 priced trades) "
+                f"in the {span[0]}..{span[1]} data window — an absence of data, not a zero "
+                "score and not a clean bill. It may be new, dormant that week, or trading "
+                "outside the pump.fun crowd this data covers."
             ),
             "",
+            f"You can still /watch deployer {owner} to hear if it ever launches a coin.",
             as_of_line(meta, now),
         ]
     )
@@ -212,7 +224,7 @@ def _comp_lines(comp: dict[str, Any], meta: dict[str, Any]) -> list[str]:
     lines = [
         (
             f"{who}: {n_traders:,} wallets; {n_profiled:,} profiled "
-            "(3+ priced legs corpus-wide)."
+            "(3+ priced trades across our data)."
         )
     ]
     if n_profiled:
@@ -229,10 +241,11 @@ def _comp_lines(comp: dict[str, Any], meta: dict[str, Any]) -> list[str]:
         lines.append(f"Guild mix: {mix_text}.")
         n_preset = comp["n_breakeven_preset"]
         lines.append(
-            f"Preset bots: {n_preset:,} BREAKEVEN_PRESET wallet{'s' if n_preset != 1 else ''} "
+            f"Preset bots: {n_preset:,} break-even-preset wallet{'s' if n_preset != 1 else ''} "
             f"({fmt_pct(n_preset, n_profiled)} of profiled). "
-            f"Mercenary rotation: {fmt_pct(comp['n_in_rotation'], n_profiled)}. "
-            f"Scheduler-ladder bots: {comp['n_on_ladder']:,}."
+            f"Mercenary rotation (capital that hops coin to coin): "
+            f"{fmt_pct(comp['n_in_rotation'], n_profiled)}. "
+            f"Clockwork bots (trading on a fixed 8s schedule): {comp['n_on_ladder']:,}."
         )
         lines.append(
             f"Track records: {fmt_pct(comp['n_net_positive'], n_profiled)} of its profiled "
@@ -252,14 +265,14 @@ def _crew_lines(crews: list[dict[str, Any]], meta: dict[str, Any]) -> list[str]:
         if crew["launched_by"] and crew["dirty"]:
             lines.append(
                 f"Crews: LAUNCHED by fingerprinted crew #{crew['crew_id']} "
-                f"({crew['crew_coins']} corpus coins, {record})."
+                f"({crew['crew_coins']} tracked coins, {record})."
             )
         elif crew["launched_by"]:
             # The ledger's own discipline: reuse of a CLEAN crew is continuity, not a
             # crime record — name it a serial deployer and show the clean record.
             lines.append(
                 f"Crews: launched by a serial deployer (crew #{crew['crew_id']}: "
-                f"{crew['crew_coins']} corpus coins, no rips or dumps on record)."
+                f"{crew['crew_coins']} tracked coins, no rips or dumps on record)."
             )
         else:
             lines.append(
@@ -273,7 +286,7 @@ def _crew_lines(crews: list[dict[str, Any]], meta: dict[str, Any]) -> list[str]:
 def _iceberg_lines(exit_row: dict[str, Any] | None, icebergs: list[dict[str, Any]]) -> list[str]:
     if exit_row is None:
         return [
-            "Exit signal: no gated distributor in the corpus — a clean no-signal "
+            "Exit signal: no large holder tripped the distribution screen — a clean no-signal "
             "(nobody who peaked at 0.1%+ of supply drew down 60%+ across 8+ sells), "
             "not a zero score."
         ]
@@ -300,7 +313,11 @@ def _iceberg_lines(exit_row: dict[str, Any] | None, icebergs: list[dict[str, Any
             when = datetime.fromtimestamp(row["last_dist_t"], UTC).strftime("%m-%d")
         propped = (row["resilience"] or 0) >= 0
         price = "price held or rose while it sold" if propped else "price fell as it sold"
-        timing = f"timing q={row['timing_q']:.2f}" if row["timing_q"] is not None else "timing untested"
+        timing = (
+            f"timing score {row['timing_q']:.2f} of 1"
+            if row["timing_q"] is not None
+            else "timing untested"
+        )
         lines.append(
             f"- {short(row['owner'])}: fed out {fmt_sol(row['dist_sold_sol'], signed=False)} in "
             f"{row['n_dist_sells']:,} sells over {fmt_dur(row['duration_s'])} "
@@ -322,6 +339,10 @@ def coin_card(mint: str, view: dict[str, Any], meta: dict[str, Any], now: float)
         "",
         *_iceberg_lines(view["exit"], view["icebergs"]),
         "",
+        (
+            f"Next: /wallet plus any address above profiles that trader · "
+            f"/watch coin {mint} for DM alerts."
+        ),
         as_of_line(meta, now),
     ]
     return "\n".join(lines)
@@ -334,10 +355,10 @@ def coin_miss(mint: str, meta: dict[str, Any], now: float) -> str:
             f"No dossier for {short(mint)} ({PUMP_COIN_URL.format(mint=mint)}).",
             "",
             (
-                f"That coin is outside the {span[0]}..{span[1]} corpus this layer was built "
-                "on (the 33k-coin active-launch cohort plus the operator coins) — launched "
-                "outside the window, or too quiet to clear its floor. No data, not a clean "
-                "bill. /screen covers launches from the last two days."
+                f"That coin is outside the {span[0]}..{span[1]} data window this was built "
+                "on (33k active launches plus the operator coins) — launched outside the "
+                "window, or too quiet to clear its floor. No data, not a clean bill. "
+                "/screen covers launches from the last two days."
             ),
             "",
             as_of_line(meta, now),

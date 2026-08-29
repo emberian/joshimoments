@@ -17,6 +17,7 @@ call in the flow is createChatInviteLink, whose response (the link) we need.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import time
@@ -41,20 +42,27 @@ CALLBACK_DATA = re.compile(r"gate:(a|r):([0-9]{1,12})\Z")
 SIGNER_URL = "https://shitcoims.dregg.studio/sign"
 
 HELP_TEXT = (
-    "This bot gates the $DREGG holders group.\n\n"
-    "/verify <wallet> — start holder verification for a Solana wallet\n"
-    "/status — your current standing\n"
-    "/invite — mint a fresh invite link if you are already verified\n"
-    "/screen <mint> — the launch screen's verdict on a recent pump.fun launch "
-    "(verified holders)\n"
-    "/wallet <address> — a trader's behavioral dossier: guild, realization policy, "
-    "executable realized PnL, win rate (batch layer, corpus-dated).\n"
-    "/coin <mint> — who is IN a coin: guild mix, preset bots, known crews, and large "
-    "holders piecewise distributing (an exit tell, ranked not proven).\n"
-    "/caller <wallet or @name> — a caller's measured record: their archived calls "
-    "and how each actually went (verified holders)\n"
-    "/watch — personal alerts: a coin, a deployer wallet, a crew, a caller, or every "
-    "CLEAN launch — DM'd to you when it happens (verified holders)\n\n"
+    "This bot gates the $DREGG holders group. Lookups below the first block are "
+    "for verified holders.\n\n"
+    "GET IN\n"
+    "/verify <wallet> — prove you hold the gate amount (you sign one plain text "
+    "message; never a transaction)\n"
+    "/status — where you stand: verified, balance, grace clock\n"
+    "/invite — a fresh single-use invite link once you're verified\n\n"
+    "CHECK A LAUNCH\n"
+    "/screen <mint> — the launch screen's verdict on any pump.fun launch from the "
+    "last two days\n"
+    "/coin <mint> — who is IN a coin: trader mix, preset bots, known crews, and "
+    "large holders quietly feeding out (an exit tell, ranked not proven)\n\n"
+    "CHECK A TRADER\n"
+    "/wallet <address> — a trader's measured record: style, realized PnL (only "
+    "what actually sold counts), win rate, bot tells\n"
+    "/caller <wallet or @name> — a caller's archived calls and how each actually "
+    "went, by our own candles\n\n"
+    "GET ALERTS\n"
+    "/watch — DM alerts on a coin, a deployer wallet, a crew, a caller, or every "
+    "CLEAN launch\n"
+    "/unwatch <id> — stop one\n\n"
     "Caller records are measurements, not endorsements: buying the callout feed was "
     "measured as an anti-signal (avg -11.9% at 1h, -43.6% at 8h), and caller identity "
     "itself carried no measured edge. Deleted callouts stay on the record.\n\n"
@@ -65,6 +73,22 @@ HELP_TEXT = (
     "(on a phone, open it inside your wallet's built-in browser). "
     "I never ask you to send funds or share keys — only a signature."
 )
+
+#: The user-facing command set, for closest-match suggestions on typos.
+KNOWN_COMMANDS = (
+    "/start", "/help", "/verify", "/status", "/invite",
+    "/screen", "/coin", "/wallet", "/caller", "/watch", "/unwatch",
+)
+
+
+def unknown_command_text(command: str) -> str:
+    """A typo gets the closest real command, not the whole help wall."""
+
+    shown = command[:32]
+    close = difflib.get_close_matches(shown.lower(), KNOWN_COMMANDS, n=1, cutoff=0.6)
+    if close:
+        return f"I don't know {shown} — did you mean {close[0]}? /help lists everything."
+    return f"I don't know {shown}. /help lists every command, grouped by what you want to do."
 
 
 def format_tokens(raw: int, decimals: int) -> str:
@@ -264,7 +288,7 @@ class GateGateway:
             n = self.state.pending_approval_count()
             self.dm(chat_id, f"{n} approval(s) awaiting a decision.", dedup)
         elif command.startswith("/"):
-            self.dm(chat_id, "Unknown command. " + HELP_TEXT, dedup)
+            self.dm(chat_id, unknown_command_text(command), dedup)
         else:
             await self._handle_signature(uid, chat_id, text, dedup)
 
@@ -331,10 +355,19 @@ class GateGateway:
                     dedup,
                 )
                 self._cmd_verify(uid, chat_id, stored_wallet, dedup + ":renew")
+            elif parse_signature(text) is not None:
+                self.dm(
+                    chat_id,
+                    "That looks like a signature, but there's no live challenge for you "
+                    "(they expire after 10 minutes). Send /verify <wallet> to get a "
+                    "fresh one, then sign THAT and paste again.",
+                    dedup,
+                )
             else:
                 self.dm(
                     chat_id,
-                    "No live challenge (they expire after 10 minutes). Start with /verify <wallet>.",
+                    "I work by command — /help lists them all. If you're here to join "
+                    "the holders group, start with /verify <wallet>.",
                     dedup,
                 )
             return
@@ -367,8 +400,9 @@ class GateGateway:
             log.error("balance check unavailable (%s)", type(exc).__name__)
             self.dm(
                 chat_id,
-                "Signature verified, but I can't check balances right now. "
-                "Paste the signature again in a few minutes.",
+                "Signature verified, but our chain-data provider isn't answering, so I "
+                "can't check the balance right now. Nothing's lost — paste the same "
+                "signature again in a few minutes.",
                 dedup,
             )
             self.alert_operator(f"Helius error during a /verify balance check: {exc}", dedup + ":helius")
@@ -390,7 +424,9 @@ class GateGateway:
         self.state.record_verification(uid, challenge.wallet, balance, now)
         self.dm(
             chat_id,
-            f"Verified: {format_tokens(balance, decimals)} $DREGG. Welcome.",
+            f"Verified: {format_tokens(balance, decimals)} $DREGG. Welcome.\n\n"
+            "That unlocks the lookups right here in DM — /screen, /coin, /wallet, "
+            "/caller, and /watch for personal alerts. Your group invite is next.",
             dedup,
         )
         await self._grant_invite(uid, chat_id, dedup + ":invite")
@@ -440,14 +476,19 @@ class GateGateway:
             log.error("invite link creation failed (%s)", type(exc).__name__)
             self.dm(
                 chat_id,
-                "Couldn't mint your invite link just now. Send /invite to retry.",
+                "Couldn't mint your invite link just now — Telegram didn't answer "
+                "cleanly. Your verification is saved; send /invite to retry.",
                 dedup,
             )
             self.alert_operator(f"createChatInviteLink failed: {exc}", dedup + ":err")
             return
         self.dm(
             chat_id,
-            f"Your single-use invite (expires in {self.config.invite_ttl_seconds // 60} min):\n{link}",
+            f"Your single-use invite (expires in {self.config.invite_ttl_seconds // 60} min):\n"
+            f"{link}\n\n"
+            "Inside: the hourly launch digest, the daily wire, and the weekly caller "
+            "record. I stay useful in DM too — /help any time, /invite for a fresh "
+            "link if this one lapses.",
             dedup,
         )
 
@@ -470,19 +511,31 @@ class GateGateway:
             if member.last_balance_raw is not None
             else "unknown"
         )
+        standing = {
+            "ok": "verified — seat active",
+            "grace": "grace — below the gate, removal clock running",
+            "ejected": "removed — the wallet stayed below the gate past its grace window",
+        }.get(member.status, member.status)
+        checked = ""
+        if member.last_checked_at is not None:
+            hours = max(0, int((self.clock() - member.last_checked_at) / 3600))
+            checked = f", checked {hours}h ago" if hours else ", checked within the hour"
         lines = [
             f"Wallet: {member.wallet}",
-            f"Standing: {member.status}",
-            f"Last checked balance: {held} $DREGG (threshold {self.effective_tokens(member.tg_user_id):,})",
+            f"Standing: {standing}",
+            (
+                f"Balance: {held} $DREGG{checked} "
+                f"(the gate is {self.effective_tokens(member.tg_user_id):,} $DREGG)"
+            ),
         ]
         if member.status == "grace" and member.grace_until is not None:
             hours_left = max(0, int((member.grace_until - self.clock()) / 3600))
             lines.append(
-                f"Below threshold — about {hours_left}h of grace left before removal. "
-                "Top up to keep your seat."
+                f"About {hours_left}h of grace left before removal. Top up above the "
+                "gate and the daily check restores you automatically."
             )
         if member.status == "ejected":
-            lines.append("Removed for dropping below the threshold. /verify again to rejoin.")
+            lines.append("Stack back above the gate, then /verify again to rejoin.")
         self.dm(chat_id, "\n".join(lines), dedup)
 
     # -- operator callbacks (approve/reject buttons) --------------------------------
@@ -523,6 +576,22 @@ class GateGateway:
     def present_approvals(self) -> int:
         presented = 0
         for request in self.state.unpresented_approvals():
+            # A service may attach a preview image (dregg_wire sends its hero panel)
+            # so the operator sees what will actually post. It rides FIRST, so the
+            # buttons land after it; an unreadable file is dropped by the outbox
+            # (drop-not-dam) and the text still delivers — never approving blind,
+            # never blocked on a picture.
+            preview = request.payload.get("preview_photo_path") if isinstance(request.payload, dict) else None
+            if isinstance(preview, str) and preview:
+                self.state.enqueue(
+                    f"approval:preview:{request.id}",
+                    "sendPhoto",
+                    {
+                        "chat_id": self.config.operator_chat_id,
+                        "photo_path": preview,
+                        "caption": f"Approval #{request.id} preview — what will post.",
+                    },
+                )
             keyboard = {
                 "inline_keyboard": [
                     [

@@ -15,10 +15,11 @@ launch's verdict card back. Design points:
 * READ-ONLY over the score files; the screen service owns all writes. Lines are
   substring-prefiltered before JSON parsing, so a lookup is one streaming pass and
   a torn tail line (mid-append) is skipped, not fatal.
-* CARD REPLIES ARE TELEGRAM HTML — the coin title links to its pump.fun page
-  (https://pump.fun/coin/<mint>). Symbol/name/reasons are provider-derived text and
-  are HTML-escaped before interpolation; the mint itself is only used after it
-  parses as a base58 pubkey. Plain-copy branches stay parse_mode-less.
+* PLAIN TEXT ONLY — no parse_mode, ever. Bare pump.fun URLs auto-link, and plain
+  text keeps provider-derived strings (symbol, name) literal-inert; the mint is only
+  used after it parses as a base58 pubkey. The scorer's machine reason codes are
+  translated to plain language at render time (never shown raw), with the honesty
+  intact: same facts, readable words.
 
 The gateway wires this in as one line per command; the copy and logic live here so
 the gateway diff stays minimal (a concurrent deputy owns the challenge/help copy
@@ -112,7 +113,7 @@ def rate_limited_text(per_minute: int) -> str:
 
 
 def not_found_text(mint: str) -> str:
-    """HTML branch: honest miss, with the coin's pump.fun link anyway."""
+    """Honest miss (plain text), with the coin's pump.fun link anyway."""
 
     url = PUMP_COIN_URL.format(mint=mint)
     return (
@@ -121,6 +122,17 @@ def not_found_text(mint: str) -> str:
         f"{SCREEN_LIVE_DATE}, so nothing before that exists. If this launch is "
         "seconds old, give it a beat and ask again — every new launch is scored "
         "moments after its create event."
+    )
+
+
+def screen_down_text(mint: str) -> str:
+    """Neither day file exists: the screen itself is unreachable — say so, don't
+    imply the launch was never scored."""
+
+    return (
+        f"I can't reach the screen's score files right now, so I can't say whether "
+        f"{mint} was scored — that's a problem on our side, not something you did. "
+        "Try /screen again in a few minutes."
     )
 
 
@@ -160,11 +172,61 @@ def find_score(scores_dir: Path, mint: str, now: float) -> dict[str, Any] | None
     return found
 
 
-# -- the verdict card (Telegram HTML) -------------------------------------------------
+# -- the verdict card (plain text) ----------------------------------------------------
+
+
+def _plain_reason(reason: str) -> str | None:
+    """One scorer reason code -> one plain-language clause; None drops the code.
+
+    The codes are the scorer's mechanism trail (dregg_screen.score); the card owes the
+    user the same fact in words. Anything unrecognized is de-coded generically rather
+    than leaked raw — a new code must never surface as machine text.
+    """
+
+    if reason == "all_gates_passed":
+        return None  # the CLEAN card's measured lines already say it
+    if reason.startswith("dev_buy_share="):
+        return "the dev's own buy is over the 2% line"
+    if reason.startswith("crew_fingerprint:"):
+        return "its birth-slot buyers match a known crew's fingerprint"
+    if reason.startswith("deployer_record:"):
+        return "this deployer's earlier launches include rips or insider dumps"
+    if reason.startswith("recidivist_sniper:"):
+        prior = reason.rsplit("=", 1)[-1]
+        n = prior if prior.isdigit() else "multiple"
+        return f"a birth-slot buyer here was in the birth slot of {n} earlier launches"
+    if reason.startswith("bundled_at_birth:"):
+        return "multiple wallets bought in the very slot the coin was born"
+    if reason.startswith("nonstandard_curve:"):
+        return "it minted a nonstandard bonding curve, which this screen was not built to score"
+    if reason == "not_hydrated":
+        return "the birth slot couldn't be read in time"
+    if reason == "cheap_gates_passed":
+        return "every check that could still run passed"
+    if reason == "birth_slot_partial":
+        return "only part of the birth slot could be read, and a partial read can hide a bundle"
+    if reason.startswith("policy:") or reason.startswith("budget:"):
+        return "the screen chose not to spend a full birth-slot read on this launch"
+    # Unknown code: humanize, never leak machine syntax.
+    return reason.split(":", 1)[0].split("=", 1)[0].replace("_", " ")
+
+
+_PLAIN_POPULATION_NOTE = {
+    "mint_without_pump_suffix": "its mint address doesn't end in \"pump\"",
+}
+
+
+def _plain_population_note(note: str) -> str:
+    if note.startswith("vendor_flag:is_mayhem_mode"):
+        return "it launched in pump's mayhem mode"
+    if note.startswith("no_dev_buy"):
+        return "it launched with no dev buy at all"
+    return _PLAIN_POPULATION_NOTE.get(note, note.split(":", 1)[0].replace("_", " "))
 
 
 def render_card(row: dict[str, Any]) -> str:
-    """One launch, one card. Escapes provider-derived text; links the pump.fun page."""
+    """One launch, one plain-text card. Links the pump.fun page; ends on the honesty
+    footer, with a next-step line just above it."""
 
     verdict = str(row.get("verdict") or "UNSCORED")
     features = row.get("features") or {}
@@ -188,7 +250,7 @@ def render_card(row: dict[str, Any]) -> str:
         if any(reason.startswith("nonstandard_curve") for reason in reasons):
             # The share's denominator assumes the standard 1e15 curve; this launch
             # minted something else, so the number is a ratio, not a supply share.
-            source += "; standard-curve basis, but this curve is NONSTANDARD"
+            source += "; assumes the standard curve, and this launch's curve is NOT standard"
         lines.append(f"Dev buy: {100 * share:.2f}% of supply ({source}; gate is <2%)")
 
     n_snipers = features.get("n_snipers")
@@ -213,16 +275,17 @@ def render_card(row: dict[str, Any]) -> str:
     crew = row.get("crew_match")
     if isinstance(crew, dict):
         lines.append(
-            f"Crew: matched fingerprint #{crew.get('crew_id')} — Jaccard "
-            f"{crew.get('jaccard')}, {crew.get('overlap')} shared birth-slot wallets "
-            f"(that crew's {crew.get('crew_coins')} corpus coins carry "
+            f"Crew: matched fingerprint #{crew.get('crew_id')} — "
+            f"{crew.get('overlap')} shared birth-slot wallets, overlap {crew.get('jaccard')} "
+            f"of 1 (that crew's {crew.get('crew_coins')} tracked coins carry "
             f"{crew.get('crew_rips')} rips / {crew.get('crew_dumps')} insider dumps)"
         )
     elif hydrated:
         lines.append("Crew: no fingerprint match")
 
-    if reasons:
-        lines.append("Why: " + "; ".join(reasons))
+    why = [text for text in (_plain_reason(str(r)) for r in reasons) if text]
+    if why:
+        lines.append("Why this verdict: " + "; ".join(why) + ".")
 
     scored_at = str(row.get("t_scored") or "")
     if len(scored_at) >= 16:
@@ -230,11 +293,19 @@ def render_card(row: dict[str, Any]) -> str:
 
     lines.append("")
     if not row.get("in_validated_population", True):
-        notes = ", ".join(str(note) for note in row.get("population_notes") or [])
-        lines.append(
-            f"⚠️ Outside the validated population ({notes or 'unflagged stratum'}) "
-            "— the screen's quoted precision was not measured on this stratum."
+        notes = "; ".join(
+            _plain_population_note(str(note)) for note in row.get("population_notes") or []
         )
+        lines.append(
+            f"⚠️ Unusual launch type ({notes or 'an unflagged shape'}) — the screen's "
+            "accuracy was measured on standard launches, and this isn't one. The verdict "
+            "stands, but its measured hit rate doesn't carry over."
+        )
+    next_steps = f"Next: /coin {mint} — who's in it · /watch coin {mint} — DM alerts"
+    deployer = row.get("deployer") or row.get("creator")
+    if isinstance(deployer, str) and deployer:
+        next_steps += f"\nTheir next launch: /watch deployer {deployer}"
+    lines.append(next_steps)
     lines.append(FOOTER)
     return "\n".join(lines)
 
@@ -281,7 +352,13 @@ class ScreenLookup:
             return rate_limited_text(cfg.screen_rate_per_minute), None
         if arg is None or parse_pubkey(arg) is None:
             return USAGE_TEXT, None
-        row = find_score(cfg.screen_scores_dir, arg, self.clock())
+        now = self.clock()
+        row = find_score(cfg.screen_scores_dir, arg, now)
         if row is None:
+            days_present = any(
+                (cfg.screen_scores_dir / f"{day}.jsonl").exists() for day in score_days(now)
+            )
+            if not days_present:
+                return screen_down_text(arg), None
             return not_found_text(arg), None
         return render_card(row), None

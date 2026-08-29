@@ -98,8 +98,9 @@ def event_from_score(row: dict) -> Event | None:
     if isinstance(crew, dict) and crew.get("crew_id") is not None:
         crew_ids.append(str(crew["crew_id"]))
         crew_line = (
-            f"Crew: fingerprint #{crew['crew_id']} — Jaccard {crew.get('jaccard')}, "
-            f"{crew.get('overlap')} shared birth-slot wallets"
+            f"Crew: matched fingerprint #{crew['crew_id']} — "
+            f"{crew.get('overlap')} shared birth-slot wallets, "
+            f"overlap {crew.get('jaccard')} of 1"
         )
     continuity = features.get("crew_continuity_note")
     if isinstance(continuity, dict) and continuity.get("crew_id") is not None:

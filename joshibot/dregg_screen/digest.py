@@ -24,7 +24,16 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-MAX_CLEAN_LINES = 6
+MAX_CLEAN_LINES = 10
+
+#: What each verdict means to a trader, in the words the /screen card uses.
+VERDICT_GLOSS = {
+    "CLEAN": "passed every gate",
+    "KNOWN_CREW": "birth-slot wallets or deployer match a tracked crew record",
+    "BUNDLED": "multiple wallets bought in the very slot the coin was born",
+    "NOT_CLEAN": "dev's own buy over the 2% line",
+    "UNSCORED": "couldn't be fully read, so no verdict",
+}
 
 
 def load_window(scores_dir: Path, window_min: float) -> list[dict]:
@@ -57,6 +66,72 @@ def load_window(scores_dir: Path, window_min: float) -> list[dict]:
     return rows
 
 
+def _flat_symbol(row: dict) -> str:
+    """Whitespace-flattened + clamped: a hostile provider name cannot add lines."""
+
+    return ("".join(str(row.get("symbol") or "?").split()) or "?")[:12]
+
+
+def _labels(cleans: list[dict]) -> dict[str, str]:
+    """mint -> display label; colliding tickers get a mint-prefix suffix (the feed
+    lane's fix: three $Lyra in one message must stay tellable apart)."""
+
+    flat = {str(r.get("mint", "")): _flat_symbol(r) for r in cleans}
+    counts: dict[str, int] = {}
+    for name in flat.values():
+        counts[name] = counts.get(name, 0) + 1
+    return {
+        mint: (name if counts[name] == 1 else f"{name}·{mint[:4]}")
+        for mint, name in flat.items()
+    }
+
+
+def _clean_line(row: dict, label: str) -> str:
+    """One admit with the numbers that made it clean — intelligence, not a roll call."""
+
+    mint = str(row.get("mint", ""))
+    features = row.get("features") or {}
+    bits = []
+    share = features.get("dev_buy_share")
+    if isinstance(share, (int, float)):
+        bits.append(f"dev buy {100 * share:.2f}%")
+    history = row.get("deployer_history") or {}
+    launches = int(history.get("launches") or 0)
+    if launches:
+        record = f"deployer launched {launches} before, no rips or dumps on record"
+        grads = int(history.get("grads") or 0)
+        if grads:
+            record += f", {grads} graduated"
+        bits.append(record)
+    else:
+        bits.append("first launch from this deployer")
+    if not row.get("in_validated_population", True):
+        bits.append("unusual launch type — screen accuracy unmeasured here")
+    detail = " · ".join(bits)
+    return f"  ${label} https://pump.fun/coin/{mint} — {detail}"
+
+
+def _rate_line(rows: list[dict]) -> str:
+    """The number that makes the hour meaningful: this window's CLEAN rate on
+    standard launches, against the screen's stamped long-run operating point."""
+
+    pop = [r for r in rows if r.get("in_validated_population")]
+    if not pop:
+        return ("None of these launches were the standard type the screen's "
+                "accuracy was measured on.")
+    pop_clean = sum(1 for r in pop if r.get("verdict") == "CLEAN")
+    rate = f"{100 * pop_clean / len(pop):.0f}%"
+    head = (f"Pass rate: {pop_clean} of {len(pop)} standard-type launches "
+            f"came out CLEAN ({rate})")
+    for row in reversed(rows):
+        rip = (row.get("base_rates") or {}).get("is_rip") or {}
+        if rip.get("admit_rate") is not None:
+            span = str((row.get("base_rates") or {}).get("validated_span") or "?").split(" (")[0]
+            return (f"{head} vs the screen's long-run {100 * rip['admit_rate']:.1f}% "
+                    f"(measured {span}).")
+    return f"{head}; no long-run baseline was stamped in this window's scores."
+
+
 def compose(rows: list[dict], window_min: float) -> str | None:
     if not rows:
         return None
@@ -66,27 +141,38 @@ def compose(rows: list[dict], window_min: float) -> str | None:
         counts[verdict] = counts.get(verdict, 0) + 1
     cleans = [r for r in rows if r.get("verdict") == "CLEAN"]
     total = len(rows)
-    parts = [
-        f"🗞 launch screen — last {window_min:.0f}m: {total} launches scored",
-        " · ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])),
-    ]
+    parts = [f"🗞 launch screen — last {window_min:.0f} min: {total} launches scored"]
+    # CLEAN leads (it's the money line); the rest by count. Enum names render
+    # hyphenated, each with its plain meaning — the counts line is not a log line.
+    ordered = sorted(counts.items(), key=lambda kv: (kv[0] != "CLEAN", -kv[1], kv[0]))
+    for verdict, n in ordered:
+        gloss = VERDICT_GLOSS.get(verdict, "unrecognized verdict")
+        parts.append(f"{verdict.replace('_', '-')} {n} — {gloss}")
+    parts.append("")
+    parts.append(_rate_line(rows))
     if cleans:
+        shown = cleans[-MAX_CLEAN_LINES:]
+        labels = _labels(shown)
         parts.append(f"\nCLEAN admits ({len(cleans)}):")
-        for row in cleans[-MAX_CLEAN_LINES:]:
-            symbol = row.get("symbol") or "?"
+        for row in shown:
             mint = str(row.get("mint", ""))
-            parts.append(f"  ${symbol} {mint[:8]}…{mint[-4:]}")
+            parts.append(_clean_line(row, labels.get(mint, "?")))
         if len(cleans) > MAX_CLEAN_LINES:
-            parts.append(f"  …and {len(cleans) - MAX_CLEAN_LINES} more")
-    parts.append("\nScores rank risk; they do not establish intent.")
+            parts.append(
+                f"  …and {len(cleans) - MAX_CLEAN_LINES} earlier this window "
+                "(newest shown). /watch clean DMs you every one."
+            )
+    parts.append("\nDM me /screen <mint> for any launch's full card.")
+    parts.append("Scores rank risk; they do not establish intent.")
     return "\n".join(parts)
 
 
-def enqueue(gate_db: Path, text: str, dedup_key: str, parse_mode: str | None = None) -> bool:
+def enqueue(gate_db: Path, text: str, dedup_key: str) -> bool:
     """INSERT into the gate outbox iff a group is bound. Returns whether enqueued.
 
-    The gate bot posts payload_json to Telegram verbatim, so an optional parse_mode
-    (dregg_wire sends HTML) rides the payload; this digest stays plain text.
+    Plain text only, by construction: every group surface (this digest, the wire,
+    the record post) rides this function, and none of them may carry a parse_mode —
+    bare URLs auto-link, provider strings stay literal-inert.
     """
     connection = sqlite3.connect(gate_db, timeout=10.0)
     try:
@@ -97,8 +183,6 @@ def enqueue(gate_db: Path, text: str, dedup_key: str, parse_mode: str | None = N
             return False
         chat_id = int(row[0])
         payload: dict[str, object] = {"chat_id": chat_id, "text": text}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
         with connection:
             connection.execute(
                 "INSERT OR IGNORE INTO outbox (dedup_key, method, payload_json, created_at) "

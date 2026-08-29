@@ -203,10 +203,15 @@ async def test_screen_renders_the_verdict_card_with_pump_fun_link(tmp_path: Path
     assert "Dev buy: 0.21% of supply (vendor estimate; gate is <2%)" in card
     assert "Bundle: YES — 4 buyers in the birth slot" in card
     assert "Deployer record: 6 launches / 0 rips / 6 dumps" in card
-    assert "fingerprint #81422 — Jaccard 0.31, 4 shared birth-slot wallets" in card
+    assert "matched fingerprint #81422 — 4 shared birth-slot wallets, overlap 0.31 of 1" in card
     assert "3 rips / 2 insider dumps" in card
-    # the population caveat and the intent line are non-negotiable
-    assert "Outside the validated population (vendor_flag:is_mayhem_mode)" in card
+    # the population caveat (in plain words) and the intent line are non-negotiable
+    assert "Unusual launch type (it launched in pump's mayhem mode)" in card
+    assert "measured hit rate doesn't carry over" in card
+    assert "vendor_flag" not in card and "crew_fingerprint:" not in card  # no raw codes
+    # every verdict hands the reader a next step
+    assert f"/coin {mint}" in card and f"/watch coin {mint}" in card
+    assert "/watch deployer deployerwallet" in card
     assert "Scores rank risk; they do not establish intent." in card
     state.close()
 
@@ -248,7 +253,8 @@ async def test_screen_unhydrated_row_says_birth_slot_unread(tmp_path: Path) -> N
     card = outbox_texts(state)[0]
     assert "NOT-CLEAN" in card
     assert "Bundle: unknown — birth slot not read" in card
-    assert "Why: dev_buy_share=0.1249>= 0.02" in card  # verbatim mechanism, plain text
+    assert "Why this verdict: the dev's own buy is over the 2% line." in card
+    assert "dev_buy_share=" not in card  # the raw code never reaches a user
     state.close()
 
 
@@ -288,13 +294,19 @@ async def test_screen_not_found_is_honest_about_window_and_go_live(tmp_path: Pat
     state.close()
 
 
-async def test_screen_missing_score_files_read_as_not_found(tmp_path: Path) -> None:
+async def test_screen_missing_score_files_read_as_screen_down(tmp_path: Path) -> None:
+    """No day file at all means the screen is unreachable — say that, with a next
+    step, instead of falsely implying the launch was never scored."""
+
     cfg = make_config(tmp_path)  # scores dir never created
     state = GateState(cfg.db_path)
     verified_member(state)
     gateway = gate(cfg, state, Clock())
     await gateway.process_update(dm_update(1, 777, f"/screen {Keypair().pubkey()}"))
-    assert any("No screen record" in t for t in outbox_texts(state))
+    texts = outbox_texts(state)
+    assert any("can't reach the screen's score files" in t for t in texts)
+    assert any("not something you did" in t and "/screen" in t for t in texts)
+    assert not any("No screen record" in t for t in texts)
     state.close()
 
 
@@ -335,6 +347,7 @@ async def test_screen_rate_limit_admits_then_refuses_then_recovers(tmp_path: Pat
     verified_member(state)
     clock = Clock()
     gateway = gate(cfg, state, clock)
+    write_scores(cfg, TODAY.isoformat(), [score_row(str(Keypair().pubkey()))])
     mint = str(Keypair().pubkey())
     for n in range(3):
         await gateway.process_update(dm_update(n + 1, 777, f"/screen {mint}"))

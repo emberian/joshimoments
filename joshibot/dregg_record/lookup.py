@@ -99,7 +99,7 @@ def _measured_lines(measured: dict) -> list[str]:
     if "absent" in measured:
         return [f"Measured: {measured['absent']}"]
     lines = ["Measured (our candles, close-to-close, "
-             f"{measured['n_with_outcomes']} calls with outcome rows):"]
+             f"{measured['n_with_outcomes']} calls measured so far):"]
     r24 = measured["ret_24h"]
     if r24["n"]:
         lines.append(
@@ -129,7 +129,7 @@ def _measured_lines(measured: dict) -> list[str]:
 
 def _wallet_layer_line(layer: dict) -> str:
     if "absent" in layer:
-        return f"Wallet layer: {layer['absent']}"
+        return f"Their own trading (wallet snapshot): {layer['absent']}"
     win = layer.get("win_rate")
     bits = [f"realized {layer.get('net_realized_sol'):+,.1f} SOL"]
     if win is not None:
@@ -137,7 +137,10 @@ def _wallet_layer_line(layer: dict) -> str:
     if layer.get("rp_mode"):
         bits.append(str(layer["rp_mode"]))
     bits.append(f"guild {layer['guild']}" if layer.get("guild") is not None else "no guild")
-    return f"Wallet layer (as of {layer.get('as_of')}, STALE): " + " · ".join(bits)
+    return (
+        f"Their own trading (wallet snapshot of {layer.get('as_of')} — stale, not live): "
+        + " · ".join(bits)
+    )
 
 
 def _call_line(call: dict) -> str:
@@ -157,7 +160,7 @@ def _call_line(call: dict) -> str:
     if call["removal"] == "removed":
         line += " · REMOVED from the provider's board (still counted)"
     elif call["removal"] == "unknown-absent":
-        line += " · absent from the provider's board (verdict: unknown-absent)"
+        line += " · gone from the provider's board (removed or expired — can't tell which; still counted)"
     return line
 
 
@@ -193,8 +196,9 @@ def render_card(record: dict, calls: list[dict]) -> str:
     n_removed = removals["published_removed"] + removals["published_unknown_absent"]
     removal_line = (
         f"Removals: {n_removed} callout(s) vanished from the provider's board "
-        f"({removals['published_removed']} removed, {removals['published_unknown_absent']} "
-        "unknown-absent; published verdicts) — they stay counted above."
+        f"({removals['published_removed']} confirmed removed, "
+        f"{removals['published_unknown_absent']} gone without a trace) — "
+        "they stay counted above."
         if n_removed
         else "Removals: none on record."
     )
@@ -203,6 +207,7 @@ def render_card(record: dict, calls: list[dict]) -> str:
              removal_line, _wallet_layer_line(record["wallet_layer"])]
     if calls:
         lines += ["", f"LAST {len(calls)} CALLS", *(_call_line(c) for c in calls)]
+    lines += ["", f"Next: /watch caller {record['wallet']} DMs you their next callout."]
     lines += ["", STANDING_LINE]
     text = "\n".join(lines)
     assert len(text) <= TELEGRAM_MAX, "/caller card exceeded Telegram's cap"

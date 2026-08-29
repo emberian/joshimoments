@@ -305,10 +305,10 @@ def test_markdown_links(scores_dir, archive_db):
 # -- approval -> deliver round trip ----------------------------------------------------
 
 
-def _compose_args(scores_dir, archive_db, gate_db, state_dir, day=DAY):
+def _compose_args(scores_dir, archive_db, gate_db, state_dir, day=DAY, d4m_dir=None):
     return argparse.Namespace(
         day=day, scores_dir=scores_dir, archive_db=archive_db, gate_db=gate_db,
-        state_dir=state_dir, wallet_parquet=None, manifest_dir=None,
+        state_dir=state_dir, wallet_parquet=None, manifest_dir=None, d4m_dir=d4m_dir,
     )
 
 
@@ -327,21 +327,37 @@ def test_compose_then_approve_then_deliver(scores_dir, archive_db, gate_db, tmp_
     args = _compose_args(scores_dir, archive_db, gate_db, state_dir)
     out = post_mod.compose(args)
     assert out["composed"] and out["chars"] > 200
+    assert out["panels"] == ["glance", "crews", "desk"]
     approval_id = out["approval_id"]
 
-    # artifact + facts landed beside the state file
+    # artifact + facts + panel PNGs landed beside the state file, stable names
     assert (state_dir / f"{DAY}.md").exists()
     assert (state_dir / f"{DAY}.facts.json").exists()
+    for name in ("glance", "crews", "desk"):
+        png = state_dir / f"{DAY}-{name}.png"
+        assert png.exists() and png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    # the markdown artifact references the panels by bare sibling filename
+    markdown = (state_dir / f"{DAY}.md").read_text()
+    for name in ("glance", "crews", "desk"):
+        assert f"]({DAY}-{name}.png)" in markdown
 
-    # the approval row carries the exact telegram text in summary AND payload
+    # the approval summary names the panels and carries the exact telegram text;
+    # the payload carries the text, the panel manifest, and the hero preview path
     db = sqlite3.connect(gate_db)
     row = db.execute(
         "SELECT source, kind, summary, payload_json FROM approvals WHERE id = ?", (approval_id,)
     ).fetchone()
     db.close()
     assert (row[0], row[1]) == ("wire", "daily")
-    assert json.loads(row[3])["text"] == row[2]
+    payload = json.loads(row[3])
+    assert payload["text"] in row[2]
+    assert "3 panels + the full text" in row[2]
+    assert "the crew board" in row[2]
     assert "DREGG WIRE #0" in row[2]
+    assert [p["name"] for p in payload["panels"]] == ["glance", "crews", "desk"]
+    assert payload["preview_photo_path"].endswith(f"{DAY}-glance.png")
+    for panel in payload["panels"]:
+        assert len(panel["caption"]) <= 1024
 
     deliver_args = argparse.Namespace(gate_db=gate_db, state_dir=state_dir)
 
@@ -354,22 +370,30 @@ def test_compose_then_approve_then_deliver(scores_dir, archive_db, gate_db, tmp_
     assert post_mod.deliver(deliver_args)["waiting"] == [DAY]
     assert post_mod.load_state(state_dir)[DAY]["status"] == "approved"
 
-    # bind the group; delivery posts with dedup wire-<day> and HTML parse_mode
+    # bind the group; delivery enqueues the ordered media sequence + closing text
     db = sqlite3.connect(gate_db)
     with db:
         db.execute("INSERT INTO metadata (key, value) VALUES ('group_id', '-100777')")
     db.close()
     assert post_mod.deliver(deliver_args)["delivered"] == [DAY]
     db = sqlite3.connect(gate_db)
-    dedup, method, payload_json = db.execute(
-        "SELECT dedup_key, method, payload_json FROM outbox"
-    ).fetchone()
+    rows = db.execute(
+        "SELECT dedup_key, method, payload_json FROM outbox ORDER BY id"
+    ).fetchall()
     db.close()
-    payload = json.loads(payload_json)
-    assert (dedup, method) == (f"wire-{DAY}", "sendMessage")
-    assert payload["chat_id"] == -100777
-    assert "parse_mode" not in payload  # plain text, bare auto-linked URLs
-    assert payload["text"] == row[2]
+    assert [r[1] for r in rows] == ["sendPhoto", "sendPhoto", "sendPhoto", "sendMessage"]
+    assert [r[0] for r in rows] == [
+        f"wire-{DAY}-p1-glance", f"wire-{DAY}-p2-crews", f"wire-{DAY}-p3-desk", f"wire-{DAY}",
+    ]
+    for dedup, method, payload_json in rows:
+        item = json.loads(payload_json)
+        assert item["chat_id"] == -100777
+        assert "parse_mode" not in item  # plain text everywhere — hard production rule
+        if method == "sendPhoto":
+            assert Path(item["photo_path"]).exists()
+            assert 0 < len(item["caption"]) <= 1024
+        else:
+            assert item["text"] == payload["text"]
 
     # compose again: refuses to double-enqueue a delivered day
     again = post_mod.compose(args)
@@ -392,6 +416,43 @@ def test_reject_marks_skipped_and_posts_nothing(scores_dir, archive_db, gate_db,
     # a skipped day MAY be recomposed (fresh approval, new id)
     out2 = post_mod.compose(_compose_args(scores_dir, archive_db, gate_db, state_dir))
     assert out2["composed"] and out2["approval_id"] != out["approval_id"]
+
+
+def test_panel_render_failure_degrades_to_text_only(
+    scores_dir, archive_db, gate_db, tmp_path, monkeypatch
+):
+    """A broken renderer never silences the wire: compose ships text-only, the
+    summary says so, and delivery enqueues exactly the one sendMessage."""
+
+    def boom(*_args, **_kwargs):
+        raise ValueError("matplotlib exploded")
+
+    monkeypatch.setattr(post_mod, "build_panels", boom)
+    state_dir = tmp_path / "wire"
+    out = post_mod.compose(_compose_args(scores_dir, archive_db, gate_db, state_dir))
+    assert out["composed"] and out["panels"] == []
+
+    db = sqlite3.connect(gate_db)
+    summary, payload_json = db.execute(
+        "SELECT summary, payload_json FROM approvals WHERE id = ?", (out["approval_id"],)
+    ).fetchone()
+    payload = json.loads(payload_json)
+    assert "text only" in summary and "panel render failed" in summary
+    assert payload["panels"] == [] and "preview_photo_path" not in payload
+    with db:
+        db.execute("INSERT INTO metadata (key, value) VALUES ('group_id', '-100777')")
+        db.execute(
+            "UPDATE approvals SET decided_at = 1, decision = 'approve', decided_by = 'op'"
+        )
+    db.close()
+    result = post_mod.deliver(argparse.Namespace(gate_db=gate_db, state_dir=state_dir))
+    assert result["delivered"] == [DAY]
+    db = sqlite3.connect(gate_db)
+    rows = db.execute("SELECT dedup_key, method FROM outbox ORDER BY id").fetchall()
+    db.close()
+    assert rows == [(f"wire-{DAY}", "sendMessage")]
+    # the markdown artifact carries no dangling image refs
+    assert "](2026" not in (state_dir / f"{DAY}.md").read_text().replace("](https", "")
 
 
 def test_issue_number_counts_prior_days():

@@ -57,7 +57,7 @@ def teaser_text(threshold_tokens: int) -> str:
         "/wallet and /coin are holder perks — verify to unlock.\n\n"
         "Verified members get the behavioral dossier on any of 728k profiled wallets "
         "(guild, realization policy, realized PnL, hold times, bot tells) and the holder "
-        "composition of any corpus coin (guild mix, preset-bot count, crews, large "
+        "composition of any coin in our data (guild mix, preset-bot count, crews, large "
         "holders quietly distributing). A taste of the shape:\n\n"
         "FLASH / BREAKEVEN_PRESET — ░░.░ SOL realized across ░░ coins, ░░% win rate, "
         "median hold ░░ s, enters ░ s after launch, mercenary rotation: yes.\n\n"

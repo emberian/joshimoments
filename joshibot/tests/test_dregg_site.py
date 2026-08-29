@@ -119,11 +119,16 @@ def wire_dir(tmp_path: Path) -> Path:
     d = tmp_path / "wire"
     d.mkdir()
     (d / f"{DAY}.md").write_text(
-        f"# DREGG WIRE #0 — {DAY}\n\n*a lede line*\n\n## Launch screen\n\n"
+        f"# DREGG WIRE #0 — {DAY}\n\n*a lede line*\n\n"
+        f"![the day at a glance {HOSTILE}]({DAY}-glance.png)\n\n## Launch screen\n\n"
         "| coin | mint |\n|---|---|\n"
         f"| [$OK](https://pump.fun/coin/{'A' * 40}pump) | `{'A' * 40}pump` |\n\n"
         f"**bold** and *italic* and `code` and hostile {HOSTILE} text\n"
+        "![evil](ftp://evil.example/x.png)\n"
+        "![evil](../escape.png)\n"
     )
+    (d / f"{DAY}-glance.png").write_bytes(b"\x89PNG\r\n\x1a\nPANELBYTES")
+    (d / "2026-08-28-crews.png").write_bytes(b"\x89PNG\r\n\x1a\nSKIPPEDDAY")
     (d / "2026-08-28.md").write_text("# DREGG WIRE — skipped day\n")
     (d / "wire_state.json").write_text(
         json.dumps({DAY: {"status": "delivered"}, "2026-08-28": {"status": "skipped"}})
@@ -157,6 +162,26 @@ def test_generates_page_set(tmp_path, scores_dir, archive_db, wire_dir):
     assert "<b>5</b><span>launches scored</span>" in html["index.html"]
     assert "292.7" in html["record.html"]  # provider claim…
     assert "provider-claimed peaks" in html["record.html"]  # …never without its label
+
+
+def test_wire_panels_embed_and_copy_only_for_published_days(
+    tmp_path, scores_dir, archive_db, wire_dir
+):
+    out, manifest = _generate(tmp_path, scores_dir, archive_db, wire_dir)
+    # the published day's panel PNG is copied beside its page, byte-identical
+    assert manifest["assets"] == [f"wire/{DAY}-glance.png"]
+    assert (out / "wire" / f"{DAY}-glance.png").read_bytes() == b"\x89PNG\r\n\x1a\nPANELBYTES"
+    # the skipped day's panel never ships
+    assert not (out / "wire" / "2026-08-28-crews.png").exists()
+    page = (out / "wire" / f"{DAY}.html").read_text()
+    # the whole-line image ref renders as an <img> on a bare sibling filename,
+    # with hostile alt text escaped
+    assert f'<img src="{DAY}-glance.png"' in page
+    assert HOSTILE not in page
+    # non-sibling and remote image refs stay inert text, never tags
+    assert 'src="ftp://evil.example/x.png"' not in page
+    assert 'src="../escape.png"' not in page
+    assert page.count("<img") == 1
 
 
 def test_skipped_and_foreign_files_stay_out_of_wire_archive(wire_dir):

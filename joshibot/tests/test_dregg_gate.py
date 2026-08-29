@@ -159,7 +159,9 @@ async def test_full_verify_flow_grants_single_use_hour_invite(tmp_path: Path) ->
         # single-use: the same signature can never grant again
         await gateway.process_update(dm_update(3, 777, signature))
         assert len(invites) == 1
-        assert any("No live challenge" in text for text in outbox_texts(state))
+        assert any(
+            "no live challenge" in text and "/verify" in text for text in outbox_texts(state)
+        )
     state.close()
 
 
