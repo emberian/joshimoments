@@ -115,7 +115,7 @@ def deliver(args: argparse.Namespace) -> dict:
             entry["note"] = "approved but payload carried no text; nothing sendable"
             skipped.append(day)
             continue
-        if enqueue_outbox(args.gate_db, text, f"wire-{day}", parse_mode="HTML"):
+        if enqueue_outbox(args.gate_db, text, f"wire-{day}"):
             entry["status"] = "delivered"
             entry["delivered_at"] = time.time()
             delivered.append(day)

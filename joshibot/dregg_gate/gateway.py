@@ -17,7 +17,6 @@ call in the flow is createChatInviteLink, whose response (the link) we need.
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 import time
@@ -284,14 +283,9 @@ class GateGateway:
             "anywhere. On a phone, open it inside your wallet's built-in browser.",
             dedup,
         )
-        # The challenge rides alone, as a <pre> block: tapping it in any Telegram app
-        # copies the exact text, so nothing extra ever gets signed by accident.
-        self.dm(
-            chat_id,
-            f"<pre>{html.escape(challenge_text)}</pre>",
-            dedup + ":challenge",
-            parse_mode="HTML",
-        )
+        # The challenge rides ALONE in its own message (no other text, no markup):
+        # tap-and-hold copies exactly these bytes, so nothing extra is ever signed.
+        self.dm(chat_id, challenge_text, dedup + ":challenge")
 
     async def _handle_signature(self, uid: int, chat_id: int, text: str, dedup: str) -> None:
         # Peek BEFORE get_challenge reaps an expired row: wallet-and-None afterwards

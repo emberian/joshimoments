@@ -7,7 +7,6 @@ programmable stub (flows and failures). Signatures are real ed25519 via solders.
 
 from __future__ import annotations
 
-import html
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -110,13 +109,12 @@ def outbox_texts(state: GateState) -> list[str]:
 
 
 def challenge_text_from(state: GateState) -> str:
-    """The challenge rides alone in a <pre> block so tap-to-copy grabs exactly it."""
+    """The challenge rides alone in its own plain-text message (no markup), so a
+    tap-and-hold copy grabs exactly it and nothing extra is ever signed."""
 
     texts = [t for t in outbox_texts(state) if "dregg wire wants proof" in t]
     assert texts, "no challenge DM enqueued"
-    text = texts[-1]
-    assert text.startswith("<pre>") and text.endswith("</pre>"), "challenge must ride alone in <pre>"
-    return html.unescape(text[len("<pre>") : -len("</pre>")])
+    return texts[-1]
 
 
 def ok_telegram_handler(invites: list[dict]):
@@ -186,8 +184,8 @@ async def test_challenge_rides_alone_and_copy_points_at_signer(tmp_path: Path) -
     assert "parse_mode" not in instructions
 
     challenge = challenge_text_from(state)
-    assert challenge_dm["text"] == f"<pre>{challenge}</pre>", "nothing but the challenge is copyable"
-    assert challenge_dm["parse_mode"] == "HTML"
+    assert challenge_dm["text"] == challenge, "nothing but the challenge is in that message"
+    assert "parse_mode" not in challenge_dm, "plain text, no markup to mis-render"
     assert str(keypair.sign_message(challenge.encode()))  # exact text is signable as-is
 
     await gateway.process_update(dm_update(2, 777, "/help"))

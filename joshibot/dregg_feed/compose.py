@@ -14,8 +14,6 @@ truncation could sever a tag and earn the outbox a definitive 400.
 
 from __future__ import annotations
 
-import html
-
 from .movers import Alert
 
 STANDING_LINE = "Awareness, not advice; momentum was measured to carry no entry edge."
@@ -68,9 +66,8 @@ def caption(alert: Alert, verdict: str | None) -> str:
     # Inputs are clamped BEFORE escaping so the assembled caption is under Telegram's
     # 1024-char cap by construction (worst case ~1010 with every char escaping to
     # 6 bytes) — a post-hoc truncation could sever the </a> and earn a definitive 400.
-    symbol = html.escape(alert.symbol[:20])
-    name = html.escape((alert.name or alert.symbol)[:64])
-    mint_attr = html.escape(alert.mint, quote=True)
+    symbol = alert.symbol[:20]
+    name = (alert.name or alert.symbol)[:64]
     claims = " · ".join(
         [
             f"5m {_sol(alert.v5)}",
@@ -82,8 +79,8 @@ def caption(alert: Alert, verdict: str | None) -> str:
         ]
     )
     lines = [
-        f"📊 ${symbol} is moving on pump.fun — "
-        f'<a href="https://pump.fun/coin/{mint_attr}">{name}</a>',
+        f"📊 ${symbol} ({name}) is moving on pump.fun",
+        f"https://pump.fun/coin/{alert.mint}",
         f"why: {reason_line(alert)}",
         f"provider claims: {claims}",
         f"birth screen: {verdict_line(verdict)}",

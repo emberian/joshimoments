@@ -6,7 +6,6 @@ score files are written by the tests themselves in the live service's exact JSON
 
 from __future__ import annotations
 
-import html
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -83,10 +82,7 @@ def outbox_texts(state: GateState) -> list[str]:
 def challenge_text_from(state: GateState) -> str:
     texts = [t for t in outbox_texts(state) if "dregg wire wants proof" in t]
     assert texts, "no challenge DM enqueued"
-    text = texts[-1]
-    if text.startswith("<pre>") and text.endswith("</pre>"):
-        return html.unescape(text[len("<pre>") : -len("</pre>")])
-    return text.split("\n\n", 1)[1]
+    return texts[-1]  # the challenge rides alone in its own plain-text message
 
 
 def score_row(mint: str, **overrides) -> dict:
@@ -200,11 +196,11 @@ async def test_screen_renders_the_verdict_card_with_pump_fun_link(tmp_path: Path
     payloads = dm_payloads(state)
     assert len(payloads) == 1
     card = payloads[0]["text"]
-    assert payloads[0].get("parse_mode") == "HTML"
-    assert f'<a href="https://pump.fun/coin/{mint}">$RUN — lil bull run</a>' in card
-    assert f"<code>{mint}</code>" in card
+    assert payloads[0].get("parse_mode") is None  # plain text everywhere
+    assert "$RUN — lil bull run" in card and f"https://pump.fun/coin/{mint}" in card
+    assert mint in card  # bare mint on its own line, tap-and-hold to copy
     assert "KNOWN-CREW" in card
-    assert "Dev buy: 0.21% of supply (vendor estimate; gate is &lt;2%)" in card
+    assert "Dev buy: 0.21% of supply (vendor estimate; gate is <2%)" in card
     assert "Bundle: YES — 4 buyers in the birth slot" in card
     assert "Deployer record: 6 launches / 0 rips / 6 dumps" in card
     assert "fingerprint #81422 — Jaccard 0.31, 4 shared birth-slot wallets" in card
@@ -225,7 +221,7 @@ async def test_screen_clean_card_and_yesterday_file(tmp_path: Path) -> None:
     await gateway.process_update(dm_update(1, 777, f"/screen {mint}"))
     card = outbox_texts(state)[0]
     assert "🟢 CLEAN" in card
-    assert "Dev buy: 0.90% of supply (chain-exact; gate is &lt;2%)" in card
+    assert "Dev buy: 0.90% of supply (chain-exact; gate is <2%)" in card
     assert "Bundle: none seen (1 birth-slot buyer)" in card
     assert "Crew: no fingerprint match" in card
     assert "Deployer record: 2 launches / 0 rips / 0 dumps / 1 graduations" in card
@@ -252,11 +248,11 @@ async def test_screen_unhydrated_row_says_birth_slot_unread(tmp_path: Path) -> N
     card = outbox_texts(state)[0]
     assert "NOT-CLEAN" in card
     assert "Bundle: unknown — birth slot not read" in card
-    assert "Why: dev_buy_share=0.1249&gt;= 0.02" in card  # escaped, verbatim mechanism
+    assert "Why: dev_buy_share=0.1249>= 0.02" in card  # verbatim mechanism, plain text
     state.close()
 
 
-async def test_screen_escapes_hostile_provider_strings(tmp_path: Path) -> None:
+async def test_screen_renders_hostile_provider_strings_inert(tmp_path: Path) -> None:
     cfg = make_config(tmp_path)
     state = GateState(cfg.db_path)
     verified_member(state)
@@ -267,11 +263,10 @@ async def test_screen_escapes_hostile_provider_strings(tmp_path: Path) -> None:
     gateway = gate(cfg, state, Clock())
     await gateway.process_update(dm_update(1, 777, f"/screen {mint}"))
     card = outbox_texts(state)[0]
-    assert "&lt;b&gt;EVIL" in card and "&lt;script&gt;" in card and "&amp;" in card
-    assert "<b>" not in card and "<script>" not in card
-    # the only tags in the card are the ones we wrote
-    for tag in ("<a ", "</a>", "<code>", "</code>"):
-        assert card.count(tag) == 1
+    assert "<b>EVIL" in card and "<script>" in card and "&" in card  # literal + inert
+    # plain text, no markup we emit
+    for tag in ("<a ", "</a>", "<code>", "</code>", "parse_mode"):
+        assert tag not in card
     state.close()
 
 
@@ -288,8 +283,8 @@ async def test_screen_not_found_is_honest_about_window_and_go_live(tmp_path: Pat
     assert "No screen record" in text
     assert "last two days" in text
     assert "2026-08-29" in text  # the screen's go-live date, named
-    assert f'href="https://pump.fun/coin/{mint}"' in text  # still hand them the coin page
-    assert payloads[0].get("parse_mode") == "HTML"
+    assert f"https://pump.fun/coin/{mint}" in text  # still hand them the coin page
+    assert payloads[0].get("parse_mode") is None  # plain text everywhere
     state.close()
 
 

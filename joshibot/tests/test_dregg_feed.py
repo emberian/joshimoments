@@ -237,7 +237,7 @@ def sample_alert(**overrides) -> Alert:
 
 def test_caption_carries_link_claims_verdict_and_the_standing_line() -> None:
     text = compose.caption(sample_alert(), "CLEAN")
-    assert f'<a href="https://pump.fun/coin/{MINT_A}">FrogeCoin</a>' in text
+    assert "FrogeCoin" in text and f"https://pump.fun/coin/{MINT_A}" in text
     assert "provider claims: 5m 254.3 SOL · 1h 4,681.6 SOL" in text
     assert "screen said CLEAN at birth" in text
     assert "254.3 SOL vs 131.2 one poll earlier" in text
@@ -245,11 +245,10 @@ def test_caption_carries_link_claims_verdict_and_the_standing_line() -> None:
     assert "🚀" not in text
 
 
-def test_caption_escapes_hostile_names_and_handles_unscored() -> None:
+def test_caption_renders_hostile_names_inert_and_handles_unscored() -> None:
     hostile = sample_alert(symbol='<b>&PWN"', name='<script>alert("x")</script>')
     text = compose.caption(hostile, None)
-    assert "<script>" not in text and "<b>&PWN" not in text
-    assert "&lt;script&gt;" in text and "&lt;b&gt;&amp;PWN&quot;" in text
+    assert "<script>" in text and '<b>&PWN"' in text  # literal, inert in plain text
     assert "born before the screen / unscored" in text
     assert len(text) <= compose.CAPTION_MAX
 
@@ -315,7 +314,7 @@ def test_enqueue_alert_writes_sendphoto_and_respects_unbound_gate(tmp_path: Path
     assert [r[0] for r in rows] == ["sendPhoto", "sendMessage"]
     photo_payload = json.loads(rows[0][1])
     assert photo_payload["photo_path"].endswith("c.png")
-    assert photo_payload["parse_mode"] == "HTML"
+    assert "parse_mode" not in photo_payload  # plain caption
     assert json.loads(rows[1][1])["disable_web_page_preview"] is True
 
 

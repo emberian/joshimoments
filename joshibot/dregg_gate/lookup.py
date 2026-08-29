@@ -27,7 +27,6 @@ there).
 
 from __future__ import annotations
 
-import html
 import json
 import time
 from collections import defaultdict, deque
@@ -115,10 +114,9 @@ def rate_limited_text(per_minute: int) -> str:
 def not_found_text(mint: str) -> str:
     """HTML branch: honest miss, with the coin's pump.fun link anyway."""
 
-    safe = html.escape(mint, quote=True)
-    url = PUMP_COIN_URL.format(mint=safe)
+    url = PUMP_COIN_URL.format(mint=mint)
     return (
-        f'No screen record for <a href="{url}">{safe}</a> in the last two days.\n\n'
+        f"No screen record for {mint} ({url}) in the last two days.\n\n"
         f"I keep today's and yesterday's scores on tap; the screen went live "
         f"{SCREEN_LIVE_DATE}, so nothing before that exists. If this launch is "
         "seconds old, give it a beat and ask again — every new launch is scored "
@@ -172,19 +170,15 @@ def render_card(row: dict[str, Any]) -> str:
     features = row.get("features") or {}
     hydrated = bool(row.get("hydrated"))
     mint = str(row.get("mint") or "")
-    safe_mint = html.escape(mint, quote=True)
-
+    
     symbol = str(row.get("symbol") or "").strip()
     name = str(row.get("name") or "").strip()
     title = f"${symbol.lstrip('$')}" if symbol else (mint[:8] or "?")
     if name and name != symbol:
         title += f" — {name}"
-    url = PUMP_COIN_URL.format(mint=safe_mint)
-    head = (
-        f"{_BADGE.get(verdict, '⚪')} {html.escape(verdict.replace('_', '-'))} · "
-        f'<a href="{url}">{html.escape(str(title))}</a>'
-    )
-    lines = [head, f"<code>{safe_mint}</code>", ""]
+    url = PUMP_COIN_URL.format(mint=mint)
+    head = f"{_BADGE.get(verdict, '⚪')} {verdict.replace('_', '-')} · {title}"
+    lines = [head, url, mint, ""]
 
     reasons = [str(reason) for reason in row.get("reasons") or []]
     share = features.get("dev_buy_share")
@@ -195,7 +189,7 @@ def render_card(row: dict[str, Any]) -> str:
             # The share's denominator assumes the standard 1e15 curve; this launch
             # minted something else, so the number is a ratio, not a supply share.
             source += "; standard-curve basis, but this curve is NONSTANDARD"
-        lines.append(f"Dev buy: {100 * share:.2f}% of supply ({source}; gate is &lt;2%)")
+        lines.append(f"Dev buy: {100 * share:.2f}% of supply ({source}; gate is <2%)")
 
     n_snipers = features.get("n_snipers")
     if hydrated and isinstance(n_snipers, int):
@@ -228,7 +222,7 @@ def render_card(row: dict[str, Any]) -> str:
         lines.append("Crew: no fingerprint match")
 
     if reasons:
-        lines.append("Why: " + html.escape("; ".join(reasons)))
+        lines.append("Why: " + "; ".join(reasons))
 
     scored_at = str(row.get("t_scored") or "")
     if len(scored_at) >= 16:
@@ -238,7 +232,7 @@ def render_card(row: dict[str, Any]) -> str:
     if not row.get("in_validated_population", True):
         notes = ", ".join(str(note) for note in row.get("population_notes") or [])
         lines.append(
-            f"⚠️ Outside the validated population ({html.escape(notes or 'unflagged stratum')}) "
+            f"⚠️ Outside the validated population ({notes or 'unflagged stratum'}) "
             "— the screen's quoted precision was not measured on this stratum."
         )
     lines.append(FOOTER)
@@ -289,5 +283,5 @@ class ScreenLookup:
             return USAGE_TEXT, None
         row = find_score(cfg.screen_scores_dir, arg, self.clock())
         if row is None:
-            return not_found_text(arg), "HTML"
-        return render_card(row), "HTML"
+            return not_found_text(arg), None
+        return render_card(row), None

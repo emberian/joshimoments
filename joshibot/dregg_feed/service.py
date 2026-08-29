@@ -131,14 +131,12 @@ def enqueue_alert(
                 "chat_id": chat_id,
                 "photo_path": str(photo_path),
                 "caption": caption,
-                "parse_mode": "HTML",
             }
         else:
             method = "sendMessage"
             payload = {
                 "chat_id": chat_id,
                 "text": caption,
-                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
         with connection:

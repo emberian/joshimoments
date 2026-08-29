@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sqlite3
 import time
 from pathlib import Path
@@ -276,15 +275,11 @@ def test_telegram_links_and_escaping(scores_dir, archive_db):
     text = compose_telegram(_facts(scores_dir, archive_db), 0)
     assert len(text) <= 4096
     # every coin mention is a pump.fun link on the symbol, mint in the href
-    assert f'<a href="https://pump.fun/coin/{"A" * 40}pump">$AAA</a>' in text
+    assert f"$AAA https://pump.fun/coin/{'A' * 40}pump" in text
     assert 'https://pump.fun/coin/M1' in text  # top provider claim links its mint
-    # hostile provider strings render inert
-    assert "<b>&EVIL" not in text and "<script>" not in text
-    assert "&lt;b&gt;&amp;EVIL" in text
-    assert "evil&lt;script&gt;name" in text
-    # after removing the anchor tags we produced, no markup characters remain
-    stripped = re.sub(r'<a href="https://pump\.fun/coin/[^"]*">|</a>', "", text)
-    assert "<" not in stripped and ">" not in stripped
+    # hostile provider strings render inert (plain text: literal, never interpreted)
+    assert "<b>&EVIL" in text
+    assert "evil<script>name" in text  # literal, inert in plain text
     # numbers carry their windows
     assert "2026-08-26..28" in text
     assert "run 2026-08-15" in text
@@ -373,7 +368,7 @@ def test_compose_then_approve_then_deliver(scores_dir, archive_db, gate_db, tmp_
     payload = json.loads(payload_json)
     assert (dedup, method) == (f"wire-{DAY}", "sendMessage")
     assert payload["chat_id"] == -100777
-    assert payload["parse_mode"] == "HTML"
+    assert "parse_mode" not in payload  # plain text, bare auto-linked URLs
     assert payload["text"] == row[2]
 
     # compose again: refuses to double-enqueue a delivered day

@@ -31,6 +31,10 @@ dev = [
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
   "mypy>=1.11,<2",
+  # Test-only: an INDEPENDENT nacl implementation to cross-validate the signer page's
+  # inlined tweetnacl deeplink crypto (tests/test_signer_page.py). Never imported by
+  # runtime code — the page vendors its own JS crypto and the gateway uses solders.
+  "pynacl>=1.5,<2",
 ]
 # Research/statistics tooling. DELIBERATELY a separate group: the sentinel runs live
 # money and its runtime dependency set stays small and auditable — nothing here is

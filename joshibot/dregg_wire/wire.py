@@ -15,7 +15,6 @@ Both are deterministic: same facts, same bytes.
 
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
 PUMP_COIN_URL = "https://pump.fun/coin/{mint}"
@@ -28,9 +27,10 @@ DISCLAIMER = "Scores rank risk; they do not establish intent. No number here is 
 
 
 def _e(value: object) -> str:
-    """HTML-escape a provider-derived string for Telegram HTML parse_mode."""
+    """Plain text for Telegram: no parse_mode, so nothing needs escaping and a
+    provider string cannot inject markup. Bare URLs auto-link; that is the link."""
 
-    return html.escape(str(value), quote=True)
+    return str(value)
 
 
 def _sym(symbol: object) -> str:
@@ -58,7 +58,7 @@ def _short_mint(mint: str) -> str:
 
 def _coin_html(mint: str, symbol: object = None) -> str:
     label = f"${_sym(symbol)}" if symbol is not None else _short_mint(str(mint))
-    return f'<a href="{_e(PUMP_COIN_URL.format(mint=mint))}">{_e(label)}</a>'
+    return f"{label} {PUMP_COIN_URL.format(mint=mint)}"
 
 
 def _coin_md(mint: str, symbol: object = None) -> str:
