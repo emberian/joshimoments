@@ -188,7 +188,7 @@ def _index_counters(facts: dict, rec: dict) -> str:
     if not screen.get("absent"):
         validated = screen["validated"]
         tiles.append(tile(f"{screen['launches_scored']:,}", "launches scored"))
-        tiles.append(tile(f"{validated['clean']:,}", "clean admits (validated pop.)"))
+        tiles.append(tile(f"{validated['clean']:,}", "clean admits (standard launches)"))
     if not callouts.get("absent"):
         tiles.append(tile(f"{callouts['archived_today']:,}", "callouts archived"))
     board = rec.get("board")
@@ -229,7 +229,7 @@ def _index_strip(facts: dict) -> str:
                 else f"<b>{validated['clean']}</b>"
             )
             chips.append(
-                f"validated pop. <b>{validated['count']}</b> launches · CLEAN {day_rate}{vs}"
+                f"standard launches <b>{validated['count']}</b> · CLEAN {day_rate}{vs}"
             )
         mayhem_share = (
             esc(wf._pct(mayhem["share"]))
@@ -237,7 +237,7 @@ def _index_strip(facts: dict) -> str:
             else f"{mayhem['count']} of {screen['launches_scored']}"
         )
         chips.append(
-            f"mayhem-mode creates <b>{mayhem_share}</b> — outside the validated pop."
+            f"mayhem-mode creates <b>{mayhem_share}</b> — outside that measured slice"
         )
         if screen["crews"]:
             chips.append(f"crew fingerprints matched <b>{len(screen['crews'])}</b>")
@@ -372,7 +372,7 @@ def _screen_sample(rows: list[dict], day: str) -> str:
     out = [
         '<div class="tablewrap"><table>',
         "<thead><tr><th>utc</th><th>coin</th><th>mint</th><th>dev buy</th>"
-        "<th>deployer l/r/d</th><th>validated pop.</th></tr></thead><tbody>",
+        "<th>deployer launches/rips/dumps</th><th>standard launch</th></tr></thead><tbody>",
     ]
     for row in cleans:
         mint = str(row.get("mint", ""))
@@ -402,7 +402,7 @@ def page_screen(facts: dict, rows: list[dict], data_through: str | None) -> str:
         op = validated.get("operating_point") or {}
         tiles = [
             tile(f"{screen['launches_scored']:,}", "launches scored today"),
-            tile(f"{validated['count']:,}", "in validated population"),
+            tile(f"{validated['count']:,}", "standard launches"),
             tile(f"{validated['clean']:,}", "clean admits"),
             tile(esc(wf._pct(mayhem["share"])), "mayhem-mode creates"),
         ]
