@@ -26,6 +26,8 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
 
+from dregg_dossier.cards import rp_short
+
 from .records import (
     LAST_CALLS,
     caller_record,
@@ -135,7 +137,8 @@ def _wallet_layer_line(layer: dict) -> str:
     if win is not None:
         bits.append(f"win rate {win:.0%} over {layer.get('n_coins_closed')} closed")
     if layer.get("rp_mode"):
-        bits.append(str(layer["rp_mode"]))
+        # Plain wording, never the enum: the code name told a reader nothing.
+        bits.append(rp_short(str(layer["rp_mode"])))
     bits.append(f"guild {layer['guild']}" if layer.get("guild") is not None else "no guild")
     return (
         f"Their own trading (wallet snapshot of {layer.get('as_of')} — stale, not live): "

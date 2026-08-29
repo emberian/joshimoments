@@ -41,6 +41,14 @@ _GUILD_BLURB = {
     "AFTERMARKET": "trades established coins rather than sniping launches",
 }
 
+_RP_SHORT = {
+    "BREAKEVEN_PRESET": "sells at break-even like a preset bot",
+    "LOSS_CUTTER": "cuts losers",
+    "PROFIT_RUNNER": "runs winners",
+    "AVERAGES_DOWN": "averages down",
+    "MIXED": "no dominant sell habit",
+}
+
 _RP_BLURB = {
     "BREAKEVEN_PRESET": (
         "over 40% of its sells land within 5% of cost — the signature of a "
@@ -121,6 +129,12 @@ def crowd_line(meta: dict[str, Any]) -> str:
 # -- /wallet --------------------------------------------------------------------------
 
 
+def rp_short(mode: str) -> str:
+    """Compact plain wording for a realization habit, for one-line contexts."""
+
+    return _RP_SHORT.get(mode, "no labelled sell habit")
+
+
 def _guild_line(row: dict[str, Any], meta: dict[str, Any]) -> str:
     guild = row["guild"]
     blurb = _GUILD_BLURB.get(guild, "unclassified pattern")
@@ -146,7 +160,9 @@ def wallet_card(row: dict[str, Any], meta: dict[str, Any], now: float) -> str:
         SOLSCAN_URL.format(owner=owner),
         "",
         _guild_line(row, meta),
-        f"Policy: {row['rp_mode']} — {_RP_BLURB.get(row['rp_mode'], 'unlabeled')}",
+        # The enum said nothing the blurb beside it didn't; printing both spent a
+        # reader's attention twice (the relevance rule). Gloss only.
+        f"Policy: {_RP_BLURB.get(row['rp_mode'], 'no labelled realization habit')}",
         "",
         (
             f"Record: {fmt_sol(row['net_realized_sol'])} realized across {row['n_coins']:,} coins "

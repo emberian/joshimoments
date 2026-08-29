@@ -261,7 +261,7 @@ def test_caller_color_join_and_staleness(tmp_path):
     assert color["stale"] is True and color["as_of"] == "2026-08-14"
     joined, missing = color["entries"]
     assert joined["rp_mode"] == "LOSS_CUTTER" and joined["net_realized_sol"] == pytest.approx(-12.5)
-    assert "below activity threshold" in missing["absent"]
+    assert "too few trades on file" in missing["absent"]
 
 
 # -- compose: determinism, links, escaping ---------------------------------------------

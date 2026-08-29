@@ -280,7 +280,11 @@ def test_every_card_is_plain_text_with_freshness_stamp(dossier: store.Dossier):
 
 def test_wallet_card_content(dossier: store.Dossier):
     text = cards.wallet_card(dossier.wallet(W_FLASH), dossier.meta, NOW)
-    assert "FLASH" in text and "BREAKEVEN_PRESET" in text
+    # Guild names stay: they are handles a user sees across surfaces and could filter by.
+    # The realization-habit ENUM is gone — nothing in the product lets you reference it,
+    # so beside its own gloss it was pure noise (the relevance rule).
+    assert "FLASH" in text and "BREAKEVEN_PRESET" not in text
+    assert "sells land within 5% of cost" in text
     assert "break-even preset" in text  # the plain-English translation, not just the enum
     assert "+1.50 SOL" in text
     assert "4 of 5 green (80% win rate)" in text

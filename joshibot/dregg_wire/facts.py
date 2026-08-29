@@ -380,7 +380,7 @@ def caller_color(wallet_parquet: Path | None, wallets: list[str]) -> dict:
         row = by_owner.get(wallet)
         if row is None:
             entries.append(
-                {"wallet": wallet, "absent": "below activity threshold (< 3 priced legs in corpus)"}
+                {"wallet": wallet, "absent": "too few trades on file to profile"}
             )
         else:
             entries.append(
