@@ -12,6 +12,14 @@ heartbeat = "state/dregg_gate/heartbeat.json"
 # where dregg_screen.live writes <utc-day>.jsonl scores (read-only for the bot);
 # on hbox: /home/hbox/dregg-data/screen/scores
 screen_scores = "state/dregg_screen/scores"
+# the watchlist db (dregg_watch): /watch commands write subscriptions here, and the
+# watch service (its own process) reads them — its config's watch_db MUST match.
+# on hbox: /home/hbox/dregg-data/watch/watch.sqlite
+watch_db = "state/dregg_watch/watch.sqlite"
+# the callout archive /caller reads (read-only); on hbox: /home/hbox/dregg-data/archive/archive.sqlite
+archive_db = "state/dregg_archive/archive.sqlite"
+# the stale wallet layer for caller color; absence renders as a stated fact, never zeros
+wallet_parquet = "state/wallets/estimator.parquet"
 
 [gate]
 # Locked decisions — listed here for visibility, defaults already match.

@@ -1,0 +1,37 @@
+# dregg_watch — personal alerts for verified holders. Copy next to the service and
+# point systemd at it: uv run python -m dregg_watch.service --config <this file>.
+# Re-read every cycle (keep-last-good: a broken edit keeps the last good settings and
+# says so in heartbeat.json). watch_db and state_dir cannot change while running.
+
+# heartbeat.json + previews.log live here.
+state_dir = "/home/hbox/dregg-data/watch"
+
+# The subscriptions/dedup/digest sqlite. THE GATE MUST POINT AT THE SAME FILE
+# ([paths] watch_db in the gate's config) — the gateway writes subscriptions here,
+# this service reads them.
+watch_db = "/home/hbox/dregg-data/watch/watch.sqlite"
+
+# The gate's sqlite: members are read (verified-only delivery), DMs are INSERTed into
+# its outbox (the gate bot delivers, and its 403 handling drops blocked users).
+gate_db = "/home/hbox/dregg-data/gate/gate.sqlite"
+
+# The three event surfaces. Any of them may be absent; the service just notes it.
+scores_dir = "/home/hbox/dregg-data/screen/scores"                 # dregg_screen.live
+archive_db = "/home/hbox/dregg-data/archive/archive.sqlite"        # dregg_archive callouts
+feed_db = "/home/hbox/dregg-data/feed/feed.sqlite"                 # dregg_feed alerts
+
+# THE SWITCH. false = full pipeline into previews.log, nothing reaches a user;
+# true = DMs ride the gate outbox. Ships false; the operator flips it. Claims and the
+# rate clock behave identically in both modes, so flipping never replays the preview
+# period as real DMs.
+deliver = false
+
+# Cadence. The sources are local files — 10s keeps the "deployer launched again" DM
+# inside the window where it is actionable.
+poll_s = 10.0
+
+# Spam control. Per-user event DMs are capped per hour; overflow (and every
+# digest-mode watch, e.g. /watch clean) batches into one message per flush window.
+digest_every_min = 30.0
+max_dms_per_hour = 20
+digest_max_lines = 15

@@ -21,6 +21,9 @@ import logging
 import re
 import time
 
+from dregg_record.lookup import CallerLookup
+from dregg_watch.commands import WatchCommands
+
 from .config import Config
 from .helius import Helius, HeliusError
 from .lookup import ScreenLookup, start_text
@@ -42,7 +45,14 @@ HELP_TEXT = (
     "/status — your current standing\n"
     "/invite — mint a fresh invite link if you are already verified\n"
     "/screen <mint> — the launch screen's verdict on a recent pump.fun launch "
-    "(verified holders)\n\n"
+    "(verified holders)\n"
+    "/caller <wallet or @name> — a caller's measured record: their archived calls "
+    "and how each actually went (verified holders)\n"
+    "/watch — personal alerts: a coin, a deployer wallet, a crew, a caller, or every "
+    "CLEAN launch — DM'd to you when it happens (verified holders)\n\n"
+    "Caller records are measurements, not endorsements: buying the callout feed was "
+    "measured as an anti-signal (avg -11.9% at 1h, -43.6% at 8h), and caller identity "
+    "itself carried no measured edge. Deleted callouts stay on the record.\n\n"
     "Verification: I send a challenge message; sign it with your wallet's "
     "signMessage and paste the base58 signature back here. No signing screen "
     f"in your wallet app? Open {SIGNER_URL} — paste the challenge, sign, and "
@@ -78,6 +88,8 @@ class GateGateway:
         self.clock = clock
         # Getter, not a snapshot: the service swaps self.config on keep-last-good reload.
         self.lookup = ScreenLookup(lambda: self.config, state, clock=clock)
+        self.caller_lookup = CallerLookup(lambda: self.config, state, clock=clock)
+        self.watch = WatchCommands(lambda: self.config, state, clock=clock)
 
     # -- plumbing ------------------------------------------------------------------
 
@@ -225,6 +237,11 @@ class GateGateway:
         elif command == "/screen":
             reply, mode = self.lookup.reply(uid, parts[1] if len(parts) > 1 else None)
             self.dm(chat_id, reply, dedup, parse_mode=mode)
+        elif command == "/caller":
+            reply, mode = self.caller_lookup.reply(uid, parts[1] if len(parts) > 1 else None)
+            self.dm(chat_id, reply, dedup, parse_mode=mode)
+        elif command in ("/watch", "/unwatch"):
+            self.dm(chat_id, self.watch.reply(uid, command, parts[1:]), dedup)
         elif command == "/verify":
             self._cmd_verify(uid, chat_id, parts[1] if len(parts) > 1 else None, dedup)
         elif command == "/status":

@@ -27,6 +27,15 @@ class Config:
     # Where the live screen (dregg_screen.live) writes <utc-day>.jsonl score files.
     # Laptop default; on hbox: /home/hbox/dregg-data/screen/scores.
     screen_scores_dir: Path = Path("state/dregg_screen/scores")
+    # The watchlist db (dregg_watch): the gateway's /watch commands write subscriptions
+    # here; the watch service reads them. MUST match the service config's watch_db.
+    # Laptop default; on hbox: /home/hbox/dregg-data/watch/watch.sqlite.
+    watch_db_path: Path = Path("state/dregg_watch/watch.sqlite")
+    # The callout archive (read-only for the bot; dregg_record's /caller reads it).
+    # Laptop default; on hbox: /home/hbox/dregg-data/archive/archive.sqlite.
+    archive_db: Path = Path("state/dregg_archive/archive.sqlite")
+    # The stale wallet layer for caller color (JOIN_CONTRACT.md; absence is stated).
+    wallet_parquet: Path = Path("state/wallets/estimator.parquet")
     mint: str = DREGG_MINT
     threshold_tokens: int = 888_888
     # Per-user threshold overrides: tg_user_id (string) -> tokens. For operator
@@ -70,12 +79,17 @@ class Config:
             db_path=_path(paths, "db", "state/dregg_gate/gate.sqlite"),
             heartbeat_path=_path(paths, "heartbeat", "state/dregg_gate/heartbeat.json"),
             screen_scores_dir=_path(paths, "screen_scores", "state/dregg_screen/scores"),
+            watch_db_path=_path(paths, "watch_db", "state/dregg_watch/watch.sqlite"),
+            archive_db=_path(paths, "archive_db", "state/dregg_archive/archive.sqlite"),
+            wallet_parquet=_path(paths, "wallet_parquet", "state/wallets/estimator.parquet"),
         )
         for key, value in gate.items():
             if (
                 not hasattr(cfg, key)
                 or key.endswith("_file")
-                or key in ("db_path", "heartbeat_path", "screen_scores_dir")
+                or key
+                in ("db_path", "heartbeat_path", "screen_scores_dir", "watch_db_path",
+                    "archive_db", "wallet_parquet")
             ):
                 raise GateConfigError(f"unknown gate config key {key!r}")
             current = getattr(cfg, key)
