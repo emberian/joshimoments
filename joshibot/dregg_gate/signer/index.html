@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' * blob: data:; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Sign the shitcoims wire verification challenge with your Solana wallet, entirely in your browser. The page sends nothing anywhere — you sign a plain text message, never a transaction.">
+<title>shitcoims wire · challenge signer</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#16181d; --muted:#5b6470; --line:#dde1e7;
+    --accent:#3b5bdb; --accent-ink:#ffffff; --ok:#177245; --warn:#8a5a00; --err:#b3261e;
+    --mono:#f0f2f5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#101216; --card:#181b21; --ink:#e8eaee; --muted:#9aa3b0; --line:#2a2f38;
+      --accent:#748ffc; --accent-ink:#0e1015; --ok:#69cf9d; --warn:#e6b35a; --err:#f2857c;
+      --mono:#0d0f13;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  main{max-width:560px; margin:0 auto; padding:20px 14px 48px}
+  h1{font-size:1.35rem; margin:18px 2px 4px}
+  .tagline{color:var(--muted); margin:0 2px 18px; font-size:.95rem}
+  section{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:16px; margin-bottom:14px;
+  }
+  .step{font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px}
+  button{
+    appearance:none; border:0; border-radius:9px; padding:11px 16px; font-size:1rem;
+    font-weight:600; cursor:pointer; background:var(--accent); color:var(--accent-ink);
+  }
+  button:disabled{opacity:.45; cursor:default}
+  button.ghost{background:transparent; color:var(--accent); border:1px solid var(--line); font-weight:500}
+  .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+  textarea{
+    width:100%; min-height:132px; resize:vertical; border:1px solid var(--line); border-radius:9px;
+    background:var(--mono); color:var(--ink); padding:10px;
+    font:.9rem/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  textarea:focus{outline:2px solid var(--accent); outline-offset:1px}
+  .mono{
+    font:.85rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:var(--mono); border:1px solid var(--line); border-radius:9px; padding:10px;
+    word-break:break-all; overflow-wrap:anywhere;
+  }
+  .muted{color:var(--muted); font-size:.87rem}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+  .status{margin:10px 0 0; font-size:.92rem; min-height:1.2em}
+  a{color:var(--accent)}
+  footer{color:var(--muted); font-size:.82rem; margin-top:22px; text-align:center}
+  #sigwrap,#pubwrap{display:none}
+  .kv{margin-top:10px}
+  .kv .k{font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:4px}
+</style>
+</head>
+<body>
+<main>
+  <h1>shitcoims wire · challenge signer</h1>
+  <p class="tagline">The gate bot sent you a verification challenge — sign it here with your
+  Solana wallet, then paste the base58 signature back to the bot. Everything happens locally:
+  this page makes <strong>no network requests</strong> and never sees your keys; it only asks
+  your wallet to sign the exact text you paste.</p>
+
+  <section style="border-color:var(--warn)">
+    <p style="margin:0"><strong>You are signing a plain text message — never a transaction.</strong>
+    A signature here cannot move funds, grant approvals, or touch your account.
+    <span class="muted">And nothing legitimate ever asks for your seed phrase — this page never
+    will; close anything that does.</span></p>
+  </section>
+
+  <noscript><section><p class="err">This page needs JavaScript to talk to your wallet.</p></section></noscript>
+
+  <section>
+    <p class="step">1 · Connect a wallet</p>
+    <div id="providers" class="row"></div>
+    <div id="nowallet" style="display:none">
+      <p class="err" style="margin:0 0 8px">No Solana wallet detected in this browser.</p>
+      <p class="muted" style="margin:0 0 8px">
+        <strong>On a phone?</strong> Wallet apps can't reach a normal mobile browser tab.
+        Open this page inside your wallet's built-in browser instead — in Phantom, tap the
+        globe/browser tab and paste this page's address there. Solflare and Backpack have the same.
+      </p>
+      <p class="muted" style="margin:0">On desktop, install a wallet extension such as
+        <a href="https://phantom.com" rel="noopener">Phantom</a>, then reload this page.</p>
+    </div>
+    <div id="pubwrap" class="kv">
+      <div class="k">Connected address — confirm this is the wallet you mean</div>
+      <div class="row">
+        <div class="mono" id="pubkey" style="flex:1 1 auto"></div>
+        <button class="ghost" id="copypub" type="button">Copy</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">Wrong wallet? Switch accounts inside the wallet app,
+      then <a href="#" id="reconnect">connect again</a>.</p>
+    </div>
+    <p class="status" id="connstatus"></p>
+  </section>
+
+  <section>
+    <p class="step">2 · Message to sign</p>
+    <textarea id="msg" autocomplete="off" autocapitalize="off" spellcheck="false"
+      placeholder="Paste the exact text you were asked to sign…"></textarea>
+    <p class="muted" style="margin:8px 0 0"><span id="count">0 characters</span>
+      <span id="wsnote" class="warn" style="display:none"> · has leading/trailing whitespace —
+      if you pasted extra, <a href="#" id="trim">trim it</a>; if it belongs, leave it.</span></p>
+  </section>
+
+  <section>
+    <p class="step">3 · Sign</p>
+    <div class="row">
+      <button id="sign" type="button" disabled>Sign message</button>
+    </div>
+    <p class="status" id="signstatus"></p>
+    <div id="sigwrap" class="kv">
+      <div class="k">Signature (base58)</div>
+      <div class="mono" id="sig"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="copysig" type="button">Copy signature</button>
+      </div>
+      <p class="muted" id="signedby" style="margin:8px 0 0"></p>
+    </div>
+  </section>
+
+  <footer>
+    Static page, no server, nothing leaves your browser —
+    its security policy blocks all outbound requests by design.
+  </footer>
+</main>
+
+<script>
+"use strict";
+
+/* ---- base58 (Bitcoin alphabet), inline so nothing is fetched ---- */
+/* b58:begin */
+var B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function b58encode(bytes) {
+  var zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  var digits = [];
+  for (var i = 0; i < bytes.length; i++) {
+    var carry = bytes[i];
+    for (var j = 0; j < digits.length; j++) {
+      carry += digits[j] * 256;
+      digits[j] = carry % 58;
+      carry = Math.floor(carry / 58);
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  var out = "";
+  for (var k = 0; k < zeros; k++) out += "1";
+  for (var m = digits.length - 1; m >= 0; m--) out += B58_ALPHABET[digits[m]];
+  return out;
+}
+/* b58:end */
+
+/* ---- tiny dom helpers ---- */
+function $(id){ return document.getElementById(id); }
+function setStatus(el, text, cls){
+  el.textContent = text || "";
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+/* ---- wallet detection: Phantom-style providers, feature-detected ---- */
+function detectProviders(){
+  var found = [];
+  var seen = [];
+  function add(name, p){
+    if (!p || typeof p.connect !== "function" || typeof p.signMessage !== "function") return;
+    if (seen.indexOf(p) !== -1) return;
+    seen.push(p);
+    found.push({ name: name, provider: p });
+  }
+  try {
+    if (window.phantom && window.phantom.solana && window.phantom.solana.isPhantom)
+      add("Phantom", window.phantom.solana);
+    if (window.solana && window.solana.isPhantom) add("Phantom", window.solana);
+    if (window.solflare && window.solflare.isSolflare) add("Solflare", window.solflare);
+    if (window.backpack && window.backpack.isBackpack) add("Backpack", window.backpack);
+    if (window.solana) {
+      // generic Phantom-compatible injection; label it if it self-identifies
+      var generic = window.solana.isSolflare ? "Solflare"
+        : window.solana.isBackpack ? "Backpack"
+        : "Wallet";
+      add(generic, window.solana);
+    }
+  } catch (_e) { /* a hostile/broken injection must not blank the page */ }
+  return found;
+}
+
+var connected = null;   // { name, provider, pubkey }
+var lastSigMsg = null;  // message text that produced the shown signature
+
+function pubkeyString(pk){
+  if (!pk) return null;
+  try {
+    if (typeof pk.toBase58 === "function") return pk.toBase58();
+    var s = String(pk);
+    return s && s !== "[object Object]" ? s : null;
+  } catch (_e) { return null; }
+}
+
+function renderProviders(){
+  var list = detectProviders();
+  var box = $("providers");
+  box.textContent = "";
+  $("nowallet").style.display = list.length ? "none" : "block";
+  list.forEach(function(entry){
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = list.length > 1 ? ("Connect " + entry.name) : ("Connect wallet (" + entry.name + ")");
+    btn.addEventListener("click", function(){ connect(entry); });
+    box.appendChild(btn);
+  });
+  return list.length;
+}
+
+function connect(entry){
+  setStatus($("connstatus"), "Waiting for " + entry.name + "…");
+  Promise.resolve()
+    .then(function(){ return entry.provider.connect(); })
+    .then(function(resp){
+      var pk = (resp && resp.publicKey) || entry.provider.publicKey;
+      var pkText = pubkeyString(pk);
+      if (!pkText) throw new Error("The wallet connected but reported no address.");
+      connected = { name: entry.name, provider: entry.provider, pubkey: pkText, pubkeyObj: pk };
+      $("pubkey").textContent = pkText;
+      $("pubwrap").style.display = "block";
+      setStatus($("connstatus"), "Connected via " + entry.name + ".", "ok");
+      updateSignButton();
+    })
+    .catch(function(err){
+      connected = null;
+      $("pubwrap").style.display = "none";
+      setStatus($("connstatus"), friendlyError(err, "Connection was declined in the wallet."), "err");
+      updateSignButton();
+    });
+}
+
+function friendlyError(err, rejectedText){
+  var msg = (err && (err.message || err.toString())) || "";
+  var code = err && err.code;
+  if (code === 4001 || /reject|declin|denied|cancel/i.test(msg)) return rejectedText;
+  return msg ? ("Wallet error: " + msg) : "Wallet error.";
+}
+
+/* ---- signature bytes arrive in several shapes; normalize to Uint8Array ---- */
+function toBytes(x){
+  if (x instanceof Uint8Array) return x;
+  if (x && x.signature !== undefined && x.signature !== x) return toBytes(x.signature);
+  if (typeof ArrayBuffer !== "undefined" && x instanceof ArrayBuffer) return new Uint8Array(x);
+  if (Array.isArray(x)) return Uint8Array.from(x);
+  if (x && Array.isArray(x.data)) return Uint8Array.from(x.data);
+  return null;
+}
+
+function updateSignButton(){
+  var msg = $("msg").value;
+  var btn = $("sign");
+  btn.disabled = !(connected && msg.length > 0);
+  if (!connected) btn.textContent = "Sign message (connect a wallet first)";
+  else if (!msg.length) btn.textContent = "Sign message (paste it above first)";
+  else btn.textContent = "Sign message";
+}
+
+function sign(){
+  var text = $("msg").value;
+  if (!connected || !text.length) return;
+  var bytes;
+  try { bytes = new TextEncoder().encode(text); }
+  catch (e) { setStatus($("signstatus"), "Could not encode that text as UTF-8.", "err"); return; }
+  setStatus($("signstatus"), "Waiting for the wallet to sign…");
+  $("sigwrap").style.display = "none";
+  Promise.resolve()
+    .then(function(){ return connected.provider.signMessage(bytes, "utf8"); })
+    .then(function(result){
+      var sigBytes = toBytes(result);
+      if (!sigBytes || !sigBytes.length) throw new Error("The wallet returned no signature bytes.");
+      var signer = pubkeyString(result && result.publicKey) || connected.pubkey;
+      var encoded = b58encode(sigBytes);
+      $("sig").textContent = encoded;
+      $("signedby").textContent = "Signed by " + signer;
+      $("sigwrap").style.display = "block";
+      lastSigMsg = text;
+      if (sigBytes.length !== 64) {
+        setStatus($("signstatus"),
+          "Signed, but the signature is " + sigBytes.length +
+          " bytes (ed25519 signatures are 64) — this wallet may not sign raw messages.", "warn");
+      } else {
+        setStatus($("signstatus"), "Signed. Copy the signature below.", "ok");
+        verifyLocally(sigBytes, bytes, result && result.publicKey);
+      }
+    })
+    .catch(function(err){
+      setStatus($("signstatus"), friendlyError(err, "Signing was declined in the wallet — nothing was signed."), "err");
+    });
+}
+
+/* Best-effort local check via WebCrypto Ed25519 where the browser supports it.
+   Unsupported browsers skip silently; an actual mismatch is worth a warning. */
+function verifyLocally(sigBytes, msgBytes, pkObj){
+  try {
+    var pk = pkObj || (connected && connected.pubkeyObj);
+    if (!pk || typeof pk.toBytes !== "function" || !window.crypto || !crypto.subtle) return;
+    var raw = pk.toBytes();
+    if (!(raw instanceof Uint8Array) || raw.length !== 32) return;
+    crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"])
+      .then(function(key){ return crypto.subtle.verify("Ed25519", key, sigBytes, msgBytes); })
+      .then(function(good){
+        if (good) setStatus($("signstatus"), "Signed and verified locally. Copy the signature below.", "ok");
+        else setStatus($("signstatus"),
+          "Signed, but the signature did not verify against the connected address — " +
+          "the wallet may have signed on behalf of a different account.", "warn");
+      })
+      .catch(function(){ /* browser lacks Ed25519 — fine */ });
+  } catch (_e) { /* never let the nicety break the flow */ }
+}
+
+/* ---- copy, with a fallback for stubborn in-app browsers ---- */
+function copyText(text, statusEl){
+  function done(ok){
+    setStatus(statusEl, ok ? "Copied to clipboard." : "Copy failed — select the text and copy it manually.", ok ? "ok" : "warn");
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(fallbackCopy(text)); });
+  } else {
+    done(fallbackCopy(text));
+  }
+}
+function fallbackCopy(text){
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    ta.setSelectionRange(0, text.length);
+    var ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (_e) { return false; }
+}
+
+/* ---- message box bookkeeping ---- */
+function onMessageInput(){
+  var v = $("msg").value;
+  $("count").textContent = v.length + (v.length === 1 ? " character" : " characters");
+  $("wsnote").style.display = (v !== v.trim() && v.length) ? "inline" : "none";
+  if (lastSigMsg !== null && v !== lastSigMsg) {
+    // the shown signature no longer matches the textarea; make that impossible to miss
+    $("sigwrap").style.display = "none";
+    lastSigMsg = null;
+    setStatus($("signstatus"), "Message changed — sign again for a fresh signature.", "warn");
+  }
+  updateSignButton();
+}
+
+/* ---- prefill: #m=<urlencoded> or ?m=<urlencoded>; never leaves the browser ---- */
+function prefill(){
+  try {
+    var text = null;
+    if (location.hash && location.hash.indexOf("#m=") === 0)
+      text = decodeURIComponent(location.hash.slice(3));
+    if (text === null) {
+      var q = new URLSearchParams(location.search).get("m");
+      if (q !== null) text = q;
+    }
+    if (text) { $("msg").value = text; }
+  } catch (_e) { /* a malformed prefill is just an empty box */ }
+}
+
+/* ---- boot; wallets often inject after load, so re-scan briefly ---- */
+function boot(){
+  prefill();
+  onMessageInput();
+  $("msg").addEventListener("input", onMessageInput);
+  $("sign").addEventListener("click", sign);
+  $("copysig").addEventListener("click", function(){ copyText($("sig").textContent, $("signstatus")); });
+  $("copypub").addEventListener("click", function(){ copyText($("pubkey").textContent, $("connstatus")); });
+  $("reconnect").addEventListener("click", function(e){
+    e.preventDefault();
+    connected = null;
+    $("pubwrap").style.display = "none";
+    setStatus($("connstatus"), "");
+    renderProviders();
+    updateSignButton();
+  });
+  var attempts = 0;
+  var timer = setInterval(function(){
+    attempts++;
+    var n = renderProviders();
+    if ((n > 0 && attempts > 1) || attempts >= 12) clearInterval(timer);
+  }, 250);
+  renderProviders();
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+else boot();
+</script>
+</body>
+</html>
