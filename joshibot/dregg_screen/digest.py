@@ -42,7 +42,17 @@ def load_window(scores_dir: Path, window_min: float) -> list[dict]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if float(row.get("t_scored", 0)) >= cutoff:
+            scored = row.get("t_scored", 0)
+            # t_scored is an ISO-8601 string on the wire; tolerate a numeric epoch too.
+            try:
+                scored_ts = (
+                    datetime.fromisoformat(str(scored)).timestamp()
+                    if isinstance(scored, str)
+                    else float(scored)
+                )
+            except ValueError:
+                continue
+            if scored_ts >= cutoff:
                 rows.append(row)
     return rows
 
