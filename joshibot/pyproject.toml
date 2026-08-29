@@ -72,6 +72,13 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# The typographic minus, multiplication sign, and en dash ARE the brand's printed form
+# for measured numbers (OFFER_BRIEF.md; dregg_wire.wire carries the same choice as
+# per-line noqas). The site pages are made of such numbers, so the decision is made
+# once here instead of a noqa per figure.
+"dregg_site/pages.py" = ["RUF001"]
+
 # Typing is currently DOCUMENTATION, not a checked invariant: the tree is annotated
 # throughout and every domain type is a frozen slotted dataclass, but nothing verified it.
 # The gate starts where the money is and tightens outward -- a repo-wide --strict flip would
