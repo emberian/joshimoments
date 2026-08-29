@@ -87,7 +87,7 @@ def enqueue(gate_db: Path, text: str, dedup_key: str) -> bool:
     connection = sqlite3.connect(gate_db, timeout=10.0)
     try:
         row = connection.execute(
-            "SELECT value FROM meta WHERE key = 'group_id'"
+            "SELECT value FROM metadata WHERE key = 'group_id'"
         ).fetchone()
         if row is None:
             return False
