@@ -1,0 +1,26 @@
+# dregg gate configuration.
+# Re-read every cycle with keep-last-good: a broken edit keeps the running config
+# and reports itself in the heartbeat. Secret FILES are read once at boot —
+# restart after rotating them. db cannot change while running.
+
+[paths]
+# laptop defaults; on hbox: ~/.config/dregg/telegram-token and ~/.config/dregg/helius-key
+telegram_token = "~/.shitcoims-tg"
+helius_key = "~/.helius-key"
+db = "state/dregg_gate/gate.sqlite"
+heartbeat = "state/dregg_gate/heartbeat.json"
+
+[gate]
+# Locked decisions — listed here for visibility, defaults already match.
+mint = "XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump"
+threshold_tokens = 888888
+operator_chat_id = 6913902526
+
+poll_timeout_seconds = 25
+message_max_age_seconds = 300
+challenge_ttl_seconds = 600     # 10 min, quoted in the challenge text
+invite_ttl_seconds = 3600       # single-use invite links expire after 1h
+grace_hours = 48
+sweep_hour_utc = 14             # daily re-verify sweep starts after this UTC hour
+sweep_spread_seconds = 3600     # ... and spreads its batches over about this long
+sweep_batch_size = 10
