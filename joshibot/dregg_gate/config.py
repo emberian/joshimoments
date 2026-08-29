@@ -36,6 +36,9 @@ class Config:
     archive_db: Path = Path("state/dregg_archive/archive.sqlite")
     # The stale wallet layer for caller color (JOIN_CONTRACT.md; absence is stated).
     wallet_parquet: Path = Path("state/wallets/estimator.parquet")
+    # The dossier index (dregg_dossier build); /wallet and /coin degrade honestly
+    # to a stated absence when it is missing on this box.
+    dossier_index_path: Path = Path("state/wallets/dossier/current.sqlite")
     mint: str = DREGG_MINT
     threshold_tokens: int = 888_888
     # Per-user threshold overrides: tg_user_id (string) -> tokens. For operator
@@ -82,6 +85,9 @@ class Config:
             watch_db_path=_path(paths, "watch_db", "state/dregg_watch/watch.sqlite"),
             archive_db=_path(paths, "archive_db", "state/dregg_archive/archive.sqlite"),
             wallet_parquet=_path(paths, "wallet_parquet", "state/wallets/estimator.parquet"),
+            dossier_index_path=_path(
+                paths, "dossier_index", "state/wallets/dossier/current.sqlite"
+            ),
         )
         for key, value in gate.items():
             if (
@@ -89,7 +95,7 @@ class Config:
                 or key.endswith("_file")
                 or key
                 in ("db_path", "heartbeat_path", "screen_scores_dir", "watch_db_path",
-                    "archive_db", "wallet_parquet")
+                    "archive_db", "wallet_parquet", "dossier_index_path")
             ):
                 raise GateConfigError(f"unknown gate config key {key!r}")
             current = getattr(cfg, key)
