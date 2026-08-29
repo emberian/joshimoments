@@ -99,12 +99,16 @@ def parse_movers(body: object) -> MoversPage:
         raise MoversError("movers body is not the {entries: [...]} envelope")
     raw = body["entries"]
     entries: list[Mover] = []
+    seen_mints: set[str] = set()
     for row in raw:
         if not isinstance(row, dict):
             continue
         mint = row.get("m")
         if not isinstance(mint, str) or not _BASE58.match(mint):
             continue
+        if mint in seen_mints:
+            continue  # a duplicated board row must not become two tiles
+        seen_mints.add(mint)
         age = _num(row.get("age"))
         tx5 = _num(row.get("tx5"))
         entries.append(
@@ -211,6 +215,13 @@ class FeedState:
         row = self.db.execute(
             "SELECT MAX(alerted_at) FROM alerts WHERE mint = ?", (mint,)
         ).fetchone()
+        return row[0]
+
+    def last_alert_at_any(self) -> float | None:
+        """When the last alert batch went out. Every coin in a montage shares one
+        `alerted_at`, so this IS the last-montage clock — durable across restarts."""
+
+        row = self.db.execute("SELECT MAX(alerted_at) FROM alerts").fetchone()
         return row[0]
 
     def alerts_since(self, t: float) -> int:

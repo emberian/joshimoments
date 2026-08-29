@@ -9,11 +9,13 @@ and every alert ends with the standing line in `compose.STANDING_LINE`. What we 
 that the pump frontend does not: the screen's BIRTH verdict on the same coin, so
 "trending" arrives welded to "and here is what its launch looked like".
 
-  charts.py   — compact dark chart PNG from swap-api 5m candles (deterministic bytes)
+  charts.py   — dark chart PNGs from swap-api 5m candles: singles and the up-to-6
+                MONTAGE grid (deterministic bytes)
   movers.py   — the movers-board poller + the high-bar detector (sqlite state)
   verdicts.py — mint -> birth verdict from the screen's scores JSONL (incremental)
-  compose.py  — the alert caption (HTML-escaped, provider-claims labeled)
-  service.py  — the loop: poll, detect, render, enqueue into the GATE outbox
+  compose.py  — the montage caption (PLAIN TEXT, bare auto-linked URLs, no HTML)
+  service.py  — the loop: poll, detect, batch into ONE montage per window, enqueue
+                into the GATE outbox
 
 Delivery goes through dregg_gate's outbox ONLY (one bot, one group, one queue);
 the gate poller uploads the PNG via multipart sendPhoto.

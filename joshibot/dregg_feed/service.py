@@ -1,4 +1,14 @@
-"""The feed loop: poll movers ~75s, detect, render the chart, enqueue into the GATE.
+"""The feed loop: poll movers ~75s, detect, emit ONE MONTAGE, enqueue into the GATE.
+
+DISPATCH IS A MONTAGE (2026-08-29 densification): qualifying movers in a cycle go out
+as ONE image — up to `montage_max` (6) mini charts in a grid — with one plain-text
+caption listing every coin's link, 5m volume and birth verdict. When more than six
+qualify, the top six by v5 ship and the rest are NOT marked alerted (drop-lowest:
+they can make the next montage if they still qualify then). The per-coin 2h cooldown
+is unchanged — a montage appearance consumes it. The global cap is now a MONTAGE
+WINDOW: at most one montage per `montage_window_min` (default 12), enforced from the
+alerts table's own clock so it survives restarts; a cycle inside the window records
+nothing, so held coins stay eligible.
 
 DELIVERY IS OFF BY DEFAULT. `deliver = false` composes everything and appends the
 would-be alerts to `<state>/previews.log` (and the heartbeat) without touching the
@@ -11,9 +21,12 @@ GateState: its flock guards the poller identity, not writers).
 
 BUDGET: every wire request this service makes — board polls AND candle fetches,
 retries included (counted from the client's own stats) — spends from one durable
-daily ceiling (default 1,200). At 75s cadence the board alone is ~1,152/day; charts
-ride in the remainder because alerts are rare by design. When the ceiling is hit the
-loop idles until the next UTC day, visibly in the heartbeat.
+daily ceiling (default 1,200). At 75s cadence the board alone is ~1,152/day; candle
+fetches ride in the remainder (≤ montage_max per montage, half-hour cached, and the
+montage window bounds montages to ≤ 60/window_min per hour). When the ceiling is hit
+the loop idles until the next UTC day, visibly in the heartbeat; a montage whose
+candle budget runs out mid-batch ships with the panels it got (text lines for the
+rest), never nothing.
 
 CHART SPOOL: PNGs land in `<state>/spool/` and the outbox row carries the PATH (the
 gate reads the bytes at delivery time; a lost file is a definitive drop there, never a
@@ -28,10 +41,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import signal
 import sqlite3
 import time
 import tomllib
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,7 +55,13 @@ from typing import Any, Callable
 from shitcoims_pumpsocial.client import PumpSocialClient, Transport
 
 from . import compose
-from .charts import ChartRenderer
+from .charts import (
+    ChartRenderer,
+    MontagePanel,
+    choose_candle_query,
+    panel_from_candles,
+    render_montage,
+)
 from .movers import Alert, FeedState, MoversPage, Thresholds, detect, fetch_movers, utc_day
 from .verdicts import VerdictIndex
 
@@ -62,7 +83,12 @@ class Config:
     accel_ratio: float = 1.6
     top5_min_v5_sol: float = 400.0
     cooldown_h: float = 2.0
+    # LEGACY, accepted-but-inert since the montage densification: the deployed config
+    # names it, and refusing it at boot would crash-loop the restart. The montage
+    # window below is what actually rate-limits the group now.
     max_alerts_per_hour: int = 6
+    montage_max: int = 6              # coins per montage image (drop-lowest beyond)
+    montage_window_min: float = 12.0  # at most one montage per this many minutes
     prev_max_age_s: float = 360.0
     chart_interval: str = "5m"
     chart_limit: int = 72             # 72 x 5m = 6h window
@@ -71,12 +97,17 @@ class Config:
 
     @property
     def thresholds(self) -> Thresholds:
+        # The detector's hourly clamp is a SAFETY VALVE derived from the montage
+        # settings (full montages at the window rate, plus one window of headroom) —
+        # never the legacy max_alerts_per_hour, which would strangle montages at 6
+        # coin-rows/hour. The montage window in cycle() is the real cap.
+        per_hour = self.montage_max * (math.ceil(60.0 / self.montage_window_min) + 1)
         return Thresholds(
             min_v5_sol=self.min_v5_sol,
             accel_ratio=self.accel_ratio,
             top5_min_v5_sol=self.top5_min_v5_sol,
             cooldown_s=self.cooldown_h * 3600.0,
-            max_alerts_per_hour=self.max_alerts_per_hour,
+            max_alerts_per_hour=per_hour,
             prev_max_age_s=self.prev_max_age_s,
         )
 
@@ -108,6 +139,10 @@ class Config:
             raise ValueError("poll_s and daily_budget must be positive")
         if cfg.cooldown_h < 2.0:
             raise ValueError("cooldown_h below 2 is out of bounds for this product")
+        if not 1 <= cfg.montage_max <= 6:
+            raise ValueError("montage_max must be 1..6 (the grid and the caption cap)")
+        if cfg.montage_window_min < 1.0:
+            raise ValueError("montage_window_min below 1 minute is a firehose, not a feed")
         return cfg
 
 
@@ -181,6 +216,8 @@ class FeedService:
         self.alerts_this_cycle: list[dict[str, Any]] = []
         self.last_errors: list[str] = []
         self.last_board: dict[str, Any] | None = None
+        self.last_montage: dict[str, Any] | None = None
+        self.montage_hold: str | None = None
         self._stopping = False
 
     # -- config (keep-last-good) ---------------------------------------------------
@@ -210,39 +247,87 @@ class FeedService:
         self.last_errors = [*self.last_errors, line][-10:]
         LOGGER.error("%s", line)
 
-    # -- one alert out ---------------------------------------------------------------
+    # -- one montage out -------------------------------------------------------------
 
-    def _emit(self, alert: Alert, now: float, day: str) -> None:
-        verdict = None
-        if self.verdicts is not None:
-            try:
-                verdict = self.verdicts.verdict(alert.mint, now)
-            except Exception as exc:  # a broken scores file must not kill the alert
-                self._error("verdict", exc)
+    @staticmethod
+    def _display_labels(alerts: list[Alert]) -> dict[str, str]:
+        """mint -> tile/caption name. Symbols legitimately collide on pump (ticker
+        waves); a colliding one gets a short mint suffix so two "$Pepsi" tiles stay
+        tellable apart. The SAME mapping titles the tiles and the caption lines."""
 
-        png: bytes | None = None
-        if self.state.budget_spent(day) < self.cfg.daily_budget:
-            before = self.client.stats.requests
-            png = self.renderer.render(
-                alert.mint, alert.symbol, now,
-                interval=self.cfg.chart_interval, limit=self.cfg.chart_limit,
+        flat = {a.mint: ("".join((a.symbol or "?").split()) or "?")[:12] for a in alerts}
+        counts = Counter(flat.values())
+        return {
+            mint: (name if counts[name] == 1 else f"{name}·{mint[:4]}")
+            for mint, name in flat.items()
+        }
+
+    def _emit_montage(self, alerts: list[Alert], now: float, day: str) -> None:
+        """One image, one caption, for the whole batch. Coins WITH candles come first
+        (their caption lines mirror the tiles in reading order); coins whose candles
+        were unavailable trail as caption-only lines. Every coin in the batch consumes
+        its cooldown at the same `now` — that shared stamp is the montage clock."""
+
+        labels = self._display_labels(alerts)
+        with_chart: list[tuple[Alert, str | None]] = []
+        without_chart: list[tuple[Alert, str | None]] = []
+        panels: list[MontagePanel] = []
+        for alert in alerts:
+            verdict = None
+            if self.verdicts is not None:
+                try:
+                    verdict = self.verdicts.verdict(alert.mint, now)
+                except Exception as exc:  # a broken scores file must not kill the batch
+                    self._error("verdict", exc)
+            # A minutes-old mover has no 5m history worth drawing: pick the interval
+            # from the coin's (provider-claimed) age so the tile has shape.
+            interval, limit = choose_candle_query(
+                alert.age_s,
+                default_interval=self.cfg.chart_interval,
+                default_limit=self.cfg.chart_limit,
             )
-            spent = self.client.stats.requests - before
-            if spent:
-                self.state.budget_spend(day, spent)
+            candles = None
+            if self.state.budget_spent(day) < self.cfg.daily_budget:
+                before = self.client.stats.requests
+                candles = self.renderer.candles_cached(
+                    alert.mint, now, interval=interval, limit=limit
+                )
+                spent = self.client.stats.requests - before
+                if spent:
+                    self.state.budget_spend(day, spent)
+            if candles:
+                panels.append(
+                    panel_from_candles(
+                        alert.mint, labels[alert.mint], candles,
+                        interval=interval,
+                        now_ms=int(now * 1000),  # so a frozen series is marked stale
+                        limit=limit,             # clip the DRAWN window to the query's span
+                        young=alert.age_s is not None and alert.age_s < 45 * 60,
+                    )
+                )
+                with_chart.append((alert, verdict))
+            else:
+                without_chart.append((alert, verdict))
 
+        ordered = with_chart + without_chart
         photo_path: Path | None = None
-        if png is not None:
-            photo_path = self.spool_dir / f"{alert.mint[:12]}-{int(now)}.png"
-            photo_path.write_bytes(png)
+        if panels:
+            try:
+                png = render_montage(panels)
+                photo_path = self.spool_dir / f"montage-{int(now)}.png"
+                photo_path.write_bytes(png)
+            except (ValueError, OSError) as exc:
+                # A render failure downgrades to a text-only alert, never silence.
+                self._error("montage_render", exc)
+                photo_path = None
+        text = compose.montage_caption(ordered, labels=labels)
 
-        text = compose.caption(alert, verdict)
         delivered = False
         if self.cfg.deliver and self.cfg.gate_db is not None:
             try:
                 delivered = enqueue_alert(
                     self.cfg.gate_db,
-                    dedup_key=f"dregg-feed:{alert.mint}:{int(now)}",
+                    dedup_key=f"dregg-feed:montage:{int(now)}",
                     caption=text,
                     photo_path=photo_path,
                 )
@@ -252,19 +337,26 @@ class FeedService:
             preview = self.cfg.state_dir / "previews.log"
             with preview.open("a") as fh:
                 fh.write(f"--- {datetime.fromtimestamp(now, UTC).isoformat()} "
-                         f"chart={'yes' if png else 'no'}\n{text}\n")
-        self.state.record_alert(alert.mint, now, alert.v5, alert.reason, delivered)
-        self.alerts_this_cycle.append(
-            {
-                "mint": alert.mint,
-                "symbol": alert.symbol,
-                "reason": alert.reason,
-                "v5": alert.v5,
-                "verdict": verdict,
-                "chart": png is not None,
-                "delivered": delivered,
-            }
-        )
+                         f"panels={len(panels)}/{len(alerts)}\n{text}\n")
+        for alert, verdict in ordered:
+            self.state.record_alert(alert.mint, now, alert.v5, alert.reason, delivered)
+            self.alerts_this_cycle.append(
+                {
+                    "mint": alert.mint,
+                    "symbol": alert.symbol,
+                    "reason": alert.reason,
+                    "v5": alert.v5,
+                    "verdict": verdict,
+                    "chart": any(p.mint == alert.mint for p in panels),
+                    "delivered": delivered,
+                }
+            )
+        self.last_montage = {
+            "t": datetime.fromtimestamp(now, UTC).isoformat(),
+            "coins": len(ordered),
+            "panels": len(panels),
+            "delivered": delivered,
+        }
 
     # -- the cycle -------------------------------------------------------------------
 
@@ -272,6 +364,7 @@ class FeedService:
         self.cycle_n += 1
         self._reload_config()
         self.alerts_this_cycle = []
+        self.montage_hold = None
         now = self.clock()
         day = utc_day(now)
         budget_idle = self.state.budget_spent(day) >= self.cfg.daily_budget
@@ -297,11 +390,24 @@ class FeedService:
                         {"mint": e.mint, "symbol": e.symbol, "v5": e.v5} for e in ranked[:5]
                     ],
                 }
-                for alert in detect(self.state, page, now, self.cfg.thresholds):
-                    try:
-                        self._emit(alert, now, day)
-                    except Exception as exc:  # one alert must not kill the batch
-                        self._error(f"emit:{alert.mint[:8]}", exc)
+                candidates = detect(self.state, page, now, self.cfg.thresholds)
+                if candidates:
+                    last = self.state.last_alert_at_any()
+                    window_s = self.cfg.montage_window_min * 60.0
+                    if last is not None and now - last < window_s:
+                        # Inside the montage window: hold, record nothing — held
+                        # coins stay eligible for the next montage if they still
+                        # qualify (their cooldowns were never consumed).
+                        self.montage_hold = (
+                            f"{len(candidates)} qualifier(s) held; last montage "
+                            f"{now - last:.0f}s ago < {window_s:.0f}s window"
+                        )
+                    else:
+                        self.montage_hold = None
+                        try:
+                            self._emit_montage(candidates[: self.cfg.montage_max], now, day)
+                        except Exception as exc:  # one montage must not kill the loop
+                            self._error("emit_montage", exc)
 
         try:
             self.state.prune(now)
@@ -334,6 +440,8 @@ class FeedService:
             },
             "board": self.last_board,
             "alerts_this_cycle": self.alerts_this_cycle,
+            "last_montage": self.last_montage,
+            "montage_hold": self.montage_hold,
             "alerts_last_24h": self.state.alerts_since(now - 86_400.0),
             "chart_last_error": self.renderer.last_error,
             "last_errors": self.last_errors,
