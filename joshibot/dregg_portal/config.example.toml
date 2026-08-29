@@ -1,0 +1,32 @@
+# dregg_portal, laptop defaults. The DEPLOYED config is
+# `dregg-infra/edge/portal/portal.toml.template`, rendered on the anchor — this file is
+# for running the service locally against a bundle produced by `dregg_portal.publish`.
+#
+# ⚠ THERE IS NOTHING SECRET HERE, and that is the design rather than the current feature
+# set. The portal has no chain provider to authenticate to and no bot token to hold: the
+# balance question is answered from the pushed roster. The one secret is the session HMAC
+# key, created by `--keygen` and never transmitted.
+#
+# An unknown key is a REFUSAL, so a future `helius_key = "..."` cannot be added to a
+# deployed box's TOML without the service failing to start and naming the key it refused.
+
+[paths]
+artifacts   = "state/dregg_portal/artifacts"
+state_db    = "state/dregg_portal/portal.sqlite"
+session_key = "state/dregg_portal/keys/session.key"
+heartbeat   = "state/dregg_portal/heartbeat.json"
+
+[service]
+bind_host = "127.0.0.1"
+bind_port = 8791
+base_path = "/portal"
+
+# 12h bounds how long a STOLEN cookie is useful. It does not bound how long a lost seat
+# keeps working: standing is re-read from the roster on every request.
+session_ttl_seconds   = 43200
+challenge_ttl_seconds = 600
+
+nonce_per_hour_per_ip     = 12
+nonce_per_hour_per_wallet = 6
+session_per_hour_per_ip   = 20
+reads_per_hour_per_ip     = 600
