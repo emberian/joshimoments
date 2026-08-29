@@ -385,7 +385,7 @@ def test_compose_then_approve_then_deliver(scores_dir, archive_db, gate_db, tmp_
     assert [r[0] for r in rows] == [
         f"wire-{DAY}-p1-glance", f"wire-{DAY}-p2-crews", f"wire-{DAY}-p3-desk", f"wire-{DAY}",
     ]
-    for dedup, method, payload_json in rows:
+    for _dedup, method, payload_json in rows:
         item = json.loads(payload_json)
         assert item["chat_id"] == -100777
         assert "parse_mode" not in item  # plain text everywhere — hard production rule

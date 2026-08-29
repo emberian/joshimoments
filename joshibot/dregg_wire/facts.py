@@ -28,6 +28,7 @@ from dregg_archive.store import day_end_ms, day_start_ms
 MAX_NOTABLE_CLEANS = 5
 MAX_CREWS = 5
 MAX_CALLERS = 3
+MAX_MEASURED = 8  # matured claimed-vs-measured rows carried for the desk panel
 
 # The season anti-signal baseline: rendered beside any provider-claimed multiple so a
 # reader never mistakes the platform's peak number for an expectation.
@@ -67,6 +68,19 @@ def _is_mayhem(row: dict) -> bool:
     return any(str(n).startswith("vendor_flag:is_mayhem_mode") for n in row.get("population_notes", []))
 
 
+def _hour_utc(row: dict) -> str | None:
+    """The row's UTC hour bucket ("00".."23") from its own scored timestamp, or None
+    when the timestamp cannot be placed — counted, never guessed."""
+
+    t_scored = row.get("t_scored")
+    if not isinstance(t_scored, str):
+        return None
+    try:
+        return datetime.fromisoformat(t_scored).astimezone(UTC).strftime("%H")
+    except ValueError:
+        return None
+
+
 def _operating_point(rows: list[dict]) -> dict | None:
     """The validated operating point the scorer stamped on its own rows (B1)."""
 
@@ -89,6 +103,16 @@ def screen_facts(rows: list[dict], day: str) -> dict:
         return {"source": source, "absent": f"no launches scored on {day} (scores file empty or missing)"}
 
     verdicts = Counter(str(r.get("verdict", "UNSCORED")) for r in rows)
+    hourly: dict[str, dict[str, int]] = {}
+    hourly_unplaced = 0
+    for row in rows:
+        hour = _hour_utc(row)
+        if hour is None:
+            hourly_unplaced += 1
+            continue
+        bucket = hourly.setdefault(hour, {})
+        verdict = str(row.get("verdict", "UNSCORED"))
+        bucket[verdict] = bucket.get(verdict, 0) + 1
     validated = [r for r in rows if r.get("in_validated_population")]
     validated_clean = [r for r in validated if r.get("verdict") == "CLEAN"]
     mayhem_n = sum(1 for r in rows if _is_mayhem(r))
@@ -142,6 +166,8 @@ def screen_facts(rows: list[dict], day: str) -> dict:
         "source": source,
         "launches_scored": len(rows),
         "verdicts": dict(sorted(verdicts.items(), key=lambda kv: -kv[1])),
+        "hourly": {h: dict(sorted(v.items())) for h, v in sorted(hourly.items())},
+        "hourly_unplaced": hourly_unplaced,
         "validated": {
             "count": len(validated),
             "clean": len(validated_clean),
@@ -193,6 +219,14 @@ def callout_facts(archive_db: Path, day: str) -> dict:
         outcomes_total, outcomes_final, outcomes_priced_1h = db.execute(
             "SELECT count(*), sum(dead_flag IS NOT NULL), sum(ret_1h IS NOT NULL) FROM outcomes"
         ).fetchone()
+        matured = db.execute(
+            "SELECT c.callout_id, c.mint, c.username_last, c.provider_multiple_last,"
+            "       o.ret_1h, o.ret_24h, o.ret_7d, o.max_close_multiple, o.dead_flag"
+            "  FROM outcomes o JOIN callouts c ON c.callout_id = o.callout_id"
+            " WHERE o.ret_1h IS NOT NULL OR o.ret_24h IS NOT NULL"
+            " ORDER BY o.computed_ms DESC, c.callout_id LIMIT ?",
+            (MAX_MEASURED,),
+        ).fetchall()
     finally:
         db.close()
 
@@ -227,6 +261,20 @@ def callout_facts(archive_db: Path, day: str) -> dict:
             }
         ),
         "anti_signal": ANTI_SIGNAL,
+        "measured": [
+            {
+                "callout_id": r["callout_id"],
+                "mint": r["mint"],
+                "username": r["username_last"],
+                "claimed_multiple": r["provider_multiple_last"],
+                "ret_1h": r["ret_1h"],
+                "ret_24h": r["ret_24h"],
+                "ret_7d": r["ret_7d"],
+                "max_close_multiple": r["max_close_multiple"],
+                "final": r["dead_flag"] is not None,
+            }
+            for r in matured
+        ],
         "top_callers": top_callers,
         "removals": {
             "today": int(removals_today or 0),

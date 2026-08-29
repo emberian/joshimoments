@@ -2,13 +2,15 @@
 
 Two renderings from one facts dict:
 
-* ``compose_telegram`` — the channel text, ~30-50 tight lines, Telegram HTML
-  parse_mode. Every coin mentioned is a pump.fun hyperlink on its symbol (or short
-  mint), never a raw URL. Every provider-derived string (symbol, name, thesis,
-  username, mint) is HTML-escaped, so hostile text renders inert; static template
-  copy avoids literal angle brackets entirely.
+* ``compose_telegram`` — the channel text, ~30-50 tight lines, PLAIN TEXT with no
+  parse_mode (the house rule): bare pump.fun URLs auto-link, and provider-derived
+  strings (symbol, name, thesis, username, mint) render literal-inert because there
+  is no markup to inject into. The channel copy trades the method vocabulary for
+  plain words (the measured slice, not "validated population") without dropping a
+  number, a window, or a source.
 * ``compose_markdown`` — the fuller artifact saved to ``state/dregg_wire/<day>.md``,
-  normal markdown links, full mint addresses, methodology footer.
+  normal markdown links, full mint addresses, methodology footer; it keeps the
+  method vocabulary because it IS the methodology record.
 
 Both are deterministic: same facts, same bytes.
 """
@@ -119,13 +121,13 @@ def lede(facts: dict) -> str:
     validated = screen["validated"]
     if mayhem["share"] >= 0.20:
         return (
-            f"{_pct(mayhem['share'])} of today's creates minted in mayhem mode — outside the "
-            "population our precision numbers were earned on. We label what we can prove."
+            f"{_pct(mayhem['share'])} of today's launches used pump's mayhem mode — territory "
+            "the screen's accuracy was never measured on. Those get labeled, not guessed at."
         )
     if validated["count"]:
         return (
-            f"{validated['clean']} CLEAN admits from {validated['count']} validated launches today "
-            "— the screen holds its line."
+            f"{validated['clean']} CLEAN admits from the {validated['count']} launches the "
+            "screen was built to judge — it holds its line."
         )
     return f"{screen['launches_scored']} launches scored today; the tape is below."
 
@@ -142,32 +144,41 @@ def compose_telegram(facts: dict, issue: int) -> str:
     if screen.get("absent"):
         lines.append(_e(screen["absent"]))
     else:
-        verdict_bits = " · ".join(f"{_e(k)} {v}" for k, v in screen["verdicts"].items())
+        verdict_bits = " · ".join(
+            f"{_e(str(k).replace('_', '-'))} {v}" for k, v in screen["verdicts"].items()
+        )
         lines.append(f"{screen['launches_scored']} launches scored — {verdict_bits}")
         validated = screen["validated"]
         op = validated.get("operating_point") or {}
         if validated["count"]:
             vs = ""
             if op.get("admit_rate") is not None:
+                # The span may carry a method parenthetical; the channel gets the dates.
+                span = str(op.get("validated_span") or "?").split(" (")[0]
                 vs = (
-                    f" vs the {_pct(op['admit_rate'])} operating point, "
-                    f"validated {_e(op.get('validated_span', '?'))}"
+                    f" — the long-run pass rate is {_pct(op['admit_rate'])} "
+                    f"(measured {_e(span)})"
                 )
             lines.append(
-                f"Validated population: {validated['count']} of {screen['launches_scored']}; "
-                f"CLEAN admits there: {validated['clean']} ({_pct(validated['clean_rate'])}){vs}."
+                f"Standard launches, where the screen's accuracy was measured: "
+                f"{validated['count']} of {screen['launches_scored']}. CLEAN passes there: "
+                f"{validated['clean']} ({_pct(validated['clean_rate'])}){vs}."
             )
         else:
-            lines.append("Validated population: none of today's launches fell inside it.")
+            lines.append(
+                "None of today's launches were the standard type the screen's "
+                "accuracy was measured on."
+            )
         mayhem = screen["mayhem"]
         lines.append(
-            f"Mayhem-mode creates: {mayhem['count']} of {screen['launches_scored']} "
-            f"({_pct(mayhem['share'])}) — outside the validated population; labeled, never blended."
+            f"Mayhem-mode launches: {mayhem['count']} of {screen['launches_scored']} "
+            f"({_pct(mayhem['share'])}) — outside that measured slice; they get labeled, "
+            "never mixed into the stats."
         )
         if screen["notable_cleans"]:
             lines.append("Notable CLEANs (dev buy · deployer launches/rips/dumps):")
             for clean in screen["notable_cleans"]:
-                tag = "" if clean["in_validated_population"] else " · unvalidated pop."
+                tag = "" if clean["in_validated_population"] else " · outside the measured slice"
                 lines.append(
                     f"• {_coin_html(clean['mint'], clean['symbol'])} — "
                     f"{_e(_devbuy(clean['dev_buy_share']))} · {_lrd(clean['deployer_history'])}{tag}"
@@ -179,8 +190,9 @@ def compose_telegram(facts: dict, issue: int) -> str:
                 coins = ", ".join(f"${_e(_sym(s))}" for s in crew["symbols"][:3])
                 lines.append(
                     f"#{crew['crew_id']} — {_n(crew['launches_today'], 'launch', 'launches')} today "
-                    f"({coins}), Jaccard {crew['max_jaccard']:.2f}; crew record {crew['crew_coins']} "
-                    f"coins, {crew['crew_rips']} rips, {crew['crew_dumps']} insider dumps."
+                    f"({coins}), birth-slot overlap up to {crew['max_jaccard']:.2f} of 1; "
+                    f"that crew's record: {crew['crew_coins']} coins, {crew['crew_rips']} rips, "
+                    f"{crew['crew_dumps']} insider dumps."
                 )
         else:
             lines.append(_e(screen.get("crews_note") or "no crew-fingerprint matches today."))
@@ -212,16 +224,19 @@ def compose_telegram(facts: dict, issue: int) -> str:
         anti = callouts["anti_signal"]
         lines.append(
             f"Season baseline ({_e(anti['short_source'])}): buying the feed averaged "
-            f"{_ret_pct(anti['ret_1h_mean'])} @1h and {_ret_pct(anti['ret_8h_mean'])} @8h; "
-            f"{_e(anti['burst_definition'])} → {_ret_pct(anti['burst_ret_8h_median'])} median @8h."
+            f"{_ret_pct(anti['ret_1h_mean'])} at 1h and {_ret_pct(anti['ret_8h_mean'])} at 8h; "
+            f"when {_e(anti['burst_definition'])} piled on, the median ran "
+            f"{_ret_pct(anti['burst_ret_8h_median'])} at 8h."
         )
         outcomes = callouts["outcomes"]
         if outcomes["note"]:
-            lines.append(f"Real outcomes: {outcomes['rows']} rows computing — {_e(outcomes['note'])}.")
+            lines.append(
+                f"Real outcomes: {outcomes['rows']} calls being measured — {_e(outcomes['note'])}."
+            )
         else:
             lines.append(
-                f"Real outcomes: {outcomes['priced_1h']} priced at 1h, {outcomes['final']} final "
-                f"(of {outcomes['rows']} rows)."
+                f"Real outcomes: {outcomes['priced_1h']} calls priced at 1h, {outcomes['final']} "
+                f"final (of {outcomes['rows']} tracked)."
             )
         removals = callouts["removals"]
         if removals["note"]:
@@ -242,10 +257,12 @@ def compose_telegram(facts: dict, issue: int) -> str:
             else _e(archive["manifest_note"])
         )
         lines.append(
-            f"{archive['fetches_today']} fetches archived today ({_kb(archive['zst_bytes_today'])} zstd), "
-            f"every body sha256'd; {anchor}."
+            f"{archive['fetches_today']} provider responses archived today "
+            f"({_kb(archive['zst_bytes_today'])} compressed), every one fingerprinted "
+            f"(sha256); {anchor}."
         )
     lines.append("")
+    lines.append("Dig into anything above: DM me /screen <mint>, /coin <mint>, or /caller <name>.")
     lines.append(f"{_e(DISCLAIMER)} — the DREGG desk")
 
     text = "\n".join(lines)
@@ -266,9 +283,10 @@ def _caller_color_lines_html(facts: dict) -> list[str]:
         who = _e(caller.get("username") or _short_mint(entry["wallet"]))
         n = caller.get("callouts_today", "?")
         lines.append(
-            f"Top caller today: {who} ({n} callouts). Wallet layer (as of {_e(color.get('as_of', '?'))} "
-            f"— stale): {_sol(entry['net_realized_sol'])} realized, {_pct(entry['win_rate'])} win rate "
-            f"over {int(entry['n_coins_closed'])} closed coins, {_e(entry['rp_mode'])}."
+            f"Top caller today: {who} ({n} callouts). Their own trading (wallet snapshot of "
+            f"{_e(color.get('as_of', '?'))} — stale): {_sol(entry['net_realized_sol'])} realized, "
+            f"{_pct(entry['win_rate'])} win rate over {int(entry['n_coins_closed'])} closed coins, "
+            f"{_e(entry['rp_mode'])}."
         )
     return lines
 
@@ -276,13 +294,23 @@ def _caller_color_lines_html(facts: dict) -> list[str]:
 # -- markdown artifact -----------------------------------------------------------------
 
 
-def compose_markdown(facts: dict, issue: int) -> str:
+def compose_markdown(facts: dict, issue: int, images: dict[str, str] | None = None) -> str:
+    """`images` maps panel name ('glance'/'crews'/'desk') to a bare PNG filename that
+    lives BESIDE the artifact; refs are emitted only for panels actually rendered."""
+
+    images = images or {}
+
+    def _img(name: str, alt: str) -> list[str]:
+        filename = images.get(name)
+        return [f"![{alt}]({filename})", ""] if filename else []
+
     day = facts["day"]
     out: list[str] = [
         f"# DREGG WIRE #{issue} — {day}",
         "",
         f"*{lede(facts)}*",
         "",
+        *_img("glance", f"the day at a glance — {day}"),
     ]
 
     screen = facts["screen"]
@@ -324,6 +352,7 @@ def compose_markdown(facts: dict, issue: int) -> str:
                     f"| {'yes' if clean['in_validated_population'] else 'no'} |"
                 )
         out.append("\n### Crew watch\n")
+        out.extend(_img("crews", f"the crew board — {day}"))
         if screen["crews"]:
             for crew in screen["crews"]:
                 coins = ", ".join(f"${_md_text(_sym(s))}" for s in crew["symbols"])
@@ -340,6 +369,7 @@ def compose_markdown(facts: dict, issue: int) -> str:
 
     callouts = facts["callouts"]
     out.append(f"## Callout desk\n\n`{callouts['source']}`\n")
+    out.extend(_img("desk", f"the callout desk — {day}"))
     if callouts.get("absent"):
         out.append(f"{callouts['absent']}\n")
     else:
@@ -421,10 +451,10 @@ def compose_markdown(facts: dict, issue: int) -> str:
 # -- assembly --------------------------------------------------------------------------
 
 
-def render(facts: dict, issue: int) -> tuple[str, str]:
-    """(telegram_html, markdown_artifact) for one facts dict."""
+def render(facts: dict, issue: int, images: dict[str, str] | None = None) -> tuple[str, str]:
+    """(telegram_text, markdown_artifact) for one facts dict."""
 
-    return compose_telegram(facts, issue), compose_markdown(facts, issue)
+    return compose_telegram(facts, issue), compose_markdown(facts, issue, images)
 
 
 def write_artifact(state_dir: Path, day: str, markdown: str) -> Path:

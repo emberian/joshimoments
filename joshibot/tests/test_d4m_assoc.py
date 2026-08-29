@@ -260,3 +260,45 @@ def test_empty_selection_is_a_valid_empty_assoc():
     assert e.shape == (0, 4)
     assert e.nnz == 0
     assert list(e.find()) == []
+
+
+def test_max_min_is_the_bottleneck_semiring_and_differs_from_max_plus():
+    #  p->q 0.11, p->r 0.55   q->z 0.99, r->z 0.54
+    #  max-plus picks the q leg (0.11 + 0.99 = 1.10 > 0.55 + 0.54 = 1.09)
+    #  max-min picks the r leg (min(0.55, 0.54) = 0.54 > min(0.11, 0.99) = 0.11)
+    a = Assoc.from_tuples(["p", "p"], ["q", "r"], [0.11, 0.55])
+    b = Assoc.from_tuples(["q", "r"], ["z", "z"], [0.99, 0.54])
+    assert matmul(a, b, semiring="max_plus").to_dict()[("p", "z")] == pytest.approx(1.10)
+    assert matmul(a, b, semiring="max_min").to_dict()[("p", "z")] == pytest.approx(0.54)
+
+
+def test_max_min_matches_a_dense_reference():
+    rng = np.random.default_rng(11)
+    da = (rng.random((6, 5)) < 0.5) * rng.random((6, 5))
+    db = (rng.random((5, 4)) < 0.5) * rng.random((5, 4))
+    rk, mk, ck = [f"r{i}" for i in range(6)], [f"m{i}" for i in range(5)], [f"c{i}" for i in range(4)]
+    ri, ci = np.nonzero(da)
+    a = Assoc.from_tuples([rk[i] for i in ri], [mk[j] for j in ci], da[ri, ci], row_keys=rk, col_keys=mk)
+    ri, ci = np.nonzero(db)
+    b = Assoc.from_tuples([mk[i] for i in ri], [ck[j] for j in ci], db[ri, ci], row_keys=mk, col_keys=ck)
+    got = matmul(a, b, semiring="max_min", chunk_rows=2).to_dict()
+    for i in range(6):
+        for j in range(4):
+            ks = [k for k in range(5) if da[i, k] and db[k, j]]
+            if ks:
+                assert got[(rk[i], ck[j])] == pytest.approx(max(min(da[i, k], db[k, j]) for k in ks))
+            else:
+                assert (rk[i], ck[j]) not in got
+
+
+def test_threshold_cuts_below_the_registered_value():
+    from dregg_d4m.assoc import threshold
+
+    a = Assoc.from_tuples(["w", "w", "w"], ["c1", "c2", "c3"], [0.09, 0.10, 0.5])
+    assert set(threshold(a, 0.10).to_dict()) == {("w", "c2"), ("w", "c3")}
+
+
+def test_unknown_semiring_is_refused():
+    a = Assoc.from_tuples(["p"], ["q"])
+    with pytest.raises(AssocError, match="unknown semiring"):
+        matmul(a, a.T, semiring="tropical_vibes")  # type: ignore[arg-type]

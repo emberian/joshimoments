@@ -123,6 +123,11 @@ td.num { white-space: nowrap; }
 article.wire h1 { font-size: 1.4rem; margin-top: 24px; }
 article.wire h2 { margin-top: 32px; }
 article.wire hr { border: 0; border-top: 1px solid #1d2733; margin: 28px 0; }
+.wireimg { margin: 20px 0; }
+.wireimg img {
+  max-width: 100%; height: auto; display: block;
+  border: 1px solid #1d2733; border-radius: 6px;
+}
 """
 
 NAV = (

@@ -140,10 +140,20 @@ def generate(
         _write(out_dir, f"wire/{w['day']}.html", pages.page_wire_day(w["day"], w["markdown"]))
         for w in wires
     ]
+    # Panel PNGs live beside each wire's .md with stable <day>-<panel>.png names; the
+    # markdown references them by bare filename, so they land in the same wire/ dir.
+    assets: list[Path] = []
+    for w in wires:
+        for png in sorted(wire_dir.glob(f"{w['day']}-*.png")):
+            target = out_dir / "wire" / png.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(png.read_bytes())
+            assets.append(target)
     return {
         "day": day,
         "out": str(out_dir),
         "pages": [str(p.relative_to(out_dir)) for p in written],
+        "assets": [str(p.relative_to(out_dir)) for p in assets],
         "wires": [w["day"] for w in wires],
         "data_through": through,
     }

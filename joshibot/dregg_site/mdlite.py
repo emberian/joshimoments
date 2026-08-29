@@ -1,8 +1,9 @@
 """A deliberately small markdown-to-HTML renderer for the wire's own artifacts.
 
 ``dregg_wire.wire.compose_markdown`` emits a known subset — ATX headings, bold,
-italic, inline code, ``[label](url)`` links, pipe tables, dash lists, and ``---``
-rules — and this renders exactly that subset and nothing more. It is not a general
+italic, inline code, ``[label](url)`` links, whole-line ``![alt](panel.png)`` image
+refs to sibling PNG files, pipe tables, dash lists, and ``---`` rules — and this
+renders exactly that subset and nothing more. It is not a general
 markdown engine and must never become one: the input is our own composed artifact,
 but it EMBEDS provider-derived strings (symbols, theses, usernames), so every text
 node is HTML-escaped before any markdown token is interpreted, and only http(s)
@@ -15,6 +16,9 @@ import html
 import re
 
 _LINK = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+# Wire panel images: a WHOLE line, and only a bare sibling .png filename — no paths,
+# no schemes — so a hostile string can never point the archive at a foreign resource.
+_IMAGE_LINE = re.compile(r"^!\[([^\]]*)\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.png)\)$")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
 _CODE = re.compile(r"`([^`]+)`")
@@ -57,6 +61,13 @@ def render(markdown: str) -> str:
         line = lines[i]
         stripped = line.strip()
         if not stripped:
+            i += 1
+            continue
+        image = _IMAGE_LINE.match(stripped)
+        if image:
+            alt = html.escape(image.group(1), quote=True)
+            src = html.escape(image.group(2), quote=True)
+            out.append(f'<p class="wireimg"><img src="{src}" alt="{alt}" loading="lazy"></p>')
             i += 1
             continue
         if stripped.startswith("### "):
