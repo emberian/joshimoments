@@ -14,6 +14,10 @@ dependencies = [
   # changing its own extras -- would have broken the firehose at the first live connect,
   # which is the one moment nobody is watching a test run.
   "websockets>=13,<18",
+  # dregg_archive's raw layer stores every fetched body as exact bytes, zstd-compressed.
+  # A runtime dependency (the archiver is a deployed service, not a study), and a read/
+  # write compression codec with no network surface.
+  "zstandard>=0.23,<1",
 ]
 
 [dependency-groups]

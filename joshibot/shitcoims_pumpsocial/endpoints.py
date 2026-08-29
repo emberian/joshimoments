@@ -168,7 +168,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              "a follower COUNT is available (profile) where a follower LIST is not.",
     ),
     Endpoint(
-        "balances_v3", FRONTEND_V3, "GET", "/balances/{address}", "none", "live",
+        "balances_v3", FRONTEND_V3, "GET", "/balances/{address}", "none", "dead",
         params=("limit", "offset"),
         note="Token balances for a wallet. Present holdings only, no history.",
     ),
@@ -210,9 +210,14 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     # `advanced-api-v2/callouts` behind a bearer token nobody obtained, so the callout
     # feed has never been collected. It is here, unauthenticated, keyed by WALLET.
     Endpoint(
-        "callout_recent", FRONTEND_V3, "GET", "/callout/recent", "none", "live",
+        "callout_recent", FRONTEND_V3, "GET", "/callout/recent", "none", "dead",
         params=("limit", "pageToken"),
-        note="THE LIVE CALLOUT FIREHOSE. Observed returning calls made in the SAME SECOND "
+        note="MEASURED DEAD 2026-08-29: HTTP 400 `Validation failed (uuid is expected)` — "
+             "the router now swallows the path as /callout/{callout_id}, so the route is "
+             "gone in effect while pump's own webapp still ships code calling it (their "
+             "recent tab throws too). Possibly a server-side regression; dregg_archive "
+             "re-measures it every cycle and self-heals when it returns. WHEN LIVE it was: "
+             "THE LIVE CALLOUT FIREHOSE. Observed returning calls made in the SAME SECOND "
              "as the request — unlike coin-communities' `feed_public`, which served a "
              "cache days old. Each item: `userId` (which is a WALLET ADDRESS on this "
              "family, not a UUID — the two id systems collide on the same field name and "
@@ -285,16 +290,23 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              "ticker.",
     ),
 
-    # -- coin-communities: content, readable with the public key -------------------
+    # -- coin-communities: MEASURED DEAD 2026-08-29 --------------------------------
+    # The entire backend was decommissioned between 2026-08-15 (all verdicts below
+    # measured live) and 2026-08-29 (probe: every route 404, the POST batches 405).
+    # The callout family had already been duplicated onto frontend-api-v3, which now
+    # even inlines the coin-communities `user_uuid` on `callout_top` rows — the two-id
+    # rosetta join without the second backend. Sole survivor: `user_by_wallet`.
+    # Entries keep their original notes: they document what the shapes WERE, which is
+    # what any reader of bodies archived before the drift needs.
     Endpoint(
-        "community", COIN_COMMUNITIES, "GET", "/api/v1/communities/{mint}", "api_key", "live",
+        "community", COIN_COMMUNITIES, "GET", "/api/v1/communities/{mint}", "api_key", "dead",
         note="Per-coin community header: internal `community.id`, postCount, memberCount, "
              "totalLikes, latestPostAt. `memberCount` is a live attention proxy that costs "
              "one request and does not exist anywhere on-chain.",
     ),
     Endpoint(
         "messages_public", COIN_COMMUNITIES, "GET",
-        "/api/v1/communities/{mint}/messages/public", "api_key", "live",
+        "/api/v1/communities/{mint}/messages/public", "api_key", "dead",
         params=("limit", "cursor"),
         note="THE COMMENT THREAD. Each message: id, userId, username, content, createdAt, "
              "likeCount, replyCount, parentMessageId, parentCalloutId, isSpam, isHarmful, "
@@ -316,7 +328,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "message_public", COIN_COMMUNITIES, "GET",
-        "/api/v1/communities/{mint}/messages/{message_id}/public", "api_key", "live",
+        "/api/v1/communities/{mint}/messages/{message_id}/public", "api_key", "dead",
         note="A REDUCED projection: id, username, displayName, profileImageUrl, content, "
              "likeCount, replyCount — and notably NO `walletAddress` and NO `createdAt`. "
              "The listing route carries strictly more. Never use this to attribute a post "
@@ -324,7 +336,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "callouts_public", COIN_COMMUNITIES, "GET",
-        "/api/v1/communities/{mint}/callouts/public", "api_key", "live",
+        "/api/v1/communities/{mint}/callouts/public", "api_key", "dead",
         params=("limit", "cursor"),
         note="THE CALLOUTS, with the platform's OWN scoring attached to each one: "
              "`calloutPrice` and `calloutMarketCap` at the moment of the call, plus "
@@ -334,28 +346,28 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "callout_replies_public", COIN_COMMUNITIES, "GET",
-        "/api/v1/communities/{mint}/callouts/{callout_id}/replies/public", "api_key", "live",
+        "/api/v1/communities/{mint}/callouts/{callout_id}/replies/public", "api_key", "dead",
         params=("limit", "cursor"),
     ),
     Endpoint(
         "callout_public", COIN_COMMUNITIES, "GET",
-        "/api/v1/communities/{mint}/callouts/{callout_id}/public", "api_key", "live",
+        "/api/v1/communities/{mint}/callouts/{callout_id}/public", "api_key", "dead",
     ),
     Endpoint(
-        "feed_public", COIN_COMMUNITIES, "GET", "/api/v1/feed/public", "api_key", "live",
+        "feed_public", COIN_COMMUNITIES, "GET", "/api/v1/feed/public", "api_key", "dead",
         params=("limit", "cursor"),
         note="Global cross-coin post feed. Carries its own `computedAt` — the body is a "
              "CACHE with a stated age, so `t_event` and freshness are separable. Observed "
              "lagging real time by days; never treat it as a live firehose.",
     ),
     Endpoint(
-        "top_communities", COIN_COMMUNITIES, "GET", "/api/v1/communities/top", "api_key", "live",
+        "top_communities", COIN_COMMUNITIES, "GET", "/api/v1/communities/top", "api_key", "dead",
         params=("limit",),
         note="Ranked by member count — a social trending board independent of price.",
     ),
     Endpoint(
         "communities_batch", COIN_COMMUNITIES, "POST", "/api/v1/communities/batch",
-        "api_key", "live",
+        "api_key", "dead",
         note="POST-shaped READ (a body carries the key list, nothing is mutated). Body is "
              "`{\"tokenAddresses\": [...]}`, and — unlike every listing route on this host "
              "— the response is snake_case (`member_count`, `post_count`, `latest_post_at`) "
@@ -373,21 +385,21 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "users_by_wallet_batch", COIN_COMMUNITIES, "POST",
-        "/api/v1/users/by-wallet/batch", "api_key", "live",
+        "/api/v1/users/by-wallet/batch", "api_key", "dead",
         note="POST-shaped READ. Body `{\"addresses\": [...]}`; returns a per-address map "
              "with a `status` field, so a miss is reported as a miss rather than dropped. "
              "This is the cheap way to resolve a wallet set from the tape.",
     ),
     Endpoint(
         "user_by_twitter_id", COIN_COMMUNITIES, "GET",
-        "/api/v1/users/by-twitter-id/{twitter_id}", "api_key", "live",
+        "/api/v1/users/by-twitter-id/{twitter_id}", "api_key", "dead",
         note="X numeric id -> pump userId. The inverse join. Combined with `user_profile` "
              "this turns an X account into a pump wallet, which is the join "
              "RESULT_caller_wallets.md could not make.",
     ),
     Endpoint(
         "user_profile", COIN_COMMUNITIES, "GET",
-        "/api/v1/users/{user_id}/profile", "api_key", "live",
+        "/api/v1/users/{user_id}/profile", "api_key", "dead",
         note="Keyed by the coin-communities UUID, not a wallet. Returns BOTH "
              "`nativeFollowerCount` (pump.fun's own follower count) and `followerCount` "
              "(larger; the union with X). They are different numbers for the same person "
@@ -396,7 +408,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "user_communities", COIN_COMMUNITIES, "GET",
-        "/api/v1/users/{user_id}/communities", "api_key", "live",
+        "/api/v1/users/{user_id}/communities", "api_key", "dead",
         params=("limit", "cursor"),
         note="Which coin communities a user belongs to — a per-person watchlist, and the "
              "closest thing to 'what is this caller currently near'.",
@@ -405,7 +417,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     # -- coin-communities: caller quality, free ------------------------------------
     Endpoint(
         "wallet_callout_stats", COIN_COMMUNITIES, "GET",
-        "/api/v1/leaderboard/callouts/wallets/{address}/stats", "api_key", "live",
+        "/api/v1/leaderboard/callouts/wallets/{address}/stats", "api_key", "dead",
         note="Caller quality keyed by WALLET, one request: totalCallouts, twoXPercent, "
              "onePointFiveXPercent, onePointTwoXPercent, averageMultiple, medianMultiple, "
              "averageTimeToPeak. This is the platform's own scoreboard and it is a PEAK "
@@ -433,6 +445,21 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("token_feed_public", COIN_COMMUNITIES, "GET",
              "/api/v1/communities/{mint}/feed/public", "api_key", "dead",
              note="Per-coin feed 404s; the global `feed_public` is live."),
+
+    # -- swap-api: candles, keyless -------------------------------------------------
+    Endpoint(
+        "swap_candles", SWAP_API, "GET", "/v1/coins/{mint}/candles", "none", "live",
+        params=("interval", "limit", "currency"),
+        note="OHLC candles priced in SOL (`currency=SOL`). `interval` accepts 1m/5m/1h; "
+             "limit=600@5m and limit=200@1h both measured working 2026-08-29 (and 1000@1m "
+             "by studies/imitation_signal.py). PARSER TRAP, measured: `timestamp` is an "
+             "int (bucket-start ms) but open/high/low/close/volume are DECIMAL STRINGS — "
+             "imitation_signal never noticed because float() coerces both. A candle "
+             "exists only where trades happened, so a series ends at the LAST TRADE, not "
+             "at now — an empty tail is 'no trades', which is data, not a gap. This is "
+             "the outcome instrument for dregg_archive: returns are computed from these "
+             "closes, never from the provider's own `multiple`.",
+    ),
 
     # -- auth-walled: the profile-api host -----------------------------------------
     Endpoint("profile_api_root", "https://profile-api.pump.fun", "GET",

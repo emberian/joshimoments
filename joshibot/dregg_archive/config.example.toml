@@ -1,0 +1,34 @@
+# dregg_archive service config. Re-read EVERY tick; a broken edit keeps the last good
+# config (the heartbeat's `config_status` says so) — edit live without fear, but check
+# the heartbeat after.
+#
+# Relative paths resolve against THIS FILE's directory.
+
+[paths]
+db = "../state/dregg_archive/archive.sqlite"
+heartbeat = "../state/dregg_archive/heartbeat.json"
+manifests = "../state/dregg_archive/manifests"
+
+[service]
+cadence_s = 600              # one cycle every 10 minutes
+overlap_min = 30             # re-walk window; ~3 sightings per callout at this cadence
+initial_lookback_min = 60    # first-ever walk depth when there is no high-water mark
+walk_limit = 50              # rows per firehose page
+walk_max_pages = 30          # gap is recorded (notes: walk_gap) if this trips first
+daily_budget = 2500          # HARD ceiling, every transport attempt counts, stop is durable
+sweep_gap_s = 1.0            # >= 1 s between sweep requests, on top of per-host pacing
+sweep_batch_max = 60         # due items attempted per cycle
+caller_stats_per_day = 300   # wallet_callout_stats rotation ceiling (coin-communities)
+caller_stats_per_cycle = 3
+active_caller_days = 7       # a caller idle longer than this leaves the rotation
+list_probes_per_cycle = 5    # second-surface confirmation probes for deletion evidence
+deletion_horizon_h = 48      # callouts older than this are only re-judged if they hold a verdict
+
+[candles]
+# DAY-anchored (see service._enqueue_sweeps): limits are sized so ONE fetch covers every
+# callout of a (mint, UTC day). Shrinking these below 5m/600 and 1h/200 silently breaks
+# that coverage.
+candles_25h_interval = "5m"
+candles_25h_limit = 600
+candles_7d_interval = "1h"
+candles_7d_limit = 200

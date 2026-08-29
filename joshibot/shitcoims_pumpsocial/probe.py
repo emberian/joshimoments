@@ -44,6 +44,7 @@ BODIES: dict[str, dict[str, Any]] = {
 QUERIES: dict[str, dict[str, Any]] = {
     "user_search": {"searchTerm": "jackduvalcalls"},
     "coins_search_v3": {"searchTerm": "dregg", "limit": 1},
+    "swap_candles": {"interval": "1h", "limit": 3, "currency": "SOL"},
 }
 
 
