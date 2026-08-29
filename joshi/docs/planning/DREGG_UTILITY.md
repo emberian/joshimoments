@@ -100,7 +100,8 @@ reviewed before anything is hosted for third parties.
 ## v1 decisions locked (2026-08-29, Ember)
 - All three products staged tight; hbox hosts everything; TG-gated + public site.
 - GATE THRESHOLD: N = 3,333,333 $DREGG (≈$1,065 at lock time, px $0.0003194) — token-denominated.
-- TG bot: reuse @ltshitcoims_bot's existing token (~/.shitcoims-tg) — ONE bot process serves
-  gate + invites + Ember's approvals/alerts. New handle only if branding warrants later.
+- TG bot: @ltshitcoims_bot IS the brand (Ember, explicit) — its token (provisioned at hbox
+  ~/.config/dregg/telegram-token) runs ONE bot process serving gate + invites + Ember's
+  approvals/alerts. @dreggnet_bot is a DIFFERENT service's bot — never use it for this.
 - Helius: Ember's existing ~/.helius-key goes to hbox (her machine); no separate product key.
 - Cloudflare: account exists; only a wrangler token needed at site time.
