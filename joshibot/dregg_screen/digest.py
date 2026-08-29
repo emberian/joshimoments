@@ -24,15 +24,20 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from dregg_screen.survival import DIGEST_SURVIVAL_NOTE
+
 MAX_CLEAN_LINES = 10
 
-#: What each verdict means to a trader, in the words the /screen card uses.
+#: What each verdict means to a trader, in the words the /screen card uses. Calibrated
+#: to the survival study: CLEAN is a safety verdict (not a buy call), KNOWN-CREW is the
+#: COMMON case rather than a rare alarm, BUNDLED cuts both ways.
 VERDICT_GLOSS = {
-    "CLEAN": "passed every gate",
-    "KNOWN_CREW": "birth-slot wallets or deployer match a tracked crew record",
-    "BUNDLED": "multiple wallets bought in the very slot the coin was born",
+    "CLEAN": "passed every gate — no known operators at the table; not a buy signal",
+    "KNOWN_CREW": ("the common case — birth-slot wallets or deployer match a tracked "
+                   "crew record; most just die fast"),
+    "BUNDLED": "multiple wallets bought in the very slot the coin was born — fat tails both ways",
     "NOT_CLEAN": "dev's own buy over the 2% line",
-    "UNSCORED": "couldn't be fully read, so no verdict",
+    "UNSCORED": "no verdict — unreadable birth slot, or a mayhem launch (unscored on purpose)",
 }
 
 
@@ -162,6 +167,8 @@ def compose(rows: list[dict], window_min: float) -> str | None:
                 f"  …and {len(cleans) - MAX_CLEAN_LINES} earlier this window "
                 "(newest shown). /watch clean DMs you every one."
             )
+    parts.append("")
+    parts.append(DIGEST_SURVIVAL_NOTE)
     parts.append("\nDM me /screen <mint> for any launch's full card.")
     parts.append("Scores rank risk; they do not establish intent.")
     return "\n".join(parts)

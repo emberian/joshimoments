@@ -61,6 +61,7 @@ from dregg_watch.commands import (
     USAGE_TEXT as WATCH_USAGE,
 )
 from dregg_watch.state import Subscription
+from dregg_wire import visuals as wire_visuals
 from dregg_wire.wire import compose_telegram
 
 NOW = 1_787_000_000.0  # 2026-08-17-ish; only used for staleness arithmetic
@@ -101,6 +102,17 @@ JARGON = (
     "wallet layer",
     "timing q=",
     "unvalidated",
+    # survival/mayhem/persistence study vocabulary (2026-08-29 wiring) — the numbers
+    # ship in plain words; the method words stay in the studies and markdown artifacts
+    "stratum",
+    "anti-selective",
+    "Kaplan",
+    "KM median",
+    "Wilson",
+    "risk ratio",
+    "deployer-clustered",
+    "pseudo-price",
+    "exposure-complete",
 )
 
 MARKUP = ("<a ", "</a>", "<b>", "<code>", "<pre>", "&lt;", "&#", "parse_mode")
@@ -381,6 +393,57 @@ def all_telegram_surfaces() -> list[tuple[str, str]]:
     return surfaces
 
 
+GRAPH_BOARD = {
+    "mode": "graph", "day": "2026-08-17", "source": "dregg_d4m crew_graph-2026-08-17.json",
+    "note": "showing top 2 of 5 crews",
+    "nodes": [
+        {"crew_id": 7, "launches_today": 3, "crew_coins": 12, "crew_rips": 2, "crew_dumps": 5},
+        {"crew_id": 9, "launches_today": 1, "crew_coins": 4, "crew_rips": 0, "crew_dumps": 0},
+    ],
+    "edges": [{"a": 7, "b": 9, "weight": 4.0}],
+}
+
+HEAT_BOARD = {
+    "mode": "heatmap", "day": "2026-08-17",
+    "days": [f"2026-08-{d}" for d in range(11, 18)],
+    "rows": [{"crew_id": 7, "counts": [0, 1, 0, 0, 2, 0, 3],
+              "record": {"crew_coins": 12, "crew_rips": 2, "crew_dumps": 5,
+                         "max_jaccard": 0.44}}],
+    "source": "dregg_screen score ledgers, trailing 7 days", "note": None,
+}
+
+EMPTY_BOARD = {
+    "mode": "empty", "day": "2026-08-17",
+    "reason": "no crew-fingerprint matches among today's launches", "source": "s",
+}
+
+
+def panel_surfaces() -> list[tuple[str, str]]:
+    """(name, string) for every string DRAWN on the wire's PNG panels, plus their
+    photo captions. A PNG offers no hover gloss, so images need the plain-language
+    bar more than text does — same blacklist, same worst-case fixture spirit."""
+
+    figures = [
+        ("wire panel: glance", wire_visuals._glance_figure(WIRE_FACTS)),
+        ("wire panel: desk", wire_visuals._desk_figure(WIRE_FACTS)),
+        ("wire panel: crews graph", wire_visuals._crew_board_figure(GRAPH_BOARD)),
+        ("wire panel: crews heatmap", wire_visuals._crew_board_figure(HEAT_BOARD)),
+        ("wire panel: crews empty", wire_visuals._crew_board_figure(EMPTY_BOARD)),
+        ("wire panel: glance empty", wire_visuals._glance_figure(
+            {"day": "2026-08-17", "screen": {"source": "s", "absent": "no launches scored"}})),
+    ]
+    surfaces = [
+        (name, text) for name, fig in figures for text in wire_visuals.figure_texts(fig)
+    ]
+    surfaces += [
+        ("wire caption: hero", wire_visuals.hero_caption(WIRE_FACTS, 3, "a lede line")),
+        ("wire caption: crews graph", wire_visuals.crew_caption(GRAPH_BOARD)),
+        ("wire caption: crews heatmap", wire_visuals.crew_caption(HEAT_BOARD)),
+        ("wire caption: desk", wire_visuals.desk_caption(WIRE_FACTS)),
+    ]
+    return surfaces
+
+
 # -- the invariants --------------------------------------------------------------------
 
 
@@ -388,6 +451,21 @@ def test_no_jargon_or_markup_reaches_any_telegram_surface():
     for name, text in all_telegram_surfaces():
         assert text, f"surface {name} rendered empty"
         assert_reads_plain(text, where=name)
+
+
+def test_no_jargon_or_markup_reaches_the_wire_panels():
+    """The panel PNGs and their captions are Telegram surfaces too — and a reader
+    can't tap a picture for a gloss, so the blacklist binds every drawn string."""
+
+    surfaces = panel_surfaces()
+    assert len(surfaces) > 40, "panel surface harvest looks broken (too few strings)"
+    for name, text in surfaces:
+        assert_reads_plain(text, where=name)
+    # the enum names themselves must not be drawn either (they carry underscores,
+    # which the blacklist alone would miss)
+    drawn = "\n".join(text for _name, text in surfaces)
+    for enum_name in ("KNOWN_CREW", "NOT_CLEAN", "UNSCORED", "KNOWN-CREW"):
+        assert enum_name not in drawn, f"verdict enum {enum_name!r} drawn on a panel"
 
 
 def test_every_surface_fits_telegram_cap():
@@ -440,6 +518,70 @@ def test_screen_card_translates_every_reason_code():
         assert f"/coin {row['mint']}" in card
 
 
+def test_screen_card_carries_the_measured_survival_context():
+    """The survival study's ship-list sentences ride the cards VERBATIM, and the
+    stratum split is honest: mayhem rows get the vault mechanism, never the
+    standard-cohort numbers (which were measured on standard-born launches only)."""
+
+    from dregg_screen import survival
+
+    clean = render_card(score_row())
+    assert survival.CLEAN_SURVIVAL in clean
+    assert survival.CLEAN_NOT_A_BUY_SIGNAL in clean
+
+    bundled = render_card(score_row(
+        MINT_B, verdict="BUNDLED", reasons=["bundled_at_birth:n_snipers=4"],
+        features={"dev_buy_share": 0.001, "dev_buy_source": "chain_exact", "n_snipers": 4},
+    ))
+    assert survival.BUNDLED_SURVIVAL in bundled
+
+    # KNOWN-CREW without a mayhem flag: the common case, recalibrated from "alarm"
+    crew = render_card(score_row(
+        MINT_B, verdict="KNOWN_CREW",
+        reasons=["deployer_record:launches=6,rips=2,dumps=1"],
+        deployer_history={"launches": 6, "rips": 2, "dumps": 1, "grads": 0},
+    ))
+    assert survival.KNOWN_CREW_CONTEXT in crew
+    assert "most common verdict" in crew and "die fast" in crew
+    # the HELD pair comparison must not ship: the context never mentions CLEAN
+    assert "CLEAN" not in survival.KNOWN_CREW_CONTEXT
+
+    # mayhem rows — any verdict — get the vault mechanism and the group-facts label
+    # INSTEAD of standard-cohort numbers
+    for mayhem_row in (
+        score_row(
+            "M1nt444444444444444444444444444444444444pump",
+            verdict="UNSCORED",
+            reasons=["policy:mayhem_flag_nonstandard_curve", "cheap_gates_passed"],
+            hydrated=False,
+        ),
+        score_row(
+            MINT_B, verdict="KNOWN_CREW",
+            reasons=["deployer_record:launches=6,rips=2,dumps=1"],
+            in_validated_population=False,
+            population_notes=["vendor_flag:is_mayhem_mode:curve_unverified"],
+        ),
+    ):
+        card = render_card(mayhem_row)
+        assert survival.MAYHEM_MECHANISM in card
+        assert survival.MAYHEM_STRATUM_FACTS in card
+        assert "administered, not discovered" in card
+        assert "never a score for this coin" in card  # stratum facts stay labeled
+        assert survival.CLEAN_SURVIVAL not in card
+        assert survival.KNOWN_CREW_CONTEXT not in card
+        # the dev-buy share was computed against the standard supply; on a 2e15
+        # mayhem mint the card must say the denominator only covers the curve half
+        assert "a mayhem launch mints double supply" in card
+
+    # a non-mayhem UNSCORED (partial read) gets no cohort sentence at all
+    partial = render_card(score_row(
+        "M1nt555555555555555555555555555555555555pump",
+        verdict="UNSCORED", reasons=["birth_slot_partial"],
+    ))
+    assert survival.MAYHEM_MECHANISM not in partial
+    assert survival.CLEAN_SURVIVAL not in partial
+
+
 def test_digest_reads_like_a_desk_note():
     rows = nasty_screen_rows()
     # collide two CLEAN tickers so disambiguation must kick in
@@ -452,15 +594,28 @@ def test_digest_reads_like_a_desk_note():
     # 2. each admit carries the numbers that made it clean
     assert "dev buy 0.90%" in text
     assert "deployer launched 2 before, no rips or dumps on record, 1 graduated" in text
-    # 3. enum names carry their meaning, hyphenated
-    assert "KNOWN-CREW 1 — birth-slot wallets or deployer match a tracked crew record" in text
+    # 3. enum names carry their meaning, hyphenated — survival-calibrated: CLEAN is
+    # not a buy call, KNOWN-CREW is the common case, mayhem is unscored on purpose
+    assert ("CLEAN 2 — passed every gate — no known operators at the table; "
+            "not a buy signal") in text
+    assert ("KNOWN-CREW 1 — the common case — birth-slot wallets or deployer match "
+            "a tracked crew record; most just die fast") in text
+    assert ("BUNDLED 1 — multiple wallets bought in the very slot the coin was born "
+            "— fat tails both ways") in text
     assert "NOT-CLEAN 1 — dev's own buy over the 2% line" in text
-    assert "UNSCORED 3 — couldn't be fully read, so no verdict" in text
+    assert ("UNSCORED 3 — no verdict — unreadable birth slot, or a mayhem launch "
+            "(unscored on purpose)") in text
     # 5. colliding tickers stay tellable apart
     assert "$TEST·M1nt" in text
     # 6. the window's pass rate is measured against the stamped long-run rate
     assert "vs the screen's long-run 8.5% (measured 2026-08-26..28)" in text
-    # 7. affordances: the full card and the honesty line
+    # 7. the standing survival note rides every digest, numbers with window and n
+    assert "What the verdicts mean for survival (2026-08-26..28):" in text
+    assert "CLEAN is not a buy signal" in text
+    assert "n=8,773: median last trade 5.7 min" in text
+    assert "n=965: collapse 3.89%, 130x CLEAN; graduation 13.49%, 71x CLEAN" in text
+    assert "KNOWN-CREW is the common case — 85.7% of launches" in text
+    # 8. affordances: the full card and the honesty line
     assert "DM me /screen <mint> for any launch's full card." in text
     assert text.endswith("Scores rank risk; they do not establish intent.")
 

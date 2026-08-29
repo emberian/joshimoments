@@ -12,13 +12,16 @@ line is a constant, not a template, so no code path can ship a caption without i
 
 Telegram caps photo captions at 1024 chars. Six lines fit by construction: symbol
 clamped to 12 chars (18 for a disambiguated "SYM·mint" label), mint is 44, per-line
-worst case ~126 chars, six lines plus header and standing line lands under ~990.
-`montage_caption` asserts the invariant anyway.
+worst case ~137 chars, six lines plus header, the CLEAN gloss (added only when a
+CLEAN verdict appears, kept under 63 chars for exactly this budget), and the standing
+line lands under ~1010. `montage_caption` asserts the invariant anyway.
 """
 
 from __future__ import annotations
 
 from typing import Sequence
+
+from dregg_screen.survival import CLEAN_FEED_GLOSS
 
 from .movers import Alert
 
@@ -82,8 +85,12 @@ def montage_caption(
             coin_line(alert, verdict, (labels or {}).get(alert.mint))
             for alert, verdict in items
         ),
-        STANDING_LINE,
     ]
+    if any(verdict == "CLEAN" for _, verdict in items):
+        # A "birth: CLEAN" tag must not read as a buy call — one short gloss, only
+        # when a CLEAN appears (its length is budgeted in the cap math above).
+        lines.append(CLEAN_FEED_GLOSS)
+    lines.append(STANDING_LINE)
     text = "\n".join(lines)
     # Belt for the invariant the clamps above establish; six max-length lines sit
     # ~880 chars. If this ever trips, the bug is upstream (an unclamped field).

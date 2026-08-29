@@ -36,6 +36,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from dregg_screen import survival
+
 from .config import Config
 from .state import GateState
 from .verify import parse_pubkey
@@ -247,7 +249,15 @@ def render_card(row: dict[str, Any]) -> str:
     if isinstance(share, (int, float)):
         exact = features.get("dev_buy_source") == "chain_exact"
         source = "chain-exact" if exact else "vendor estimate"
-        if any(reason.startswith("nonstandard_curve") for reason in reasons):
+        if survival.is_mayhem_row(row):
+            # Mayhem mints DOUBLE the standard supply; the share's 1e15 denominator
+            # covers only the curve half, so against everything minted it reads 2x
+            # high (measured, docs/MAYHEM_MODE.md).
+            source += (
+                "; a mayhem launch mints double supply, so this is the share of the "
+                "curve half — of everything minted it's about half this"
+            )
+        elif any(reason.startswith("nonstandard_curve") for reason in reasons):
             # The share's denominator assumes the standard 1e15 curve; this launch
             # minted something else, so the number is a ratio, not a supply share.
             source += "; assumes the standard curve, and this launch's curve is NOT standard"
@@ -290,6 +300,13 @@ def render_card(row: dict[str, Any]) -> str:
     scored_at = str(row.get("t_scored") or "")
     if len(scored_at) >= 16:
         lines.append(f"Scored: {scored_at[:16].replace('T', ' ')} UTC")
+
+    # What this verdict's coins actually DO — the measured survival/stratum context
+    # (studies' ship lists, verbatim). CLEAN must never read as a buy signal; mayhem
+    # rows get the vault mechanism instead of cohort numbers that don't transfer.
+    for context in survival.verdict_context(row):
+        lines.append("")
+        lines.append(context)
 
     lines.append("")
     if not row.get("in_validated_population", True):

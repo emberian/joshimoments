@@ -19,8 +19,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dregg_screen import survival
+
 PUMP_COIN_URL = "https://pump.fun/coin/{mint}"
 TELEGRAM_HARD_LIMIT = 4096
+
+# The channel edition lists the top few cleans/crews and states the cut; the markdown
+# artifact (and the site's archive edition) always carries the full tables. Sized so a
+# maxed-out facts dict plus the standing verdict footer stays inside the 4096 cap.
+TELEGRAM_MAX_CLEANS = 3
+TELEGRAM_MAX_CREWS = 3
 
 DISCLAIMER = "Scores rank risk; they do not establish intent. No number here is a promise."
 
@@ -176,17 +184,24 @@ def compose_telegram(facts: dict, issue: int) -> str:
             "never mixed into the stats."
         )
         if screen["notable_cleans"]:
+            # The channel gets the top few; the archive edition carries the full table
+            # (the cut is stated, digest-style, never silent).
+            shown_cleans = screen["notable_cleans"][:TELEGRAM_MAX_CLEANS]
             lines.append("Notable CLEANs (dev buy · deployer launches/rips/dumps):")
-            for clean in screen["notable_cleans"]:
+            for clean in shown_cleans:
                 tag = "" if clean["in_validated_population"] else " · outside the measured slice"
                 lines.append(
                     f"• {_coin_html(clean['mint'], clean['symbol'])} — "
                     f"{_e(_devbuy(clean['dev_buy_share']))} · {_lrd(clean['deployer_history'])}{tag}"
                 )
+            cut = len(screen["notable_cleans"]) - len(shown_cleans)
+            if cut:
+                lines.append(f"…and {cut} more in the archive edition.")
         lines.append("")
         lines.append("🕸 CREW WATCH")
         if screen["crews"]:
-            for crew in screen["crews"]:
+            shown_crews = screen["crews"][:TELEGRAM_MAX_CREWS]
+            for crew in shown_crews:
                 coins = ", ".join(f"${_e(_sym(s))}" for s in crew["symbols"][:3])
                 lines.append(
                     f"#{crew['crew_id']} — {_n(crew['launches_today'], 'launch', 'launches')} today "
@@ -194,8 +209,14 @@ def compose_telegram(facts: dict, issue: int) -> str:
                     f"that crew's record: {crew['crew_coins']} coins, {crew['crew_rips']} rips, "
                     f"{crew['crew_dumps']} insider dumps."
                 )
+            cut = len(screen["crews"]) - len(shown_crews)
+            if cut:
+                lines.append(f"…and {cut} more fingerprints in the archive edition.")
         else:
             lines.append(_e(screen.get("crews_note") or "no crew-fingerprint matches today."))
+        # The crew ledger's memory, measured (RESULT_crew_persistence.md ship list):
+        # match rates cross-gap, and the inverted sign on who is actually dangerous.
+        lines.append(_e(survival.CREW_WIRE_COMPACT))
     lines.append("")
 
     callouts = facts["callouts"]
@@ -261,6 +282,10 @@ def compose_telegram(facts: dict, issue: int) -> str:
             f"({_kb(archive['zst_bytes_today'])} compressed), every one fingerprinted "
             f"(sha256); {anchor}."
         )
+    lines.append("")
+    # The standing verdict-survival footer: safety and longevity order in OPPOSITE
+    # directions, and nobody gets to read CLEAN as "will go up".
+    lines.extend(_e(line) for line in survival.WIRE_VERDICT_FOOTER_LINES)
     lines.append("")
     lines.append("Dig into anything above: DM me /screen <mint>, /coin <mint>, or /caller <name>.")
     lines.append(f"{_e(DISCLAIMER)} — the DREGG desk")
@@ -365,6 +390,12 @@ def compose_markdown(facts: dict, issue: int, images: dict[str, str] | None = No
                 )
         else:
             out.append(screen.get("crews_note") or "no crew-fingerprint matches today")
+        out.append("")
+        out.append(
+            f"*{survival.CREW_PERSISTENCE}* *{survival.UNSEEN_RISK}* "
+            "(`studies/RESULT_crew_persistence.md`, registered; all three fingerprint "
+            "legs passed their gates)"
+        )
     out.append("")
 
     callouts = facts["callouts"]
@@ -439,6 +470,26 @@ def compose_markdown(facts: dict, issue: int, images: dict[str, str] | None = No
             f"- Daily manifests anchored: {archive['manifests_anchored']}"
             + (f" — {archive['manifest_note']}" if archive["manifest_note"] else "")
         )
+    out.append("")
+    out.append("## What the verdicts mean\n")
+    out.append(
+        "Safety and longevity order in **opposite** directions "
+        "(`studies/RESULT_verdict_survival.md`, registered; standard-born launches "
+        "2026-08-26..28, n=91,505):\n"
+    )
+    out.append(f"- **CLEAN** — {survival.CLEAN_SURVIVAL} {survival.CLEAN_NOT_A_BUY_SIGNAL}")
+    out.append(f"- **BUNDLED** — {survival.BUNDLED_SURVIVAL}")
+    out.append(f"- **KNOWN-CREW** — {survival.KNOWN_CREW_CONTEXT}")
+    out.append(
+        f"- **MAYHEM / UNSCORED** — {survival.MAYHEM_MECHANISM} {survival.MAYHEM_STRATUM_FACTS} "
+        "(`studies/RESULT_mayhem_arm.md` + `docs/MAYHEM_MODE.md`; real-flow numbers only — "
+        "price-path rates on this stratum are artifacts of administered pricing and are "
+        "not quoted)"
+    )
+    out.append(
+        "\n*Held, deliberately: the CLEAN-vs-KNOWN_CREW lifetime comparison missed one "
+        "registered per-day sign check and does not ship until a longer window settles it.*"
+    )
     out.append("")
     out.append("---")
     out.append(

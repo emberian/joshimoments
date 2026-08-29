@@ -200,7 +200,14 @@ async def test_screen_renders_the_verdict_card_with_pump_fun_link(tmp_path: Path
     assert "$RUN — lil bull run" in card and f"https://pump.fun/coin/{mint}" in card
     assert mint in card  # bare mint on its own line, tap-and-hold to copy
     assert "KNOWN-CREW" in card
-    assert "Dev buy: 0.21% of supply (vendor estimate; gate is <2%)" in card
+    # a mayhem-flagged row: the dev-buy denominator only covers the curve half,
+    # and the card says so (double-supply mint, measured in docs/MAYHEM_MODE.md)
+    assert ("Dev buy: 0.21% of supply (vendor estimate; a mayhem launch mints double "
+            "supply, so this is the share of the curve half — of everything minted "
+            "it's about half this; gate is <2%)") in card
+    # …and the vault mechanism rides the card in plain words, group facts labeled
+    assert "administered, not discovered" in card
+    assert "never a score for this coin" in card
     assert "Bundle: YES — 4 buyers in the birth slot" in card
     assert "Deployer record: 6 launches / 0 rips / 6 dumps" in card
     assert "matched fingerprint #81422 — 4 shared birth-slot wallets, overlap 0.31 of 1" in card

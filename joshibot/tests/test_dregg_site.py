@@ -261,6 +261,26 @@ def test_every_static_claim_is_used_somewhere(tmp_path, scores_dir, archive_db, 
     assert not unused, f"registry entries nothing renders: {unused}"
 
 
+def test_research_and_screen_carry_survival_and_mayhem_sections(
+    tmp_path, scores_dir, archive_db, wire_dir
+):
+    """The 2026-08-29 studies ship: verdict survival (CLEAN is not a buy signal),
+    the mayhem mechanism + refusal to score, and crew-ledger persistence."""
+
+    out, _ = _generate(tmp_path, scores_dir, archive_db, wire_dir)
+    research = (out / "research.html").read_text()
+    assert "safety and longevity order in opposite directions" in research
+    assert "mayhem mode: the counterparty is the protocol" in research
+    assert "4,756 SOL market cap" in research  # the case study, with its window via cite()
+    assert "deliberately held" in research  # the CLEAN-vs-KNOWN-CREW hold is stated
+    assert "the crew ledger&#x27;s memory holds" in research or "the crew ledger" in research
+    screen = (out / "screen.html").read_text()
+    assert "not a prediction of upside" in screen
+    assert "safety and longevity point in opposite directions" in screen
+    assert "mayhem launches are labeled, never scored" in screen
+    assert "never a buy signal" in screen
+
+
 # -- determinism -----------------------------------------------------------------------
 
 

@@ -52,7 +52,7 @@ def test_keys_are_sorted_and_round_trip():
 
 
 def test_explicit_key_lists_fix_the_index_and_reject_strangers():
-    a = Assoc.from_tuples(ROWS, COLS, row_keys=["wC", "wB", "wA"], col_keys=list("c1 c2 c3 c4".split()))
+    a = Assoc.from_tuples(ROWS, COLS, row_keys=["wC", "wB", "wA"], col_keys=list(["c1", "c2", "c3", "c4"]))
     assert a.row == ("wC", "wB", "wA")
     assert a.row_set("wA") == {"c1", "c2", "c3"}
     with pytest.raises(AssocError):
@@ -169,7 +169,9 @@ def test_max_plus_chunking_does_not_change_the_answer():
     d = (rng.random((40, 40)) < 0.15) * rng.random((40, 40))
     keys = [f"k{i}" for i in range(40)]
     ri, ci = np.nonzero(d)
-    a = Assoc.from_tuples([keys[i] for i in ri], [keys[j] for j in ci], d[ri, ci], row_keys=keys, col_keys=keys)
+    a = Assoc.from_tuples(
+        [keys[i] for i in ri], [keys[j] for j in ci], d[ri, ci], row_keys=keys, col_keys=keys
+    )
     one = matmul(a, a, semiring="max_plus", chunk_rows=1000).to_dict()
     many = matmul(a, a, semiring="max_plus", chunk_rows=3).to_dict()
     assert one == many

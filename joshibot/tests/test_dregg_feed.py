@@ -397,8 +397,21 @@ def test_montage_caption_lists_every_coin_and_ends_with_the_standing_line() -> N
     assert lines[1] == f"$FROGE  https://pump.fun/coin/{MINT_A} · 5m 254 SOL · birth: CLEAN"
     assert f"https://pump.fun/coin/{MINT_B} · 5m 263 SOL · birth: pre-screen/unscored" in lines[2]
     assert "birth: KNOWN-CREW" in lines[3]
+    # a CLEAN in the montage brings the one-line gloss so the tag never reads as
+    # a buy call; it rides just above the standing line
+    assert lines[-2] == "CLEAN = no known operators at birth, not a price call."
     assert lines[-1] == compose.STANDING_LINE
     assert "🚀" not in text
+
+
+def test_montage_caption_gloss_only_when_a_clean_appears() -> None:
+    no_clean = compose.montage_caption([(sample_alert(), "KNOWN_CREW")])
+    assert "no known operators" not in no_clean
+    with_clean = compose.montage_caption([(sample_alert(), "CLEAN")])
+    assert "CLEAN = no known operators at birth, not a price call." in with_clean
+    # the gloss is budgeted into the 1024-char cap math (compose module docstring)
+    from dregg_screen.survival import CLEAN_FEED_GLOSS
+    assert len(CLEAN_FEED_GLOSS) <= 63
 
 
 def test_montage_caption_is_plain_text_and_newline_proof() -> None:
@@ -424,6 +437,17 @@ def test_montage_caption_stays_under_telegram_cap_with_six_worst_case_coins() ->
     text = compose.montage_caption(items)
     assert len(text) <= compose.CAPTION_MAX
     assert text.split("\n")[-1] == compose.STANDING_LINE
+    # worst case WITH the CLEAN gloss line and 18-char disambiguated labels: five
+    # longest-verdict coins plus one CLEAN, every label at the wide clamp
+    items = [
+        (sample_alert(mint=MINTS[i], symbol="W" * 60, v5=999_999_999.9),
+         "CLEAN" if i == 5 else None)
+        for i in range(6)
+    ]
+    labels = {MINTS[i]: "X" * 60 for i in range(6)}
+    text = compose.montage_caption(items, labels=labels)
+    assert len(text) <= compose.CAPTION_MAX
+    assert "CLEAN = no known operators at birth, not a price call." in text
 
 
 def test_montage_caption_refuses_empty() -> None:

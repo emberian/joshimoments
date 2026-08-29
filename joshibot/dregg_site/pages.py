@@ -85,6 +85,60 @@ STATIC_CLAIMS: dict[str, tuple[str, str]] = {
         "wallet links per world, in 30 of 30 worlds; a degree-preserving null deleted every one",
         "SVN co-trading study, synthetic worlds with known ground truth",
     ),
+    "cleansurvival": (
+        "the modal CLEAN launch fades quietly inside six minutes — median last trade 5.7 min "
+        "after birth, 16.4% still trading at 6h, collapse by 24h 0.03%, graduation 0.19%",
+        "verdict-survival study, CLEAN cohort n=8,773, fresh corpus 2026-08-26..28",
+    ),
+    "bundledsurvival": (
+        "BUNDLED coins are the longest-lived, most-graduating cohort AND the most "
+        "collapse-prone: median last trade 10.3 min, collapse by 24h 3.89% (130× CLEAN), "
+        "graduation 13.49% (71× CLEAN)",
+        "verdict-survival study, BUNDLED cohort n=965, 2026-08-26..28",
+    ),
+    "knowncrewmodal": (
+        "KNOWN-CREW is the modal verdict — 85.7% of fresh launches — and those coins mostly "
+        "just die fast, median last trade 184 seconds",
+        "verdict-survival study, 91,505 deployer-identified standard launches, 2026-08-26..28",
+    ),
+    "mayhemmech": (
+        "every mayhem launch mints 2× supply and parks half in one global pump-operated vault "
+        "— the same address on all 30,831 coins — whose fee-exempt agent starts selling into "
+        "the curve a median 2 seconds after birth, re-marking virtual reserves at roughly "
+        "500× each trade's real SOL",
+        "mayhem-arm study + decoded live tapes, 2026-08-26..29",
+    ),
+    "mayhemcase": (
+        "one mayhem coin printed a 4,756 SOL market cap three seconds after birth on under "
+        "0.1 SOL of real money, and was dead 36 seconds in",
+        "full 31-transaction case tape decoded from chain, 2026-08-29",
+    ),
+    "mayhemcrowd": (
+        "the typical mayhem coin's entire human audience is four wallets, and only 7.39% of "
+        "coins see any human trade after the 24-hour burn",
+        "mayhem real-flows amendment, n=30,831 / 18,472 exposure-complete, 2026-08-26..28",
+    ),
+    "mayhemrefusal": (
+        "the screen's gates, transplanted into mayhem, admit a set with MORE real rips than "
+        "the stratum base (88.15% rip-free vs 93.88%), crew fingerprints are simply absent "
+        "(Jaccard 0.0011 vs a 0.0010 null), and a dirty deployer record runs protective "
+        "(risk ratio 0.49×)",
+        "mayhem-arm study, registered ship rules failed — recalibration 3 of 5 conditions, "
+        "real-flows amendment concurring, 2026-08-26..28",
+    ),
+    "crewpersist": (
+        "crew fingerprints are durable: the 400 busiest returning deployers' new launches "
+        "matched their own recorded crew 48.5% of the time (strangers: 0.59%), and "
+        "fingerprint overlap retains 93% of its same-day strength after two weeks",
+        "crew-persistence study, window A 2026-08-05..14 to window B 2026-08-26..28, "
+        "11 unobserved days between",
+    ),
+    "unseenrisk": (
+        "40.4% of fresh births came from deployers already on record two weeks earlier — "
+        "and the danger is the unseen: no-record deployers' coins collapsed 1.03% vs 0.57% "
+        "for known-dirty ones",
+        "crew-persistence study, 91,505 births 2026-08-26..28 against the 2026-08-05..14 record",
+    ),
 }
 
 DISCLAIMER = (
@@ -291,11 +345,16 @@ and a window on every number.</p>
 # -- screen ----------------------------------------------------------------------------
 
 VERDICT_GLOSS = (
-    ("CLEAN", "all five validated gates pass, on chain-exact hydrated features"),
-    ("BUNDLED", "two or more birth-slot buyers — the on-chain bundle shape, no Jito id needed"),
+    ("CLEAN", "all five validated gates pass, on chain-exact hydrated features — an "
+     "absence-of-known-operators verdict, not a prediction of upside"),
+    ("BUNDLED", "two or more birth-slot buyers — the on-chain bundle shape, no Jito id "
+     "needed; committed operators, fat tails both ways"),
     ("NOT_CLEAN", "fails remaining gates (e.g. dev buy ≥ 2% of supply)"),
-    ("KNOWN_CREW", "a named fingerprint: crew Jaccard match, recorded rips/dumps, or a recidivist sniper"),
-    ("UNSCORED", "nonstandard curve, hydration failure, or budget policy — reason attached"),
+    ("KNOWN_CREW", "a named fingerprint: crew Jaccard match, recorded rips/dumps, or a "
+     "recidivist sniper — the most common verdict, not a rare alarm; it names the actor, "
+     "it does not convict the coin"),
+    ("UNSCORED", "nonstandard curve, hydration failure, or budget policy — reason attached; "
+     "mayhem-mode launches stay unscored by design"),
 )
 
 
@@ -405,10 +464,27 @@ not establish intent — the emitted line says what was measured, never who some
 </section>
 
 <section>
+<h2>how long the verdicts live — safety and longevity point in opposite directions</h2>
+<p>A verdict ranks rug risk; it says nothing about upside, and the measured lifetimes run
+the other way. {cite("cleansurvival")}. CLEAN means nobody with a record is at the table —
+including anyone who would push it: a safety statement, never a buy signal. Meanwhile
+{cite("bundledsurvival")}. And {cite("knowncrewmodal")} — the common case, whose card names
+the actor rather than predicting the coin's path.</p>
+</section>
+
+<section>
+<h2>mayhem launches are labeled, never scored</h2>
+<p>{cite("mayhemmech")}. For those first 24 hours the quoted price is administered, not
+discovered, so the screen labels the stratum UNSCORED instead of pretending its measured
+accuracy transfers — <a href="research.html">the research page carries the full
+measurement</a>.</p>
+</section>
+
+<section>
 <h2>why the gates are these gates</h2>
 <p>{cite("bundle")}. And the repeat offender is not the deployer wearing a new wallet —
 {cite("crew")}. The screen's five gates are the conjunction that survived validation, not a
-score we liked.</p>
+score we liked. Two weeks later the ledger still knows them: {cite("crewpersist")}.</p>
 </section>
 {footer()}
 """
@@ -577,6 +653,39 @@ order, because a record you can't watch being corrected is a record you can't tr
 <p>Coordination detectors love to hallucinate on heavy-tailed markets: {cite("svn")}. Every
 crew-reuse and co-trading number we publish is tested against nulls that preserve the market's
 own structure — that is why our Jaccard 0.26 means something and a raw correlation would not.</p>
+</section>
+
+<section>
+<h2>safety and longevity order in opposite directions</h2>
+<p>The screen's verdicts rank rug risk. Lifetime, measured on the same launches, runs the
+<em>other</em> way: {cite("cleansurvival")}. At the far end, {cite("bundledsurvival")} — the
+market's honest bargain, both tails fat by construction of who bundles. And
+{cite("knowncrewmodal")} — so a surface that plays KNOWN-CREW as a rare alarm is
+miscalibrated; it is the ordinary case, and the verdict names the actor rather than
+predicting the coin. One comparison is deliberately held: the CLEAN-vs-KNOWN-CREW lifetime
+ordering missed one registered per-day stability check, so that sentence does not ship until
+a longer window settles it. The rule is the rule.</p>
+</section>
+
+<section>
+<h2>mayhem mode: the counterparty is the protocol</h2>
+<p>pump.fun's opt-in "mayhem mode" is the first launch stratum we refuse to score, and the
+refusal is now a measurement rather than a shrug — nobody else has published this mechanism.
+Measured on chain: {cite("mayhemmech")}; at the 24-hour mark the vault's unsold tokens burn.
+On the tape it looks like this: {cite("mayhemcase")}. Set the administered prices aside and
+what remains is thin: {cite("mayhemcrowd")}. And why no re-tuned screen ships:
+{cite("mayhemrefusal")}. The crew-and-deployer economy our gates measure does not operate
+where the protocol itself is the whale, and a re-thresholded arm would be a new unvalidated
+screen wearing this one's name — so mayhem launches carry the UNSCORED label with these
+stratum facts attached: facts about the group, never a score for one coin.</p>
+</section>
+
+<section>
+<h2>the crew ledger's memory holds</h2>
+<p>The KNOWN-CREW arm rests on wallet fingerprints staying stable across weeks, so we
+measured that too: {cite("crewpersist")}. And recidivism cuts against folklore —
+{cite("unseenrisk")}. The ledger names actors; absence from the ledger is the actual risk
+marker.</p>
 </section>
 
 <section>

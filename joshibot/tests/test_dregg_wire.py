@@ -285,6 +285,49 @@ def test_telegram_links_and_escaping(scores_dir, archive_db):
     assert "run 2026-08-15" in text
 
 
+def test_telegram_carries_verdict_survival_and_crew_memory(scores_dir, archive_db):
+    """The standing verdict footer (survival study ship list) and the crew-memory
+    facts (persistence study ship list) ride every wire, windows attached."""
+
+    text = compose_telegram(_facts(scores_dir, archive_db), 0)
+    assert "WHAT THE VERDICTS MEAN (all numbers measured 2026-08-26..28)" in text
+    assert "CLEAN = safety, not a buy signal (n=8,773)" in text
+    assert "the usual outcome is a quiet fade" in text
+    assert "collapse 3.89% (130x CLEAN), graduation 13.49% (71x CLEAN)" in text
+    assert "KNOWN-CREW = the common case, not a rare alarm (85.7% of 91,505 launches)" in text
+    assert "MAYHEM = unscored on purpose" in text
+    assert "never a coin score" in text  # stratum facts stay labeled as group facts
+    # crew memory, on the crew section
+    assert "matched their own crew 48.5% vs 0.59% for strangers" in text
+    assert "the danger is the UNSEEN: no-record coins collapsed 1.03% vs 0.57%" in text
+
+
+def test_telegram_stays_under_cap_when_facts_max_out(scores_dir, archive_db):
+    """Five cleans + five crews (the facts caps) plus the standing footer must fit;
+    the channel states its cut and the archive edition keeps the full tables."""
+
+    facts = _facts(scores_dir, archive_db)
+    clean = dict(facts["screen"]["notable_cleans"][0], symbol="WORSTCASE$$$")
+    facts["screen"]["notable_cleans"] = [dict(clean) for _ in range(5)]
+    crew = dict(facts["screen"]["crews"][0], symbols=["LONGSYMBOL12"] * 5)
+    facts["screen"]["crews"] = [dict(crew) for _ in range(5)]
+    text = compose_telegram(facts, 999)
+    assert len(text) <= 4096
+    assert "…and 2 more in the archive edition." in text
+    assert "…and 2 more fingerprints in the archive edition." in text
+
+
+def test_markdown_carries_the_full_verdict_section(scores_dir, archive_db):
+    md = compose_markdown(_facts(scores_dir, archive_db), 0)
+    assert "## What the verdicts mean" in md
+    assert "CLEAN cohort (2026-08-26..28, n=8,773)" in md
+    assert "BUNDLED cohort (2026-08-26..28, n=965)" in md
+    # the held CLEAN-vs-KNOWN_CREW comparison is stated as held, not smuggled in
+    assert "CLEAN-vs-KNOWN_CREW lifetime comparison missed one registered per-day" in md
+    assert "Crew fingerprints are durable" in md
+    assert "no record is the risk factor" in md.lower() or "No record is the risk factor" in md
+
+
 def test_formatting_helpers_never_zero_pretend():
     from dregg_wire.wire import _devbuy, _sym
 
