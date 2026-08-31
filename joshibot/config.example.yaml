@@ -1,0 +1,101 @@
+rpc:
+  helius_api_key_file: "~/.helius-key"
+  http_url_template: "https://mainnet.helius-rpc.com/?api-key={api_key}"
+  websocket_url_template: "wss://mainnet.helius-rpc.com/?api-key={api_key}"
+  commitment: "confirmed"
+
+wallet:
+  name: "shitcoims"
+  secret_key_file: "~/.shitcoims-wallet"
+
+jupiter:
+  # Create a Jupiter API key at portal.jup.ag and put only the key in this file.
+  api_key_file: "~/.jup-shitcoims"
+  base_url: "https://api.jup.ag/swap/v2"
+  # A CEILING, not the working tolerance. A normal exit asks for 250 bps
+  # (`clients.TIGHT_EXIT_SLIPPAGE_BPS`); only a rug or a panic uses the full number, where
+  # getting out matters more than the price. Read 1500 as "an emergency exit may pay
+  # anything", not as "we accept 15% slippage".
+  #
+  # It is NOT what bounds a normal fill. A tolerance is a budget an adversary can spend in
+  # full; the actual bound is a min-out computed from the observed pool reserves through the
+  # Lean-mirrored constant-product fill — see `shitcoims_sentinel/reserves.py`. An order
+  # authorising less than the pool itself would pay is refused outright.
+  slippage_bps: 1500
+  max_priority_fee_lamports: 5000000
+  # Force on-chain Metis routing so the returned transaction can be narrowly validated.
+  excluded_routers: ["jupiterz", "dflow", "okx"]
+
+execution:
+  enabled: false
+  arm_file: "./state/LIVE_ARMED"
+  max_attempts: 3
+  retry_delay_seconds: 2
+  # Signed transaction simulation must not reduce wallet SOL by more than 0.02 SOL.
+  max_sol_cost_lamports: 20000000
+
+rug_detector:
+  poll_interval_seconds: 30
+  liquidity_drop_pct: 40
+  mint_supply_growth_pct: 5
+  active_mint_liquidity_drop_pct: 20
+  confirm_delay_seconds: 0.75
+  quote_collapse_pct: 20
+
+notifications:
+  telegram_bot_token_file: "~/.shitcoims-tg"
+  telegram_chat_id: null
+  heartbeat_interval_hours: 6
+
+experiments:
+  # Record-only adapters. Neither has access to an execution action.
+  wallet_activity_stream: true
+  pump_metadata: true
+  pump_metadata_poll_interval_seconds: 60
+  # Bound dusting-driven provider work.
+  max_unmonitored_holdings: 50
+  max_enrichment_concurrency: 6
+  advisory_wallets:
+    # Record-only public wallet experiment. Labels never identify assets.
+    - id: "claudekol"
+      label: "ClaudeKOL public wallet"
+      address: "6s5RoARKg1oc4eWvGof1FwTzPuPLkToP4iS1N4Mgqvz"
+
+server:
+  host: "127.0.0.1"
+  port: 8787
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+
+poll_interval_seconds: 10
+state_dir: "./state"
+auto_discover: true
+
+positions:
+  # buy_price_sol is SOL per whole token. cost_basis_sol (total paid) is also
+  # supported; set exactly one of the two.
+  #
+  # EVERY PRICE-BASED EXIT IS OPTIONAL. `null` means that exit never fires, and an omitted
+  # key takes the default in `shitcoims_sentinel/domain.py::PolicyDefaults` (no stop, take
+  # profit 100%, rug exit on). Absence is absence: do not write a very deep number to mean
+  # "no stop" -- -95 is a stop that still fires at -96.
+  #
+  # - mint: "TOKEN_MINT_ADDRESS"
+  #   name: "EXAMPLE"
+  #   cost_basis_sol: 0.5
+  #   stop_loss_pct: null          # null = never sold for falling. Rug exit still applies.
+  #   take_profit_pct: 100         # arms the runner; with runner_tightness null it SELLS
+  #   runner_tightness: 20         # tightness knob (20 = canonical lock floors), not a leash
+  #   floor_confirm_quotes: 2      # consecutive quotes past a threshold before it fires
+  #   hold_trail_until_graduated: true
+  #   rug_exit: true               # asset death is not a price move; on by default
+  #
+  # MIGRATION from the pre-2026-08-15 shape: `exit_style: runner` plus `trailing_stop_pct: N`
+  # is read as `runner_tightness: N` and logged. `exit_style: fixed_trail` is REFUSED at load
+  # with the edit to make -- its N meant "sell at N% off the print high", which has no
+  # faithful equivalent in the lock-rung runner.
+  #   # Durable sell-only policy: after an observed full-balance exit quote
+  #   # crosses from PnL <= 0 to PnL > 0, wait for the next confirmed slot,
+  #   # then sell the full balance (subject to all three live-execution gates).
+  #   dispose_after_break_even: false

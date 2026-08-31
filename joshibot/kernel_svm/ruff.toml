@@ -1,0 +1,10 @@
+# Matches the repo's root style (line-length 110, same rule set). Local because this
+# directory is its own package with its own venv and its own first-party module names.
+line-length = 110
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "B", "SIM", "RUF"]
+
+[lint.isort]
+known-first-party = ["capture", "idl", "oracle", "rpc", "snapshot", "stream", "svm"]

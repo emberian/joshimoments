@@ -1,0 +1,73 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+/dist/
+/.wrangler/
+/outputs/
+/work/
+
+# recorded tape + its frames: data, not code. Findings go to studies/, bytes stay here.
+/tape/
+
+# shitcoims sentinel: local secrets, policy, and runtime artifacts
+/config.yaml
+# lpexec: its own config, kept out of the sentinel's file so one broken edit cannot
+# misconfigure the other package. See lpexec.example.yaml.
+/lpexec.yaml
+/shitcoims_lpexec/node/node_modules/
+/state/
+/intelligence.yaml
+/intelligence_state/
+*.csv
+*.jsonl
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.pyc
+kernel/.lake/
+kernel/build/
+
+# study caches: chain censuses and API snapshots. Data, not code -- findings go to studies/.
+/.cache/
+
+# Lane data: chain snapshots, price caches, SVM fixtures and venvs. Data, not code.
+studies/data/
+kernel_svm/.venv/
+kernel_svm/cache/
+
+# generated netmap snapshot — regenerate with `python -m shitcoims_netmap.render --json`
+/public/netmap.json

@@ -1,0 +1,56 @@
+# dregg_screen live service configuration. Copy to config.toml and edit; every key is
+# optional and defaults to the value shown. Paths are repo-relative unless absolute.
+
+# Where scores/, latest.json, heartbeat.json, the firehose tape and the budget state live.
+state_dir = "state/dregg_screen"
+
+# The crime-ledger artifact. Default: state/dregg_screen/ledger/current.sqlite, the
+# symlink `python -m dregg_screen.ledger build` maintains. The heartbeat reports the
+# loaded build's corpus span and flags staleness beyond 14 days.
+# ledger_path = "state/dregg_screen/ledger/current.sqlite"
+
+helius_key_file = "~/.helius-key"
+
+# Hard daily ceiling on Helius requests, counted per attempt, persisted across restarts.
+# Sizing (measured on the fresh corpus, ~34.8k launches/day, ~2-3 requests/hydration):
+#   cheap-gate policy, dev-buy launches only .... ~14k/day   (hydrate_no_dev_buy = false)
+#   cheap-gate policy, incl. no-dev-buy stratum . ~15-30k/day (default)
+#   full coverage (hydrate_all = true) .......... ~90k/day
+daily_helius_budget = 30000
+
+# Seconds to let the RPC index the birth slot before hydrating. "Scored within seconds"
+# means event + this delay + 2-3 round trips.
+hydrate_delay_s = 3.0
+
+# Spend hydration on launches with no dev buy. They are OUTSIDE the validated population
+# (the study's deployer is a dev-buy artifact) and every score on them says so; disabling
+# this halves the hydration bill and marks them UNSCORED(policy) instead.
+hydrate_no_dev_buy = true
+
+# Hydrate creates the vendor flags is_mayhem_mode. Measured 2026-08-29: 10 of 10
+# hydrated mayhem creates minted 2e15 raw — outside the corpus BORN predicate — so
+# hydration can only confirm UNSCORED(nonstandard_curve); the default skips the spend
+# and emits UNSCORED(policy:mayhem_flag_nonstandard_curve) instead. Flip this on if the
+# vendor flag ever starts lying about standard coins.
+hydrate_mayhem = false
+
+# Hydrate every launch regardless of cheap gates. The cheap gates are conjuncts of the
+# validated screen, so this buys bundle detail on launches already condemned — size the
+# budget for ~90k/day before enabling.
+hydrate_all = false
+
+workers = 4
+queue_max = 2000
+latest_n = 200
+heartbeat_s = 30.0
+
+# Crew-fingerprint match thresholds. The validated statistic: same-deployer pairwise
+# Jaccard 0.26 vs day-matched 0.0026 vs degree-preserving null 0.0075 (fresh 08-26..28).
+# min_overlap 2 refuses to call a single shared wallet a crew (that is what
+# sniper_prior_max already reports).
+crew_min_overlap = 2
+crew_min_jaccard = 0.10
+
+# Cap on same-slot transactions fetched per hydration; past it the result is partial and
+# can never mint a CLEAN (a slot that busy failed the bundle gate long before the cap).
+max_same_slot_txs = 6

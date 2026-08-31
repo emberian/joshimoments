@@ -1,0 +1,526 @@
+"""Compose the Daily PvP Wire from a facts dict. Pure templates — no model call in v0.
+
+Two renderings from one facts dict:
+
+* ``compose_telegram`` — the channel text, ~25-40 tight lines, PLAIN TEXT with no
+  parse_mode (the house rule): bare pump.fun URLs auto-link, and provider-derived
+  strings (symbol, name, thesis, username, mint) render literal-inert because there
+  is no markup to inject into. The channel copy trades the method vocabulary for
+  plain words (the measured slice, not "validated population") without dropping a
+  number, a window, or a source. It carries DAY FACTS ONLY: standing study recaps,
+  instrument-status lines ("removal ledger armed"), internal counters (outcome rows,
+  fetch/manifest tallies) and day-percentages under ``survival.RATE_FLOOR_N`` are
+  cut here and live in the archive edition — including a datum asserts it is worth
+  the reader's attention, and a label saying otherwise does not cancel that.
+* ``compose_markdown`` — the fuller artifact saved to ``state/dregg_wire/<day>.md``,
+  normal markdown links, full mint addresses, methodology footer; it keeps the
+  method vocabulary and the standing sections because it IS the methodology record.
+
+Both are deterministic: same facts, same bytes.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from dregg_screen import survival
+
+PUMP_COIN_URL = "https://pump.fun/coin/{mint}"
+TELEGRAM_HARD_LIMIT = 4096
+
+# The channel edition lists the top few cleans/crews and states the cut; the markdown
+# artifact (and the site's archive edition) always carries the full tables. Sized so a
+# maxed-out facts dict plus the standing verdict footer stays inside the 4096 cap.
+TELEGRAM_MAX_CLEANS = 3
+TELEGRAM_MAX_CREWS = 3
+
+DISCLAIMER = "Scores rank risk; they do not establish intent. No number here is a promise."
+
+
+# -- escaping + tiny formatters --------------------------------------------------------
+
+
+def _e(value: object) -> str:
+    """Plain text for Telegram: no parse_mode, so nothing needs escaping and a
+    provider string cannot inject markup. Bare URLs auto-link; that is the link."""
+
+    return str(value)
+
+
+def _sym(symbol: object) -> str:
+    """Symbols come from the launch event verbatim; keep them one short token.
+
+    A leading ``$`` is stripped because every template adds its own cashtag sigil.
+    """
+
+    text = " ".join(str(symbol or "?").split()).lstrip("$")
+    return text[:12] if text else "?"
+
+
+def _md_text(value: object) -> str:
+    """Neutralize markdown link syntax in provider-derived link text."""
+
+    text = " ".join(str(value or "?").split())
+    for ch in ("\\", "[", "]", "(", ")"):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
+def _short_mint(mint: str) -> str:
+    return f"{mint[:4]}…{mint[-4:]}" if len(mint) > 12 else mint
+
+
+def _coin_html(mint: str, symbol: object = None) -> str:
+    label = f"${_sym(symbol)}" if symbol is not None else _short_mint(str(mint))
+    return f"{label} {PUMP_COIN_URL.format(mint=mint)}"
+
+
+def _coin_md(mint: str, symbol: object = None) -> str:
+    label = f"${_md_text(_sym(symbol))}" if symbol is not None else _short_mint(str(mint))
+    return f"[{label}]({PUMP_COIN_URL.format(mint=mint)})"
+
+
+def _pct(x: float | None, digits: int = 1) -> str:
+    return "?" if x is None else f"{100.0 * x:.{digits}f}%"
+
+
+def _devbuy(share: float | None) -> str:
+    """A dev buy that is tiny-but-real never rounds to a pretend zero."""
+
+    if not share:
+        return "0%"
+    if share < 0.0001:
+        return "<0.01%"  # escaped at the HTML render site
+    return _pct(share, 2)
+
+
+def _n(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _sol(x: float) -> str:
+    return f"{x:+,.1f} SOL".replace("-", "−")  # noqa: RUF001 — typographic minus, house style
+
+
+def _lrd(history: dict) -> str:
+    return f"{history.get('launches', 0)}/{history.get('rips', 0)}/{history.get('dumps', 0)}"
+
+
+def _ret_pct(x: float) -> str:
+    # The typographic minus is deliberate: it is the brand's printed form for measured
+    # negative returns (see OFFER_BRIEF.md), same for the multiplication sign below.
+    return f"{100.0 * x:+.1f}%".replace("-", "−")  # noqa: RUF001
+
+
+# -- the lede --------------------------------------------------------------------------
+
+
+def lede(facts: dict) -> str:
+    """LEDE SLOT — v0 is a deterministic template.
+
+    A later revision may let a model draft this one line (from `facts` and nothing
+    else); it will still ride the same approval gate before anything posts.
+    """
+
+    screen = facts.get("screen", {})
+    if screen.get("absent"):
+        return "The desk is up; today's screen ledger is empty — the tape below is what we do have."
+    mayhem = screen["mayhem"]
+    validated = screen["validated"]
+    if mayhem["share"] >= 0.20:
+        scored = screen["launches_scored"]
+        share = (
+            f"{_pct(mayhem['share'])} of today's launches"
+            if scored >= survival.RATE_FLOOR_N
+            else f"{mayhem['count']} of today's {scored} launches"
+        )
+        return (
+            f"{share} used pump's mayhem mode — territory "
+            "the screen's accuracy was never measured on. Those get labeled, not guessed at."
+        )
+    if validated["count"]:
+        return (
+            f"{validated['clean']} CLEAN admits from the {validated['count']} launches the "
+            "screen was built to judge — it holds its line."
+        )
+    return f"{screen['launches_scored']} launches scored today; the tape is below."
+
+
+# -- telegram --------------------------------------------------------------------------
+
+
+def compose_telegram(facts: dict, issue: int) -> str:
+    day = facts["day"]
+    lines: list[str] = [f"📰 DREGG WIRE #{issue} — {day}", _e(lede(facts)), ""]
+
+    screen = facts["screen"]
+    lines.append(f"🔬 LAUNCH SCREEN (scores, UTC day {day})")
+    if screen.get("absent"):
+        lines.append(_e(screen["absent"]))
+    else:
+        verdict_bits = " · ".join(
+            f"{_e(str(k).replace('_', '-'))} {v}" for k, v in screen["verdicts"].items()
+        )
+        lines.append(f"{screen['launches_scored']} launches scored — {verdict_bits}")
+        validated = screen["validated"]
+        op = validated.get("operating_point") or {}
+        if validated["count"]:
+            vs = ""
+            if op.get("admit_rate") is not None:
+                # The span may carry a method parenthetical; the channel gets the dates.
+                span = str(op.get("validated_span") or "?").split(" (")[0]
+                vs = (
+                    f" — the long-run pass rate is {_pct(op['admit_rate'])} "
+                    f"(measured {_e(span)})"
+                )
+            # The day-percentage needs a real denominator; under the floor the
+            # counts stand alone against the long-run yardstick.
+            day_rate = (
+                f" ({_pct(validated['clean_rate'])})"
+                if validated["count"] >= survival.RATE_FLOOR_N
+                else ""
+            )
+            lines.append(
+                f"Standard launches, where the screen's accuracy was measured: "
+                f"{validated['count']} of {screen['launches_scored']}. CLEAN passes there: "
+                f"{validated['clean']}{day_rate}{vs}."
+            )
+        else:
+            lines.append(
+                "None of today's launches were the standard type the screen's "
+                "accuracy was measured on."
+            )
+        mayhem = screen["mayhem"]
+        mayhem_share = (
+            f" ({_pct(mayhem['share'])})"
+            if screen["launches_scored"] >= survival.RATE_FLOOR_N
+            else ""
+        )
+        lines.append(
+            f"Mayhem-mode launches: {mayhem['count']} of {screen['launches_scored']}"
+            f"{mayhem_share} — outside that measured slice; they get labeled, "
+            "never mixed into the stats."
+        )
+        if screen["notable_cleans"]:
+            # The channel gets the top few; the archive edition carries the full table
+            # (the cut is stated, digest-style, never silent).
+            shown_cleans = screen["notable_cleans"][:TELEGRAM_MAX_CLEANS]
+            lines.append("Notable CLEANs (dev buy · deployer launches/rips/dumps):")
+            for clean in shown_cleans:
+                tag = "" if clean["in_validated_population"] else " · outside the measured slice"
+                lines.append(
+                    f"• {_coin_html(clean['mint'], clean['symbol'])} — "
+                    f"{_e(_devbuy(clean['dev_buy_share']))} · {_lrd(clean['deployer_history'])}{tag}"
+                )
+            cut = len(screen["notable_cleans"]) - len(shown_cleans)
+            if cut:
+                lines.append(f"…and {cut} more in the archive edition.")
+            # The one spot in this message where CLEAN could read as a pick.
+            lines.append(_e(survival.CLEAN_FEED_GLOSS))
+        lines.append("")
+        lines.append("🕸 CREW WATCH")
+        if screen["crews"]:
+            shown_crews = screen["crews"][:TELEGRAM_MAX_CREWS]
+            for crew in shown_crews:
+                coins = ", ".join(f"${_e(_sym(s))}" for s in crew["symbols"][:3])
+                tied = crew.get("tied_launches") or 0
+                tie_note = (
+                    f" {tied} of those matches fit other tracked crews equally well."
+                    if tied else ""
+                )
+                lines.append(
+                    f"#{crew['crew_id']} — {_n(crew['launches_today'], 'launch', 'launches')} today "
+                    f"({coins}), birth-slot overlap up to {crew['max_jaccard']:.2f} of 1; "
+                    f"that crew's record: {crew['crew_coins']} coins, {crew['crew_rips']} rips, "
+                    f"{crew['crew_dumps']} insider dumps.{tie_note}"
+                )
+            cut = len(screen["crews"]) - len(shown_crews)
+            if cut:
+                lines.append(f"…and {cut} more fingerprints in the archive edition.")
+        else:
+            lines.append(_e(screen.get("crews_note") or "no crew-fingerprint matches today."))
+        # The crew-persistence study (why the ledger's memory can be trusted) is a
+        # standing fact, not a day fact — it lives in the archive edition and on the
+        # research page, not restated on every daily wire.
+    lines.append("")
+
+    callouts = facts["callouts"]
+    lines.append(f"📣 CALLOUT DESK (archived, UTC day {day})")
+    if callouts.get("absent"):
+        lines.append(_e(callouts["absent"]))
+    else:
+        if callouts["archived_today"]:
+            lines.append(
+                f"{callouts['archived_today']} callouts archived today · "
+                f"{callouts['distinct_callers_today']} callers · {callouts['distinct_mints_today']} coins "
+                f"(board lifetime: {callouts['board_total']} callouts, {callouts['board_callers']} callers)."
+            )
+        else:
+            lines.append(
+                f"No callouts first-archived today (board lifetime: {callouts['board_total']} "
+                f"callouts, {callouts['board_callers']} callers)."
+            )
+        top = callouts.get("top_provider_claim")
+        if top:
+            by = f" by {_e(top['username'])}" if top.get("username") else ""
+            lines.append(
+                f"Boldest provider claim: {top['multiple']:.1f}× on {_coin_html(top['mint'])}{by} "  # noqa: RUF001
+                "— their peak number, not our measurement."
+            )
+        anti = callouts["anti_signal"]
+        lines.append(
+            f"Season baseline ({_e(anti['short_source'])}): buying the feed averaged "
+            f"{_ret_pct(anti['ret_1h_mean'])} at 1h and {_ret_pct(anti['ret_8h_mean'])} at 8h; "
+            f"when {_e(anti['burst_definition'])} piled on, the median ran "
+            f"{_ret_pct(anti['burst_ret_8h_median'])} at 8h."
+        )
+        outcomes = callouts["outcomes"]
+        if outcomes["note"]:
+            # An informative absence: it explains why no measured return stands
+            # beside the claims above. Once measurements exist they speak for
+            # themselves (the desk panel and the record); the raw row counts are
+            # plumbing and stay in the archive edition.
+            lines.append(
+                f"Real outcomes: {outcomes['rows']} calls being measured — {_e(outcomes['note'])}."
+            )
+        removals = callouts["removals"]
+        if removals["total"]:
+            lines.append(f"Removal ledger: {removals['today']} caught today, {removals['total']} all-time.")
+        # A removal ledger that has caught nothing is an armed instrument, not news —
+        # the channel says nothing; the record page and the archive edition state it.
+        lines.extend(_caller_color_lines_html(facts))
+    lines.append("")
+    # Receipts (fetch counts, bytes, manifest anchoring) are the desk proving its own
+    # rigor — the mechanism is stated once on the site's "why trust it" and the daily
+    # numbers live in the archive edition, not the channel.
+    lines.append("Dig into anything above: DM me /screen <mint>, /coin <mint>, or /caller <name>.")
+    lines.append(f"{_e(DISCLAIMER)} — the DREGG desk")
+
+    text = "\n".join(lines)
+    if len(text) > TELEGRAM_HARD_LIMIT:
+        raise ValueError(f"composed wire is {len(text)} chars; Telegram's limit is {TELEGRAM_HARD_LIMIT}")
+    return text
+
+
+def _caller_color_lines_html(facts: dict) -> list[str]:
+    color = facts.get("caller_color") or {}
+    entries = [e for e in (color.get("entries") or []) if "absent" not in e]
+    if not entries:
+        return []  # color is color; its absence is stated in the markdown artifact, not the channel
+    top_callers = {c["wallet"]: c for c in facts["callouts"].get("top_callers", [])}
+    lines = []
+    for entry in entries[:1]:
+        caller = top_callers.get(entry["wallet"], {})
+        who = _e(caller.get("username") or _short_mint(entry["wallet"]))
+        n = caller.get("callouts_today", "?")
+        lines.append(
+            f"Top caller today: {who} ({n} callouts). Their own trading (wallet snapshot of "
+            f"{_e(color.get('as_of', '?'))} — stale): {_sol(entry['net_realized_sol'])} realized, "
+            f"{_pct(entry['win_rate'])} win rate over {int(entry['n_coins_closed'])} closed coins, "
+            f"{_e(entry['rp_mode'])}."
+        )
+    return lines
+
+
+# -- markdown artifact -----------------------------------------------------------------
+
+
+def compose_markdown(facts: dict, issue: int, images: dict[str, str] | None = None) -> str:
+    """`images` maps panel name ('glance'/'crews'/'desk') to a bare PNG filename that
+    lives BESIDE the artifact; refs are emitted only for panels actually rendered."""
+
+    images = images or {}
+
+    def _img(name: str, alt: str) -> list[str]:
+        filename = images.get(name)
+        return [f"![{alt}]({filename})", ""] if filename else []
+
+    day = facts["day"]
+    out: list[str] = [
+        f"# DREGG WIRE #{issue} — {day}",
+        "",
+        f"*{lede(facts)}*",
+        "",
+        *_img("glance", f"the day at a glance — {day}"),
+    ]
+
+    screen = facts["screen"]
+    out.append(f"## Launch screen\n\n`{screen['source']}`\n")
+    if screen.get("absent"):
+        out.append(f"{screen['absent']}\n")
+    else:
+        verdict_bits = " · ".join(f"**{k}** {v}" for k, v in screen["verdicts"].items())
+        out.append(f"**{screen['launches_scored']} launches scored** — {verdict_bits}\n")
+        validated = screen["validated"]
+        op = validated.get("operating_point") or {}
+        if validated["count"]:
+            out.append(
+                f"- Validated population: {validated['count']} of {screen['launches_scored']}; "
+                f"CLEAN admits {validated['clean']} ({_pct(validated['clean_rate'])})"
+                + (
+                    f" vs the {_pct(op['admit_rate'])} operating point — "
+                    f"validated {op.get('validated_span', '?')}, "
+                    f"clean precision {_pct(op.get('clean_precision'), 2)}"
+                    if op.get("admit_rate") is not None
+                    else ""
+                )
+            )
+        else:
+            out.append("- Validated population: none of today's launches fell inside it")
+        mayhem = screen["mayhem"]
+        out.append(
+            f"- Mayhem-mode creates: {mayhem['count']} of {screen['launches_scored']} "
+            f"({_pct(mayhem['share'])}) — {mayhem['definition']}"
+        )
+        if screen["notable_cleans"]:
+            out.append("\n### Notable CLEANs\n")
+            out.append("| coin | mint | dev buy | deployer L/R/D | validated pop. |")
+            out.append("|---|---|---|---|---|")
+            for clean in screen["notable_cleans"]:
+                out.append(
+                    f"| {_coin_md(clean['mint'], clean['symbol'])} | `{clean['mint']}` "
+                    f"| {_devbuy(clean['dev_buy_share'])} | {_lrd(clean['deployer_history'])} "
+                    f"| {'yes' if clean['in_validated_population'] else 'no'} |"
+                )
+        out.append("\n### Crew watch\n")
+        out.extend(_img("crews", f"the crew board — {day}"))
+        if screen["crews"]:
+            for crew in screen["crews"]:
+                coins = ", ".join(f"${_md_text(_sym(s))}" for s in crew["symbols"])
+                tied = crew.get("tied_launches") or 0
+                tie_note = (
+                    f"; {tied} of its matches are Jaccard ties shared with other crews"
+                    if tied else ""
+                )
+                out.append(
+                    f"- fingerprint **#{crew['crew_id']}** — "
+                    f"{_n(crew['launches_today'], 'launch', 'launches')} today "
+                    f"({coins}), max Jaccard {crew['max_jaccard']:.2f}; crew corpus record: "
+                    f"{crew['crew_coins']} coins, {crew['crew_rips']} rips, "
+                    f"{crew['crew_dumps']} insider dumps{tie_note}"
+                )
+        else:
+            out.append(screen.get("crews_note") or "no crew-fingerprint matches today")
+        out.append("")
+        out.append(
+            f"*{survival.CREW_PERSISTENCE}* *{survival.UNSEEN_RISK}* "
+            "(`studies/RESULT_crew_persistence.md`, registered; all three fingerprint "
+            "legs passed their gates)"
+        )
+    out.append("")
+
+    callouts = facts["callouts"]
+    out.append(f"## Callout desk\n\n`{callouts['source']}`\n")
+    out.extend(_img("desk", f"the callout desk — {day}"))
+    if callouts.get("absent"):
+        out.append(f"{callouts['absent']}\n")
+    else:
+        out.append(
+            f"- {callouts['archived_today']} callouts first-archived today · "
+            f"{callouts['distinct_callers_today']} distinct callers · "
+            f"{callouts['distinct_mints_today']} coins "
+            f"(board lifetime: {callouts['board_total']} callouts / {callouts['board_callers']} callers)"
+        )
+        top = callouts.get("top_provider_claim")
+        if top:
+            thesis = f' — thesis: "{_md_text(top["thesis"])}"' if top.get("thesis") else ""
+            out.append(
+                f"- Boldest provider claim: **{top['multiple']:.1f}×** on {_coin_md(top['mint'])}"  # noqa: RUF001
+                + (f" by {_md_text(top['username'])}" if top.get("username") else "")
+                + f"{thesis} — *{top['label']}*"
+            )
+        anti = callouts["anti_signal"]
+        out.append(
+            f"- Season baseline: {_ret_pct(anti['ret_1h_mean'])} @1h, {_ret_pct(anti['ret_8h_mean'])} @8h; "
+            f"{anti['burst_definition']} → {_ret_pct(anti['burst_ret_8h_median'])} median @8h "
+            f"(*{anti['source']}*)"
+        )
+        outcomes = callouts["outcomes"]
+        out.append(
+            f"- Real outcomes: {outcomes['rows']} rows, {outcomes['priced_1h']} priced @1h, "
+            f"{outcomes['final']} final" + (f" — {outcomes['note']}" if outcomes["note"] else "")
+        )
+        removals = callouts["removals"]
+        out.append(
+            f"- Removal ledger: {removals['today']} today, {removals['total']} all-time"
+            + (f" — {removals['note']}" if removals["note"] else "")
+        )
+        if callouts.get("top_callers"):
+            out.append("\n### Top callers today\n")
+            color = facts.get("caller_color") or {}
+            color_by_wallet = {e.get("wallet"): e for e in color.get("entries") or []}
+            for caller in callouts["top_callers"]:
+                who = _md_text(caller.get("username") or _short_mint(caller["wallet"]))
+                line = f"- **{who}** (`{caller['wallet']}`) — {caller['callouts_today']} callouts today"
+                entry = color_by_wallet.get(caller["wallet"])
+                if entry is None:
+                    line += f"; wallet layer: {color.get('absent', 'not joined')}"
+                elif "absent" in entry:
+                    line += f"; wallet layer (as of {color.get('as_of', '?')}, stale): {entry['absent']}"
+                else:
+                    line += (
+                        f"; wallet layer (as of {color.get('as_of', '?')}, **stale**): "
+                        f"{_sol(entry['net_realized_sol'])} realized, {_pct(entry['win_rate'])} win "
+                        f"rate / {int(entry['n_coins_closed'])} closed, {entry['rp_mode']}"
+                        + (f", guild {entry['guild']}" if entry.get("guild") else "")
+                    )
+                out.append(line)
+            out.append(f"\n*{color.get('note', '')}*")
+    out.append("")
+
+    archive = facts["archive"]
+    out.append(f"## Receipts\n\n`{archive['source']}`\n")
+    if archive.get("absent"):
+        out.append(f"{archive['absent']}\n")
+    else:
+        out.append(
+            f"- {archive['fetches_today']} fetches archived today, {archive['zst_bytes_today']} bytes "
+            "zstd-compressed, every body sha256'd"
+        )
+        out.append(
+            f"- Daily manifests anchored: {archive['manifests_anchored']}"
+            + (f" — {archive['manifest_note']}" if archive["manifest_note"] else "")
+        )
+    out.append("")
+    out.append("## What the verdicts mean\n")
+    out.append(
+        "Safety and longevity order in **opposite** directions "
+        "(`studies/RESULT_verdict_survival.md`, registered; standard-born launches "
+        "2026-08-26..28, n=91,505):\n"
+    )
+    out.append(f"- **CLEAN** — {survival.CLEAN_SURVIVAL} {survival.CLEAN_NOT_A_BUY_SIGNAL}")
+    out.append(f"- **BUNDLED** — {survival.BUNDLED_SURVIVAL}")
+    out.append(f"- **KNOWN-CREW** — {survival.KNOWN_CREW_CONTEXT}")
+    out.append(
+        f"- **MAYHEM / UNSCORED** — {survival.MAYHEM_MECHANISM} {survival.MAYHEM_STRATUM_FACTS} "
+        "(`studies/RESULT_mayhem_arm.md` + `docs/MAYHEM_MODE.md`; real-flow numbers only — "
+        "price-path rates on this stratum are artifacts of administered pricing and are "
+        "not quoted)"
+    )
+    out.append(
+        "\n*Held, deliberately: the CLEAN-vs-KNOWN_CREW lifetime comparison missed one "
+        "registered per-day sign check and does not ship until a longer window settles it.*"
+    )
+    out.append("")
+    out.append("---")
+    out.append(
+        f"*{DISCLAIMER} Every figure above names its source and window; absences are stated, "
+        "not zero-filled. Composed deterministically from the desk's own archives by dregg_wire.*"
+    )
+    return "\n".join(out) + "\n"
+
+
+# -- assembly --------------------------------------------------------------------------
+
+
+def render(facts: dict, issue: int, images: dict[str, str] | None = None) -> tuple[str, str]:
+    """(telegram_text, markdown_artifact) for one facts dict."""
+
+    return compose_telegram(facts, issue), compose_markdown(facts, issue, images)
+
+
+def write_artifact(state_dir: Path, day: str, markdown: str) -> Path:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / f"{day}.md"
+    path.write_text(markdown)
+    return path

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.watchdog</string>
+  <!-- StartInterval, NOT KeepAlive. Every other job here is a long-lived process kept alive by
+       launchd; the supervisor is deliberately the opposite shape. One pass, then exit, so it
+       has no state to wedge, no socket to lose and no way to be the silently-dead daemon it
+       exists to catch. launchd re-runs it every 60s, and if a pass hangs, the next one takes
+       the flock, finds it held, and exits 0 — a double-fire is a no-op by construction.
+
+       AbandonProcessGroup is set because a pass calls `launchctl kickstart` on OTHER jobs;
+       without it launchd would treat those children as part of this job's group. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>scripts/watchdog.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/watchdog.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/watchdog.err.log</string>
+</dict>
+</plist>

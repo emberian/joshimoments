@@ -1,0 +1,135 @@
+[project]
+name = "shitcoims-sentinel"
+version = "0.1.0"
+license = "AGPL-3.0-or-later"
+description = "Local-first, sell-only Solana position sentinel for the shitcoims wallet"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "pyyaml>=6.0.2,<7",
+  "solders>=0.26,<1",
+  "uvicorn[standard]>=0.35,<1",
+  # `shitcoims_scalper.firehose` imports this directly. It was undeclared and present only
+  # transitively through uvicorn[standard], so dropping the `[standard]` extra -- or uvicorn
+  # changing its own extras -- would have broken the firehose at the first live connect,
+  # which is the one moment nobody is watching a test run.
+  "websockets>=13,<18",
+  # dregg_archive's raw layer stores every fetched body as exact bytes, zstd-compressed.
+  # A runtime dependency (the archiver is a deployed service, not a study), and a read/
+  # write compression codec with no network surface.
+  "zstandard>=0.23,<1",
+  # dregg_feed renders chart PNGs for Telegram alerts (Agg backend, no display, no
+  # network surface). Until now matplotlib was present only TRANSITIVELY through the
+  # research group's lifelines — the exact undeclared-dependency trap the websockets
+  # entry above documents — and the feed is a deployed service, so it is declared.
+  "matplotlib>=3.9,<4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+  "mypy>=1.11,<2",
+  # Test-only: an INDEPENDENT nacl implementation to cross-validate the signer page's
+  # inlined tweetnacl deeplink crypto (tests/test_signer_page.py). Never imported by
+  # runtime code — the page vendors its own JS crypto and the gateway uses solders.
+  "pynacl>=1.5,<2",
+]
+# Research/statistics tooling. DELIBERATELY a separate group: the sentinel runs live
+# money and its runtime dependency set stays small and auditable — nothing here is
+# importable from shitcoims_sentinel.
+#
+# Added 2026-08-15 after discovering that ~22,000 lines of studies had been written
+# against NO statistical library at all: Aalen-Johansen, clustered standard errors,
+# bootstraps, variance ratios and permutation tests were all hand-rolled in stdlib.
+# The cost was not speed, it was a class of error. A survival library makes you
+# DECLARE censoring as part of the model specification — you cannot fit a Cox model
+# without saying which observations are censored — whereas the hand-rolled version let
+# an analyst forget, which is precisely how RESULT_board_entry.md shipped a +21.77%
+# finding that reverses to -12.24% once the censored 96% are priced instead of dropped.
+research = [
+  "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
+  "pandas>=2.2,<3",
+  "statsmodels>=0.14,<1",   # clustered/robust SEs, time series, event studies
+  "lifelines>=0.30,<1",     # survival + competing risks, censoring-explicit by construction
+  "scikit-learn>=1.5,<2",
+  "pyarrow>=17,<22",        # parquet, for the BigQuery bulk-history path
+  "duckdb>=1.1,<2",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The typographic minus, multiplication sign, and en dash ARE the brand's printed form
+# for measured numbers (OFFER_BRIEF.md; dregg_wire.wire carries the same choice as
+# per-line noqas). The site pages are made of such numbers, so the decision is made
+# once here instead of a noqa per figure.
+"dregg_site/pages.py" = ["RUF001"]
+# Same decision, same reason, for the portal's gated pages: they render the same measured
+# numbers behind the gate that dregg_site renders in front of it, so `2.4x` and `2.4×` must
+# not become a difference between the public page and the paid one.
+"dregg_portal/gated.py" = ["RUF001"]
+
+# Typing is currently DOCUMENTATION, not a checked invariant: the tree is annotated
+# throughout and every domain type is a frozen slotted dataclass, but nothing verified it.
+# The gate starts where the money is and tightens outward -- a repo-wide --strict flip would
+# produce hundreds of findings nobody reads, which is how type checking gets switched off.
+[tool.mypy]
+python_version = "3.11"
+# The GATED set: these must stay clean, and CI fails if they do not. Everything else is
+# tracked debt, surfaced by `scripts/check.sh --full` but not blocking, so the gate is a
+# line that holds rather than a wall of findings nobody reads.
+files = [
+  "shitcoims_sentinel/executor.py",
+  "shitcoims_sentinel/transaction.py",
+  "shitcoims_sentinel/domain.py",
+  "shitcoims_tape",
+  "shitcoims_kernel",
+  "shitcoims_replay",
+  # Gated from birth rather than added to the debt pile: this package signs transactions
+  # for a second wallet, and its refusals are the product.
+  "shitcoims_lpexec",
+]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+
+# The execution path and the tape contract are held to the full standard. These are the two
+# places where a wrong type is money or a corrupt study rather than an inconvenience.
+[[tool.mypy.overrides]]
+module = ["shitcoims_sentinel.executor", "shitcoims_sentinel.transaction", "shitcoims_tape.*", "shitcoims_kernel.*", "shitcoims_replay.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# solders ships no stubs.
+[[tool.mypy.overrides]]
+module = ["solders.*", "yaml.*", "uvicorn.*"]
+ignore_missing_imports = true
+
+# The tape recorder REUSES the intelligence package's audited Borsh decoder and its Helius
+# credential handling rather than forking either -- a second copy of the code that must never
+# leak an API key is exactly the mirror this project keeps paying for. mypy therefore follows
+# those imports, and without this the gate on shitcoims_tape would fail on pre-existing debt in
+# a module nobody in this lane owns. `silent` keeps the types flowing while leaving that debt
+# where it already is: tracked by `scripts/check.sh --full`, not blocking.
+[[tool.mypy.overrides]]
+module = ["shitcoims_intelligence.*"]
+follow_imports = "silent"

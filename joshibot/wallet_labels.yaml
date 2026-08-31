@@ -1,0 +1,335 @@
+# Operator-attested wallet labels — the ground truth no instrument can produce.
+#
+# HANDOFF.md's process lesson: "measurement was complete and meaningless until a human
+# said 'that address is mine' or 'that one is a scammer'. Make it cheap to attach a
+# label, and record its confidence alongside it." This file is that mechanism.
+#
+# Provenance: operator statements in session 6afafeaf (the accounting fork,
+# messages ~1866-1878, 2026-08-14) and session 59905ce5. The fork displayed most
+# addresses truncated; entries with `address: null` carry the operator's prefix and
+# need resolution against the five-wallet counterparty set (see
+# studies/position_history.py). DO NOT guess a full address from a prefix — resolve
+# it from the ledger or leave it null.
+#
+# confidence: attested = operator said it outright; probable = operator said
+# "pretty sure"; inferred = derived by an instrument, never overrides attested.
+#
+# ---------------------------------------------------------------------------------
+# RESOLUTION RULE (2026-08-15). Read this before adding or changing any address.
+# ---------------------------------------------------------------------------------
+# An active ADDRESS-POISONING campaign dusts these wallets with lookalikes that match
+# BOTH the leading and trailing characters of a real counterparty, within seconds of
+# the real payment (measured latencies: 16s, 22s, 31s). Matching a prefix against all
+# of chain history therefore resolves to the ATTACKER by construction. The rule used
+# here, and the one to keep using:
+#
+#   Candidate set = counterparties of the five own_wallets ONLY, derived from the
+#   on-disk cache .cache/position_history/tx/*.json (2012 transactions,
+#   2026-06-27T13:14Z .. 2026-08-14T05:25Z — the wallets' full lifetimes bar the last
+#   day) by walking every parsed transfer|transferChecked|transferWithSeed leg and
+#   resolving SPL token accounts to owners via that transaction's OWN
+#   pre/postTokenBalances. Prefix comparison is CASE-SENSITIVE base58.
+#
+#   A candidate is the label's referent only if it is SUBSTANTIVE:
+#     (a) SOL: >= 0.1 SOL (1e8 lamports) cumulative OUTBOUND from an own wallet, via a
+#         bare system transfer in a transaction invoking no swap/LP/fee-claim program; or
+#     (b) tokens: an outbound token amount whose exact raw value is NOT shared by more
+#         than 10 other recipients (i.e. not a batch airdrop).
+#
+#   Everything else is an artifact:
+#     - inbound-only, <= 0.0001 SOL, or a 0.000001-SOL / zero-value token transfer
+#       -> ADDRESS-POISONING DUST;
+#     - a token receipt whose exact raw amount recurs across hundreds of recipients
+#       (744.046875 DREGG x886, 22778.0 DREGG x77) -> HOLDER AIRDROP, median ~$0.24
+#       (studies/RESULT_position_history.md:217).
+#
+#   The two floors are separated by ~1000x: every confirmed lookalike delivered
+#   <= 0.0001 SOL inbound and 0 outbound, while the smallest genuine discretionary
+#   payment in the whole book is 0.1 SOL outbound. DIRECTION IS THE DISCRIMINATOR:
+#   real payees RECEIVE from us; poisoners SEND dust to us.
+#
+# Bound on all six prefix questions: the complete set of non-hub SOL payees >= 0.1 SOL
+# across all five wallets over the entire history is 16 addresses totalling 66.2959 SOL,
+# which reconciles with RESULT_position_history.md:437 ("discretionary distributions
+# -66.2993 SOL"). Exactly ONE of those 16 matches any of the six prefixes.
+
+own_wallets:
+  - {address: Sh1WNJ8g68rXJGyDjVPcfxWN1WbMrLsgdXmSb6cccuE, label: shitcoims,      note: live trading wallet}
+  - {address: Funv3QdbBA1ZUC53t2ZoWa9zubAz15w9oCyajDPoRaMQ, label: tha_funds,      note: Meteora DLMM LP wallet}
+  - {address: PmpDh2BQCMMseKYPxseWTSoX3aAouHE4sWyFWTdkqYE, label: pumpfun_main,   note: creator-fee withdrawal target; nets to ~zero (pass-through)}
+  - {address: Dev2GmPW2Jv28KW8D7DLqh7TM9hRf8adTDF5p6Jk3CHc, label: ember_dev,      note: DREGG unlock deposits (Streamflow escrow releases)}
+  - {address: PrvpTgcuAzN337qSmmKizTMSmhpLPJmZ5Vt8WKCzagf, label: og_shitcoims,   note: pre-migration Phantom wallet}
+
+external:
+  - {address: Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh, label: coinbase_receiving, kind: exchange, confidence: attested,
+     note: "operator's Coinbase Solana receiving address; Coinbase also SENDS to the own-wallets from rotating addresses — inbound from Coinbase is a transfer, not income"}
+
+  # CORRECTED 2026-08-15. This entry previously read
+  #   address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6
+  # which does not exist. It appears in ZERO of the 2012 cached transactions, nowhere
+  # else on disk, and — decisively — it is OFF the ed25519 curve, so no keypair can
+  # exist for it and no human can be paid at it. The real payee shares its first
+  # TWENTY characters and then diverges completely; a 20-char base58 collision is
+  # ~58^20 ~ 1e35 work, so this is not poisoning and not coincidence. It is a
+  # truncated display ("PayDyNeCPqJBp34JMWWj...") completed with a fabricated tail.
+  # The address below is the one that actually received the money.
+  - {address: PayDyNeCPqJBp34JMWWjP7DbDbneF2mHHFjPNrEbuv6, label: payroll, kind: payee, confidence: attested,
+     superseded_address: PsupYUmZCrn9YdBwkxNoxhYnDBCYe2cCPmetKtRbEB6,
+     note: "1,063,079.526895 DREGG over 4 transfers, 2026-07-25T04:52:33Z..2026-08-08T16:39:27Z; the largest non-batch DREGG payee that is not a hub or the Streamflow escrow. Has its own poisoning lookalike Pay1mF5quHykSwHowLCvJLcVzD2D5zo3dCL8BRBcbuv6 which dusted 16s after the first real transfer"}
+
+  # RESOLVED 2026-08-15 from the prefix "3CP". Sole 3CP-prefixed key in the entire
+  # 5274-key universe of the ledger, and no lookalike shares its suffix.
+  - {address: 3CP5QbshPtZ7YDENR9kb8eKLhd17c5xL5gkxvNYm1rAs, label: payroll, kind: payee, confidence: probable,
+     resolved_from_prefix: "3CP",
+     note: "1.000000000 SOL outbound from tha_funds, 2026-07-24T02:22:25Z, bare 3-key system transfer, no swap/LP program, no memo. Also received the 744.046875 DREGG batch airdrop, which is NOT what identifies it"}
+
+  # UNRESOLVED. Left null on purpose: the ledger contains no substantive counterparty
+  # matching these, so filling them in would be guessing, and guessing here resolves to
+  # the poisoning campaign. `resolution` records what was actually searched so the next
+  # pass does not redo it.
+  - {address: null, prefix: "9gy",  label: payroll, kind: payee, confidence: attested,
+     resolution: not_found,
+     note: "zero case-sensitive matches in the counterparty set AND in the full 5274-key
+       universe. Case-insensitively 9GY47nLj... appears in 1 tx but is never a transfer
+       counterparty, and 9giZjBp1... is airdrop-dust. No payee matching this exists in the
+       ledger at all"}
+  - {address: null, prefix: "7tvm", label: payroll, kind: payee, confidence: attested,
+     resolution: not_found_airdrop_only,
+     note: "operator initially recalled as KOL, then corrected: 'was actually payroll i
+       realized'. Exactly one prefix match, 7tvm4XqjBSajv7YuyNMMfPPxSB4MxDikHYt4Wdia1KDr,
+       which received 0 SOL and exactly 744.046875 DREGG — the mass-airdrop tier that went
+       to 886 distinct recipients at ~$0.24 each. A holder airdrop is not a payroll payment,
+       so this does NOT satisfy the attestation"}
+  - {address: null, prefix: "3CP",  label: payroll, kind: payee, confidence: probable,
+     resolution: superseded,
+     note: "RESOLVED — see the 3CP5Qbsh... entry above. Kept as a tombstone so the prefix
+       is not re-resolved from scratch"}
+  - {address: null, prefix: "C7",   label: payroll, kind: payee, confidence: probable,
+     resolution: not_found_airdrop_only,
+     note: "two characters, so weak by construction — but the answer is stronger than
+       'ambiguous': NO C7-prefixed address ever received SOL from any of the five wallets.
+       7 exist in the universe; the only 2 that are transfer counterparties are
+       C7H9bmqFKTFC6wwVDHxVBLVJNbwzQEa8x7BcYF8At5oa (23,522.046875 DREGG = the 77-recipient
+       batch plus the 886-recipient batch; 7 recipients got exactly this pair) and
+       C7n7DgLqWpdmPYD98CSkCZxvWSwcEi7dgZyt6n11ckc2 (744.046875 DREGG, the 886-batch).
+       Both airdrop-only. If the rule were relaxed to 'received any token', this would be
+       AMBIGUOUS between those two. Do not upgrade `probable` here"}
+  - {address: null, prefix: "EBF",  label: marketing_kol, kind: payee, confidence: attested,
+     resolution: not_found,
+     note: "zero matches, case-sensitive or not, in the counterparty set or the universe.
+       NEAR-MISS FOR THE OPERATOR TO ADJUDICATE, deliberately NOT resolved here:
+       EBP74nGCUTB8ME7xGtRPntQa3WZsamoFDm2pEwbSTTSP received 14.143888 SOL in a single
+       transfer from pumpfun_main on 2026-06-30T03:23:11Z — the largest non-hub
+       discretionary payment in the whole book, which is marketing-KOL-shaped. But EBP != EBF
+       in the third character. The only other EB... counterparty is airdrop-dust. This is
+       one character from an attested label and needs a human, not an instrument"}
+  - {address: null, prefix: "Fu5RB", label: scammer, kind: adversary, confidence: attested,
+     resolution: not_found,
+     note: "funds sent here are a loss, not payroll and not marketing. Strongest negative of
+       the six: NO address beginning 'Fu5' exists anywhere in the 5274-key universe, and the
+       literal string 'Fu5RB' appears nowhere on disk except this file. NEAR-MISS, again NOT
+       resolved: FU21ojvNwQYTUCQetgj2f26TDFNqfZ81GofHiytK1DG2 took a single 7.700000 SOL
+       send from ember_dev on 2026-07-28T23:12:31Z that never recurs, which is loss-shaped —
+       but the case pattern differs (FU2 vs Fu5). Its own lookalike FU21WXEB...K2zG2 dusted
+       31 seconds later"}
+
+  - {address: AgmLJBMDCqWynYnQiPCuj9ewsNNsBJXyzoUhD9LJzN51, label: fomo_family_relayer, kind: infrastructure, confidence: inferred,
+     superseded_address: AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c,
+     note: "gas-sponsors 22.5% of distinct traders on cluster pools; identified three ways in
+       RESULT_copytrading.md. CORRECTED 2026-08-15 by studies/operator_crime.py: this entry
+       previously read AgmLJBMDwDrsyNsFC1JS8yeAJt8DBB1cJC4dyLctnh4c, which shares exactly the
+       first EIGHT characters with the address its own cited source uses and then diverges
+       completely. Both decode to valid 32-byte pubkeys, so a length/base58 check does not
+       catch it. FOUR independent disproofs of the old value, strongest first:
+       (1) STRUCTURAL -- ...wDrsy... is OFF the ed25519 curve, so no keypair can exist for it.
+       A relayer SIGNS transactions and pays their fees; an address that cannot hold a private
+       key cannot be one. This is decisive on its own and needs no corpus. (Same signature as
+       the fabricated payroll address corrected above -- see the PayDy... entry. Two of the
+       three full addresses this file inherited were completed from truncated displays, so
+       treat every remaining inherited address as unverified until it is checked this way.)
+       (2) ON CHAIN -- across 106,639,238 transactions in ten days of state/bulk_pump,
+       ...wDrsy... appears on ZERO token-balance legs and ...CqWyn... appears on 58,270,
+       across 11 mints.
+       (3) PROVENANCE -- the cited RESULT_copytrading.md line 24 and the code that produced it
+       (studies/copytrading.py line 164) both say ...CqWyn...
+       (4) ABSENCE -- the ...wDrsy... string appears nowhere else on disk at all.
+       Given the address_poisoning block below, a prefix-matching lookalike sitting in the
+       label file is the exact failure this file exists to prevent, so the old value is kept
+       as superseded_address rather than deleted. Still inferred, not attested: the tape
+       carries no fee payers, so this confirms the address exists and is heavily active, NOT
+       that it is FOMO's relayer. Attesting that needs a fee-payer view."}
+
+  # The caller the operator asked to watch, and the homoglyph parked next to him.
+  # NOTE 2026-08-15: both entries were first appended at the END of this file, which put
+  # them inside `address_poisoning:` and made the whole file unparseable — committed broken
+  # in 5d6b5c0 and caught only when something finally tried to load it. They belong here, in
+  # `external:`. The footer invariant is now a real test (tests/test_wallet_labels.py) rather
+  # than a comment, because a comment cannot fail.
+  - {address: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh, label: jackduvalcalls, kind: watched_caller, confidence: inferred,
+     x_handle: jackduval,
+     note: "pump.fun profile 'jackduvalcalls', 17,468 followers, bio 'never wrong, always early.',
+       following: 0; resolved via /users/search 2026-08-15, on-curve verified. Operator follows this
+       caller (fatdogwithhat, calico); watched on accountTrade since 2026-08-15T17:07Z.
+       THE X HANDLE IS `@jackduval`, NOT `@jackduvalcalls` — 'jackduvalcalls' is the PUMP.FUN
+       username and there is no such account on X. The join is the bio: x.com/jackduval ('Jack
+       Duval🌊') carries the identical string 'never wrong, always early'. A `from:jackduvalcalls`
+       census returns nothing and a study built on it would be measuring no one, so the handle is
+       recorded here rather than left to be re-derived. See also @jackduvalstocks, same X display
+       name, possibly a second account of his and NOT assumed to be a squatter.
+       THIS IS HIS TRADING WALLET, contrary to the prior from RESULT_caller_wallets.md §1 that a
+       profile wallet is almost never one: 2,637 transactions over ten days, 494 distinct coins,
+       MEDIAN HOLD 45 SECONDS. He snipes fresh bonding-curve launches. He has touched nosis, weave,
+       DREGG and SOLVE exactly ZERO times. Full workup: studies/RESULT_jackduval_workup.md."}
+  - {address: 9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP, label: jackduvalcalls_imposter, kind: adversary, confidence: inferred,
+     note: "pump.fun profile 'jackduvalcalIs' — capital-I homoglyph of the real caller's handle, 9 followers.
+       Same genus as the address-poisoning campaign: an impersonation parked on a caller the operator trusts.
+       NEVER act on content or addresses from this profile.
+       Two timestamps from the pump.fun API make the sequence deliberate rather than coincidental:
+       it FOLLOWED the real jackduvalcalls on 2026-08-04T11:12Z, and SET ITS USERNAME to the
+       homoglyph on 2026-08-09T12:22Z (`last_username_update_timestamp` 1786278171768) — five days
+       later. It picked the target first and dressed up as it afterwards.
+       It follows exactly NINE accounts, EIGHT of which are large callers totalling ~169k followers:
+       slingoor 45,044 / daumen 30,347 / nyhrox 24,651 / jeets 24,177 / jackduvalcalls 17,468 /
+       mdudas 14,225 / pxblocito 11,351 / chudthebuilder 1,617 (plus kobecoin1, 74). Read as a
+       SHORTLIST — inference, not fact — the other seven are candidate next impersonations, and a
+       homoglyph of any of them should be treated as this same actor until shown otherwise.
+       For contrast the real jackduvalcalls follows NOBODY (following: 0), so 'follows a roster of
+       big callers' is itself a discriminator between the impersonator and the impersonated."}
+
+  # Three wallets that appear to exist only to trade alongside jackduvalcalls. Found by the
+  # temporal join in studies/jackduval_workup.py and kept because the EVIDENCE IS BREADTH,
+  # not timing: each trades ~99% of its coins in common with him, while a universal launch
+  # sniper trading 2,237 coins (FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, the control
+  # that makes this mean anything) answers 6.3%. All on-curve; none has a pump.fun profile.
+  #
+  # WHAT THIS IS NOT: it is NOT established that these are his own wallets. A copy bot that
+  # follows only him produces the same 99%. Two shape facts narrow it without closing it --
+  # the slot-offset profile against his buys is SYMMETRIC (d=-1 ~ d=+1), which a lagging
+  # copier would not produce, and same-slot tx_index offsets are spread over +/-1..3 rather
+  # than consecutive, so this is not one atomic Jito bundle either. Co-scheduled, not chained.
+  #
+  # DO NOT read same-slot co-occurrence as the evidence. The 6.3% control ALSO sits at 42.7%
+  # same-slot, because everyone racing a new launch lands in the same few slots. Same-slot
+  # measures sniping; breadth measures coordination. See studies/RESULT_jackduval_workup.md
+  # section 5.7.1.
+  - {address: 6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB, label: jackduval_coordinated_a, kind: coordinated_set, confidence: inferred,
+     note: "355 pump coins in 10 days, 352 of them (99.2%) also traded by jackduvalcalls; 925 same-slot with his buys, 0 same-transaction. First seen slot 437325417, identical to _b."}
+  - {address: DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT, label: jackduval_coordinated_b, kind: coordinated_set, confidence: inferred,
+     note: "342 pump coins in 10 days, 338 of them (98.8%) also traded by jackduvalcalls; 892 same-slot with his buys, 0 same-transaction. First seen slot 437325417, identical to _a -- co-birth is its own linkage channel."}
+  - {address: D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42, label: jackduval_coordinated_c, kind: coordinated_set, confidence: inferred,
+     note: "276 pump coins in 10 days, 275 of them (99.6%) also traded by jackduvalcalls; 656 same-slot with his buys, 0 same-transaction."}
+  # PROPOSED fourth member, surfaced by studies/bundle_hypothesizer.py on its own initiative
+  # rather than by hand: 53 coins, 96.2% contained in the fleet's book, top-5 under both nulls.
+  # PROPOSED, NOT ATTESTED -- it has not been seen firing with the others. Added to the live
+  # accountTrade watch precisely so that forward tape can confirm or refute it, which is how the
+  # first three stopped being a correlation and became an observation.
+  - {address: 7uyGRgoCRKfynPbB35kWQwEGz9pmRvUyNFunV939mXpN, label: jackduval_coordinated_d_proposed, kind: coordinated_set, confidence: inferred,
+     note: "53 pump coins, 96.2% of them inside the fleet's book; top-5 candidate under both structure-preserving nulls. Far smaller book than _a/_b/_c (355/342/276), which fits the NESTED tier structure the fleet already shows rather than contradicting it. Unconfirmed until observed firing in the same window as the others."}
+
+  - {address: FBvxneTq8dY7WKxj924CseuveWzDL5tN9JuSW3S9nJkN, label: universal_launch_sniper, kind: control, confidence: inferred,
+     note: "NOT a coordinated wallet -- this is the NEGATIVE CONTROL that gives the three above their meaning.
+       CORRECTED 2026-08-15: first recorded as touching 17,908 coins and sharing 1.4%. 15,671 of those mints it
+       NEVER TRADED -- they are inbound airdrop dust (24,699 inbound transfer legs, ZERO outbound). Its real
+       traded book is 2,237 coins and its true specificity is 6.3%. The separation is 99.6% vs 6.3%, still
+       decisive and now for the right reason. The lesson generalises and is why this note is long: COINS
+       TOUCHED IS NOT COINS TRADED, and unsolicited inbound dust silently inflates any portfolio-overlap
+       denominator. Same genus as the address_poisoning block below -- dust arriving uninvited, corrupting a
+       measurement rather than a label.
+       It still sits at 42.7% same-slot with jackduvalcalls' buys, which is the reason to keep it: no future
+       study should mistake same-slot co-occurrence for coordination."}
+
+# ---------------------------------------------------------------------------------
+# Competitor bot infrastructure on the cluster pools, 2026-08-15, from
+# studies/failure_stream.py §3 (RESULT_failure_stream.md Appendix B / §3.2). This is a
+# TOP-LEVEL section, not part of `external:` -- appending into the wrong section is the
+# exact mistake that broke this file twice; tests/test_wallet_labels.py now covers it.
+# DERIVED, never attested: each address is the fee payer behind >=99% of one behavioural-
+# fingerprint cell in a 2,266-transaction getTransaction sample; `program` is the program
+# at the failing instruction index. Every address is a full 44-char key read from
+# getTransaction, never a prefix completed by search, so the file's address-poisoning
+# resolution rule is satisfied by construction, and all eight are on-curve (checked; the
+# invariant test now includes this section).
+# HALF-LIFE: §6 measured 56% error-code-mix overlap across a two-day gap, so re-run
+# `failure_stream.py refresh` before trusting this roster's currency.
+bot_infrastructure:
+  - {address: FUJKrQhxWYu4z59G6JGVfZstjQKi1fY1BZNwoekgs9vL, label: arb_bot_3yGCLwQ, kind: bot, confidence: inferred,
+     note: "program 3yGCLwQWdeS6jQvPgPYb7eDW1TQ9otWnuyyZFRC9K6K6; 100% of that program's sampled failures; self-aborter (beaten 16%, uses 8% of requested compute, bids 2,768 ulamports/CU)"}
+  - {address: XUrKb2aK4jBm77q75EemchVUNRTJyeFQ5KebTJygPhF, label: arb_bot_CZr8VacF, kind: bot, confidence: inferred,
+     note: "program CZr8VacFkAVKXYgiB5VFmZWE42Bi7XTkNmsMwN5EyzhP; 100% of sampled failures; uses 73% of requested compute, bids 10,489"}
+  - {address: Bu79TNqnLb5Pgbn4JA2L5k6sXmmgie5cXyCXi4w5X9RY, label: arb_bot_DF3Ljmyz, kind: bot, confidence: inferred,
+     note: "program DF3LjmyzuMApbw55YeC52JJArKgQjygKWZFUB9TNqLWn; 100% of sampled failures; error i3:0x3 with an interquartile compute range of TWO units (1,637-1,639); bids a flat 40,000"}
+  - {address: 6WJfN1fqrEEMSVKnzZkR4vJTMTxBaqvka2KA7aQHJMfF, label: arb_bot_2VSNUquk, kind: bot, confidence: inferred,
+     note: "program 2VSNUquk7FqkbS27WJpm6J1175EhoLcGtxuExu3wrzVz; 100% of sampled failures; the router RESULT_execution_landing.md saw succeed 77% of the time while filling elsewhere"}
+  - {address: 4NHYHfeMKKWa77v9hSo7k4FxhGopGmwosxsC1baLsoAk, label: arb_bot_31KJbyd5, kind: bot, confidence: inferred,
+     note: "program 31KJbyd5umqKQ9a3NuFWuhV1MLUQkg3FBrn3vE7L9R1t; 100% of sampled failures; lowest bidder on the board at 537 ulamports/CU"}
+  - {address: 8TPWakvWw4xQbk7uAYdNjZiDKKHgv9GE5GebzsbtUaHr, label: arb_bot_6MWVTis8, kind: bot, confidence: inferred,
+     note: "program 6MWVTis8rmmk6Vt9zmAJJbmb3VuLpzoQ1aHH4N6wQEGh; 99% of sampled failures; bids 924"}
+  - {address: VLXFRyxhAndY21gS4ys6ZWyJKHeP9DQgoqHhq3ARs2H, label: arb_bot_VeLoXemE, kind: bot, confidence: inferred,
+     note: "program VeLoXemE5sA5Co5NnQM2SKYW5ovddcYrCytHX5gWDyV; 63% of sampled failures; vanity address matching its own program prefix"}
+  - {address: 9DnwXX7kQWkk3EsTDRvJc5GYutEeaJv3WuWFC4uyjPER, label: arb_bot_i3_0x1798, kind: bot, confidence: inferred,
+     note: "fails inside PumpSwap AMM itself with i3:0x1798; the most contested machine on the board (beaten in-block 54%) and the ONLY exposure whose effect survives the pre-registered §8 test"}
+
+# The namespace census behind the imposter entry above, so the hazard's SHAPE is recorded
+# and not re-derived. `/users/search?searchTerm=jackduval` returns THIRTEEN profiles, all
+# on-curve. Only one matters: the real caller holds 17,468 of the namespace's 17,529
+# followers (99.65%), which is what makes the identification safe — it rests on follower
+# mass, not on a name match. Only ONE of the twelve others is a homoglyph attack; the rest
+# (jackduvalstocks, jackduvaltrades, jack_duval …) are ordinary squatting, several predating
+# the real account by months, and are NOT labelled adversary because nothing connects them
+# to it. `x_username` is null on all thirteen, so RESULT_caller_wallets.md §1's route 2 —
+# the platform's own X link — is still dead.
+#
+# This block was itself first written INSIDE the `external:` list, i.e. the identical
+# structural mistake that broke this file earlier today, and tests/test_wallet_labels.py
+# caught it in under a minute. That is the entire argument for the test existing.
+jackduval_namespace_census:
+  checked: 2026-08-15
+  profiles: 13
+  real_wallet: BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh
+  real_followers: 17468
+  namespace_followers: 17529
+  real_share_of_followers: 0.9965
+  homoglyph_attacks: 1
+
+# The poisoning campaign itself, recorded so it is never re-derived. Every entry is
+# inbound-only dust (<= 0.0001 SOL, or 100-1000 raw USDC) at an address matching both the
+# prefix AND suffix of a real counterparty, sent within seconds of the real payment.
+address_poisoning:
+  confirmed_pairs: 17
+  targets_include_our_own_wallets: true
+  examples:
+    - {real: Cbx3NneVa8dKpFbWJeVGARH9pmx4ZttdAfWVqm3HP3Eh, note: "coinbase, 486.63 SOL",
+       lookalikes: [Cbx3naVY...JJRP3Eh, Cbx3SmW9...nDRP3Eh, Cbx3gMty...Rn3P3Eh]}
+    - {real: 9sZEoWp5...nijWoV, note: "1.5 SOL payee, paid 02:20:13",
+       lookalikes: ["9sZEr9cr...VV7iWoV dusted 02:20:35 (+22s)", "9sZE2CDx...AwYWoV at 02:20:55"]}
+    - {real: FU21ojvNwQYTUCQetgj2f26TDFNqfZ81GofHiytK1DG2, note: "7.7 SOL at 23:12:31",
+       lookalikes: ["FU21WXEB...K2zG2 dusted 0.000001 SOL at 23:13:02 (+31s)"]}
+  our_wallets_targeted:
+    - {real: Funv3Qdb...PoRaMQ, lookalike: Fun1hUJX...eYWaMQ}
+    - {real: Sh1WNJ8g...6cccuE, lookalike: Sh1WyxAi...DwycuE}
+    - {real: PmpDh2BQ...TdkqYE, lookalike: Pmp1xuHh...y8hYE}
+    - {real: Dev2GmPW...Jk3CHc, lookalike: Dev3ysEW...AGHCHc}
+    - {real: PrvpTgcu...KCzagf, lookalike: Prv1CVzq...qZ1agf}
+
+categories:
+  # Operator's own classification from the fork: "let's call this all payroll
+  # 'marketing/community' tbh" — payroll and marketing_kol both roll up here.
+  marketing_community: [payroll, marketing_kol]
+
+# INVARIANT, checkable in one line and worth running after any edit here:
+#   every LIVE address is on the ed25519 curve, and every OFF-curve address is a
+#   `superseded_address`, i.e. quarantined rather than in use.
+#
+#   uv run python -c "
+#   import yaml; from solders.pubkey import Pubkey
+#   d=yaml.safe_load(open('wallet_labels.yaml'))
+#   for s in ('own_wallets','external'):
+#       for e in d.get(s) or []:
+#           a=e.get('address')
+#           assert a is None or Pubkey.from_string(a).is_on_curve(), (e.get('label'), a)
+#   print('all live addresses on-curve')"
+#
+# Two of the three full addresses this file inherited were off-curve: an ATTESTED payroll
+# address and the relayer. Both were truncated displays completed with a fabricated tail, and
+# both were caught by exactly this check. An off-curve key has no private key, so it can
+# neither sign nor be paid at -- it is not a wallet, whatever the label says.

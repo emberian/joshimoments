@@ -1,0 +1,48 @@
+# dregg_feed — movers awareness into the gated group. Copy next to the service and
+# point systemd at it: uv run python -m dregg_feed.service --config <this file>.
+# The service re-reads this file every cycle (keep-last-good: a broken edit keeps the
+# last good settings and says so in heartbeat.json).
+
+# Where feed.sqlite, spool/ (chart PNGs), previews.log and heartbeat.json live.
+state_dir = "/home/hbox/dregg-data/feed"
+
+# The gate's sqlite — alerts are INSERTed into its outbox (the gate bot delivers).
+gate_db = "/home/hbox/dregg-data/gate/gate.sqlite"
+
+# The screen's scores JSONL dir, for the birth verdict on each alert.
+scores_dir = "/home/hbox/dregg-data/screen/scores"
+
+# THE SWITCH. false = compose alerts into previews.log only (nothing reaches the
+# group); true = enqueue into the gate outbox. Ships false; the operator flips it.
+deliver = false
+
+# Polling and spend. ~75s => ~1,152 board polls/day; montage candle fetches (at most
+# montage_max per montage, half-hour cached per coin) ride in the ceiling's remainder.
+# Worst case at defaults: 5 montages/hr x 6 coins is over the 1,200 ceiling with the
+# board — the ceiling then bites late in the UTC day, visibly; raise daily_budget to
+# ~1500 if montages prove that dense in practice.
+poll_s = 75.0
+board_limit = 100
+daily_budget = 1200
+
+# The bar. v5 is the provider's claimed 5m volume in SOL (an undecoded compact key —
+# see dregg_feed/movers.py). ACCEL: v5 >= min_v5_sol AND >= accel_ratio x the v5 we
+# saw one poll earlier. TOP5_ENTRY: newly enters the top-5 ranked by v5 (we never use
+# board position — the board is personalised) with v5 >= top5_min_v5_sol.
+min_v5_sol = 250.0
+accel_ratio = 1.6
+top5_min_v5_sol = 400.0
+
+# Spam control. Per-coin cooldown (config refuses < 2h) — one montage appearance
+# consumes it. The group-facing cap is the MONTAGE WINDOW: qualifiers batch into one
+# image of up to montage_max coins (top-by-v5, drop-lowest; dropped coins keep their
+# cooldown and can make the next montage), at most one montage per window.
+cooldown_h = 2.0
+montage_max = 6
+montage_window_min = 12.0
+# LEGACY (pre-montage), accepted but inert — montage_window_min governs now.
+max_alerts_per_hour = 6
+
+# Charts: 72 x 5m = 6h of swap-api closes, SOL-priced.
+chart_interval = "5m"
+chart_limit = 72

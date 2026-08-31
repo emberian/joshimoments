@@ -1,0 +1,323 @@
+from __future__ import annotations
+
+import dataclasses
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+import yaml
+from solders.keypair import Keypair
+
+from shitcoims_sentinel.config import load_config
+from shitcoims_sentinel.policies import (
+    PolicyError,
+    persist_positions,
+    policies_for_unmonitored,
+    policy_from_payload,
+    policy_to_yaml_mapping,
+    policy_without_basis,
+)
+
+
+def _config(path: Path) -> None:
+    wallet = Keypair()
+    path.write_text(
+        """
+rpc:
+  helius_api_key_file: ./helius
+wallet:
+  name: shitcoims
+  secret_key_file: ./wallet
+execution:
+  enabled: false
+positions: []
+""",
+        encoding="utf-8",
+    )
+    (path.parent / "helius").write_text("k", encoding="utf-8")
+    (path.parent / "wallet").write_text(str(wallet), encoding="utf-8")
+
+
+def _thresholds(policy) -> dict:
+    """Every rule field, read off the type rather than listed here.
+
+    A hand-written list goes stale exactly when a field is added, which is the moment this
+    comparison most needs to include it.
+    """
+
+    lot_specific = {"mint", "name", "buy_price_sol", "cost_basis_sol"}
+    return {
+        field.name: getattr(policy, field.name)
+        for field in dataclasses.fields(policy)
+        if field.name not in lot_specific
+    }
+
+
+def test_every_route_into_a_policy_produces_the_same_unstated_rule(tmp_path: Path) -> None:
+    """The bug this pins: the same bag, protected two ways, ran two different rules.
+
+    `config.py`, `policies.py` (twice), `server.py` and `lots.py` each wrote a default set
+    down, and `lots.py` disagreed — -35 there, -30 everywhere else — so whether a stop sat
+    5 points wider depended on whether the engine discovered the bag or the operator created
+    it in the dashboard. This compares the routes to EACH OTHER, so it stays honest when the
+    numbers change and fails the moment they diverge again.
+    """
+
+    mint = str(Keypair().pubkey())
+    config_path = tmp_path / "config.yaml"
+    _config(config_path)
+
+    dashboard = policy_from_payload(mint, {"name": "SAME"})
+    merged, _created, _skipped = policies_for_unmonitored(
+        unmonitored=[{"mint": mint, "name": "SAME"}], current=[]
+    )
+    auto_protect = merged[0]
+
+    document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    document["positions"] = [{"mint": mint, "name": "SAME"}]
+    config_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    from_yaml = load_config(config_path).positions[0]
+
+    assert _thresholds(dashboard) == _thresholds(auto_protect) == _thresholds(from_yaml)
+
+
+def test_policy_rejects_execution_and_secret_fields() -> None:
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError, match="cannot include"):
+        policy_from_payload(mint, {"cost_basis_sol": 1, "execution": True})
+    with pytest.raises(PolicyError, match="cannot include"):
+        policy_from_payload(mint, {"cost_basis_sol": 1, "api_key": "x"})
+
+
+def test_policy_requires_negative_stop_and_one_cost_basis() -> None:
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError, match="negative"):
+        policy_from_payload(mint, {"cost_basis_sol": 1, "stop_loss_pct": 10})
+    with pytest.raises(PolicyError, match="exactly one"):
+        policy_from_payload(mint, {"cost_basis_sol": 1, "buy_price_sol": 0.1})
+
+
+def test_policy_without_basis_keeps_thresholds() -> None:
+    mint = str(Keypair().pubkey())
+    policy = policy_from_payload(
+        mint,
+        {
+            "name": "CLOUT",
+            "cost_basis_sol": 1.15,
+            "stop_loss_pct": -10,
+            "take_profit_pct": 80,
+            "trailing_stop_pct": 20,
+        },
+    )
+    cleared = policy_without_basis(policy)
+    assert cleared.cost_basis_sol is None
+    assert cleared.buy_price_sol is None
+    assert cleared.stop_loss_pct == policy.stop_loss_pct
+    assert "cost_basis_sol" not in policy_to_yaml_mapping(cleared)
+
+
+def test_a_legacy_runner_policy_migrates_to_the_same_behaviour() -> None:
+    """`exit_style: runner` + `trailing_stop_pct: N` was already the tightness knob.
+
+    Asserted as decision-equivalence rather than field-equality: what must survive the
+    rename is what the rule DOES.
+    """
+
+    mint = str(Keypair().pubkey())
+    legacy = policy_from_payload(
+        mint,
+        {
+            "name": "CLOUT",
+            "cost_basis_sol": 1.15,
+            "stop_loss_pct": -10,
+            "take_profit_pct": 80,
+            "trailing_stop_pct": 35,
+            "exit_style": "runner",
+        },
+    )
+    current = policy_from_payload(
+        mint,
+        {
+            "name": "CLOUT",
+            "cost_basis_sol": 1.15,
+            "stop_loss_pct": -10,
+            "take_profit_pct": 80,
+            "runner_tightness": 35,
+        },
+    )
+    assert legacy == current
+    assert legacy.runner_tightness == Decimal("35")
+    assert "exit_style" not in policy_to_yaml_mapping(legacy)
+    assert "trailing_stop_pct" not in policy_to_yaml_mapping(legacy)
+
+
+def test_a_legacy_fixed_trail_policy_is_refused_not_reinterpreted() -> None:
+    """The one migration that cannot be faithful, so it is not attempted.
+
+    `fixed_trail`'s 20 meant "sell at 20% off the print high". `runner_tightness`'s 20 means
+    "use the canonical lock-rung table", which on a 10x holds through a 40% wick. Carrying
+    the number across would silently turn a sell rule into a hold rule, and a policy whose
+    meaning changes under an upgrade is a money bug in either direction.
+    """
+
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError, match="fixed_trail"):
+        policy_from_payload(
+            mint,
+            {"cost_basis_sol": 1, "exit_style": "fixed_trail", "trailing_stop_pct": 20},
+        )
+
+
+def test_policy_rejects_unknown_exit_style() -> None:
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError, match="exit_style"):
+        policy_from_payload(mint, {"cost_basis_sol": 1, "exit_style": "atr"})
+
+
+def test_an_absent_threshold_takes_the_default_and_an_explicit_null_turns_it_off() -> None:
+    """Absence and OFF are different states, and both have to survive a YAML round trip."""
+
+    mint = str(Keypair().pubkey())
+    unstated = policy_from_payload(mint, {"name": "A"})
+    switched_off = policy_from_payload(
+        mint,
+        {"name": "A", "take_profit_pct": None, "runner_tightness": None},
+    )
+    assert unstated.take_profit_pct is not None
+    assert switched_off.take_profit_pct is None
+    assert switched_off.runner_tightness is None
+
+    rendered = policy_to_yaml_mapping(switched_off)
+    assert rendered["take_profit_pct"] is None
+    assert rendered["runner_tightness"] is None
+    assert policy_from_payload(mint, rendered) == switched_off
+
+
+def test_a_stop_may_be_switched_off_but_never_set_positive() -> None:
+    mint = str(Keypair().pubkey())
+    assert policy_from_payload(mint, {"stop_loss_pct": None}).stop_loss_pct is None
+    with pytest.raises(PolicyError, match="negative"):
+        policy_from_payload(mint, {"stop_loss_pct": 10})
+
+
+def test_policy_allows_missing_basis_for_rug_only() -> None:
+    mint = str(Keypair().pubkey())
+    policy = policy_from_payload(
+        mint,
+        {
+            "name": "RUG",
+            "stop_loss_pct": -30,
+            "take_profit_pct": 100,
+            "trailing_stop_pct": 20,
+            "rug_exit": True,
+        },
+    )
+    assert policy.buy_price_sol is None
+    assert policy.cost_basis_sol is None
+    assert policy.rug_exit is True
+    mapping = policy_to_yaml_mapping(policy)
+    assert "cost_basis_sol" not in mapping
+    assert "buy_price_sol" not in mapping
+
+
+def test_seeding_a_basis_from_an_exit_quote_is_refused() -> None:
+    """The old `from_quote` mode is gone, not merely defaulted away.
+
+    It stamped the current Jupiter exit quote as cost basis, so PnL started at 0%
+    regardless of what was paid and every stop fired below the coin's already-fallen
+    price. Asking for it must fail loudly rather than silently fabricate.
+    """
+    mint = str(Keypair().pubkey())
+    with pytest.raises(PolicyError):
+        policies_for_unmonitored(
+            unmonitored=[{"mint": mint, "name": "L00T", "exit_sol": "0.542"}],
+            current=[],
+            mode="from_quote",
+        )
+
+
+def test_unmonitored_rows_never_seed_a_basis_from_their_quote() -> None:
+    """A row carrying an exit quote still yields a basis-free, rug-only policy."""
+    existing_mint = str(Keypair().pubkey())
+    new_mint = str(Keypair().pubkey())
+    existing = policy_from_payload(
+        existing_mint, {"name": "KEEP", "cost_basis_sol": 9}
+    )
+    merged, created, skipped = policies_for_unmonitored(
+        unmonitored=[
+            {"mint": existing_mint, "name": "OVERWRITE", "exit_sol": "1.0"},
+            {"mint": new_mint, "name": "L00T", "exit_sol": "0.542"},
+            {"mint": "not-a-mint", "name": "BOGUS", "exit_sol": "1"},
+        ],
+        current=[existing],
+    )
+    assert [policy.mint for policy in merged] == [existing_mint, new_mint]
+    # an operator-typed basis is never overwritten
+    assert merged[0].name == "KEEP"
+    assert merged[0].cost_basis_sol == existing.cost_basis_sol
+    # and the new policy carries no basis at all, despite exit_sol being present
+    assert created == [new_mint]
+    assert merged[1].name == "L00T"
+    assert merged[1].cost_basis_sol is None
+    assert merged[1].buy_price_sol is None
+    skipped_by_mint = {item["mint"]: item["reason"] for item in skipped}
+    assert "not-a-mint" in skipped_by_mint
+    assert existing_mint not in skipped_by_mint
+
+
+def test_policies_for_unmonitored_rug_only_has_no_cost_basis() -> None:
+    mint = str(Keypair().pubkey())
+    merged, created, skipped = policies_for_unmonitored(
+        unmonitored=[{"mint": mint, "name": "AKitty", "exit_sol": "0.127"}],
+        current=[],
+        mode="rug_only",
+    )
+    assert created == [mint]
+    assert skipped == []
+    assert merged[0].cost_basis_sol is None
+    assert merged[0].buy_price_sol is None
+    assert merged[0].name == "AKitty"
+    mapping = policy_to_yaml_mapping(merged[0])
+    assert "cost_basis_sol" not in mapping
+    assert "buy_price_sol" not in mapping
+
+
+def test_policies_for_unmonitored_rejects_unknown_mode() -> None:
+    with pytest.raises(PolicyError, match="mode"):
+        policies_for_unmonitored(unmonitored=[], current=[], mode="panic")
+
+
+def test_persist_positions_rewrites_only_positions_key(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    _config(path)
+    mint = str(Keypair().pubkey())
+    policy = policy_from_payload(
+        mint,
+        {
+            "name": "TEST",
+            "cost_basis_sol": 0.5,
+            "stop_loss_pct": -25,
+            "take_profit_pct": 80,
+            "trailing_stop_pct": 15,
+            "rug_exit": True,
+        },
+    )
+    persist_positions(path, [policy])
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert document["execution"]["enabled"] is False
+    assert document["wallet"]["name"] == "shitcoims"
+    assert document["positions"][0]["mint"] == mint
+    assert document["positions"][0]["cost_basis_sol"] == 0.5
+
+
+def test_persist_rug_only_omits_basis_and_leaves_execution(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    _config(path)
+    mint = str(Keypair().pubkey())
+    policy = policy_from_payload(mint, {"name": "RUG", "rug_exit": True})
+    persist_positions(path, [policy])
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert document["execution"]["enabled"] is False
+    assert "cost_basis_sol" not in document["positions"][0]
+    assert "buy_price_sol" not in document["positions"][0]
+    assert document["positions"][0]["rug_exit"] is True

@@ -1,0 +1,99 @@
+version: 1
+
+# This process owns its own evidence database. It never reads Sentinel state or
+# imports the transaction executor. WAL is intentionally forbidden until the
+# bundled SQLite runtime is upgraded beyond the affected 3.50.x series.
+database:
+  path: ./intelligence_state/intelligence.sqlite3
+  journal_mode: DELETE
+  busy_timeout_ms: 5000
+
+ingestion:
+  queue_capacity: 10000
+  batch_size: 250
+
+retention:
+  observation_days: 180
+  raw_blob_days: 30
+  max_observations: 5000000
+  max_disk_bytes: 5368709120       # 5 GiB hard stop
+  warn_disk_bytes: 4294967296      # warn at 4 GiB
+  prune_batch_size: 10000
+
+server:
+  host: 127.0.0.1
+  port: 8788
+  allowed_origins:
+    - http://127.0.0.1:8787
+    - http://localhost:8787
+    - http://127.0.0.1:3000
+    - http://localhost:3000
+
+helius:
+  api_key_file: ~/.helius-key
+  http_url_template: "https://mainnet.helius-rpc.com/?api-key={api_key}"
+  websocket_url_template: "wss://mainnet.helius-rpc.com/?api-key={api_key}"
+  daily_credit_budget: 10000
+  monthly_credit_budget: 300000
+  history_pages_per_run: 10
+  history_transactions_per_run: 1000
+  history_page_size: 100
+  watchlist_max_addresses: 2000
+  keepalive_seconds: 30
+  reconnect_seconds: 1
+
+# Scout is a read-only Telegram console. It cannot arm, sign, buy, sell, panic,
+# or modify Sentinel policy. Use a separate bot token when enabling it.
+scout:
+  enabled: false
+  telegram_bot_token_file: null
+  telegram_chat_id: null
+  telegram_user_id: null
+  state_file: ./intelligence_state/scout.sqlite3
+  api_base: http://127.0.0.1:8788
+  sentinel_api_base: http://127.0.0.1:8787
+  poll_timeout_seconds: 25
+  message_max_age_seconds: 120
+
+adapters:
+  claudekol:
+    enabled: false
+  kagi:
+    enabled: false
+    env_file: ~/dev/allgame/.env
+    key_name: KAGI_API_KEY
+  # Unsupported experiment, disabled by default. This accepts no cookies or
+  # user sessions and must quarantine any response that drifts from the pin.
+  pump_callouts:
+    enabled: false
+    endpoint: null
+    schema_version: null
+    credential_env_file: null
+    credential_key_name: PUMP_CALLOUTS_TOKEN
+  # Official X API v2 Basic/Pro is closed to new signups. This pays a pinned
+  # Apify actor for recent-search results. Advisory only: cashtags are labels,
+  # not mints, and nothing here can execute.
+  x_apify:
+    enabled: false
+    token_file: ~/.apify-token
+    actor_id: kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest
+    # The pinned actor bills per RETURNED tweet ($0.00025 each) and returns ~20
+    # regardless of a smaller maxItems, so asking for fewer pays for 20 and
+    # discards the rest. Ask for what you are charged for.
+    max_items_per_query: 20
+    poll_interval_seconds: 600
+    # Spent evenly across the day by the runtime's per-cycle allowance, not in
+    # one burst at midnight: a hard daily wall makes every callout after the
+    # wall invisible, which biases the tape rather than merely shortening it.
+    # 2400/day is about $0.60/day.
+    max_items_per_day: 2400
+    kol_thread_limit: 3
+    # These run every cycle; the KOL list rotates behind them. Ordered by
+    # measured distinct mints per purchased tweet (2026-08-15): dexscreener
+    # 0.95, axiom 0.70, "CA" pump 0.65, url:pump.fun 0.45, bare pump.fun 0.35.
+    # See studies/RESULT_callout_edge.md §1.1.
+    queries:
+      - "url:dexscreener.com/solana"
+      - "url:pump.fun"
+      - '"CA" pump'
+    kols: []

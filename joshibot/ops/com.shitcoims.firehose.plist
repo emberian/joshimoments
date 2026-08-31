@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shitcoims.firehose</string>
+  <!-- Omitting --minutes runs until SIGTERM. The recorder writes its own gap
+       rows across restarts, so a supervised restart stays honest about what it
+       did not see rather than papering over the hole. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string>
+    <string>python</string>
+    <string>-m</string>
+    <string>shitcoims_scalper.firehose</string>
+    <string>--subscribe</string>
+    <string>newToken,migration,tokenTrade,accountTrade</string>
+    <!-- Keys are PER METHOD and must stay that way. tokenTrade keys are MINTS,
+         accountTrade keys are WALLETS; a single shared list offers each feed the
+         other's addresses, which the vendor accepts and then answers with silence
+         forever. That is indistinguishable on the tape from a coin nobody traded,
+         so the recorder now refuses a bare list when both trade feeds are on. -->
+    <string>--keys</string>
+    <!-- the four cluster coins: nosis, weave, DREGG, SOLVE. Hunched/held coins get
+         dynamic subscription when the hunch glass lands. -->
+    <string>tokenTrade=FPfi9q1AixdUeWQVPFHJMJQ7a43S78dm6UZ4fzN4pump,8PecVcCGs2HphgU5vxoWfqe4XTojaN2LWdy4FvZzpump,XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump,GwyWFsDKW9a2ref1EWqdUS7B37Toii433zrAh9Dipump</string>
+    <string>--keys</string>
+    <!-- BAr5csYt = jackduvalcalls, the caller the operator asked to have watched.
+         This is his pump.fun PROFILE wallet, which is very often not the wallet a
+         caller trades from (RESULT_caller_wallets.md §1: the profile-to-trading link
+         resolves for 5 of 146 handles). So an empty stream here is a MEASUREMENT --
+         "his profile wallet does not trade" -- and not a broken subscription, which
+         is why the watch_open manifest now records the keys next to the window.
+         9T8QKsR2 = the capital-I homoglyph impersonating him. Watched deliberately:
+         the open question is whether it snipes or dumps into the real caller's flow,
+         and that can only be answered with forward tape. Never act on it.
+         6Eegkyd2 / DkWzWsQT / D7xK1ZLz = the coordinated set that trades 99.2/98.8/99.6%
+         of its coins in common with him (studies/RESULT_jackduval_workup.md 5.7). Added
+         so the fleet can be watched FIRING rather than only reconstructed afterwards --
+         the live tape is the only place to see whether they lead him, follow him, or fire
+         together, which is the question the ten-day corpus cannot answer because it has
+         no sub-slot ordering we trust. Costs ~600 metered events/day on top of ~5,200,
+         so the funded key's 10k allowance goes from ~46h to ~41h; the metered_stale alarm
+         is what catches the far side of that.
+         7uyGRgo = a PROPOSED fourth member the hypothesizer surfaced on its own (53 coins,
+         96.2% contained). Watched to CONFIRM OR REFUTE it: if it fires inside the same
+         sub-second window as the other three it is a member, and if it never does, it is
+         a correlation that forward tape refused. That is the same test that turned the
+         first three from a 99% statistic into an observation. -->
+    <string>accountTrade=BAr5csYtpWoNpwhUjixX7ZPHXkUciFZzjBp9uNxZXJPh,9T8QKsR28boKJL3x3td39rX8dk1xsd5zwWaF2nFzijvP,6Eegkyd2qNzxSzZz3PH3jiDyqL5HFcHdcsb9zfMzWHKB,DkWzWsQT9ZThfkFfdZqzNT59dZMiJXp81oob8QBG9UcT,D7xK1ZLz8KQNWN8aU1jbzNAuT5xwqgFrCUUYodVU4G42,7uyGRgoCRKfynPbB35kWQwEGz9pmRvUyNFunV939mXpN</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/firehose.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/dev/joshibot/state/logs/firehose.err.log</string>
+</dict>
+</plist>

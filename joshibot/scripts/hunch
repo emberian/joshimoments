@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""``hunch`` — record what the operator thinks about a coin, and open the paper position.
+
+    uv run scripts/hunch CALICO "gonna wiggle for a bit"
+    uv run scripts/hunch 3dNk wiggle
+    uv run scripts/hunch 3dNkR2mQ...pump --kind down --note "this keeps bleeding"
+    uv run scripts/hunch zap 8iHW5A --note "not doing what i thought"
+    uv run scripts/hunch report
+    uv run scripts/hunch look CALICO          # readout only, records nothing
+
+    alias hunch='uv run --project ~/dev/joshibot ~/dev/joshibot/scripts/hunch'
+
+THIS IS THE PLUMBING PATH, NOT THE MAIN ONE
+--------------------------------------------
+The operator's own correction, verbatim: *"I don't want to be typing hunches my dude. I want
+to be interfacing with it the way i do with pumpfun: by seeing it and clicking on it."* So
+the primary capture surface is the glass -- a coin explorer with one-click ``[wiggle]``
+``[down]`` ``[watch]`` buttons on every card (``uv run python -m shitcoims_paperdesk glass``,
+then the Hunch view). This command is the same machinery with a keyboard on it, and it earns
+its place for three things: an agent can call it, it works when the browser is not open, and
+it is the surface where a hunch arrives WITH WORDS. A click records a pointing; a typed
+hunch records a sentence, and the sentence is the part a distillation model will want most.
+
+Every path through this file writes to exactly one place -- ``state/hunches.jsonl``, append
+only, fsynced -- and reads a handful of tapes. It holds no key, signs nothing, sends
+nothing, and cannot reach the sentinel.
+
+THE ORDER OF OPERATIONS IS THE DURABILITY CONTRACT
+---------------------------------------------------
+resolve (local tapes, fast) -> APPEND AND FSYNC -> print the readout. The row is on disk
+before the first vendor is touched, so the worst a hung API can do is print you a thinner
+instrument. A hunch is a fact about a person at a moment and it does not come back.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from shitcoims_paperdesk.hunch import (  # noqa: E402
+    KIND_CLAIMS,
+    Hunch,
+    Zap,
+    append_hunch,
+    append_zap,
+    default_horizon_s,
+    new_hunch_id,
+    new_zap_id,
+)
+from shitcoims_paperdesk.readout import (  # noqa: E402
+    is_mint,
+    readout,
+    render_readout,
+    resolve,
+)
+
+WIGGLE_CLIP_SOL = 0.1
+
+
+def _duration(text: str) -> float:
+    """``45m``, ``3h``, ``2d``, or bare seconds. Refuses anything else rather than guessing."""
+    text = text.strip().lower()
+    scale = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+    if text and text[-1] in scale:
+        return float(text[:-1]) * scale[text[-1]]
+    return float(text)
+
+
+def _print_candidates(found) -> None:
+    print(f"  refused: {found.reason}", file=sys.stderr)
+    if not found.candidates:
+        return
+    print("  candidates:", file=sys.stderr)
+    for candidate in found.candidates[:12]:
+        age = time.time() - candidate.t_seen_unix if candidate.t_seen_unix else None
+        seen = f"{age / 60:.0f}m ago" if age and age == age else "unknown"
+        print(
+            f"    {candidate.mint}  {(candidate.symbol or candidate.name or ''):<12}"
+            f"  {candidate.source:<9} {candidate.detail[:24]:<24} seen {seen}",
+            file=sys.stderr,
+        )
+    print(
+        "\n  Two coins can wear one ticker on this market; the tool will not pick for you."
+        "\n  Paste the mint address, or type a longer prefix.",
+        file=sys.stderr,
+    )
+
+
+def _resolve_or_die(query: str):
+    found = resolve(query)
+    if not found.ok:
+        _print_candidates(found)
+        raise SystemExit(2)
+    return found
+
+
+def cmd_look(args: argparse.Namespace) -> int:
+    """The instrument with no gesture attached. Records nothing, opens nothing."""
+    found = _resolve_or_die(args.coin)
+    out = readout(
+        found.mint,
+        clip_lamports=int(args.size * 1e9),
+        symbol=found.chosen.symbol if found.chosen else None,
+    )
+    print()
+    print(render_readout(out, found))
+    print()
+    return 0
+
+
+def cmd_hunch(args: argparse.Namespace) -> int:
+    gesture = time.time()
+    found = _resolve_or_die(args.coin)
+    mint = found.mint
+    assert mint is not None
+
+    kind = args.kind
+    horizon = _duration(args.horizon) if args.horizon else default_horizon_s(kind)
+    utterance = args.note if args.note is not None else (args.words or "")
+
+    hunch = Hunch(
+        hunch_id=new_hunch_id(mint, gesture),
+        run_id=f"cli-{int(gesture)}",
+        mint=mint,
+        symbol=found.chosen.symbol if found.chosen else None,
+        kind=kind,
+        claim=KIND_CLAIMS[kind],
+        # VERBATIM. Not stripped of punctuation, not title-cased, not spell-corrected, and
+        # never replaced by the parse. The parse is lossy and lives in `claim`; the words
+        # are the corpus.
+        utterance=utterance,
+        confidence=args.confidence,
+        horizon_s=horizon,
+        size_lamports=int(args.size * 1e9),
+        t_gesture_unix=gesture,
+        t_ingest_unix=time.time(),
+        resolution=found.to_json(),
+        evidence={"surface": {"name": "cli", "declared_by": "cli", "argv": sys.argv[1:]}},
+    )
+    # ON DISK AND FSYNCED before a single vendor is contacted.
+    path = append_hunch(hunch)
+
+    label = hunch.symbol or mint[:8]
+    print()
+    print(f"  RECORDED  {hunch.hunch_id}   {kind}   {label}")
+    if utterance:
+        print(f'  "{utterance}"')
+    print(f"  -> {path}")
+    if kind == "wiggle":
+        print(
+            f"  The desk opens a paper position on its next observation of this coin"
+            f" ({args.size:.2f} SOL, operator book)."
+        )
+        print(
+            "  It stays open until YOU zap it. The 20-40 min backstop is a bound, not a plan:"
+            "  `hunch zap <coin>` closes it at the next observation, no confirmation."
+        )
+    else:
+        print(
+            f"  Watch-only claim, scored in {(horizon or 0) / 60:.0f} min."
+            " No position: this desk has no short and no measured hold."
+        )
+    print()
+
+    out = readout(
+        mint,
+        clip_lamports=hunch.size_lamports,
+        symbol=hunch.symbol,
+    )
+    print(render_readout(out, found))
+
+    if out.ghost_town:
+        print()
+        print("  " + "!" * 76)
+        print("  !!  GHOST TOWN WARNING — thin and/or stale.")
+        print(
+            f"  !!  Your own exit moves the price {(out.own_exit_impact or 0) * 100:.2f}%"
+            f" at {args.size:.2f} SOL."
+        )
+        print(
+            "  !!  RESULT_crime_signatures §7.1: at this depth there may be no exit at the"
+        )
+        print("  !!  quoted price at all — the rug IS the first real seller.")
+        print("  !!  Your call stands. The desk is opening it and tagging the entry.")
+        print("  " + "!" * 76)
+    print()
+    return 0
+
+
+def cmd_zap(args: argparse.Namespace) -> int:
+    """Get out. No confirmation, and the instrument goes on the row with the decision."""
+    gesture = time.time()
+    found = _resolve_or_die(args.coin)
+    mint = found.mint
+    assert mint is not None
+    out = readout(
+        mint,
+        clip_lamports=int(WIGGLE_CLIP_SOL * 1e9),
+        symbol=found.chosen.symbol if found.chosen else None,
+    )
+    zap = Zap(
+        zap_id=new_zap_id(mint, gesture),
+        mint=mint,
+        position_id=args.position_id,
+        reason=args.note or "",
+        t_event_unix=gesture,
+        t_ingest_unix=time.time(),
+        run_id=f"cli-{int(gesture)}",
+        # THE TRAINING SET: whatever the instrument could see at the moment of the exit.
+        state={"readout": out.to_json(), "surface": {"name": "cli", "declared_by": "cli"}},
+    )
+    append_zap(zap)
+    label = out.symbol or mint[:8]
+    print()
+    print(f"  ZAPPED  {zap.zap_id}   {label}")
+    if args.note:
+        print(f'  "{args.note}"')
+    print("  The desk arms the exit on its next cycle; it fills on the first observation after.")
+    print()
+    print(render_readout(out, found))
+    print()
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from shitcoims_paperdesk import hunch_report
+
+    return hunch_report.main(["--days", str(args.days)] if args.days else [])
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="hunch",
+        description="record a hunch about a coin; the desk opens the paper position",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    look = sub.add_parser("look", help="print the instrument for a coin; record nothing")
+    look.add_argument("coin")
+    look.add_argument("--size", type=float, default=WIGGLE_CLIP_SOL)
+    look.set_defaults(func=cmd_look)
+
+    zap = sub.add_parser("zap", help="close an open operator position, now, no confirmation")
+    zap.add_argument("coin")
+    zap.add_argument("--note", default=None, help="why, in your own words. Kept verbatim.")
+    zap.add_argument("--position-id", default=None)
+    zap.set_defaults(func=cmd_zap)
+
+    report = sub.add_parser("report", help="the intuition premium and the scorecard")
+    report.add_argument("--days", type=int, default=None)
+    report.set_defaults(func=cmd_report)
+
+    return parser
+
+
+def build_capture_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="hunch")
+    parser.add_argument("coin", help="mint address, mint prefix, or symbol")
+    parser.add_argument(
+        "words",
+        nargs="?",
+        default="",
+        help="what you actually thought, in your own words. Kept verbatim, forever.",
+    )
+    parser.add_argument(
+        "--kind",
+        choices=sorted(KIND_CLAIMS),
+        default="wiggle",
+        help="wiggle opens a position; down/up/watch are scored claims with no capital",
+    )
+    parser.add_argument(
+        "--size", type=float, default=WIGGLE_CLIP_SOL, help="clip in SOL (default: the wiggle clip)"
+    )
+    parser.add_argument("--note", default=None, help="same as the positional words")
+    parser.add_argument(
+        "--confidence",
+        type=float,
+        default=0.6,
+        help="what Brier will score, in (0, 1). Only meaningful once you vary it.",
+    )
+    parser.add_argument("--horizon", default=None, help="e.g. 45m, 3h, 2d (down/up/watch)")
+    parser.set_defaults(func=cmd_hunch)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in {"-h", "--help", "help"}:
+        build_capture_parser().print_help()
+        print("\nsubcommands: look <coin>, zap <coin> [--note ...], report")
+        return 0
+    # A bare first word that is a subcommand routes there; anything else is a coin, so the
+    # common case stays `hunch CALICO "..."` with no ceremony. A coin named `look` or
+    # `report` is addressable by its mint, which is the escape hatch and is enough.
+    if args[0] in {"look", "report", "zap"}:
+        parsed = build_parser().parse_args(args)
+        return int(parsed.func(parsed))
+    parsed = build_capture_parser().parse_args(args)
+    if not 0.0 < parsed.confidence < 1.0:
+        print("confidence must be in (0, 1)", file=sys.stderr)
+        return 2
+    if parsed.size <= 0:
+        print("size must be positive", file=sys.stderr)
+        return 2
+    if is_mint(parsed.coin.strip()) is False and len(parsed.coin.strip()) < 2:
+        print("give at least two characters of ticker or mint prefix", file=sys.stderr)
+        return 2
+    return int(parsed.func(parsed))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
