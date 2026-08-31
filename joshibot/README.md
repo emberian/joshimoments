@@ -257,3 +257,13 @@ X collection is **KOL-first**. Handles live in `intelligence.yaml` under `adapte
 The seed list was research-checked: `threadguy` is the wrong account — the streamer is
 `notthreadguy`. Cashtags are claims. The only self-attested wallet currently configured is
 Ansem's X-linked pump.fun profile, stored as a low-confidence claim.
+
+## License
+
+This repository's original source code, studies, and documentation are licensed under the
+[GNU Affero General Public License, version 3 or later](LICENSE) (`AGPL-3.0-or-later`).
+Copyright (C) 2026 Ember Arlynx.
+
+All of it is first-party work by a single copyright holder. Third-party dependencies (see
+`pyproject.toml`, `package.json`, `uv.lock`) remain under their own licenses, and captured or
+provider-derived data retains its own provenance; the project license does not replace either.
