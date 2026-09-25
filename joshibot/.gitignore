@@ -48,11 +48,15 @@ yarn-error.log*
 # misconfigure the other package. See lpexec.example.yaml.
 /lpexec.yaml
 /shitcoims_lpexec/node/node_modules/
-/state/
+/state/*
+!/state/ladder/
+/state/ladder/*
 /intelligence.yaml
 /intelligence_state/
 *.csv
 *.jsonl
+# the ladder watchlist is a committed study result (studies/RESULT_ladder_causality.md)
+!/state/ladder/watchlist.jsonl
 __pycache__/
 .pytest_cache/
 .ruff_cache/
